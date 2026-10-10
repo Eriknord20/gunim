@@ -3,7 +3,8 @@ package audio
 import (
 	"math"
 	"math/cmplx"
-	"sync"
+	"slices"
+	"sync/atomic"
 )
 
 // FilterKind is the shape a [Band] of an [EQ] gives the sound.
@@ -151,50 +152,92 @@ func Response(bands []Band, hz float64) float64 {
 // puts it on a voice. Bands set glide to their new settings over a
 // few tens of milliseconds, so a band dragged about sweeps without
 // clicks. Its methods are safe from any goroutine.
+//
+// Its inserts run in real time: they take no lock and make nothing
+// new as they process, however the settings change. [EQ.Set] makes the
+// bands anew and hands them over whole, and each insert holds room for
+// [MaxBands] bands, and as many fading out, from the start.
+// [EQ.SetBypass] is real time too, so an insert's own goroutine may
+// call it.
 type EQ struct {
-	mu     sync.Mutex
-	bands  []Band
-	bypass bool
+	settings atomic.Pointer[eqSettings]
+	bypass   atomic.Bool
+}
+
+// MaxBands is how many bands an EQ plays. [EQ.Set] keeps the first
+// MaxBands of more.
+const MaxBands = 32
+
+// eqSettings are an EQ's bands, as Set hands them over: never changed
+// once handed.
+type eqSettings struct {
+	bands []Band
 }
 
 // NewEQ returns an EQ with no bands, which leaves the sound as it is.
-func NewEQ() *EQ { return &EQ{} }
+func NewEQ() *EQ {
+	e := &EQ{}
+	e.settings.Store(&eqSettings{})
+	return e
+}
 
 // Set sets the EQ's bands. Each glides from where it was, matched by
 // its ID; a band new to the EQ fades in, and one gone fades out.
 func (e *EQ) Set(bands []Band) {
-	e.mu.Lock()
-	e.bands = append(e.bands[:0:0], bands...)
-	e.mu.Unlock()
+	e.settings.Store(&eqSettings{bands: slices.Clone(bands[:min(len(bands), MaxBands)])})
 }
 
 // SetBypass turns the whole EQ off, or on again, fading.
-func (e *EQ) SetBypass(on bool) {
-	e.mu.Lock()
-	e.bypass = on
-	e.mu.Unlock()
-}
+func (e *EQ) SetBypass(on bool) { e.bypass.Store(on) }
 
 // Insert returns an insert that puts the EQ on one voice, for
 // [Options.Insert]: each voice needs its own, which follows the EQ's
 // settings.
-func (e *EQ) Insert() Insert { return &eqInsert{eq: e} }
+func (e *EQ) Insert() Insert { return newEQInsert(e) }
+
+// InsertAt returns an insert that puts the EQ on a stream of
+// interleaved stereo frames at hz frames a second, played other than
+// through a [Mixer], as a plugin's sound is. A mixer it plays in sets
+// its own rate.
+func (e *EQ) InsertAt(hz int) Insert {
+	in := newEQInsert(e)
+	in.setRate(hz)
+	return in
+}
 
 // glideAt is how much of the way to its settings a band goes each
 // block of 128 frames at rate: most of it in about 25 ms.
 func glideAt(rate float64) float64 { return 1 - math.Exp(-float64(block)/rate/0.025) }
 
+// liveBands is how many bands an insert has room for: as many as an EQ
+// plays, and as many again fading out as others fade in.
+const liveBands = 2 * MaxBands
+
+// maxStages is the most sections a band takes: a cut at 48 dB an
+// octave.
+const maxStages = 4
+
 // eqInsert is an EQ on one voice: each band's settings as they glide,
 // and the state of its sections.
 type eqInsert struct {
-	eq    *EQ
+	eq *EQ
+	// bands are the bands playing, in pool, and free those of pool not.
+	pool  [liveBands]liveBand
 	bands []*liveBand
+	free  []*liveBand
 	// mix fades the whole EQ in and out for a bypass.
 	mix float64
-	got []Band
 	// rate is the mixer's, which the bands' sections are worked out
 	// for, and glide how far they glide each block at it.
 	rate, glide float64
+}
+
+func newEQInsert(e *EQ) *eqInsert {
+	in := &eqInsert{eq: e, bands: make([]*liveBand, 0, liveBands), free: make([]*liveBand, 0, liveBands)}
+	for i := range in.pool {
+		in.free = append(in.free, &in.pool[i])
+	}
+	return in
 }
 
 // setRate tells the insert the rate of the mixer it plays in, which
@@ -204,7 +247,7 @@ func (e *eqInsert) setRate(hz int) {
 		e.rate, e.glide = r, glideAt(r)
 		for _, b := range e.bands {
 			// Worked out anew at the new rate.
-			b.secs = nil
+			b.fresh = true
 		}
 	}
 }
@@ -218,24 +261,25 @@ type liveBand struct {
 	logFreq, gain, logQ float64
 	// mix fades the band in and out as it turns on and off, or comes
 	// and goes.
-	mix   float64
-	want  Band
-	gone  bool
+	mix  float64
+	want Band
+	gone bool
+	// secs are the band's sections, in room, and fresh says they are
+	// to be worked out anew.
 	secs  []biquad
-	state [][4]float64
+	room  [maxStages]biquad
+	fresh bool
+	state [maxStages][4]float64
 }
 
 // Process implements [Insert]: it follows the EQ's settings a block's
 // way, and filters frames through each band in turn.
 func (e *eqInsert) Process(frames []float32) {
-	e.eq.mu.Lock()
-	e.got = append(e.got[:0], e.eq.bands...)
-	bypass := e.eq.bypass
-	e.eq.mu.Unlock()
+	set, bypass := e.eq.settings.Load(), e.eq.bypass.Load()
 	if e.rate == 0 {
 		e.setRate(SampleRate)
 	}
-	e.follow(e.got)
+	e.follow(set.bands)
 	target := 1.0
 	if bypass {
 		target = 0
@@ -274,7 +318,8 @@ func (e *eqInsert) Process(frames []float32) {
 }
 
 // follow moves each band a block's way toward its settings, adding
-// bands new to the EQ and dropping those faded out.
+// bands new to the EQ and dropping those faded out. A band new while
+// the room is full of bands fading out comes in once one has.
 func (e *eqInsert) follow(want []Band) {
 	for _, b := range e.bands {
 		b.gone = true
@@ -288,7 +333,12 @@ func (e *eqInsert) follow(want []Band) {
 			}
 		}
 		if lb == nil {
-			lb = &liveBand{id: w.ID, kind: w.Kind, slope: w.Slope,
+			if len(e.free) == 0 {
+				continue
+			}
+			lb = e.free[len(e.free)-1]
+			e.free = e.free[:len(e.free)-1]
+			*lb = liveBand{id: w.ID, kind: w.Kind, slope: w.Slope, fresh: true,
 				logFreq: math.Log(float64(max(w.Freq, 10))), gain: float64(w.Gain), logQ: math.Log(float64(max(w.Q, 0.025)))}
 			e.bands = append(e.bands, lb)
 		}
@@ -303,7 +353,7 @@ func (e *eqInsert) follow(want []Band) {
 			on = false
 			if b.mix == 0 {
 				b.kind, b.slope = b.want.Kind, b.want.Slope
-				b.secs, b.state = nil, nil
+				b.fresh, b.secs, b.state = true, nil, [maxStages][4]float64{}
 			}
 		}
 		target := 0.0
@@ -315,6 +365,7 @@ func (e *eqInsert) follow(want []Band) {
 			b.mix = target
 		}
 		if b.gone && b.mix == 0 {
+			e.free = append(e.free, b)
 			continue
 		}
 		b.move(e.rate, e.glide)
@@ -329,7 +380,7 @@ func (e *eqInsert) follow(want []Band) {
 func (b *liveBand) move(rate, glide float64) {
 	w := b.want
 	tf, tg, tq := math.Log(float64(max(w.Freq, 10))), float64(w.Gain), math.Log(float64(max(w.Q, 0.025)))
-	moved := b.secs == nil
+	moved := b.fresh
 	step := func(v *float64, to, near float64) {
 		if math.Abs(to-*v) < near {
 			if *v != to {
@@ -348,8 +399,11 @@ func (b *liveBand) move(rate, glide float64) {
 		return
 	}
 	now := Band{Kind: b.kind, Slope: b.slope, Freq: float32(math.Exp(b.logFreq)), Gain: float32(b.gain), Q: float32(math.Exp(b.logQ))}
-	b.secs = now.appendSections(b.secs[:0], rate)
-	if len(b.state) != len(b.secs) {
-		b.state = make([][4]float64, len(b.secs))
+	n := len(b.secs)
+	b.secs = now.appendSections(b.room[:0], rate)
+	if len(b.secs) != n {
+		// Other sections start from silence.
+		b.state = [maxStages][4]float64{}
 	}
+	b.fresh = false
 }

@@ -2,6 +2,7 @@ package audio
 
 import (
 	"math"
+	"runtime"
 	"testing"
 )
 
@@ -140,5 +141,110 @@ func TestAnEQFollowsTheMixersRate(t *testing.T) {
 	want := Band{Kind: Bell, Freq: 1000, Gain: 6, Q: 1}.appendSections(nil, 44100)
 	if len(in.bands) != 1 || in.bands[0].secs[0] != want[0] {
 		t.Fatalf("the sections are %+v, want %+v at 44.1 kHz", in.bands[0].secs, want)
+	}
+}
+
+// TestAnEQInsertedAtARateWorksAtIt runs an EQ at 44.1 kHz outside a
+// mixer and finds the sections worked out for that rate.
+func TestAnEQInsertedAtARateWorksAtIt(t *testing.T) {
+	eq := NewEQ()
+	eq.Set([]Band{{ID: 1, Kind: Bell, Freq: 1000, Gain: 6, Q: 1, On: true}})
+	in, ok := eq.InsertAt(44100).(*eqInsert)
+	if !ok {
+		t.Fatal("the EQ's insert is of another type")
+	}
+	frames := make([]float32, 2*block)
+	for range 200 {
+		in.Process(frames)
+	}
+	want := Band{Kind: Bell, Freq: 1000, Gain: 6, Q: 1}.appendSections(nil, 44100)
+	if len(in.bands) != 1 || in.bands[0].secs[0] != want[0] {
+		t.Fatalf("the sections are %+v, want %+v at 44.1 kHz", in.bands[0].secs, want)
+	}
+}
+
+// TestAnEQInsertMakesNothingNewAsItsSettingsChange runs an insert
+// through every kind of change, bands coming and going, changing kind
+// and slope, and the bypass, and finds it makes nothing new.
+func TestAnEQInsertMakesNothingNewAsItsSettingsChange(t *testing.T) {
+	eq := NewEQ()
+	in := eq.InsertAt(44100)
+	steps := make([]*eqSettings, 0, MaxBands+2)
+	for i := range MaxBands {
+		bands := make([]Band, i+1)
+		for k := range bands {
+			bands[k] = Band{ID: k + 1, Kind: FilterKind((i + k) % 6), Slope: 12 * (1 + (i+k)%4), Freq: float32(40 + 300*k), Gain: 3, Q: 1, On: true}
+		}
+		steps = append(steps, &eqSettings{bands: bands})
+	}
+	// Then all gone at once, and all back, other bands, as the room
+	// fills with bands fading out.
+	steps = append(steps, &eqSettings{})
+	again := make([]Band, MaxBands)
+	for k := range again {
+		again[k] = Band{ID: 100 + k, Kind: HighCut, Slope: 48, Freq: 8000, Q: 0.7, On: true}
+	}
+	steps = append(steps, &eqSettings{bands: again})
+	frames := make([]float32, 2*block)
+	// Every allocation counted, not their mean a block, which rounds
+	// the few a change makes down to none.
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	// On one thread, as testing.AllocsPerRun counts, so other
+	// goroutines allocate as little as may be meanwhile.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := range 4 * len(steps) {
+		eq.settings.Store(steps[i/4])
+		eq.SetBypass(i%28 == 13)
+		in.Process(frames)
+	}
+	runtime.ReadMemStats(&after)
+	if n := after.Mallocs - before.Mallocs; n != 0 {
+		t.Fatalf("the insert made %d things over %d blocks", n, 4*len(steps))
+	}
+}
+
+// TestAnEQIsSetWhileItPlays sets an EQ from one goroutine while an
+// insert plays it on another, for the race detector.
+func TestAnEQIsSetWhileItPlays(t *testing.T) {
+	eq := NewEQ()
+	in := eq.InsertAt(48000)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 500 {
+			eq.Set([]Band{{ID: 1, Kind: Bell, Freq: float32(100 + i), Gain: 6, Q: 1, On: true}})
+			eq.SetBypass(i%50 == 0)
+		}
+	}()
+	frames := make([]float32, 2*block)
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			in.Process(frames)
+		}
+	}
+}
+
+// TestAnEQPlaysAtMostMaxBands keeps the first MaxBands bands of more.
+func TestAnEQPlaysAtMostMaxBands(t *testing.T) {
+	eq := NewEQ()
+	bands := make([]Band, MaxBands+5)
+	for k := range bands {
+		bands[k] = Band{ID: k + 1, Kind: Bell, Freq: 1000, Gain: 1, Q: 1, On: true}
+	}
+	eq.Set(bands)
+	in, ok := eq.Insert().(*eqInsert)
+	if !ok {
+		t.Fatal("the EQ's insert is of another type")
+	}
+	in.Process(make([]float32, 2*block))
+	if len(in.bands) != MaxBands || in.bands[MaxBands-1].id != MaxBands {
+		t.Fatalf("the EQ plays %d bands, want the first %d", len(in.bands), MaxBands)
 	}
 }
