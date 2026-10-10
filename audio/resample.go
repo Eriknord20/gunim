@@ -41,40 +41,46 @@ type resampler struct {
 	read     int64
 	end      int64
 	endKnown bool
-	// filled says win holds frames.
-	filled bool
+	// primed counts the frames win holds from the decoder, to three.
+	primed int
 }
 
 func newResampler(d decoder, to int) *resampler {
 	return &resampler{d: d, step: float64(d.rate()) / float64(to), in: make([]float32, 2*1024)}
 }
 
-// next returns the decoder's next frame, or false at its end.
-func (r *resampler) next() (l, rt float32, ok bool, err error) {
+// next returns the decoder's next frame, or false at its end; wait
+// says the decoder has none yet, as a [Stream] not yet decoded that
+// far, and to try again later.
+func (r *resampler) next() (l, rt float32, ok, wait bool, err error) {
 	for r.inAt >= r.inN {
 		if r.ended {
-			return 0, 0, false, nil
+			return 0, 0, false, false, nil
 		}
 		n, err := r.d.read(r.in)
 		r.inN, r.inAt = n, 0
 		if errors.Is(err, io.EOF) {
 			r.ended = true
 		} else if err != nil {
-			return 0, 0, false, err
+			return 0, 0, false, false, err
 		}
 		if n == 0 && !r.ended {
-			return 0, 0, false, io.ErrNoProgress
+			return 0, 0, false, true, nil
 		}
 	}
 	l, rt = r.in[2*r.inAt], r.in[2*r.inAt+1]
 	r.inAt++
-	return l, rt, true, nil
+	return l, rt, true, false, nil
 }
 
 // push moves the window on by one frame of the decoder; past its end
-// the window fills with silence.
-func (r *resampler) push() error {
-	l, rt, ok, err := r.next()
+// the window fills with silence. It returns false, the window as it
+// was, where the decoder has no frame yet.
+func (r *resampler) push() (bool, error) {
+	l, rt, ok, wait, err := r.next()
+	if wait || err != nil {
+		return false, err
+	}
 	if ok {
 		r.read++
 	} else if !r.endKnown {
@@ -82,22 +88,30 @@ func (r *resampler) push() error {
 	}
 	copy(r.win[:6], r.win[2:])
 	r.win[6], r.win[7] = l, rt
-	return err
+	return true, nil
 }
 
-// Read implements [Source].
+// Read implements [Source]: it stops short, with no error, where the
+// decoder has no frames yet.
 func (r *resampler) Read(dst []float32) (int, error) {
-	if !r.filled {
-		// The frame before the first is silence; win holds -1 to 2.
-		for range 3 {
-			if err := r.push(); err != nil {
-				return 0, err
-			}
+	// The frame before the first is silence; win holds -1 to 2.
+	for r.primed < 3 {
+		if moved, err := r.push(); !moved {
+			return 0, err
 		}
-		r.filled = true
+		r.primed++
 	}
 	frames := len(dst) / 2
 	for i := range frames {
+		// The window moves on to the frame made next, before it is
+		// made, so a decoder with none yet leaves nothing half done.
+		for r.frac >= 1 {
+			if moved, err := r.push(); !moved {
+				return i, err
+			}
+			r.frac--
+			r.pos++
+		}
 		if r.past() {
 			return i, io.EOF
 		}
@@ -106,13 +120,6 @@ func (r *resampler) Read(dst []float32) (int, error) {
 			dst[2*i+c] = hermite(r.win[c], r.win[2+c], r.win[4+c], r.win[6+c], t)
 		}
 		r.frac += r.step
-		for r.frac >= 1 {
-			r.frac--
-			r.pos++
-			if err := r.push(); err != nil {
-				return i + 1, err
-			}
-		}
 	}
 	return frames, nil
 }
@@ -129,7 +136,7 @@ func (r *resampler) SeekFrame(f int64) error {
 		return err
 	}
 	r.pos, r.frac = src, float64(f)*r.step-float64(src)
-	r.inN, r.inAt, r.ended, r.filled = 0, 0, false, false
+	r.inN, r.inAt, r.ended, r.primed = 0, 0, false, 0
 	r.read, r.endKnown = src, false
 	r.win = [8]float32{}
 	return nil
