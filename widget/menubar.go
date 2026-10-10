@@ -822,7 +822,7 @@ func (b *Menubar) paintCompact(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		faint.A = uint8(float32(faint.A) * 0.6)
 		run := b.subRun.shape(faceIn(Font, th), b.Subtitle, size)
 		if run.Advance > room {
-			run = cutRun(run, b.subEll.shape(faceIn(Font, th), "…", size), room)
+			run = cutRunWith(run, b.subEll.shape(faceIn(Font, th), "…", size), room)
 		}
 		run.Paint(p, geom.Pt(x, (box.H-run.Height())/2), faint)
 	}

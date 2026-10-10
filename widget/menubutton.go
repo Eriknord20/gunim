@@ -223,7 +223,7 @@ func (b *MenuButton) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	run := b.shown.run
 	x := pad + b.iconRoom(th)
 	if room := box.W - x - pad - chevron - pad; run.Advance > room {
-		run = cutRun(run, b.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
+		run = cutRunWith(run, b.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
 	}
 	run.Paint(p, geom.Pt(x, (box.H-run.Height())/2), Ink.Get(th))
 	c := geom.Pt(box.W-pad-chevron/2, box.H/2)

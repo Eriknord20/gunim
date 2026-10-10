@@ -920,7 +920,7 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 			return
 		}
 		if cut {
-			run = g.cutRun(run, room)
+			run = g.cutShort(run, room)
 			cutShort()
 		}
 		ty := y + (g.rowH-run.Height())/2
@@ -1035,16 +1035,16 @@ func (g *DataGrid) shape(k spanKey, face *text.Face, s string, size float32) tex
 	return sh.run
 }
 
-// cutRun returns run cut to the glyphs that fit in room with an ellipsis
+// cutShort returns run cut to the glyphs that fit in room with an ellipsis
 // after them.
-func (g *DataGrid) cutRun(run text.Run, room float32) text.Run {
+func (g *DataGrid) cutShort(run text.Run, room float32) text.Run {
 	key := cutKey{run.Face, run.Size}
 	ell, ok := g.cut[key]
 	if !ok {
 		ell = run.Face.Shape("…", run.Size)
 		g.cut[key] = ell
 	}
-	return cutRun(run, ell, room)
+	return cutRunWith(run, ell, room)
 }
 
 func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pad float32) {
@@ -1073,7 +1073,7 @@ func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pa
 			right -= sortArrow + 2
 		}
 		if room := right - x - pad; run.Advance > room {
-			run = g.cutRun(run, room)
+			run = g.cutShort(run, room)
 		}
 		at := x + pad
 		if col.End {

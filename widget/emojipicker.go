@@ -414,7 +414,7 @@ func (c *emojiCard) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gun
 		x += c.hotRun.Advance + 8
 	}
 	if room := foot.Max.X - x; c.name.Advance > room {
-		c.name = cutRun(c.name, faceIn(Font, th).Shape("…", c.name.Size), room)
+		c.name = cutRunWith(c.name, faceIn(Font, th).Shape("…", c.name.Size), room)
 	}
 	c.name.Paint(p, geom.Pt(x, mid-c.name.Height()/2), Ink.Get(th))
 }

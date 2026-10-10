@@ -61,10 +61,19 @@ func (pr *laidText) wrap(face *text.Face, s string, size, width float32, lines i
 	return pr.layout(face, s, text.Style{Size: size, MaxLines: lines}, width)
 }
 
-// cutRun returns run cut to the glyphs that fit in room with ell, an
+// CutRun returns run cut short to fit in room, ending in an ellipsis,
+// or run as it is when it fits.
+func CutRun(run text.Run, room float32) text.Run {
+	if run.Advance <= room || run.Face == nil {
+		return run
+	}
+	return cutRunWith(run, run.Face.Shape("…", run.Size), room)
+}
+
+// cutRunWith returns run cut to the glyphs that fit in room with ell, an
 // ellipsis shaped in the same face and size, after them. Where even the
 // ellipsis is wider than room, it returns run with no glyphs.
-func cutRun(run, ell text.Run, room float32) text.Run {
+func cutRunWith(run, ell text.Run, room float32) text.Run {
 	avail := room - ell.Advance
 	if avail < 0 {
 		run.Glyphs, run.Advance = nil, 0
@@ -105,5 +114,5 @@ func fitRun(run text.Run, ell *shapedText, room float32) text.Run {
 	if run.Advance <= room || run.Face == nil {
 		return run
 	}
-	return cutRun(run, ell.shape(run.Face, "…", run.Size), room)
+	return cutRunWith(run, ell.shape(run.Face, "…", run.Size), room)
 }

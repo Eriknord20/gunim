@@ -20,6 +20,9 @@ type fakeDriver struct {
 	cfg    asio.Config
 	opens  int
 	closed bool
+	// stuck has the device not stop as it closes, as a driver that
+	// stopped answering.
+	stuck bool
 }
 
 func (f *fakeDriver) open(c asio.Config) (pullDevice, error) {
@@ -54,8 +57,11 @@ func (d *fakeDevice) Info() asio.Info     { return d.info }
 func (d *fakeDevice) ControlPanel() error { return nil }
 func (d *fakeDevice) Close() error {
 	d.f.mu.Lock()
+	defer d.f.mu.Unlock()
+	if d.f.stuck {
+		return asio.ErrNotAnswering
+	}
 	d.f.closed = true
-	d.f.mu.Unlock()
 	return nil
 }
 
@@ -261,4 +267,32 @@ func TestADriverThatFailedOpensItsSettings(t *testing.T) {
 	if st := s.State(); st.Driver != "Fake" || st.Problem != nil {
 		t.Errorf("after the settings, the speaker plays through %q, problem %v", st.Driver, st.Problem)
 	}
+}
+
+// TestADriverThatStopsAnsweringIsLetGo has a driver that stops
+// answering ask to be opened again: the speaker lets it go and opens
+// the driver anew, where it would keep the one that does not close.
+func TestADriverThatStopsAnsweringIsLetGo(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
+	m := audio.NewMixer()
+	s, err := Open(m, Options{Driver: "Fake", Latency: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	was := ringOf(t, s)
+	f.mu.Lock()
+	f.stuck = true
+	reset := f.cfg.Reset
+	f.mu.Unlock()
+	reset()
+	waitFor(t, "the driver opened anew", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.opens == 2
+	})
+	waitFor(t, "a new output", func() bool {
+		out := s.out.Load()
+		return out != nil && out.output != was
+	})
 }

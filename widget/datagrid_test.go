@@ -155,7 +155,7 @@ func TestDraggingTheScrollbarScrolls(t *testing.T) {
 func TestALongCellEndsInAnEllipsis(t *testing.T) {
 	g := NewDataGrid(GridColumn{Title: "Message", Width: 80})
 	long := "a message far too long to fit in eighty pixels"
-	run := g.cutRun(Font.Default().Shape(long, 12), 60)
+	run := g.cutShort(Font.Default().Shape(long, 12), 60)
 	if run.Advance > 60 {
 		t.Fatalf("cut to 60, the run is %v wide", run.Advance)
 	}

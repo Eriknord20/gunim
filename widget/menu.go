@@ -970,7 +970,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 			small := size * 0.85
 			caption := r.label.shape(face, m.label(i), small)
 			if fits := room + m.gut + m.iconSpace; caption.Advance > fits {
-				caption = cutRun(caption, m.smallEll.shape(face, "…", small), fits)
+				caption = cutRunWith(caption, m.smallEll.shape(face, "…", small), fits)
 			}
 			caption.Paint(p, geom.Pt(card.Min.X+pad, m.rowY(i)+(m.row-caption.Height())/2), hint)
 			continue
@@ -1008,7 +1008,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		full := r.label.shape(face, m.label(i), size)
 		run := full
 		if run.Advance > fits {
-			run = cutRun(full, m.ell.shape(face, "…", size), fits)
+			run = cutRunWith(full, m.ell.shape(face, "…", size), fits)
 		}
 		y := m.rowY(i) + (m.row-run.Height())/2
 		run.Paint(p, geom.Pt(x+m.iconSpace, y), col)
@@ -1384,7 +1384,7 @@ func (d *Dropdown) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		x += d.iconSpace
 		run := d.shown.shape(faceIn(Font, th), it.Label, TextSize.Get(th))
 		if room := box.W - x - pad - chevron - pad; run.Advance > room {
-			run = cutRun(run, d.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
+			run = cutRunWith(run, d.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
 		}
 		run.Paint(p, geom.Pt(x, (box.H-run.Height())/2), Ink.Get(th))
 	}

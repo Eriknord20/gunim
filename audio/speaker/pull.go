@@ -40,6 +40,10 @@ type ringOutput struct {
 	// device finds short is the sound running dry.
 	primed atomic.Bool
 	paused atomic.Bool
+	// taken is when the device last took a buffer, and silent says the
+	// log has told it stopped.
+	taken  atomic.Int64
+	silent bool
 	wake   chan struct{}
 	quit   chan struct{}
 	done   chan struct{}
@@ -47,7 +51,7 @@ type ringOutput struct {
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
-	dev, err := openPull(asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Reset: s.askReset})
+	dev, err := openPull(asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Reset: s.askReset, Log: s.logf})
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +62,7 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 
 // start starts reading the mixer, working ahead as far as ahead.
 func (r *ringOutput) start(ahead time.Duration) {
+	r.taken.Store(time.Now().UnixNano())
 	r.setAhead(ahead)
 	go r.feed()
 }
@@ -65,6 +70,7 @@ func (r *ringOutput) start(ahead time.Duration) {
 // take fills frames from the ring, as the device asks, and silence
 // where the ring runs short.
 func (r *ringOutput) take(frames []float32) {
+	r.taken.Store(time.Now().UnixNano())
 	n := 0
 	q := r.q.Load()
 	if q != nil && !r.paused.Load() {
@@ -165,4 +171,19 @@ func (r *ringOutput) close() error {
 	close(r.quit)
 	<-r.done
 	return r.dev.Close()
+}
+
+// stoppedTaking says the device has taken no buffer for a while, as it
+// would while it plays, the first time it is asked after it stopped.
+func (r *ringOutput) stoppedTaking(after time.Duration) (time.Duration, bool) {
+	since := time.Since(time.Unix(0, r.taken.Load()))
+	if since < after || !r.primed.Load() || r.paused.Load() {
+		r.silent = false
+		return since, false
+	}
+	if r.silent {
+		return since, false
+	}
+	r.silent = true
+	return since, true
 }

@@ -279,6 +279,13 @@ func (s *Speaker) watch() {
 			if dry > 0 {
 				s.logf("ran dry %d times in %v", dry, every)
 			}
+			if out := s.out.Load(); out != nil {
+				if r, ok := out.output.(*ringOutput); ok {
+					if since, now := r.stoppedTaking(2 * time.Second); now {
+						s.logf("the driver has asked for no sound in %v", since.Round(time.Millisecond))
+					}
+				}
+			}
 			// Once might be a hiccup; more is the buffer too small. It
 			// grows from how far ahead the output works, which may be
 			// further than asked, as a driver's buffer is long.
@@ -340,8 +347,13 @@ func (s *Speaker) reopenLocked() error {
 	if cur := s.out.Load(); cur != nil {
 		s.out.Store(nil)
 		if err := cur.close(); err != nil {
-			s.out.Store(cur)
-			return err
+			if !errors.Is(err, asio.ErrNotAnswering) {
+				s.out.Store(cur)
+				return err
+			}
+			// Let go as it stopped answering: the output asked for
+			// opens all the same.
+			s.logf("%v; opening the output again all the same", err)
 		}
 	}
 	out, err := s.open()

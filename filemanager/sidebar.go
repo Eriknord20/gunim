@@ -613,10 +613,16 @@ type placeRow struct {
 	note  text.Run
 	shown string
 	size  float32
+	// cutName and cutNote are name and note cut short to the room the
+	// row had at width cutW.
+	cutName, cutNote text.Run
+	cutW             float32
+	// tip shows the name and the note whole while either is cut short.
+	tip widget.PartTip
 }
 
 func newPlaceRow(i placeItem) *placeRow {
-	r := &placeRow{item: i, hover: anim.NewFloat(0), on: anim.NewFloat(0), used: anim.NewFloat(0)}
+	r := &placeRow{item: i, hover: anim.NewFloat(0), on: anim.NewFloat(0), used: anim.NewFloat(0), cutW: -1}
 	r.Add(r.hover, r.on, r.used)
 	if i.current {
 		r.on.Jump(1)
@@ -651,6 +657,22 @@ func (r *placeRow) shape(th *theme.Live) {
 	r.shown, r.size = key, size
 	r.name = text.Default().Shape(r.item.Name, size)
 	r.note = text.Default().Shape(r.noteText(), SmallText.Get(th))
+	r.cutW = -1
+}
+
+// textLeft is where a row's name and note start, and textRight the room
+// kept after them.
+const textLeft, textRight = 34, 10
+
+// cut cuts the name and the note short, with an ellipsis, to fit a row
+// width wide.
+func (r *placeRow) cut(width float32) {
+	if width == r.cutW {
+		return
+	}
+	r.cutW = width
+	room := max(0, width-textLeft-textRight)
+	r.cutName, r.cutNote = widget.CutRun(r.name, room), widget.CutRun(r.note, room)
 }
 
 // tall reports whether the row has a second line.
@@ -696,7 +718,8 @@ func (r *placeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		p.RRect(geom.Rc(12, t+(line-12)/2, 12, 12), 3.5, paint.Solid(mark))
 	}
 	ink := widget.Ink.Get(th)
-	r.name.Paint(p, geom.Pt(34, t+(line-r.name.Height())/2), ink)
+	r.cut(box.W)
+	r.cutName.Paint(p, geom.Pt(textLeft, t+(line-r.name.Height())/2), ink)
 	if !r.tall() {
 		return
 	}
@@ -716,8 +739,7 @@ func (r *placeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		p.RRect(geom.Rc(track.Min.X, y, track.Size().W*used, 4), 2, paint.Solid(fill))
 		y += 6
 	}
-	defer p.Layer(paint.LayerOpts{Bounds: geom.Rc(34, y, box.W-40, box.H-y), Opacity: 1, Clip: true})()
-	r.note.Paint(p, geom.Pt(34, y), noteInk)
+	r.cutNote.Paint(p, geom.Pt(textLeft, y), noteInk)
 }
 
 // placeMark is the colour of the mark of p: green while it is lit, and
@@ -749,6 +771,7 @@ func placeTint(kind string) theme.Token[color.NRGBA] {
 // Handle implements [gunim.Handler]: the row lights under the pointer,
 // and leaves presses to the list, which tells a click from a drag.
 func (r *placeRow) Handle(e input.Event, u *gunim.UI) bool {
+	r.tip.Handle(e, u, r, r.tipText())
 	switch e.(type) {
 	case input.PointerEnter:
 		r.hover.Animate(1, widget.Quick.Get(u.Theme()))
@@ -760,6 +783,22 @@ func (r *placeRow) Handle(e input.Event, u *gunim.UI) bool {
 
 // Cursor implements [gunim.CursorShaper].
 func (r *placeRow) Cursor(geom.Point) input.Cursor { return input.CursorHand }
+
+// tipText is what the last paint cut short of the row's name and note,
+// whole, and else nothing.
+func (r *placeRow) tipText() string {
+	if r.cutW < 0 {
+		return ""
+	}
+	var parts []string
+	if len(r.cutName.Glyphs) != len(r.name.Glyphs) {
+		parts = append(parts, r.item.Name)
+	}
+	if len(r.cutNote.Glyphs) != len(r.note.Glyphs) {
+		parts = append(parts, r.noteText())
+	}
+	return strings.Join(parts, " · ")
+}
 
 // paintFavMark draws a favourite's mark centred on c: its icon in its
 // colour, on a tile of the colour.
