@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"runtime"
 	"testing"
 )
 
@@ -259,16 +258,14 @@ func TestReadingAWAVMakesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := make([]float32, 2*8192)
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for _, n := range []int{100, 1024, 4096, 8192, 7} {
-		if _, err := s.Read(dst[:2*n]); err != nil {
-			t.Fatal(err)
+	n := allocsUnder(t, "audio.(*wav).read", func() {
+		for _, n := range []int{100, 1024, 4096, 8192, 7} {
+			if _, err := s.Read(dst[:2*n]); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	runtime.ReadMemStats(&after)
-	if n := after.Mallocs - before.Mallocs; n != 0 {
+	})
+	if n != 0 {
 		t.Fatalf("reading made %d things", n)
 	}
 }

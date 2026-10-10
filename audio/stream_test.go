@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,17 +152,15 @@ func TestAStreamReadsMakeNothing(t *testing.T) {
 		t.Fatal("the frames never came")
 	}
 	dst := make([]float32, 2*1024)
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for i := range 40 {
-		if i == 20 {
-			_ = c.SeekFrame(100)
+	n := allocsUnder(t, "audio.(*Cursor)", func() {
+		for i := range 40 {
+			if i == 20 {
+				_ = c.SeekFrame(100)
+			}
+			_, _ = c.Read(dst)
 		}
-		_, _ = c.Read(dst)
-	}
-	runtime.ReadMemStats(&after)
-	if n := after.Mallocs - before.Mallocs; n != 0 {
+	})
+	if n != 0 {
 		t.Fatalf("reading made %d things", n)
 	}
 }

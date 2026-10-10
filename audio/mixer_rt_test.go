@@ -1,7 +1,6 @@
 package audio
 
 import (
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -43,36 +42,34 @@ func TestMixingMakesNothingAsTheSoundsChange(t *testing.T) {
 	}
 	buf := make([]float32, 2*1024)
 	m.Mix(buf)
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var made uint64
-	for i := range 300 {
-		// What the application does between blocks, which makes what
-		// it makes on its own side.
-		v := voices[i%2]
-		switch i % 10 {
-		case 0:
-			v.SetVolume(float32(i%5)/5, anim.Tween{Duration: 50 * time.Millisecond})
-		case 1:
-			v.SetPan(float32(i%3)-1, nil)
-		case 2:
-			v.Pause(0)
-		case 3:
-			v.Resume(0)
-		case 4:
-			_ = v.Seek(time.Duration(i) * time.Millisecond)
-		case 5:
-			v.Then(&endless{})
-		case 6:
-			m.Play(&endless{}, Options{FadeIn: 10 * time.Millisecond}).Stop(20 * time.Millisecond)
-		case 7:
-			eq.Set([]Band{{ID: 1 + i%3, Kind: FilterKind(i % 6), Freq: 500, Gain: 2, Q: 1, On: true}})
+	// Only what mixing makes counts: what the application makes between
+	// blocks, and what other goroutines make, does not.
+	made := allocsUnder(t, "audio.(*Mixer).Mix", func() {
+		for i := range 300 {
+			// What the application does between blocks, which makes what
+			// it makes on its own side.
+			v := voices[i%2]
+			switch i % 10 {
+			case 0:
+				v.SetVolume(float32(i%5)/5, anim.Tween{Duration: 50 * time.Millisecond})
+			case 1:
+				v.SetPan(float32(i%3)-1, nil)
+			case 2:
+				v.Pause(0)
+			case 3:
+				v.Resume(0)
+			case 4:
+				_ = v.Seek(time.Duration(i) * time.Millisecond)
+			case 5:
+				v.Then(&endless{})
+			case 6:
+				m.Play(&endless{}, Options{FadeIn: 10 * time.Millisecond}).Stop(20 * time.Millisecond)
+			case 7:
+				eq.Set([]Band{{ID: 1 + i%3, Kind: FilterKind(i % 6), Freq: 500, Gain: 2, Q: 1, On: true}})
+			}
+			m.Mix(buf)
 		}
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		m.Mix(buf)
-		runtime.ReadMemStats(&after)
-		made += after.Mallocs - before.Mallocs
-	}
+	})
 	if made != 0 {
 		t.Fatalf("mixing made %d things over 300 blocks", made)
 	}

@@ -2,7 +2,6 @@ package audio
 
 import (
 	"math"
-	"runtime"
 	"testing"
 )
 
@@ -191,18 +190,14 @@ func TestAnEQInsertMakesNothingNewAsItsSettingsChange(t *testing.T) {
 	if raceOn {
 		t.Skip("the race detector allocates of its own")
 	}
-	// On one thread, as testing.AllocsPerRun counts, so other
-	// goroutines allocate as little as may be meanwhile.
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for i := range 4 * len(steps) {
-		eq.settings.Store(steps[i/4])
-		eq.SetBypass(i%28 == 13)
-		in.Process(frames)
-	}
-	runtime.ReadMemStats(&after)
-	if n := after.Mallocs - before.Mallocs; n != 0 {
+	n := allocsUnder(t, "audio.(*eqInsert).Process", func() {
+		for i := range 4 * len(steps) {
+			eq.settings.Store(steps[i/4])
+			eq.SetBypass(i%28 == 13)
+			in.Process(frames)
+		}
+	})
+	if n != 0 {
 		t.Fatalf("the insert made %d things over %d blocks", n, 4*len(steps))
 	}
 }
