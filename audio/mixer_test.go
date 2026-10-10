@@ -42,9 +42,7 @@ func TestASoundEndsAndItsVoiceIsDone(t *testing.T) {
 	if out[2*299] != 0.5 || out[2*300] != 0 {
 		t.Errorf("frames 299 and 300 are %v and %v, want the sound's last and then silence", out[2*299], out[2*300])
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("the voice is not done once its sound ended")
 	}
 	if m.Playing() != 0 {
@@ -109,9 +107,7 @@ func TestStopFadesOutAndEnds(t *testing.T) {
 	if end := out[len(out)-2]; end != 0 {
 		t.Errorf("after a stop the sound is at %v, want silence", end)
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("a stopped voice is not done")
 	}
 }
@@ -330,9 +326,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 			t.Fatalf("frame %d is %v, want %v: the second source ran on from the first's last frame", i, out[2*i], want)
 		}
 	}
-	select {
-	case <-v.Turned():
-	default:
+	if !soon(v.Turned()) {
 		t.Fatal("the turn went unheard")
 	}
 	if p := v.Position(); p != Duration(500) {
@@ -342,9 +336,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 		t.Fatalf("the voice's length is %v, want the second source's, %v", l, Duration(1000))
 	}
 	m.Mix(out)
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Fatal("the voice played on after its last source ended")
 	}
 }
@@ -421,5 +413,16 @@ func TestAMixerAtAnotherRate(t *testing.T) {
 	}
 	if got := m.Duration(44100); got != time.Second {
 		t.Errorf("44100 frames last %v", got)
+	}
+}
+
+// soon says ch receives, or is closed, within a second: the mixer
+// tells of an end or a turn a moment after it mixes it.
+func soon(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Second):
+		return false
 	}
 }

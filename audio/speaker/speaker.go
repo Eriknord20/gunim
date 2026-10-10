@@ -105,9 +105,12 @@ type Speaker struct {
 	dry, reads, dropouts atomic.Int64
 	// suspended stops the watch growing the buffer while nothing plays.
 	suspended atomic.Bool
-	// qmu guards q, which rounds the sound as it leaves.
-	qmu sync.Mutex
-	q   audio.Quantizer
+	// q rounds the sound as it leaves, as bits and dither say: q is
+	// the goroutine's that pulls, and the settings anyone's, so neither
+	// waits.
+	bits   atomic.Int64
+	dither atomic.Bool
+	q      audio.Quantizer
 	// reset asks the watch to open the output again, as an ASIO driver
 	// asks; changed tells of an output opened again.
 	reset   chan struct{}
@@ -159,7 +162,9 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	}
 	s := &Speaker{m: m, o: o, reset: make(chan struct{}, 1), changed: make(chan struct{}, 1),
 		quit: make(chan struct{}), done: make(chan struct{}), debug: os.Getenv("GUNIM_DEBUG_AUDIO") != ""}
-	s.q = audio.Quantizer{Bits: o.Bits, Dither: o.Dither}
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
+	s.q.Ready()
 	s.fixed.Store(o.Fixed)
 	s.ahead.Store(int64(o.latency()))
 	out, err := s.open()
@@ -203,9 +208,8 @@ func (s *Speaker) open() (output, error) {
 // pull fills frames with what plays next, rounded as Bits says.
 func (s *Speaker) pull(frames []float32) {
 	s.m.Mix(frames)
-	s.qmu.Lock()
+	s.q.Bits, s.q.Dither = int(s.bits.Load()), s.dither.Load()
 	s.q.Process(frames)
-	s.qmu.Unlock()
 }
 
 // ranDry counts a read that found the buffer empty.
@@ -311,9 +315,8 @@ func (s *Speaker) Set(o Options) error {
 	defer s.mu.Unlock()
 	prev := s.o
 	s.o = o
-	s.qmu.Lock()
-	s.q.Bits, s.q.Dither = o.Bits, o.Dither
-	s.qmu.Unlock()
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
