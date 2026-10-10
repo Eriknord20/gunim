@@ -26,6 +26,7 @@ const (
 // rowItems are the context menu of the items selected.
 var rowItems = []menuItem{
 	{"Open", "Enter", CmdOpen},
+	{"View", "Space", CmdViewer},
 	{"Open with system", "", CmdOpenSystem},
 	{"Open with", "", localOpenWith},
 	{"Open in new window", "", localOpenWindow},
@@ -34,9 +35,12 @@ var rowItems = []menuItem{
 	{"Cut", "Ctrl+X", CmdCut},
 	{"Copy", "Ctrl+C", CmdCopy},
 	{"Paste", "Ctrl+V", CmdPaste},
+	{"Paste as zip…", "", CmdPasteZip},
 	{"-", "", ""},
 	{"Rename", "F2", CmdRename},
 	{"Duplicate", "", CmdDuplicate},
+	{"Create zip…", "", CmdZip},
+	{"Extract…", "", CmdExtract},
 	{"Move to trash", "Delete", CmdTrash},
 	{"Delete permanently", "Shift+Delete", CmdDelete},
 	{"-", "", ""},
@@ -50,6 +54,7 @@ var rowItems = []menuItem{
 var emptyItems = []menuItem{
 	{"New folder", "Ctrl+Shift+N", CmdNewFolder},
 	{"Paste", "Ctrl+V", CmdPaste},
+	{"Paste as zip…", "", CmdPasteZip},
 	{"Refresh", "F5", CmdRefresh},
 	{"-", "", ""},
 	{"Sort by name", "", CmdSortName},
@@ -178,7 +183,7 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		if row < 0 {
 			b.listing.selectNone(u)
 			st = menuState{path: b.listing.path}
-			st.cmds = fill(m, emptyItems, func(cmd string) bool { return cmd == CmdPaste && clipEmpty },
+			st.cmds = fill(m, emptyItems, func(cmd string) bool { return (cmd == CmdPaste || cmd == CmdPasteZip) && clipEmpty },
 				b.title.checked)
 			b.paneHints(m, st.cmds)
 			return true
@@ -208,16 +213,22 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		if !b.shell.OpenWith {
 			items = without(items, localOpenWith)
 		}
+		if !one || sel[0].Dir || !isArchive(sel[0].Name) {
+			// Only for an archive it can open.
+			items = without(items, CmdExtract)
+		}
 		st.cmds = fill(m, items, func(cmd string) bool {
 			switch cmd {
 			case CmdOpenSystem:
 				// Folders elsewhere do not open with this computer's
 				// programs; their files are fetched to.
 				return b.shell.Fetches && dirs > 0
-			case CmdPaste:
+			case CmdPaste, CmdPasteZip:
 				return clipEmpty
 			case CmdRename:
 				return !one
+			case CmdViewer:
+				return !one || sel[0].Dir
 			case localOpenWindow:
 				return !one || !sel[0].Dir
 			case localOpenWith:

@@ -32,8 +32,9 @@ type carried struct{ at, from, n int }
 // frame before this one and holds only shapes, text, images and masks; with
 // false nothing is recorded, and the node draws as usual.
 //
-// The commands keep the transforms they were drawn with, so the space
-// in force should be the one they were drawn in. [Painter.Damage] takes
+// The commands keep the transforms and blends they were drawn with, so
+// the space in force should be the one they were drawn in, and the
+// blend in force does not change them. [Painter.Damage] takes
 // commands carried to the place they held as unchanged, without
 // comparing them.
 func (p *Painter) Again(run Run) bool {
@@ -63,8 +64,7 @@ func (p *Painter) Again(run Run) bool {
 			c := *op
 			p.ops = append(p.ops, &c)
 		case *MaskOp:
-			c := *op
-			p.ops = append(p.ops, &c)
+			p.ops = append(p.ops, p.takeMask(*op))
 		case *CellsOp:
 			c := *op
 			p.ops = append(p.ops, &c)

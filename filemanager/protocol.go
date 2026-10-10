@@ -170,6 +170,9 @@ type Selection struct {
 	Gen    int
 	Runs   [][2]int
 	Cursor int
+	// Slide has the selection slide there, as it does for a key that
+	// moves it, for a row found by the name typed.
+	Slide bool
 }
 
 // Band is what the overview strip shows for a stretch of rows: the
@@ -185,9 +188,10 @@ type Bands struct {
 	Bands []Band
 }
 
-// Status is the status bar.
+// Status is the status bar. Note is the program's, as [Window.SetNote]
+// gives it, between the two.
 type Status struct {
-	Left, Right string
+	Left, Note, Right string
 }
 
 // Banner is a line under the path bar, for an error that stopped
@@ -256,15 +260,23 @@ type Command struct {
 
 // The commands.
 const (
-	CmdBack      = "back"
-	CmdForward   = "forward"
-	CmdUp        = "up"
-	CmdHome      = "home"
-	CmdRefresh   = "refresh"
-	CmdOpen      = "open"
-	CmdCopy      = "copy"
-	CmdCut       = "cut"
-	CmdPaste     = "paste"
+	CmdBack    = "back"
+	CmdForward = "forward"
+	CmdUp      = "up"
+	CmdHome    = "home"
+	CmdRefresh = "refresh"
+	CmdOpen    = "open"
+	CmdCopy    = "copy"
+	CmdCut     = "cut"
+	CmdPaste   = "paste"
+	// CmdZip makes a zip of the items selected, in their folder, and
+	// CmdPasteZip makes one of the items on the clipboard, in the folder
+	// showing. Each asks for the zip's name first. CmdExtract extracts
+	// the archive selected, a zip or a tar, into a new folder beside it,
+	// asking for the folder's name first.
+	CmdZip       = "zip"
+	CmdExtract   = "extract"
+	CmdPasteZip  = "pastezip"
 	CmdTrash     = "trash"
 	CmdDelete    = "delete"
 	CmdRename    = "rename"

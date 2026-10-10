@@ -328,7 +328,14 @@ type blendSlot[T any] struct {
 func (s *blendSlot[T]) step(dt time.Duration) bool { return s.p.Step(dt) }
 
 func (s *blendSlot[T]) retarget(th Theme, parent *Live, m anim.Motion) {
-	s.from, s.to = s.value(), s.token.target(th, parent)
+	to := s.token.target(th, parent)
+	if reflect.DeepEqual(to, s.to) {
+		// Going where it goes already. Starting again would blend the
+		// value into itself, and a blend that fades through, as a
+		// foreground does, would dip the text and bring it back.
+		return
+	}
+	s.from, s.to = s.value(), to
 	s.p.Jump(0)
 	s.p.Animate(1, m)
 }

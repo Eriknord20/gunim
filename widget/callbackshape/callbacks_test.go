@@ -24,6 +24,7 @@ import (
 // whole, from the packages' source.
 var structs = []any{
 	(*widget.AddressBar)(nil),
+	(*widget.AddressLead)(nil),
 	(*widget.AddressPlace)(nil),
 	(*widget.BarMenu)(nil),
 	(*widget.Button)(nil),

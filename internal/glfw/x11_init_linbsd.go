@@ -1105,6 +1105,7 @@ func platformTerminate() error {
 
 	_glfw.platformWindow.primarySelectionString = ""
 	_glfw.platformWindow.clipboardString = ""
+	dropClipboardImage() // gunim change
 
 	if _glfw.platformWindow.im != 0 {
 		xCloseIM(_glfw.platformWindow.im)

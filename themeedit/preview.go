@@ -71,11 +71,11 @@ type previewPanel struct {
 	stops []func()
 }
 
-func newPreviewPanel(content gunim.Node, spec *specimen, th theme.Theme) *previewPanel {
+func newPreviewPanel(content gunim.Node, spec *specimen, title string, th theme.Theme) *previewPanel {
 	p := &previewPanel{heading: widget.NewLabel("Preview"), caption: widget.NewLabel("")}
 	p.heading.Face = widget.BoldFont
 	p.caption.Color, p.caption.NoWrap, p.caption.MaxLines = widget.Placeholder, true, 1
-	p.scene = newScene(content, spec)
+	p.scene = newScene(content, spec, title)
 	p.themed = widget.NewThemed(p.scene, th)
 	p.fold = widget.NewFold(p.themed, true)
 	p.toggle = widget.NewIconButton(icon.ChevronUp, "Hide the preview")
@@ -235,18 +235,21 @@ type scene struct {
 	// popped and fade how much of it shows, and chip where the chip is
 	// along its track and chipOn how much of the track shows.
 	panel, toast, fade, chip, chipOn *anim.Float
-	title                            text.Run
-	titleFace                        *text.Face
-	titleSize                        float32
-	sideAt, noteAt                   geom.Rect
-	bar                              float32
+	// name is the window's name in its title bar, or empty for none,
+	// and title it shaped.
+	name           string
+	title          text.Run
+	titleFace      *text.Face
+	titleSize      float32
+	sideAt, noteAt geom.Rect
+	bar            float32
 	// maxH is the most height the panel has room for, or zero for no
 	// bound.
 	maxH float32
 }
 
-func newScene(content gunim.Node, spec *specimen) *scene {
-	s := &scene{content: content, spec: spec,
+func newScene(content gunim.Node, spec *specimen, name string) *scene {
+	s := &scene{content: content, spec: spec, name: name,
 		panel: anim.NewFloat(0), toast: anim.NewFloat(0), fade: anim.NewFloat(0), chip: anim.NewFloat(0), chipOn: anim.NewFloat(0)}
 	s.Add(s.panel, s.toast, s.fade, s.chip, s.chipOn)
 	head := widget.NewLabel("Details")
@@ -276,7 +279,7 @@ func (s *scene) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) 
 	face, size := widget.Font.Get(th), widget.TextSize.Get(th)*0.9
 	if face != s.titleFace || size != s.titleSize {
 		s.titleFace, s.titleSize = face, size
-		s.title = face.Shape("Notes", size)
+		s.title = face.Shape(s.name, size)
 	}
 	cs := kids.At(0).Layout(gunim.Constraints{Min: geom.Sz(w, 0), Max: geom.Sz(w, 0)})
 	kids.At(0).Place(geom.Pt(0, s.bar))

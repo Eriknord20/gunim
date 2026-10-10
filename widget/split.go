@@ -31,7 +31,11 @@ const splitMin = 48
 //
 // The first pane's share of the space glides to where SetShare aims
 // it, so a pane opened with a Split whose share starts at 1 slides in
-// as the divider springs into place. At a share of 0 or 1 the divider
+// as the divider springs into place. During a slide SlideFrom asks for,
+// each pane is laid out once at the larger of the lengths it starts and
+// ends at, and shows only what its place holds as it moves: what is in
+// it, such as a terminal fitting its text to its size, is resized once
+// as the slide ends, and not on every frame of it. At a share of 0 or 1 the divider
 // narrows away and one pane has all the space. A double click on the
 // divider evens the panes out.
 //
@@ -60,8 +64,12 @@ type Split struct {
 	// laid is set by the first layout; a share set before it shows at once.
 	laid bool
 	// slide says the first layout starts the share at from and glides it to its target, as SlideFrom asks.
-	slide         bool
-	from          float32
+	slide bool
+	from  float32
+	// sliding is set while that glide lasts, and slots are then the
+	// places the first and the second pane show in.
+	sliding       bool
+	slots         [2]geom.Rect
 	first, second gunim.Node
 	// bar is the divider as the keyboard knows it, between the panes.
 	bar   *splitBar
@@ -129,6 +137,10 @@ func (s *Split) SetShare(v float32, u *gunim.UI) {
 		v = min(max(v, 0), 1)
 	}
 	v = max(v, 0)
+	if s.laid {
+		// Asked for anew: the panes follow the divider as it goes.
+		s.sliding = false
+	}
 	if !s.laid || u == nil {
 		s.share.Jump(v)
 		return
@@ -196,17 +208,41 @@ func (s *Split) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) 
 		to := s.share.Target()
 		s.share.Jump(s.from)
 		s.share.Animate(to, s.glide().Get(f.Theme))
+		s.sliding = true
 	}
 	s.laid = true
+	if s.held || !s.share.Active() {
+		s.sliding = false
+	}
 	own := c.Max
 	s.own = own
 	s.length = own.W
 	if s.Axis == Vertical {
 		s.length = own.H
 	}
-	s.gap = s.room(SplitGap.Get(f.Theme))
+	full := SplitGap.Get(f.Theme)
+	s.gap = s.room(full)
 	a := s.firstLength()
 	b := max(0, s.length-s.gap-a)
+	if s.sliding {
+		a0, b0 := s.lengthsAt(s.from, full)
+		a1, b1 := s.lengthsAt(s.share.Target(), full)
+		s.slots[0] = s.slot(0, a, own)
+		s.slots[1] = s.slot(a+s.gap, b, own)
+		for kid := range kids.All {
+			switch kid.Node() {
+			case s.first:
+				s.place(kid, 0, max(a0, a1), own)
+			case s.second:
+				s.place(kid, a+s.gap, max(b0, b1), own)
+			case s.bar:
+				s.place(kid, a, s.gap, own)
+			default:
+				s.place(kid, 0, a, own)
+			}
+		}
+		return own
+	}
 	for kid := range kids.All {
 		switch kid.Node() {
 		case s.first:
@@ -223,6 +259,34 @@ func (s *Split) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) 
 	return own
 }
 
+// lengthsAt returns the panes' lengths along the split at share v, with
+// a divider full wide between them.
+func (s *Split) lengthsAt(v, full float32) (a, b float32) {
+	frac := min(max(v, 0), 1)
+	if s.Fixed {
+		frac = 0
+		if s.length > 0 {
+			frac = min(max(v/s.length, 0), 1)
+		}
+	}
+	gap := full * min(max(min(frac, 1-frac)*20, 0), 1)
+	space := s.length - gap
+	if s.Fixed {
+		a = float32(int(min(max(v, 0), space) + 0.5))
+	} else {
+		a = float32(int(space*frac + 0.5))
+	}
+	return a, max(0, space-a)
+}
+
+// slot returns the place from at along the split, length long.
+func (s *Split) slot(at, length float32, own geom.Size) geom.Rect {
+	if s.Axis == Vertical {
+		return geom.Rc(0, at, own.W, length)
+	}
+	return geom.Rc(at, 0, length, own.H)
+}
+
 func (s *Split) place(kid gunim.Child, at, length float32, own geom.Size) {
 	size := geom.Sz(length, own.H)
 	pos := geom.Pt(at, 0)
@@ -236,9 +300,27 @@ func (s *Split) place(kid gunim.Child, at, length float32, own geom.Size) {
 // Paint implements [gunim.Node]. A pane with no room draws nothing.
 func (s *Split) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	for kid := range kids.All {
-		if sz := kid.Size(); sz.W >= 1 && sz.H >= 1 {
-			kid.Paint(p)
+		if sz := kid.Size(); sz.W < 1 || sz.H < 1 {
+			continue
 		}
+		i := -1
+		if s.sliding {
+			switch kid.Node() {
+			case s.first:
+				i = 0
+			case s.second:
+				i = 1
+			}
+		}
+		if i < 0 {
+			kid.Paint(p)
+			continue
+		}
+		// Sliding, a pane shows only what its place holds.
+		func() {
+			defer p.Layer(paint.LayerOpts{Bounds: s.slots[i], Opacity: 1, Clip: true})()
+			kid.Paint(p)
+		}()
 	}
 	if s.gap < 0.5 {
 		return

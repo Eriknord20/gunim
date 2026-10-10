@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"runtime"
 	"strings"
 	"time"
@@ -279,9 +280,10 @@ func firstScene(s *Session) scene {
 // runner is the installer's application half: it hears the window,
 // does the work, and shows how it goes.
 type runner struct {
-	s  *Session
-	c  gunim.Client
-	sc scene
+	s      *Session
+	c      gunim.Client
+	sc     scene
+	logged logged
 	// working says the work runs, and quitting that the copies running
 	// were asked to end and have not yet. Neither takes another press but
 	// Close: Close stops the work, and closes the window while the copies
@@ -312,7 +314,10 @@ type runner struct {
 // go round however quick the copying is.
 var leastWork = 1600 * time.Millisecond
 
-func (r *runner) show() { _ = r.c.Update("installer", r.sc) }
+func (r *runner) show() {
+	r.logged.log("install", r.sc)
+	_ = r.c.Update("installer", r.sc)
+}
 
 // stopWait is how long the installer, interrupted as from a terminal,
 // waits for the work to stop before it ends all the same: within the
@@ -940,4 +945,27 @@ func closeButton(label string) *widget.Button {
 	b := widget.NewButton(label)
 	b.OnClick = widget.Sends(closed{})
 	return b
+}
+
+// logged is the problems a window has logged, so that each is logged
+// once, as it first shows: a failure on its page is read again in the
+// program's log, after the window has gone.
+type logged struct{ problem, notes, status string }
+
+// log logs the problems sc shows that it did not show before, after
+// what, which says which window it is.
+func (l *logged) log(what string, sc scene) {
+	if sc.Problem != "" && sc.Problem != l.problem {
+		log.Printf("%s: %s", what, sc.Problem)
+	}
+	if sc.NotesErr != "" && sc.NotesErr != l.notes {
+		log.Printf("%s: reading what's new: %s", what, sc.NotesErr)
+	}
+	if sc.Trouble && sc.Status != l.status {
+		log.Printf("%s: %s", what, sc.Status)
+	}
+	l.problem, l.notes, l.status = sc.Problem, sc.NotesErr, ""
+	if sc.Trouble {
+		l.status = sc.Status
+	}
 }

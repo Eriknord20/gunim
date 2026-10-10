@@ -113,7 +113,10 @@ func (a *app) placeLabel(fs, path string) string {
 func (a *app) startTransfer(t Transfer, ps PathStyle) {
 	what, where := whatIn(ps, t.Paths), a.placeLabel(t.ToFS, t.Into)
 	title, done, kind := "Copying "+what+" to "+where, "Copied "+what+" to "+where, OpCopy
-	if t.Move {
+	switch {
+	case t.Zip != "":
+		title, done, kind = "Zipping "+what+" to "+t.Zip, "Made "+t.Zip, OpZip
+	case t.Move:
 		title, done, kind = "Moving "+what+" to "+where, "Moved "+what+" to "+where, OpMove
 	}
 	id, ctx, cancel := a.newOp(title, kind)
@@ -163,6 +166,9 @@ func (a *app) transferred(id int, t Transfer, ps PathStyle, done string, err err
 		a.nav.pick = nil
 		for _, p := range t.Paths {
 			a.nav.pick = append(a.nav.pick, ps.Base(p))
+		}
+		if t.Zip != "" {
+			a.nav.pick = []string{t.Zip}
 		}
 	}
 	a.relist()

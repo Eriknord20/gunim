@@ -61,6 +61,11 @@ type TextField struct {
 	// of a folder's name, shown faintly after the caret while the caret
 	// is at the end. Tab or Right takes it. Set it from OnChange.
 	Ghost string
+	// Align puts text shorter than the field against its left edge,
+	// AlignStart, its right edge, AlignEnd, or in its middle, as a
+	// column of numbers lines up on the right. Text longer than the
+	// field scrolls as it always does.
+	Align text.Align
 
 	editor
 
@@ -76,10 +81,16 @@ type TextField struct {
 	clearHot *anim.Float
 	// clearing says a primary press on the X is held.
 	clearing bool
+	// pressed, when set, runs from 0 to 1 as a widget built on the
+	// field is pressed, and tints it [FieldPressed]; caretless hides
+	// the caret meanwhile. A number field's drag sets them.
+	pressed   *anim.Float
+	caretless bool
 
-	// size is the field's size at its last layout, and lead and trail the room before and after the text.
-	size        geom.Size
-	lead, trail float32
+	// size is the field's size at its last layout, lead and trail the room before and after the text, and shift
+	// how far Align moves text shorter than the field from its start.
+	size               geom.Size
+	lead, trail, shift float32
 	// line is the text as shaped, kept up as it changes; dots are the
 	// dots a secret shows in its place, and wasSecret whether the line
 	// holds them.
@@ -117,15 +128,19 @@ func (t *TextField) TakesText() bool { return true }
 func (t *TextField) TextCaret() geom.Rect {
 	h := t.line.Height()
 	y := (t.size.H - h) / 2
-	return geom.Rc(t.lead-t.scroll.Value()+t.caretAt.Value(), y, 1.5, h)
+	return geom.Rc(t.origin()+t.caretAt.Value(), y, 1.5, h)
 }
 
 // caretRect returns where a caret before rune i would stand, in the
 // field's space.
 func (t *TextField) caretRect(i int) geom.Rect {
 	h := t.line.Height()
-	return geom.Rc(t.lead-t.scroll.Value()+t.line.CaretX(i), (t.size.H-h)/2, 1.5, h)
+	return geom.Rc(t.origin()+t.line.CaretX(i), (t.size.H-h)/2, 1.5, h)
 }
+
+// origin returns where the text starts, in the field's space: after
+// the room before it, moved by Align and by the scroll.
+func (t *TextField) origin() float32 { return t.lead + t.shift - t.scroll.Value() }
 
 // hostIndex returns the rune a press at p in the field's space is before.
 func (t *TextField) hostIndex(p geom.Point, u *gunim.UI) int { return t.indexAt(p, u) }
@@ -291,7 +306,7 @@ func (t *TextField) atEnd() bool {
 // indexAt returns the rune index a pointer at p, in the field's space,
 // puts the caret at.
 func (t *TextField) indexAt(p geom.Point, u *gunim.UI) int {
-	return t.run(u.Theme()).Index(p.X - t.lead + t.scroll.Value())
+	return t.run(u.Theme()).Index(p.X - t.origin())
 }
 
 // clearable reports whether the X shows: the field is Clearable, has text, and is not composing.
@@ -407,6 +422,7 @@ func (t *TextField) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children)
 	}
 	scroll = max(0, min(scroll, run.Advance-inner))
 	t.aim(t.scroll, scroll, motion)
+	t.shift = alignShift(t.Align, inner-run.Advance)
 	t.edited = false
 	t.placeHandles(t)
 	return own
@@ -421,6 +437,15 @@ func (t *TextField) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	radius := FieldRadius.Get(th)
 	border := anim.Mix(anim.ColorCodec, FieldBorder.Get(th), Accent.Get(th), min(focus, 1))
 	fill := FieldFill.Get(th)
+	if t.pressed != nil {
+		if lit := min(max(t.pressed.Value(), 0), 1); lit > 0 {
+			tint := FieldPressed.Get(th)
+			a := float32(tint.A) / 0xff
+			tint.A = 0xff
+			fill = anim.Mix(anim.ColorCodec, fill, tint, a*lit)
+			border = anim.Mix(anim.ColorCodec, border, Accent.Get(th), lit)
+		}
+	}
 	if lit := min(max(t.flash.Value(), 0), 1); lit > 0 {
 		fill = anim.Mix(anim.ColorCodec, fill, Accent.Get(th), 0.35*lit)
 		border = anim.Mix(anim.ColorCodec, border, Accent.Get(th), lit)
@@ -438,11 +463,11 @@ func (t *TextField) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	defer p.Layer(paint.LayerOpts{Bounds: inner, Opacity: 1, Clip: true})()
 
 	run := t.run(th)
-	x := lead - t.scroll.Value()
+	x := lead + t.shift - t.scroll.Value()
 	y := (box.H - run.Height()) / 2
 	if len(t.text) == 0 && len(t.preedit) == 0 && t.Placeholder != "" {
 		ph := faceIn(t.Face, th).Shape(t.Placeholder, TextSize.Get(th))
-		ph.Paint(p, geom.Pt(lead, y), Placeholder.Get(th))
+		ph.Paint(p, geom.Pt(lead+alignShift(t.Align, box.W-lead-trail-ph.Advance), y), Placeholder.Get(th))
 	}
 
 	if a, b := t.selA.Value(), t.selB.Value(); b-a > 0.5 && focus > 0 {
@@ -462,7 +487,7 @@ func (t *TextField) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		p.RRect(geom.Rc(x+min(x0, x1), y+run.Ascent()+2, abs32(x1-x0), 1), 0, paint.Solid(Ink.Get(th)))
 	}
 
-	if focus > 0.01 {
+	if focus > 0.01 && !t.caretless {
 		c := Accent.Get(th)
 		c.A = uint8(float32(c.A) * min(focus, 1) * t.blink.value())
 		p.RRect(geom.Rc(x+t.caretAt.Value()-0.75, y, 1.5, run.Height()), 0.75, paint.Solid(c))
@@ -481,4 +506,21 @@ func (t *TextField) paintClear(p *paint.Painter, th *theme.Live, box geom.Size) 
 	ink.A = uint8(float32(ink.A) * min(on, 1))
 	defer p.Push(paint.Scale(0.5+0.5*on, r.Center()))()
 	paintIcon(p, th, icon.X, r, ink, 1)
+}
+
+// alignShift returns how far align moves text that leaves room spare
+// in its field: none for AlignStart, or text that fills the field, all
+// of it for AlignEnd, and half for AlignCenter.
+func alignShift(align text.Align, room float32) float32 {
+	if room <= 0 {
+		return 0
+	}
+	switch align {
+	case text.AlignEnd:
+		return room
+	case text.AlignCenter:
+		return room / 2
+	default:
+		return 0
+	}
 }

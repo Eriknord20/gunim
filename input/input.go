@@ -276,11 +276,12 @@ type WindowFocusGained struct{ Time time.Time }
 // The window draws no frames meanwhile, so its animations hold where
 // they are; an application stops what else only matters while it is
 // seen, as a game's music. It goes to the focused node and bubbles, as
-// a key does.
+// a key does, and then to each view mounted at the root that it did not
+// pass, so a view under a dialog that holds the keyboard hears it too.
 type WindowHidden struct{ Time time.Time }
 
 // WindowShown arrives when a hidden window can be seen again. It goes
-// to the focused node and bubbles, as a key does.
+// where [WindowHidden] goes.
 type WindowShown struct{ Time time.Time }
 
 // MediaSeek arrives when the user moves what plays to At, in the media

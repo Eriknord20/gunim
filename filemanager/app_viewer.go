@@ -71,15 +71,23 @@ func (a *app) openViewerOnCursor() {
 	}
 }
 
-// openViewer shows the picture in row of listing gen large, or opens anything else as a double click does.
+// openViewer shows the picture in row of listing gen large, any other file in the text viewer, and opens a folder as
+// a double click does.
 func (a *app) openViewer(gen, row int) {
 	n := &a.nav
 	if gen != n.gen || row < 0 || row >= len(n.rows) {
 		return
 	}
 	e := n.rows[row]
-	if e.Dir || !viewable(e.Name) {
+	switch {
+	case e.Broken:
+		return
+	case e.Dir:
 		a.activate(e)
+		return
+	case !viewable(e.Name):
+		// Not a picture: its text, in the text viewer.
+		a.openReading(e)
 		return
 	}
 	v := &a.viewer
@@ -171,6 +179,7 @@ func (a *app) pictureDecoded(seq int, pic *paint.Image, w, h int, err error) {
 	v.view.W, v.view.H = w, h
 	if err != nil {
 		v.view.Err = err.Error()
+		a.logLine("Showing a picture", v.view.Err)
 	} else {
 		v.view.Image = pic
 	}

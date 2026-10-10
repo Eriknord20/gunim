@@ -23,6 +23,10 @@ const (
 	OpRename
 	OpNewFolder
 	OpUndo
+	// OpZip writes items into a new zip file.
+	OpZip
+	// OpExtract extracts an archive into a new folder.
+	OpExtract
 )
 
 // job is a file operation to run.
@@ -33,7 +37,9 @@ type job struct {
 	// dest is the folder a copy or a move goes into, or the folder a new
 	// folder goes in.
 	dest string
-	// name is the new name of a rename, or the name of a new folder.
+	// name is the new name of a rename, the name of a new folder, the
+	// name of a zip, or of the folder an archive is extracted into, made
+	// in dest.
 	name string
 	// undo is the record an undo reverses.
 	undo *record
@@ -103,9 +109,11 @@ var errStopped = errors.New("stopped")
 // env is what an operation reaches outside itself.
 type env struct {
 	// fs is the file system the operation works on, and trash its trash,
-	// or nil where it has none.
+	// or nil where it has none. to is the file system a zip is written
+	// to, where it is not fs.
 	fs    FS
 	trash Trasher
+	to    FS
 	// ask asks the user about a clash, and waits for the answer.
 	ask func(ctx context.Context, c clash) (answer, error)
 	// report hears how far the operation has got, every reportEvery, or
@@ -151,6 +159,10 @@ func runJob(ctx context.Context, j job, e env) (record, error) {
 		err = r.newFolder(j.dest, j.name)
 	case OpUndo:
 		err = r.undo(j.undo)
+	case OpZip:
+		err = r.zipAll(j.srcs, j.dest, j.name)
+	case OpExtract:
+		err = r.extractAll(j.srcs[0], j.dest, j.name)
 	}
 	r.tell(true)
 	return r.rec, err
@@ -826,7 +838,7 @@ func (r *runner) undoStep(k OpKind, s step) error {
 	fsys := r.env.fs
 	ps := fsys.Paths()
 	switch k {
-	case OpCopy, OpNewFolder:
+	case OpCopy, OpNewFolder, OpZip, OpExtract:
 		if r.env.trash == nil {
 			return errTrashless
 		}
@@ -876,10 +888,10 @@ func caseOnly(fsys FS, s step, info fs.FileInfo) bool {
 }
 
 // undoable reports whether rec can be undone, on a file system with a
-// trash when trash is set. Undoing a copy or a new folder moves what it
-// made to the trash.
+// trash when trash is set. Undoing a copy, a new folder, a zip or an
+// extraction moves what it made to the trash.
 func undoable(rec record, trash bool) bool {
-	if !trash && (rec.kind == OpCopy || rec.kind == OpNewFolder) {
+	if !trash && (rec.kind == OpCopy || rec.kind == OpNewFolder || rec.kind == OpZip || rec.kind == OpExtract) {
 		return false
 	}
 	return len(rec.steps) > 0 && rec.kind != OpDelete && rec.kind != OpUndo

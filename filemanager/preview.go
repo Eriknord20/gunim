@@ -9,7 +9,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
-	"github.com/marrasen/gunim/text"
+	fileview "github.com/marrasen/gunim/viewer"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -25,16 +25,24 @@ type previewPane struct {
 	deck *deck
 	cur  *previewPage
 	seq  int
+	// systemIcon returns the system icon of a key, nil for none yet.
+	systemIcon func(key string) *paint.Image
 }
 
-func newPreviewPane() *previewPane { return &previewPane{deck: &deck{}} }
+func newPreviewPane(systemIcon func(key string) *paint.Image) *previewPane {
+	return &previewPane{deck: &deck{}, systemIcon: systemIcon}
+}
 
 func (p *previewPane) show(s Preview, u *gunim.UI) {
 	if s.Seq < p.seq {
 		return
 	}
 	p.seq = s.Seq
-	p.cur = newPreviewPage(s)
+	var system *paint.Image
+	if s.IconKey != "" && p.systemIcon != nil {
+		system = p.systemIcon(s.IconKey)
+	}
+	p.cur = newPreviewPage(s, system)
 	p.deck.show(p.cur, 0, u)
 }
 
@@ -73,7 +81,7 @@ type previewPage struct {
 	links []*widget.Link
 }
 
-func newPreviewPage(s Preview) *previewPage {
+func newPreviewPage(s Preview, system *paint.Image) *previewPage {
 	pg := &previewPage{}
 	var kids []gunim.Node
 	if s.Title == "" && s.Seq > 0 && len(s.Facts) == 0 {
@@ -87,7 +95,7 @@ func newPreviewPage(s Preview) *previewPage {
 		img.Fit, img.Radius, img.Alt = widget.FitContain, 8, s.Title
 		kids = append(kids, &thumbBox{img: img})
 	} else if s.Title != "" {
-		kids = append(kids, &typeTile{tint: s.Tint, label: tileLabel(s)})
+		kids = append(kids, newPreviewIcon(s, system))
 	}
 	title := widget.NewLabel(s.Title)
 	title.Size, title.Face, title.MaxLines, title.Selectable = TitleText, widget.BoldFont, 3, true
@@ -142,13 +150,14 @@ func newPreviewPage(s Preview) *previewPage {
 		kids = append(kids, e)
 	}
 	if s.Text != "" {
-		body := s.Text
-		if s.Cut {
-			body = strings.TrimRight(body, "\n") + "\n…"
+		// In its language's colours, or rendered for Markdown, whose links
+		// lead nowhere from here.
+		v := fileview.New(s.Title, []byte(s.Text), fileview.Options{Compact: true, Cut: s.Cut})
+		if v.Kind() == fileview.Markdown {
+			kids = append(kids, &textBox{child: v})
+		} else {
+			kids = append(kids, v)
 		}
-		t := widget.NewLabel(body)
-		t.Face, t.Size, t.Selectable = widget.MonoFont, SmallText, true
-		kids = append(kids, &textBox{child: t})
 	}
 	col := widget.Column(kids...)
 	col.Cross = widget.CrossStretch
@@ -168,19 +177,6 @@ type linkWrap struct {
 
 // Children implements [gunim.Composite].
 func (l *linkWrap) Children() []gunim.Node { return l.kids }
-
-// tileLabel is what the tile for an item without a picture says: its
-// extension, or a word for a folder.
-func tileLabel(s Preview) string {
-	if s.Tint == TintFolder {
-		return "Folder"
-	}
-	ext := strings.TrimPrefix(filepath.Ext(s.Title), ".")
-	if ext == "" || len(ext) > 5 || s.Path == "" {
-		return ""
-	}
-	return strings.ToUpper(ext)
-}
 
 // factRow is a label and its value, side by side.
 func factRow(label, value string) gunim.Node {
@@ -277,34 +273,39 @@ func (t *thumbBox) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids guni
 	kids.At(0).Paint(p)
 }
 
-// typeTile is a large rounded square in an item's colour, with its
-// extension on it, for an item with no picture.
-type typeTile struct {
-	tint  Tint
-	label string
-	run   text.Run
-	shown bool
+// previewIcon is an item's picture when it has no thumbnail: drawn as
+// the icon view draws it, its system icon, the folder, or a page in its
+// colour with its extension on it.
+type previewIcon struct{ pic *tilePic }
+
+// newPreviewIcon is the picture of the item s previews, with its system
+// icon, nil for none.
+func newPreviewIcon(s Preview, system *paint.Image) *previewIcon {
+	pic := newTilePic()
+	pic.loaded, pic.dir, pic.tint, pic.system = true, s.Dir, s.Tint, system
+	if ext := strings.TrimPrefix(filepath.Ext(s.Title), "."); !s.Dir && s.Path != "" && ext != "" && len(ext) <= 5 {
+		pic.ext = strings.ToUpper(ext)
+	}
+	return &previewIcon{pic: pic}
 }
 
-// Layout implements [gunim.Node].
-func (t *typeTile) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	return geom.Sz(c.Max.W, 96)
+// previewIconSize is how large the picture is.
+const previewIconSize = 88
+
+// Children implements [gunim.Composite].
+func (i *previewIcon) Children() []gunim.Node { return []gunim.Node{i.pic} }
+
+// Layout implements [gunim.Node]: the picture at the left of a row.
+func (i *previewIcon) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	k := kids.At(0)
+	k.Layout(gunim.Tight(geom.Sz(previewIconSize, previewIconSize)))
+	k.Place(geom.Pt(0, 4))
+	return geom.Sz(c.Max.W, previewIconSize+8)
 }
 
 // Paint implements [gunim.Node].
-func (t *typeTile) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Children) {
-	tile := geom.Rc(0, 4, 80, 80)
-	c := TintToken(t.tint).Get(f.Theme)
-	p.ShadowRRect(tile, 18, paint.Solid(c), paint.Shadow{Offset: geom.Pt(0, 4), Blur: 14, Color: widget.DialogShadow.Get(f.Theme)})
-	if t.label == "" {
-		return
-	}
-	if !t.shown {
-		t.run = widget.BoldFont.Default().Shape(t.label, 15)
-		t.shown = true
-	}
-	t.run.Paint(p, geom.Pt(tile.Min.X+(80-t.run.Advance)/2, tile.Min.Y+(80-t.run.Height())/2),
-		widget.ButtonStrongInk.Get(f.Theme))
+func (i *previewIcon) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+	kids.At(0).Paint(p)
 }
 
 // textBox frames the start of a text file.

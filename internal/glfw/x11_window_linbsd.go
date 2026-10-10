@@ -824,6 +824,11 @@ func createNativeWindow(window *Window, wndconfig *wndconfig, visual uintptr, de
 // requested target and returns the property to reply with, or None when the
 // request cannot be satisfied.
 func writeTargetToProperty(request *_XSelectionRequestEvent) _Atom {
+	// gunim change: the clipboard may hold a picture rather than text.
+	if request.Selection == _glfw.platformWindow.CLIPBOARD && x11Clip.png != nil {
+		return writeImageToProperty(request)
+	}
+
 	formats := []_Atom{_glfw.platformWindow.UTF8_STRING, _XA_STRING}
 
 	selectionString := _glfw.platformWindow.clipboardString
@@ -1228,6 +1233,11 @@ func processEvent(event *_XEvent) error {
 
 	if event.EventType() == _SelectionRequest {
 		handleSelectionRequest(event)
+		return nil
+	}
+
+	// gunim change: a requestor took a piece of a large picture.
+	if event.EventType() == _PropertyNotify && continueIncr(event.xproperty()) {
 		return nil
 	}
 
@@ -1952,6 +1962,10 @@ func pushSelectionToManagerX11() {
 					return
 				}
 			}
+		}
+		// gunim change: the manager may take a large picture in pieces.
+		for xCheckIfEvent(_glfw.platformWindow.display, &event, isIncrEventCallback(), 0) {
+			continueIncr(event.xproperty())
 		}
 
 		waitForX11Event(nil)
@@ -3006,6 +3020,7 @@ func (w *Window) platformSetCursor(cursor *Cursor) error {
 
 func platformSetClipboardString(str string) error {
 	_glfw.platformWindow.clipboardString = str
+	dropClipboardImage() // gunim change
 
 	xSetSelectionOwner(_glfw.platformWindow.display,
 		_glfw.platformWindow.CLIPBOARD,

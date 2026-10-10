@@ -59,6 +59,13 @@ gunim's changes are marked `gunim change` in the code:
   it is a `WS_POPUP` tool window with `WS_EX_NOACTIVATE` and
   `WS_EX_TOPMOST`, and a click answers `WM_MOUSEACTIVATE` with
   `MA_NOACTIVATE` (`win32_window_windows.go`). Cocoa ignores it.
+- `gl` makes the calls that pass only numbers through `call`
+  (`default_purego.go`), which hands `purego.SyscallN` a list of
+  arguments the context keeps. `SyscallN` is `go:uintptrescapes`, so
+  the list each call built for it went to the heap: an allocation for
+  every GL call. The `Uniform*v` calls copy up to 16 values into the
+  context's scratch and pass its address the same way; longer ones, and
+  the calls that pass other memory, call `SyscallN` as before.
 
 To take a newer Ebitengine, copy the same files again and reapply those
 changes.

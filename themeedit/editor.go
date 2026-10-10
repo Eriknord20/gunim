@@ -4,7 +4,8 @@
 // The editor edits overrides: values laid over a base theme, such as the
 // dark or light theme the user started from. Every edit is live: the
 // editor hands the program the new theme on each change, and the program
-// switches the window to it.
+// switches the window to it. Or, with [Options.OnSave], the edits are a
+// draft that only the Preview wears, until the user presses Save.
 //
 //	ed := themeedit.New(themeedit.Options{
 //		Base:      widget.Dark(),
@@ -86,6 +87,11 @@ type Options struct {
 	// demonstrations need the editor's widgets, and play as any other
 	// motion's do over it.
 	Preview gunim.Node
+	// PreviewTitle is the name in the title bar of the window the
+	// Preview draws, such as the program's own name. Empty is "Notes"
+	// over the editor's own widgets, and no name over a Preview of the
+	// program's own.
+	PreviewTitle string
 	// OnChange runs on the UI goroutine with the theme as edited, Base
 	// with the overrides over it, on every change: every step of a drag
 	// too. It usually switches the window to it with [gunim.UI.UseTheme].
@@ -96,6 +102,14 @@ type Options struct {
 	// edit ends: a drag let go, a value typed, a preset picked, a value
 	// reset. It is the time to save them.
 	OnCommit func(over theme.Theme, u *gunim.UI) gunim.Intent
+	// OnSave, when set, makes the edits a draft: the program leaves its
+	// windows as they are, and the Preview alone wears the edits, until
+	// the user presses Save in the header. That runs OnSave with the
+	// overrides, for the program to keep and use them. Discard beside
+	// it takes the draft back to the overrides as last saved: those the
+	// editor was made with, or given by [Editor.SetOverrides], or saved
+	// since. OnChange and OnCommit run as ever, on the draft.
+	OnSave func(over theme.Theme, u *gunim.UI) gunim.Intent
 	// OnExport, when set, adds Export… to the header's menu, which runs
 	// it with the overrides written as JSON, for the program to save
 	// where the user says.
@@ -126,7 +140,8 @@ type Field struct {
 	// and Bounce.
 	Presets []Preset
 	// Min and Max, when Max is above Min, bound a length or a number,
-	// which then shows as a slider over that range.
+	// which then shows as a slider over that range with a field for
+	// the value beside it.
 	Min, Max float32
 }
 
@@ -144,23 +159,33 @@ type Preset struct {
 // Its header names the theme edited and counts the changes, with Reset
 // all beside them, which takes every value back and can be undone until
 // the next edit. Every row has one control for its value: a swatch that
-// opens a colour picker, a field for a number, a slider for a number
-// with a range, four fields for insets, or a spring's presets in words.
+// opens a colour picker, a field for a number, a slider and a field for
+// a number with a range, four fields for insets, or a spring's presets
+// in words. Every field for a number can be dragged up and down to
+// change it.
 // A changed row has a dot before its name and a button that resets it.
+//
+// With [Options.OnSave], the header also has Discard and Save, and says
+// when there are changes not saved.
 //
 // Everything is reached by Tab, and every control is named for a screen
 // reader.
 type Editor struct {
-	// OnChange, OnCommit, OnExport and OnImport are as in [Options].
+	// OnChange, OnCommit, OnSave, OnExport and OnImport are as in
+	// [Options].
 	OnChange func(th theme.Theme, u *gunim.UI) gunim.Intent
 	OnCommit func(over theme.Theme, u *gunim.UI) gunim.Intent
+	OnSave   func(over theme.Theme, u *gunim.UI) gunim.Intent
 	OnExport func(data []byte, u *gunim.UI) gunim.Intent
 	OnImport func(u *gunim.UI) gunim.Intent
 
 	base, over theme.Theme
-	name       string
-	sections   []Section
-	choices    map[string][]Preset
+	// saved is the overrides as last saved, which Discard goes back to,
+	// with OnSave set.
+	saved    theme.Theme
+	name     string
+	sections []Section
+	choices  map[string][]Preset
 	// tokens are every token declared, by key, labels the labels the
 	// sections give some of them, and defaults a theme of every token
 	// at its default, which pins a theme's every value.
@@ -175,11 +200,14 @@ type Editor struct {
 	title    *widget.Label
 	count    *widget.Label
 	resetAll *widget.Button
-	more     *widget.MenuButton
-	tabs     *widget.Tabs
-	preview  *previewPanel
-	spec     *specimen
-	all      *allValues
+	// discard and save are the header's Discard and Save, with OnSave
+	// set.
+	discard, save *widget.Button
+	more          *widget.MenuButton
+	tabs          *widget.Tabs
+	preview       *previewPanel
+	spec          *specimen
+	all           *allValues
 	// chosen are the rows of the first tab, by key.
 	chosen map[string][]*row
 	// undo is the overrides Reset all took back, while it can be undone.
@@ -189,8 +217,8 @@ type Editor struct {
 // New returns an editor set up by o.
 func New(o Options) *Editor {
 	e := &Editor{
-		OnChange: o.OnChange, OnCommit: o.OnCommit, OnExport: o.OnExport, OnImport: o.OnImport,
-		base: o.Base, over: o.Overrides, name: o.Name, sections: o.Sections, choices: o.Choices,
+		OnChange: o.OnChange, OnCommit: o.OnCommit, OnSave: o.OnSave, OnExport: o.OnExport, OnImport: o.OnImport,
+		base: o.Base, over: o.Overrides, saved: o.Overrides, name: o.Name, sections: o.Sections, choices: o.Choices,
 		tokens: map[string]theme.Info{}, labels: map[string]string{},
 		chosen: map[string][]*row{},
 	}
@@ -263,6 +291,14 @@ func (e *Editor) build(o Options) {
 	names := widget.Column(e.title, e.count)
 	names.Gap = NamesGap
 	head = append(head, names, widget.NewSpacer(), e.resetAll)
+	if e.OnSave != nil {
+		e.discard = widget.NewButton("Discard")
+		e.discard.OnClick = func(u *gunim.UI) gunim.Intent { e.Discard(u); return nil }
+		e.save = widget.NewButton("Save")
+		e.save.Kind = widget.ButtonPrimary
+		e.save.OnClick = func(u *gunim.UI) gunim.Intent { e.Save(u); return nil }
+		head = append(head, e.discard, e.save)
+	}
 	if len(menu) > 0 {
 		e.more = widget.NewMenuButton("", menu)
 		e.more.Icon, e.more.Tooltip = icon.Ellipsis, "Import and export"
@@ -274,12 +310,15 @@ func (e *Editor) build(o Options) {
 	header := widget.NewPad(bar)
 	header.Padding = HeaderPadding
 
-	content := o.Preview
+	content, title := o.Preview, o.PreviewTitle
 	if content == nil {
 		e.spec = newSpecimen()
 		content = e.spec
+		if title == "" {
+			title = "Notes"
+		}
 	}
-	e.preview = newPreviewPanel(content, e.spec, e.pinned(e.Theme()))
+	e.preview = newPreviewPanel(content, e.spec, title, e.pinned(e.Theme()))
 	e.preview.use(e.pinned(e.Theme()))
 
 	e.all = newAllValues(e)
@@ -438,12 +477,55 @@ func (e *Editor) SetBase(th theme.Theme, u *gunim.UI) {
 	e.refreshAll(u)
 }
 
-// SetOverrides makes over the values the user has changed, and sends no
-// intent.
+// SetOverrides makes over the values the user has changed, as saved,
+// and sends no intent.
 func (e *Editor) SetOverrides(over theme.Theme, u *gunim.UI) {
-	e.over = over
+	e.over, e.saved = over, over
 	e.undo = nil
 	e.refreshAll(u)
+}
+
+// Unsaved reports whether the draft has changes not saved, with
+// [Options.OnSave] set.
+func (e *Editor) Unsaved() bool { return e.OnSave != nil && !sameValues(e.over, e.saved) }
+
+// Save keeps the draft, as the Save button does, running OnSave with
+// the overrides. It does nothing with no changes unsaved.
+func (e *Editor) Save(u *gunim.UI) {
+	if !e.Unsaved() {
+		return
+	}
+	e.saved = e.over
+	e.showCount(u)
+	send(u, e, e.OnSave(e.over, u))
+}
+
+// Discard takes the draft back to the overrides as last saved, as the
+// Discard button does, running OnChange and OnCommit.
+func (e *Editor) Discard(u *gunim.UI) {
+	if !e.Unsaved() {
+		return
+	}
+	e.over = e.saved
+	e.undo = nil
+	e.refreshAll(u)
+	e.changed(true, u)
+}
+
+// sameValues reports whether a and b give the same tokens the same
+// values.
+func sameValues(a, b theme.Theme) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+	for _, k := range a.Keys() {
+		av, _ := a.Value(k)
+		bv, ok := b.Value(k)
+		if !ok || !same(av, bv) {
+			return false
+		}
+	}
+	return true
 }
 
 // Export returns the overrides written as JSON, as [theme.MarshalValues]
@@ -578,6 +660,15 @@ func (e *Editor) showCount(u *gunim.UI) {
 		e.count.Text = "1 change"
 	default:
 		e.count.Text = strconv.Itoa(n) + " changes"
+	}
+	if e.save != nil {
+		unsaved := e.Unsaved()
+		if unsaved {
+			e.count.Text += ", not saved"
+		}
+		e.save.Disabled, e.discard.Disabled = !unsaved, !unsaved
+		e.save.Tooltip = "Uses these values everywhere, and keeps them"
+		e.discard.Tooltip = "Takes back the changes made since the last save"
 	}
 	e.resetAll.Label, e.resetAll.Tooltip = "Reset all", "Takes every value back to "+e.baseName()
 	e.resetAll.Disabled = e.over.Len() == 0

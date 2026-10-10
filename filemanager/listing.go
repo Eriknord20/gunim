@@ -110,7 +110,11 @@ func (a *listingArea) selection(s Selection, u *gunim.UI) {
 		return
 	}
 	g := a.cur.grid
-	g.SetSelectedRows(s.Runs, s.Cursor, u)
+	if s.Slide {
+		g.SlideSelectedRows(s.Runs, s.Cursor, u)
+	} else {
+		g.SetSelectedRows(s.Runs, s.Cursor, u)
+	}
 	if s.Cursor >= 0 {
 		top, vis := g.Top(), g.Visible()
 		if float64(s.Cursor) < top || float64(s.Cursor) >= top+vis-1 {
@@ -213,6 +217,7 @@ func newListingPage(b *browser, widths []float32) *listingPage {
 	g := widget.NewDataGrid(cols...)
 	g.Multi = true
 	g.NoBar = true
+	g.Glide = true
 	g.Row = pg.row
 	g.OnView = func(first, count int, _ *gunim.UI) gunim.Intent { return pg.need(first, count) }
 	g.OnSelectRows = func(sel [][2]int, cursor int, u *gunim.UI) gunim.Intent {

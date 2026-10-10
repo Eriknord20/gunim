@@ -438,10 +438,11 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		if d.problem.Text != "" {
 			around += pad/2 + ps.H
 		}
-		// A body taller than the window is measured again with the
-		// room that is left, so a form that scrolls fills it instead of
-		// running off both ends of the screen.
-		if room := size.H - DialogMargin.Get(th) - around; around+bs.H > size.H && room > 0 {
+		// A body too tall to leave the dialog its margin is measured
+		// again with the room that is left, so a form that scrolls
+		// fills it instead of running off both ends of the screen, or
+		// up to the window's very edge, under a title bar drawn there.
+		if room := size.H - DialogMargin.Get(th) - around; around+bs.H > size.H-DialogMargin.Get(th) && room > 0 {
 			bs = body.Layout(gunim.Tight(geom.Sz(width-2*pad, room)))
 		}
 	}

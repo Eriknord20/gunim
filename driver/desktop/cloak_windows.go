@@ -36,6 +36,11 @@ func cloak(w *Window, on bool) {
 	_, _, _ = procDwmSetWindowAttribute.Call(uintptr(hwnd), dwmwaCloak, uintptr(unsafe.Pointer(&v)), unsafe.Sizeof(v))
 }
 
+// setCloaked takes w off the screen while it stays open, cloaked, which
+// keeps its button on the task bar, or puts it back. It runs on the
+// main thread.
+func setCloaked(w *Window, on bool) { cloak(w, on) }
+
 // showFrame puts back the border and shadow the system draws round a
 // chromeless window, or with on unset hides them, for a window fading in
 // or out; see glfw's SetFrameHidden. It runs on the main thread.

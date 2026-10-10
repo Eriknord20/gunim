@@ -150,7 +150,11 @@ func (a *app) showPreviewOf(sel []entry) {
 		}()
 	default:
 		info := entry{Name: a.ps.placeName(n.path), Dir: true, Type: "Folder", Mod: n.mod}
-		pv := Preview{Seq: seq, Title: info.Name, Type: "This folder", Path: n.path, Shown: a.ps.Show(n.path), Tint: TintFolder,
+		key := ""
+		if a.systemIconsOn() {
+			key = "dir"
+		}
+		pv := Preview{Seq: seq, Title: info.Name, Type: "This folder", Path: n.path, Shown: a.ps.Show(n.path), Tint: TintFolder, IconKey: key, Dir: true,
 			Facts: []Fact{{"Holds", plural(len(n.all), "item")}, {"Modified", fmtTime(n.mod)}, {"In", a.ps.placeName(a.ps.Dir(n.path))}}, NoReveal: a.fetches()}
 		a.patch(pv)
 	}
@@ -182,7 +186,7 @@ func manyPreview(seq int, sel []entry) Preview {
 // downloaded, only when fetch says the user asked.
 func itemPreview(ctx context.Context, fsys FS, seq int, path string, e entry, fetch bool) Preview {
 	ps := fsys.Paths()
-	pv := Preview{Seq: seq, Title: e.Name, Type: e.Type, Path: path, Shown: ps.Show(path), Tint: tintOf(e)}
+	pv := Preview{Seq: seq, Title: e.Name, Type: e.Type, Path: path, Shown: ps.Show(path), Tint: tintOf(e), IconKey: e.iconKey, Dir: e.Dir}
 	if !e.Dir {
 		size := humanBytes(e.Size)
 		if e.Size >= 1024 {

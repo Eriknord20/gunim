@@ -325,16 +325,20 @@ func (d *Driver) surfaceChanged(w *C.ANativeWindow, width, height int) {
 	d.kick()
 }
 
-// surfaceDestroyed takes the surface back from the render thread, and
+// surfaceDestroyed takes the surface w back from the render thread, and
 // returns once it is let go: Android reclaims it when this returns.
-func (d *Driver) surfaceDestroyed() {
+// Where Android replaces the activity, the new activity's surface comes
+// before the old one goes, so the render thread lets go of w alone, and
+// keeps drawing on the new one.
+func (d *Driver) surfaceDestroyed(w *C.ANativeWindow) {
 	done := make(chan struct{})
-	d.surfaces <- surfaceChange{gone: done}
+	d.surfaces <- surfaceChange{window: w, gone: done}
 	<-done
 }
 
 // surfaceChange is a new surface for the render thread, or with gone
-// set the old one going.
+// set a surface going: window, or the one it draws on where window is
+// nil.
 type surfaceChange struct {
 	window *C.ANativeWindow
 	gone   chan struct{}

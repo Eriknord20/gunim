@@ -163,10 +163,11 @@ func updateScene(a *App, page, from, to string) scene {
 
 // updater is the application half of an update's window.
 type updater struct {
-	a  App
-	u  Update
-	c  gunim.Client
-	sc scene
+	a      App
+	u      Update
+	c      gunim.Client
+	sc     scene
+	logged logged
 	// ctx ends the window, and events are the work's reports, run on
 	// serve's goroutine.
 	ctx    context.Context
@@ -200,7 +201,10 @@ func (r *updater) start(ctx context.Context, from, to string) {
 	r.readNotes(from, to)
 }
 
-func (r *updater) show() { _ = r.c.Update("installer", r.sc) }
+func (r *updater) show() {
+	r.logged.log("update", r.sc)
+	_ = r.c.Update("installer", r.sc)
+}
 
 func (r *updater) leave() {
 	r.left = true

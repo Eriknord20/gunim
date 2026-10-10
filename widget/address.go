@@ -7,6 +7,7 @@ import (
 	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
@@ -21,6 +22,14 @@ var (
 	AddressCrumbInk = theme.Foreground("address.crumb", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
 	AddressChevron  = theme.Foreground("address.chevron", color.NRGBA{R: 0x6b, G: 0x72, B: 0x80, A: 0xff})
 )
+
+// An AddressLead names where an [AddressBar]'s path is, before its places: the machine a file manager shows, say.
+// It stays at the bar's start while the places scroll.
+type AddressLead struct {
+	Name    string
+	Icon    *icon.Icon
+	Tooltip string
+}
 
 // A Crumb is one place along an [AddressBar]'s path: the name it shows and the path it goes to.
 type Crumb struct {
@@ -38,6 +47,8 @@ type AddressBar struct {
 	// OnDone runs as the field gives the bar back to the places from the keyboard, with Enter or Escape, such as to
 	// hand the keyboard to what the bar shows. A non-nil result is sent as the bar's intent.
 	OnDone func(u *gunim.UI) gunim.Intent
+	// OnLead runs on the UI goroutine as the lead is clicked; a non-nil result is sent as the bar's intent.
+	OnLead func(u *gunim.UI) gunim.Intent
 
 	crumbs *crumbBar
 	themed gunim.Node
@@ -50,8 +61,16 @@ type AddressBar struct {
 func NewAddressBar() *AddressBar {
 	a := &AddressBar{mix: anim.NewFloat(0)}
 	a.Add(a.mix)
-	a.crumbs = &crumbBar{a: a, ring: anim.NewFloat(0), shift: anim.NewFloat(0)}
+	a.crumbs = &crumbBar{a: a, ring: anim.NewFloat(0), shift: anim.NewFloat(0), lead: NewButton("")}
 	a.crumbs.Add(a.crumbs.ring, a.crumbs.shift)
+	lead := a.crumbs.lead
+	lead.Ghost, lead.KeepFocus, lead.Ink, lead.Disabled = true, true, Accent, true
+	lead.OnClick = func(u *gunim.UI) gunim.Intent {
+		if a.OnLead != nil {
+			send(u, a, a.OnLead(u))
+		}
+		return nil
+	}
 	a.themed = NewThemed(a.crumbs, crumbTheme)
 	a.field = &addressField{TextField: NewTextField(), a: a}
 	return a
@@ -62,6 +81,18 @@ func NewAddressBar() *AddressBar {
 func (a *AddressBar) SetPath(full string, cs []Crumb, u *gunim.UI) {
 	a.path = full
 	a.crumbs.set(cs, u)
+}
+
+// SetLead shows l before the places, or nothing there when its Name is empty.
+func (a *AddressBar) SetLead(l AddressLead, u *gunim.UI) {
+	b := a.crumbs.lead
+	if b.Label == l.Name && b.Icon == l.Icon && b.Tooltip == l.Tooltip {
+		return
+	}
+	b.Label, b.Icon, b.Tooltip, b.Disabled = l.Name, l.Icon, l.Tooltip, l.Name == ""
+	if u != nil {
+		u.Invalidate()
+	}
 }
 
 // Edit turns the places into a field holding the path, all selected, with the keyboard.
@@ -177,13 +208,17 @@ func (f *addressField) Handle(e input.Event, u *gunim.UI) bool {
 	return f.TextField.Handle(e, u)
 }
 
-// crumbBar shows the places along the path, with the last one at the right edge when they do not all fit. The places
-// slide along to bring the one with the keyboard into view, and a name too long for the bar ends in an ellipsis.
+// crumbBar shows the lead and the places along the path, with the last one at the right edge when they do not all
+// fit. The places slide along to bring the one with the keyboard into view, and with the wheel, and fade where more
+// lie past an edge. A name too long for the bar ends in an ellipsis.
 type crumbBar struct {
 	anim.Group
 	a      *AddressBar
+	lead   *Button
 	crumbs []*crumb
-	ring   *anim.Float
+	// from is where the places start, past the lead, at the last layout.
+	from float32
+	ring *anim.Float
 	// shift is how far right of the last one at the right edge the places sit, to show the one with the keyboard;
 	// most is how far they can go, and size the bar's size, at the last layout.
 	shift *anim.Float
@@ -222,14 +257,19 @@ func (c *crumbBar) set(cs []Crumb, u *gunim.UI) {
 	u.Invalidate()
 }
 
-// Children implements [gunim.Composite]: the places set before the bar was mounted arrive with it.
+// Children implements [gunim.Composite]: the lead, and the places set before the bar was mounted, which arrive with
+// it.
 func (c *crumbBar) Children() []gunim.Node {
-	out := make([]gunim.Node, len(c.crumbs))
-	for i, n := range c.crumbs {
-		out[i] = n
+	out := make([]gunim.Node, 0, len(c.crumbs)+1)
+	out = append(out, c.lead)
+	for _, n := range c.crumbs {
+		out = append(out, n)
 	}
 	return out
 }
+
+// leadGap is the room between the lead and the places, where a line parts them.
+const leadGap = 9
 
 // crumbEdge is the room the places keep from either end of the bar.
 const crumbEdge = 8
@@ -238,8 +278,8 @@ const crumbEdge = 8
 func (c *crumbBar) Reveal(r geom.Rect, u *gunim.UI) {
 	to := c.shift.Value()
 	switch {
-	case r.Min.X < crumbEdge:
-		to += crumbEdge - r.Min.X
+	case r.Min.X < c.from+crumbEdge:
+		to += c.from + crumbEdge - r.Min.X
 	case r.Max.X > c.size.W-crumbEdge:
 		to -= r.Max.X - (c.size.W - crumbEdge)
 	default:
@@ -256,21 +296,34 @@ func (c *crumbBar) TabGroup() {}
 func (c *crumbBar) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	size := cs.Max
 	c.size = size
+	// The lead takes up to a third of the bar, and the places start past it.
+	c.from = 0
+	if lead := kids.At(0); c.lead.Label == "" {
+		lead.Layout(gunim.Tight(geom.Size{}))
+		lead.Place(geom.Point{})
+	} else {
+		s := lead.Layout(gunim.Loose(geom.Sz(max(size.W/3, 1), size.H)))
+		lead.Place(geom.Pt(crumbEdge/2, (size.H-s.H)/2))
+		c.from = crumbEdge/2 + s.W + leadGap
+	}
 	// Each place fits in the bar, its name cut short where it is longer.
-	room := gunim.Loose(geom.Sz(max(size.W-2*crumbEdge, 1), size.H))
+	room := gunim.Loose(geom.Sz(max(size.W-c.from-2*crumbEdge, 1), size.H))
 	total := float32(0)
 	for k := range kids.All {
-		if k.Presence() == gunim.Exiting {
+		if k.Node() == gunim.Node(c.lead) || k.Presence() == gunim.Exiting {
 			continue
 		}
 		total += k.Layout(room).W
 	}
-	// When the places overflow, the last ones show, unless the keyboard has
-	// slid them along to show an earlier one.
-	x := min(float32(crumbEdge), size.W-total-crumbEdge)
-	c.most = crumbEdge - x
+	// When the places overflow, the last ones show, unless the keyboard or
+	// the wheel has slid them along to show an earlier one.
+	x := c.from + min(float32(crumbEdge), size.W-c.from-total-crumbEdge)
+	c.most = c.from + crumbEdge - x
 	x += min(max(c.shift.Value(), 0), c.most)
 	for k := range kids.All {
+		if k.Node() == gunim.Node(c.lead) {
+			continue
+		}
 		s := k.Layout(room)
 		cr, _ := k.Node().(*crumb)
 		if k.Presence() == gunim.Exiting {
@@ -294,10 +347,21 @@ func (c *crumbBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	r := geom.Rect{Max: box.Point()}
 	radius := FieldRadius.Get(th)
 	p.RRect(r, radius, paint.Solid(FieldFill.Get(th)))
+	if c.lead.Label != "" {
+		kids.At(0).Paint(p)
+		x := c.from - leadGap/2
+		p.RRect(geom.Rc(x, box.H/4, 1, box.H/2), 0, paint.Solid(FieldBorder.Get(th)))
+	}
 	func() {
-		defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: 1, Clip: true, Radius: radius})()
+		// The places fade where more of them lie past an edge.
+		places := geom.Rc(c.from, 0, box.W-c.from, box.H)
+		at, fade := min(max(c.shift.Value(), 0), c.most), ScrollFade.Get(th)
+		defer p.Layer(paint.LayerOpts{Bounds: places, Opacity: 1, Clip: true, Radius: radius,
+			Fade: geom.Insets{Left: fadeFor(c.most-at, fade), Right: fadeFor(at, fade)}})()
 		for k := range kids.All {
-			k.Paint(p)
+			if k.Node() != gunim.Node(c.lead) {
+				k.Paint(p)
+			}
 		}
 	}()
 	GroupRing(p, r, radius, c.ring.Value(), th)
@@ -322,6 +386,20 @@ func (c *crumbBar) Handle(e input.Event, u *gunim.UI) bool {
 			c.a.Edit(u)
 		}
 		return e.Button == input.ButtonPrimary
+	case input.Scroll:
+		// A wheel turns either way along the places, which overflow; a
+		// finger drags them.
+		d := e.Delta.X
+		if d == 0 {
+			d = e.Delta.Y
+		}
+		to := min(max(c.shift.Target()+d, 0), c.most)
+		if c.most <= 0 || to == c.shift.Target() {
+			return false
+		}
+		c.shift.Animate(to, Quick.Get(u.Theme()))
+		u.Invalidate()
+		return true
 	case input.KeyPress:
 		if e.Mods != 0 {
 			return false

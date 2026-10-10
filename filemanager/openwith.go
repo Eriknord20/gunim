@@ -75,6 +75,7 @@ func (a *app) askedOpenWith(path string) {
 		if err != nil {
 			// The menu still offers the system's dialog.
 			apps = nil
+			a.post(func() { a.logLine("Finding the programs that open "+a.ps.Base(path), err.Error()) })
 		}
 		a.post(func() { a.patch(OpenWithMenu{Path: path, Apps: dedupApps(apps)}) })
 	}()

@@ -25,7 +25,7 @@ public final class Native {
 
 	static native void start(String zone);
 	static native void surfaceChanged(Surface surface, int width, int height);
-	static native void surfaceDestroyed();
+	static native void surfaceDestroyed(Surface surface);
 	static native void metrics(float density, float refreshRate);
 	static native void touch(int action, float x, float y, long time);
 	static native void pinch(int action, float x0, float y0, float x1, float y1);

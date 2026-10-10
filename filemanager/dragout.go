@@ -95,6 +95,11 @@ func (a *app) dragFetchEnded(id int) {
 // and shows nothing more unless the operation showed, as only a fetch
 // that took a while does.
 func (a *app) fetchedForDrag(id, drag int, what string, local []string, err error, stopped bool) {
+	if r, ok := a.ops.running[id]; err != nil && !stopped && !errors.Is(err, context.Canceled) && (!ok || !r.visible) {
+		// The drop hint says only that it failed, and the operation never
+		// showed to say why.
+		a.logLine("Fetching "+what+" to drag out", err.Error())
+	}
 	switch {
 	case err == nil:
 		a.patch(DragFetched{ID: drag, Paths: local})

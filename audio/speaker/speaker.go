@@ -105,6 +105,13 @@ type Speaker struct {
 	dry, reads, dropouts atomic.Int64
 	// suspended stops the watch growing the buffer while nothing plays.
 	suspended atomic.Bool
+	// smu guards stopped, faded and asked: the device is stopped; the
+	// mix was faded out as it suspended, to fade in as it resumes; and
+	// asked counts Suspend's and Resume's calls, so a stop Suspend
+	// waits to make lapses where Resume came first.
+	smu            sync.Mutex
+	stopped, faded bool
+	asked          int
 	// q rounds the sound as it leaves, as bits and dither say: q is
 	// the goroutine's that pulls, and the settings anyone's, so neither
 	// waits.
@@ -438,21 +445,66 @@ func (s *Speaker) Err() error {
 	return s.problem
 }
 
+// SuspendFade is how long [Speaker.Suspend] takes to fade out the
+// sound playing, and [Speaker.Resume] to fade it back in.
+const SuspendFade = 150 * time.Millisecond
+
 // Suspend stops the device, as while the application is in the
-// background on a phone. The mixer stops with it.
+// background on a phone. The mixer stops with it. Sound playing fades
+// out first, over [SuspendFade]: Suspend returns at once, and the
+// device stops once the fade has been heard, unless Resume comes
+// first.
 func (s *Speaker) Suspend() error {
+	s.smu.Lock()
+	defer s.smu.Unlock()
 	s.suspended.Store(true)
-	if out := s.out.Load(); out != nil {
-		return out.suspend()
+	s.asked++
+	if s.stopped {
+		return nil
 	}
+	if !s.faded && !s.m.Sounding() {
+		return s.stopLocked()
+	}
+	s.faded = true
+	s.m.FadeOut(SuspendFade)
+	asked := s.asked
+	time.AfterFunc(SuspendFade+s.Latency(), func() {
+		s.smu.Lock()
+		defer s.smu.Unlock()
+		if s.asked == asked && !s.stopped {
+			_ = s.stopLocked()
+		}
+	})
 	return nil
 }
 
-// Resume starts a suspended device again.
+// stopLocked stops the device. It runs with smu held.
+func (s *Speaker) stopLocked() error {
+	out := s.out.Load()
+	if out == nil {
+		return nil
+	}
+	s.stopped = true
+	return out.suspend()
+}
+
+// Resume starts a suspended device again, and fades back in the sound
+// Suspend faded out, over [SuspendFade]. Where nothing sounded as it
+// suspended, a sound played as it resumes starts at once.
 func (s *Speaker) Resume() error {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.asked++
 	var err error
-	if out := s.out.Load(); out != nil {
-		err = out.resume()
+	if s.stopped {
+		if out := s.out.Load(); out != nil {
+			err = out.resume()
+		}
+		s.stopped = false
+	}
+	if s.faded {
+		s.faded = false
+		s.m.FadeIn(SuspendFade)
 	}
 	s.suspended.Store(false)
 	return err

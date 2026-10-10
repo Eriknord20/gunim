@@ -24,7 +24,11 @@ type Preview struct {
 	// file manager, for an item of a file system that cannot.
 	NoReveal bool
 	Tint     Tint
-	Facts    []Fact
+	// IconKey names the system icon the item shows with, as a row's
+	// does, and is empty where there is none; Dir says it is a folder.
+	IconKey string
+	Dir     bool
+	Facts   []Fact
 	// Image is a picture's thumbnail, and Text the start of a text file,
 	// Cut set when there is more.
 	Image *paint.Image

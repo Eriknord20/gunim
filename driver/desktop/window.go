@@ -394,6 +394,17 @@ func (w *Window) ClipboardImage() ([]byte, error) {
 	return b, err
 }
 
+// SetClipboardImage implements [driver.ImageClipboard]. It decodes png and readies it for the platform on the
+// caller's goroutine, so a large picture does not hold up the main thread, and puts it on the clipboard on the main
+// thread, where GLFW has to.
+func (w *Window) SetClipboardImage(png []byte) error {
+	img, err := glfw.PrepareClipboardImage(png)
+	if err != nil {
+		return err
+	}
+	return w.d.call(func() error { return glfw.SetClipboardImage(img) })
+}
+
 var _ driver.ImageClipboard = (*Window)(nil)
 
 // SetClipboard implements [driver.Window].
@@ -479,9 +490,6 @@ func (w *Window) awaitFrameAtSize() {
 		}
 	}
 }
-
-// RaiseThread implements [driver.Raiser].
-func (*Window) RaiseThread() { raiseThread() }
 
 // stopRender tells the render thread and the input feed to stop.
 func (w *Window) stopRender() { w.quitOnce.Do(func() { close(w.quit) }) }
@@ -1049,12 +1057,9 @@ type frame struct {
 // render is the window's render thread. It owns the GL context: it
 // replays each frame the engine presents, swaps, and reports the frame
 // shown once the swap returns.
-//
-// The goroutine keeps its thread until it exits, so the raised thread
-// and the GL context end together with it.
 func (w *Window) render() {
 	runtime.LockOSThread()
-	raiseThread()
+	defer runtime.UnlockOSThread()
 	defer close(w.done)
 
 	r, err := w.startGL()
@@ -1339,6 +1344,16 @@ func charOf(k glfw.Key, scancode int) rune {
 		return 0
 	}
 	return r[0]
+}
+
+// SetCloaked implements [driver.Cloaker].
+func (w *Window) SetCloaked(on bool) {
+	w.debugf("cloaked %v", on)
+	w.d.post(func() {
+		if !w.closed {
+			setCloaked(w, on)
+		}
+	})
 }
 
 // Hide implements [driver.Recycler].

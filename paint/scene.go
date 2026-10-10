@@ -192,12 +192,33 @@ func (*SceneOp) isOp() {}
 
 // Scene records s drawn into r. The view's aspect is r's, so a sphere
 // stays round in a wide view.
+//
+// The op holds its own copy of s.Items, so the caller may change its
+// slice once Scene returns. The copy is made into a buffer the painter
+// keeps from frame to frame, so a scene drawn every frame allocates
+// nothing once the buffer has grown to the frame's items.
 func (p *Painter) Scene(r geom.Rect, s Scene) {
 	if r.Empty() {
 		return
 	}
-	s.Items = slices.Clone(s.Items)
-	p.record(&SceneOp{Rect: r, Scene: s, Transform: p.at()}, r)
+	op := p.scenes.take()
+	*op = SceneOp{Rect: r, Scene: s, Transform: p.at()}
+	op.Scene.Items = p.copyItems(s.Items)
+	p.record(op, r)
+}
+
+// copyItems copies items to the end of this frame's item buffer and
+// returns the copy. Its capacity ends where it does, so an append to
+// it moves it rather than overwriting the next scene's items. Where
+// the buffer has to grow, the scenes recorded before keep the array
+// they were copied into, which stays as it was.
+func (p *Painter) copyItems(items []SceneItem) []SceneItem {
+	if len(items) == 0 {
+		return nil
+	}
+	at := len(p.items)
+	p.items = append(p.items, items...)
+	return p.items[at:len(p.items):len(p.items)]
 }
 
 // sameScene reports whether two scene ops draw the same.

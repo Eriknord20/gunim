@@ -117,7 +117,8 @@ func (r *Renderer) text(op *paint.TextOp) {
 		return
 	}
 	raster := text.Raster{Hint: r.textRendering.Hinting == text.HintingLight}
-	l := look{kind: kindGlyph, color0: rgba(op.Color), color1: r.gamma, stroke: greyContrast}
+	add := op.Blend == paint.BlendAdd
+	l := look{kind: kindGlyph, add: add, color0: rgba(op.Color), color1: r.gamma, stroke: greyContrast}
 	if r.subpixels && plain && r.depth == 0 {
 		raster.LCD = true
 		l.radius, l.stroke = 1, lcdContrast
@@ -129,7 +130,7 @@ func (r *Renderer) text(op *paint.TextOp) {
 	// transform: the op's without its translation.
 	shape := paint.Transform{A: t.A, B: t.B, D: t.D, E: t.E}
 	// A colour glyph keeps its own colours, and fades with the text.
-	colorLook := look{kind: kindGlyph, color0: [4]float32{1, 1, 1, float32(op.Color.A) / 255}, radius: 3}
+	colorLook := look{kind: kindGlyph, add: add, color0: [4]float32{1, 1, 1, float32(op.Color.A) / 255}, radius: 3}
 
 	var (
 		face   *text.Face

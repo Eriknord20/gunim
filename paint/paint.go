@@ -41,6 +41,11 @@ type Painter struct {
 	open  []int
 	stack []Transform
 	cur   Transform
+	// blend is the blend in force, and blends the ones Blend put aside,
+	// innermost last. Only a zero Painter holds BlendInherit, which
+	// blendFor takes as BlendNormal.
+	blend  Blend
+	blends []Blend
 	// clip is the innermost clipping layer open, or nil, and proj the
 	// projection of the tilted layers open, or nil.
 	clip *Clip
@@ -54,12 +59,23 @@ type Painter struct {
 	// popFn is pop as a func value, made once, so Push allocates
 	// nothing.
 	popFn func()
-	// rrects and texts hold the ops themselves, in blocks, so a frame
-	// allocates a block now and then, never an op at a time. The blocks
-	// of the frame before this one are reused; the driver is done with
-	// them by then.
+	// unblendFn is unblend as a func value, made once, so Blend
+	// allocates nothing.
+	unblendFn func()
+	// rrects, texts, masks and scenes hold the ops themselves, in
+	// blocks, so a frame allocates a block now and then, never an op at
+	// a time. The blocks of the frame before this one are reused; the
+	// driver is done with them by then. An op kept past that, in a
+	// Recording, is a copy, never one of these.
 	rrects, prevRRects slab[RRectOp]
 	texts, prevTexts   slab[TextOp]
+	masks, prevMasks   slab[MaskOp]
+	scenes, prevScenes slab[SceneOp]
+	// items holds the items of every scene this frame records, back to
+	// back, and prevItems those of the frame before, kept from frame to
+	// frame as the blocks are. A scene of a thousand items drawn every
+	// frame would otherwise copy them to a new slice every frame.
+	items, prevItems []SceneItem
 	// floats holds painting put off until the rest of the frame is
 	// done; see Float.
 	floats []func(*Painter)
@@ -88,13 +104,21 @@ func (s *slab[T]) take() *T {
 	}
 	v := &s.blocks[s.at][s.n]
 	s.n++
-	var zero T
-	*v = zero
 	return v
 }
 
-// reset makes every block available again.
-func (s *slab[T]) reset() { s.at, s.n = 0, 0 }
+// reset makes every block available again. It zeroes what was taken,
+// so take hands out zeroed Ts, and an op the next frame leaves untaken
+// holds on to nothing: no mesh, item array, shape or glyphs.
+func (s *slab[T]) reset() {
+	for _, b := range s.blocks[:s.at] {
+		clear(b)
+	}
+	if s.at < len(s.blocks) {
+		clear(s.blocks[s.at][:s.n])
+	}
+	s.at, s.n = 0, 0
+}
 
 // Everything is the damage that covers the whole window.
 var Everything = geom.Rect{Min: geom.Pt(-1e9, -1e9), Max: geom.Pt(1e9, 1e9)}
@@ -104,17 +128,29 @@ var Everything = geom.Rect{Min: geom.Pt(-1e9, -1e9), Max: geom.Pt(1e9, 1e9)}
 // it are reused.
 func (p *Painter) Reset() {
 	p.hasPrev = p.ready
+	// The ops of the frame before last are let go, all the way to the
+	// buffer's end, so a frame of fewer ops keeps none of them alive.
+	clear(p.prev[:cap(p.prev)])
 	p.prev, p.ops = p.ops, p.prev[:0]
 	p.prevBounds, p.bounds = p.bounds, p.prevBounds[:0]
 	p.prevBlurs, p.blurs = p.blurs, false
 	p.prevTilts, p.tilts = p.tilts, false
 	p.prevRRects, p.rrects = p.rrects, p.prevRRects
 	p.prevTexts, p.texts = p.texts, p.prevTexts
+	p.prevMasks, p.masks = p.masks, p.prevMasks
+	p.prevScenes, p.scenes = p.scenes, p.prevScenes
 	p.rrects.reset()
 	p.texts.reset()
+	p.masks.reset()
+	p.scenes.reset()
+	// The items of the frame before last let go of their meshes, so a
+	// mesh no longer drawn is not held on to by a buffer left unused.
+	clear(p.prevItems)
+	p.prevItems, p.items = p.items, p.prevItems[:0]
 	p.open = p.open[:0]
 	p.stack = p.stack[:0]
 	p.cur = Identity
+	p.blend, p.blends = BlendNormal, p.blends[:0]
 	p.ready = true
 	p.clip = nil
 	p.proj = nil
@@ -127,7 +163,8 @@ func (p *Painter) Reset() {
 // it then in window space, above everything and inside no clip. It is
 // for something that must leave its place in the tree for a moment,
 // such as an element flying from one screen to the next, which the
-// containers around it would otherwise clip.
+// containers around it would otherwise clip. It starts from
+// [BlendNormal], whatever blend was in force when it was put off.
 func (p *Painter) Float(fn func(*Painter)) { p.floats = append(p.floats, fn) }
 
 // PaintFloats runs the painting put off with Float, including any that
@@ -137,10 +174,10 @@ func (p *Painter) PaintFloats() {
 		fs := p.floats
 		p.floats = nil
 		for _, fn := range fs {
-			stack, cur, clip, proj := p.stack, p.cur, p.clip, p.proj
-			p.stack, p.cur, p.clip, p.proj = nil, Identity, nil, nil
+			stack, cur, clip, proj, blend := p.stack, p.cur, p.clip, p.proj, p.blend
+			p.stack, p.cur, p.clip, p.proj, p.blend = nil, Identity, nil, nil, BlendNormal
 			fn(p)
-			p.stack, p.cur, p.clip, p.proj = stack, cur, clip, proj
+			p.stack, p.cur, p.clip, p.proj, p.blend = stack, cur, clip, proj, blend
 		}
 	}
 }
@@ -214,7 +251,7 @@ func sameOp(a, b Op) bool {
 		return a2 == b2
 	case *TextOp:
 		b, ok := b.(*TextOp)
-		return ok && a.Size == b.Size && a.Color == b.Color && a.Transform == b.Transform &&
+		return ok && a.Size == b.Size && a.Color == b.Color && a.Transform == b.Transform && a.Blend == b.Blend &&
 			slices.Equal(a.Glyphs, b.Glyphs)
 	case *ImageOp:
 		b, ok := b.(*ImageOp)
@@ -372,6 +409,14 @@ type LayerOpts struct {
 	// scrolls on past its edge. A layer that fades shows only within
 	// Bounds, clipping or not. A tilted layer does not fade.
 	Fade geom.Insets
+	// Blend is how the whole layer meets what is beneath it as it
+	// composites, after its contents have drawn into it with their own
+	// blends; [BlendInherit] takes the blend in force, as an op does.
+	// A layer that adds with [BlendAdd] adds its colours, times
+	// Opacity, to what is beneath, and hides nothing: the layer's
+	// alpha goes unused. Its Backdrop, if any, still draws normally
+	// beneath it. An added layer always draws offscreen.
+	Blend Blend
 }
 
 // Layer opens an offscreen group and returns the function that closes
@@ -379,6 +424,7 @@ type LayerOpts struct {
 //
 //	defer p.Layer(paint.LayerOpts{Opacity: t, Backdrop: 12 * t})()
 func (p *Painter) Layer(o LayerOpts) func() {
+	o.Blend = p.blendFor(o.Blend)
 	if o.Blur > 0 || o.Backdrop > 0 {
 		p.blurs = true
 	}
@@ -662,6 +708,11 @@ type RRectOp struct {
 	// shape. A zero Shadow is skipped.
 	Inset     [2]Shadow
 	Transform Transform
+	// Blend is how the shape, its shadows and its stroke meet what is
+	// beneath them. The painter sets it from the blend in force as the
+	// op is recorded, unless the op asks for one of its own in
+	// DrawRRect; see [Painter.Blend].
+	Blend Blend
 }
 
 // Shadow is a soft drop shadow behind a shape. A zero Shadow is
@@ -671,6 +722,11 @@ type Shadow struct {
 	Blur   float32
 	Spread float32
 	Color  color.NRGBA
+	// Outside keeps the shadow out from under the shape, as CSS's
+	// box-shadow is: a see-through shape, such as frosted glass, then
+	// shows what lies behind it undarkened. A drop shadow, Outside
+	// applies to it alone, not to an inset shadow.
+	Outside bool
 }
 
 // TextOp draws a run of already-shaped text.
@@ -685,6 +741,10 @@ type TextOp struct {
 	Size      float32
 	Color     color.NRGBA
 	Transform Transform
+	// Blend is how the glyphs meet what is beneath them, set from the
+	// blend in force as the op is recorded; see [Painter.Blend]. Text
+	// added with [BlendAdd] glows over what it crosses.
+	Blend Blend
 }
 
 // Glyph is one positioned glyph from a shaped run.
@@ -725,14 +785,14 @@ func (p *Painter) takeRRect(op RRectOp) *RRectOp {
 
 // RRect records a rounded rectangle.
 func (p *Painter) RRect(r geom.Rect, radius float32, f Fill) {
-	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Transform: p.at()}), r)
+	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Transform: p.at(), Blend: p.blendNow()}), r)
 }
 
 // RRectStroke records a rounded rectangle with an outline, which is
 // centred on the rectangle's edge.
 func (p *Painter) RRectStroke(r geom.Rect, radius float32, f Fill, s Stroke) {
 	half := s.Width / 2
-	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Stroke: s, Transform: p.at()}),
+	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Stroke: s, Transform: p.at(), Blend: p.blendNow()}),
 		geom.Rect{Min: geom.Pt(r.Min.X-half, r.Min.Y-half), Max: geom.Pt(r.Max.X+half, r.Max.Y+half)})
 }
 
@@ -742,12 +802,14 @@ func (p *Painter) ShadowRRect(r geom.Rect, radius float32, f Fill, sh Shadow) {
 		Min: geom.Pt(r.Min.X-sh.Blur-sh.Spread+sh.Offset.X, r.Min.Y-sh.Blur-sh.Spread+sh.Offset.Y),
 		Max: geom.Pt(r.Max.X+sh.Blur+sh.Spread+sh.Offset.X, r.Max.Y+sh.Blur+sh.Spread+sh.Offset.Y),
 	}
-	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Shadow: sh, Transform: p.at()}), grown.Union(r))
+	p.record(p.takeRRect(RRectOp{Rect: r, Radius: radius, Fill: f, Shadow: sh, Transform: p.at(), Blend: p.blendNow()}),
+		grown.Union(r))
 }
 
 // DrawRRect records op as it is, in the transform in force, with any
 // of a rounded rectangle's parts: a fill, a stroke, a drop shadow and
-// inset shadows.
+// inset shadows. It draws with op's Blend, or with the blend in force
+// where that is [BlendInherit].
 func (p *Painter) DrawRRect(op RRectOp) {
 	b := op.Rect
 	half := op.Stroke.Width / 2
@@ -760,6 +822,7 @@ func (p *Painter) DrawRRect(op RRectOp) {
 		})
 	}
 	op.Transform = p.at()
+	op.Blend = p.blendFor(op.Blend)
 	p.record(p.takeRRect(op), b)
 }
 
@@ -768,7 +831,7 @@ func (p *Painter) DrawRRect(op RRectOp) {
 // is the usual way to call it.
 func (p *Painter) Text(g []Glyph, size float32, c color.NRGBA, bounds geom.Rect) {
 	op := p.texts.take()
-	*op = TextOp{Glyphs: g, Size: size, Color: c, Transform: p.at()}
+	*op = TextOp{Glyphs: g, Size: size, Color: c, Transform: p.at(), Blend: p.blendNow()}
 	p.record(op, bounds)
 }
 

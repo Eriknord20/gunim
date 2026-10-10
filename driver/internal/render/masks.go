@@ -107,7 +107,7 @@ func (r *Renderer) scratch(pix []byte, w, h int) glyphSlot {
 
 // maskLook is the look of op's mask, drawn w by h device pixels.
 func (r *Renderer) maskLook(op *paint.MaskOp, w, h int) look {
-	l := look{kind: kindGlyph, color0: rgba(op.Color)}
+	l := look{kind: kindGlyph, color0: rgba(op.Color), add: op.Blend == paint.BlendAdd}
 	if gr := op.Gradient; gr != nil {
 		// A corner's point is in device pixels of the mask; the
 		// gradient's are in the space of its rectangle.

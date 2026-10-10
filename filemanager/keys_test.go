@@ -222,6 +222,32 @@ func TestTypingAtTheListingGoesToTheNameTyped(t *testing.T) {
 	h.until("after a pause, a goes to apple", func() bool { return h.a.nav.cursor == "apple.txt" })
 }
 
+func TestTheSelectionSlidesToANameTypedAndToAClickedRow(t *testing.T) {
+	h := newHarness(t, "apple.txt", "banana.txt", "berry.txt", "cherry.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 4 })
+	h.do(FocusListing{})
+	h.press(input.KeyDown, 0)
+	h.frames(60)
+	g := h.b.listing.cur.grid
+	if g.Sliding() {
+		t.Fatal("the selection is still sliding a second after Down")
+	}
+	h.w.Input(input.TextInput{Text: "c", Time: time.Now()})
+	h.until("c goes to cherry", func() bool { return h.a.nav.cursor == "cherry.txt" })
+	if !g.Sliding() {
+		t.Fatal("the selection jumped to the name typed")
+	}
+	h.frames(60)
+	h.w.Input(input.PointerDown{Pos: h.point("banana.txt"), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	h.w.Input(input.PointerUp{Pos: h.point("banana.txt"), Button: input.ButtonPrimary, Time: time.Now()})
+	h.frames(1)
+	if !g.Sliding() {
+		t.Fatal("the selection jumped to the row clicked")
+	}
+	h.until("the click selects banana", func() bool { return h.a.nav.cursor == "banana.txt" })
+}
+
 func TestCtrlAndAClickOpenAFolderInANewWindow(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "a", "b")

@@ -120,3 +120,94 @@ func TestAWindowWithRoundCornersLeavesWhole(t *testing.T) {
 		t.Fatalf("halfway out, the background left under the window is %v opaque", a)
 	}
 }
+
+// A window faded out fades as it would leaving, takes no input, and is
+// taken off the screen once it has gone, staying open; faded back in, it
+// is on the screen again and fades in, and takes input once more.
+func TestAWindowFadesOutAndBackInStayingOpen(t *testing.T) {
+	w, _, r := newStage(t, paint.Identity)
+	c := w.Client()
+	c.Fade(true)
+	w.Frame(time.Second / 60)
+	w.Frame(LeaveTime / 2)
+	l, ok := w.Offscreen().Ops()[0].(*paint.LayerOp)
+	if !ok || l.Opts.Opacity <= 0 || l.Opts.Opacity >= 1 {
+		t.Fatalf("halfway out, the frame starts with %#v", w.Offscreen().Ops()[0])
+	}
+	press(w, 50, 30)
+	if len(r.events) != 0 {
+		t.Fatalf("fading out, the window passed on %v", r.events)
+	}
+	if w.Offscreen().Cloaked() {
+		t.Fatal("halfway out, the window is off the screen")
+	}
+	w.Frame(LeaveTime)
+	if !w.Offscreen().Cloaked() {
+		t.Fatal("faded out, the window is still on the screen")
+	}
+	if w.draws() {
+		t.Fatal("faded out, the window still draws")
+	}
+	select {
+	case <-w.done:
+		t.Fatal("faded out, the window closed")
+	default:
+	}
+
+	c.Fade(false)
+	w.Frame(time.Second / 60)
+	if w.Offscreen().Cloaked() {
+		t.Fatal("fading in, the window is still off the screen")
+	}
+	l, ok = w.Offscreen().Ops()[0].(*paint.LayerOp)
+	if !ok || l.Opts.Opacity >= 0.5 {
+		t.Fatalf("starting in, the frame starts with %#v", w.Offscreen().Ops()[0])
+	}
+	w.Frame(LeaveTime)
+	w.Frame(time.Second / 60)
+	if ops := w.Offscreen().Ops(); len(ops) > 0 {
+		if _, ok := ops[0].(*paint.LayerOp); ok {
+			t.Fatal("faded in, the window is still drawn in a layer")
+		}
+	}
+	press(w, 50, 30)
+	if len(r.events) == 0 {
+		t.Fatal("faded in, the window takes no input")
+	}
+}
+
+// Fading back in before it has gone whole, the window comes back from
+// as far as it had gone.
+func TestAWindowFadingOutTurnsBackWhereItIs(t *testing.T) {
+	w, _, _ := newStage(t, paint.Identity)
+	c := w.Client()
+	c.Fade(true)
+	w.Frame(time.Second / 60)
+	w.Frame(LeaveTime / 2)
+	was := w.ui.faded
+	c.Fade(false)
+	w.Frame(time.Second / 60)
+	w.Frame(time.Second / 60)
+	if got := w.ui.faded; got >= was || got < was-0.3 {
+		t.Fatalf("turned back at %v, the window is at %v", was, got)
+	}
+	if w.Offscreen().Cloaked() {
+		t.Fatal("turned back, the window went off the screen")
+	}
+}
+
+// A window fading out or in fades where it stands, at its own size: it
+// comes back exactly where what stood in for it lands.
+func TestAFadingWindowKeepsItsSize(t *testing.T) {
+	w, _, _ := newStage(t, paint.Identity)
+	w.Client().Fade(true)
+	w.Frame(time.Second / 60)
+	w.Frame(LeaveTime / 2)
+	l, ok := w.Offscreen().Ops()[0].(*paint.LayerOp)
+	if !ok || l.Opts.Opacity >= 1 {
+		t.Fatalf("halfway out, the frame starts with %#v", w.Offscreen().Ops()[0])
+	}
+	if l.Transform.A != 1 {
+		t.Fatalf("halfway out, the window is drawn at scale %v, want its own size", l.Transform.A)
+	}
+}

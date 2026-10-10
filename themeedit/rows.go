@@ -257,12 +257,12 @@ func (c *colorControl) show(v any, u *gunim.UI) {
 }
 
 // numberControl is a field for a length or a number, or, for a field
-// of the Basics with a range, a slider with the value written beside
-// it. It is never both.
+// of the Basics with a range, a slider with a small field for the value
+// beside it. Either field can be dragged up and down to change the
+// value.
 type numberControl struct {
 	field  *widget.NumberField
 	slider *widget.Slider
-	value  *widget.Label
 	// whole says the value is a whole number, and view is what the
 	// row shows.
 	whole bool
@@ -272,16 +272,42 @@ type numberControl struct {
 func newNumberControl(info theme.Info, f Field, label string, dense bool, edit editFunc) *numberControl {
 	def, _ := info.Default.(float32)
 	c := &numberControl{whole: def == float32(math.Round(float64(def)))}
+	c.field = widget.NewNumberField(-1e6, 1e6)
+	if f.Max > f.Min {
+		c.field.Min, c.field.Max = float64(f.Min), float64(f.Max)
+	}
+	// A whole number steps by ones; any other by hundredths, and drags
+	// a little quicker than a hundredth every few pixels, so a value
+	// such as a text size can be dragged across in a short way.
+	c.field.Decimals, c.field.Increment = 2, 0.01
+	if c.whole {
+		c.field.Decimals, c.field.Increment = 0, 1
+	} else if f.Max <= f.Min {
+		c.field.DragRate = fractionRate
+	}
+	c.field.Tooltip, c.field.Placeholder = label, label
+	// While the field is dragged the edits are on the way, as a
+	// slider's are, and letting go keeps the one it ends at. A value
+	// typed is kept as it reads.
+	c.field.OnChange = func(v float64, u *gunim.UI) gunim.Intent {
+		if c.slider != nil {
+			c.slider.SetValue(float32(v), u)
+		}
+		edit(float32(v), !c.field.Dragging(), c, u)
+		return nil
+	}
+	c.field.OnCommit = func(v float64, u *gunim.UI) gunim.Intent {
+		edit(float32(v), true, c, u)
+		return nil
+	}
 	if f.Max > f.Min && !dense {
 		c.slider = widget.NewSlider(f.Min, f.Max)
 		c.slider.Label = label
 		if c.whole {
 			c.slider.Snap = 1
 		}
-		c.value = widget.NewLabel("")
-		c.value.Align, c.value.NoWrap = text.AlignEnd, true
 		c.slider.OnChange = func(v float32, u *gunim.UI) gunim.Intent {
-			c.value.Text = c.format(v)
+			c.field.SetValue(float64(v), u)
 			edit(v, false, c, u)
 			return nil
 		}
@@ -289,24 +315,11 @@ func newNumberControl(info theme.Info, f Field, label string, dense bool, edit e
 			edit(v, true, c, u)
 			return nil
 		}
-		r := widget.Row(&sized{child: c.slider, width: SliderWidth}, &sized{child: c.value, width: ValueWidth})
-		r.Cross = widget.CrossCenter
+		c.field.Height = CompactHeight
+		r := widget.Row(&sized{child: c.slider, width: SliderWidth}, &sized{child: c.field, width: ValueWidth})
+		r.Cross, r.Gap = widget.CrossCenter, NamesGap
 		c.view = r
 		return c
-	}
-	c.field = widget.NewNumberField(-1e6, 1e6)
-	if f.Max > f.Min {
-		c.field.Min, c.field.Max = float64(f.Min), float64(f.Max)
-	}
-	// A whole number steps by ones; any other by hundredths.
-	c.field.Decimals, c.field.Increment = 2, 0.01
-	if c.whole {
-		c.field.Decimals, c.field.Increment = 0, 1
-	}
-	c.field.Tooltip, c.field.Placeholder = label, label
-	c.field.OnChange = func(v float64, u *gunim.UI) gunim.Intent {
-		edit(float32(v), true, c, u)
-		return nil
 	}
 	c.view = &sized{child: c.field, width: NumberWidth}
 	if dense {
@@ -316,20 +329,16 @@ func newNumberControl(info theme.Info, f Field, label string, dense bool, edit e
 	return c
 }
 
-// format writes v as the slider's readout.
-func (c *numberControl) format(v float32) string {
-	if c.whole {
-		return fmt.Sprintf("%.0f", v)
-	}
-	return fmt.Sprintf("%.2f", v)
-}
+// fractionRate is how far a field for a number that is not whole, and
+// has no range, moves for each pixel it is dragged.
+const fractionRate = 0.02
 
 func (c *numberControl) node() gunim.Node  { return c.view }
 func (c *numberControl) below() gunim.Node { return nil }
 
 func (c *numberControl) stops() []gunim.Node {
 	if c.slider != nil {
-		return []gunim.Node{c.slider}
+		return []gunim.Node{c.slider, c.field}
 	}
 	return []gunim.Node{c.field}
 }
@@ -341,9 +350,6 @@ func (c *numberControl) show(v any, u *gunim.UI) {
 	}
 	if c.slider != nil {
 		c.slider.SetValue(f, u)
-		c.value.Text = c.format(f)
-		u.Invalidate()
-		return
 	}
 	c.field.SetValue(float64(f), u)
 }
@@ -367,6 +373,10 @@ func newInsetsControl(label string, dense bool, edit editFunc) *insetsControl {
 		}
 		c.sides[i] = n
 		n.OnChange = func(_ float64, u *gunim.UI) gunim.Intent {
+			edit(c.value(), !n.Dragging(), c, u)
+			return nil
+		}
+		n.OnCommit = func(_ float64, u *gunim.UI) gunim.Intent {
 			edit(c.value(), true, c, u)
 			return nil
 		}

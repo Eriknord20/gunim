@@ -198,6 +198,28 @@ func (a *app) opsCommand(name string) bool {
 			a.nav.pick = []string{name}
 			a.startOp(job{kind: OpNewFolder, dest: here, name: name}, "Making "+name)
 		})
+	case CmdZip:
+		if paths := a.selectedPaths(); len(paths) > 0 && here != "" {
+			a.askZip(a.fs.ID(), a.ps, paths, here)
+		}
+	case CmdExtract:
+		paths := a.selectedPaths()
+		if len(paths) != 1 || here == "" || !isArchive(a.ps.Base(paths[0])) {
+			a.patch(Notice{Title: "Select a zip or tar archive to extract", Kind: "info"})
+			return true
+		}
+		a.askExtract(paths[0])
+	case CmdPasteZip:
+		if here == "" {
+			return true
+		}
+		// A zip copies: what was cut stays where it is, and on the
+		// clipboard.
+		if c := a.ops.away; len(c.paths) > 0 {
+			a.askZip(c.fs, c.ps, slices.Clone(c.paths), here)
+		} else if len(a.ops.clip) > 0 {
+			a.askZip(a.fs.ID(), a.ps, slices.Clone(a.ops.clip), here)
+		}
 	case CmdUndo:
 		if n := len(a.ops.undo); n > 0 {
 			a.undo(a.ops.undo[n-1])
@@ -206,6 +228,34 @@ func (a *app) opsCommand(name string) bool {
 		return false
 	}
 	return true
+}
+
+// askZip asks for the name of a zip of the items at paths, on the file
+// system of ID fs whose paths are written as ps, and makes it in the
+// folder dest of the window's: itself, or through the program from
+// another file system.
+func (a *app) askZip(fs string, ps PathStyle, paths []string, dest string) {
+	name, err := freeName(a.fs, a.ps.Join(dest, zipName(ps, paths)))
+	if err != nil {
+		a.fail("Looking for a free name: " + err.Error())
+		return
+	}
+	base := a.ps.Base(name)
+	stem := utf8.RuneCountInString(strings.TrimSuffix(base, zipExt))
+	a.prompt(Prompt{Title: "Create zip", Text: base, OK: "Create", Stem: stem}, func(name string) {
+		name = withZipExt(name)
+		what := whatIn(ps, paths)
+		if fs != a.fs.ID() {
+			if a.opts.Transfer == nil {
+				a.fail("A zip of items elsewhere cannot be made here.")
+				return
+			}
+			a.startTransfer(Transfer{FromFS: fs, Paths: paths, ToFS: a.fs.ID(), Into: dest, Zip: name}, ps)
+			return
+		}
+		a.nav.pick = []string{name}
+		a.startOp(job{kind: OpZip, srcs: paths, dest: dest, name: name}, "Zipping "+what+" to "+name)
+	})
 }
 
 // what says how many items paths are, or names the one.
@@ -404,12 +454,12 @@ func (a *app) finish(id int, j job, rec record, err error) {
 			a.patch(Notice{Title: "Partly done: " + r.title, Undo: undo, Kind: "warning"})
 		}
 	}
-	if j.kind == OpRename || j.kind == OpNewFolder {
+	if j.kind == OpRename || j.kind == OpNewFolder || j.kind == OpZip || j.kind == OpExtract {
 		if err != nil {
 			a.nav.pick = nil
 		}
 	}
-	if (j.kind == OpCopy || j.kind == OpMove) && len(rec.landed) > 0 && a.ps.Same(j.dest, a.nav.path) {
+	if (j.kind == OpCopy || j.kind == OpMove || j.kind == OpZip || j.kind == OpExtract) && len(rec.landed) > 0 && a.ps.Same(j.dest, a.nav.path) {
 		// What a paste or a drop brought into the folder showing is
 		// selected, so the user sees what came.
 		a.nav.pick = rec.landed
@@ -445,6 +495,10 @@ func (a *app) doneTitle(j job, rec record) string {
 		return "Renamed to " + j.name
 	case OpNewFolder:
 		return "Made " + j.name
+	case OpZip:
+		return "Made " + j.name
+	case OpExtract:
+		return "Extracted to " + j.name
 	case OpUndo:
 		return "Undone"
 	}
@@ -456,7 +510,7 @@ func failedTitle(j job) string {
 	return map[OpKind]string{
 		OpCopy: "The copy stopped", OpMove: "The move stopped", OpTrash: "Moving to the trash stopped",
 		OpDelete: "Deleting stopped", OpRename: "The rename failed", OpNewFolder: "The folder was not made",
-		OpUndo: "Undo stopped",
+		OpUndo: "Undo stopped", OpZip: "The zip was not made", OpExtract: "The archive was not extracted",
 	}[j.kind]
 }
 
@@ -561,8 +615,9 @@ func (a *app) prompt(p Prompt, got func(name string)) {
 	}})
 }
 
-// showError says an operation failed, in a dialog.
+// showError says an operation failed, in a dialog, and to Options.Log.
 func (a *app) showError(e ErrorBox) {
+	a.logShown(e)
 	a.showDialog(&dialog{view: "error", state: e, answer: func(gunim.Intent) {}})
 }
 

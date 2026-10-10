@@ -54,6 +54,7 @@ var (
 	SyntaxNumber   = theme.Foreground("syntax.number", color.NRGBA{R: 0xd1, G: 0x9a, B: 0x66, A: 0xff})
 	SyntaxComment  = theme.Foreground("syntax.comment", color.NRGBA{R: 0x7f, G: 0x84, B: 0x8e, A: 0xff})
 	SyntaxOperator = theme.Foreground("syntax.operator", color.NRGBA{R: 0x9d, G: 0xa5, B: 0xb4, A: 0xff})
+	SyntaxVariable = theme.Foreground("syntax.variable", color.NRGBA{R: 0xe0, G: 0x6c, B: 0x75, A: 0xff})
 )
 
 // syntaxInk returns the colour token for a kind of token.
@@ -75,6 +76,8 @@ func syntaxInk(k syntax.Kind) theme.Token[color.NRGBA] {
 		return SyntaxComment
 	case syntax.Operator:
 		return SyntaxOperator
+	case syntax.Variable:
+		return SyntaxVariable
 	}
 	return Ink
 }
@@ -109,6 +112,13 @@ type CodeEditor struct {
 	// OnChange runs on the UI goroutine after each edit, with the code; a
 	// non-nil result is sent to the application as the editor's intent.
 	OnChange func(code string, u *gunim.UI) gunim.Intent
+	// OnCommit, when set, runs when Enter is pressed, as OnChange does,
+	// and Shift+Enter starts a line instead.
+	OnCommit func(code string, u *gunim.UI) gunim.Intent
+	// MaxRows, when above zero, makes the editor as tall as its code up
+	// to that many lines, growing and shrinking as lines come and go,
+	// and scrolling past them, rather than filling the room it is given.
+	MaxRows int
 	// Label names the editor for screen readers.
 	Label string
 	// Numbers shows line numbers down the left. NewCodeEditor sets it.
@@ -117,6 +127,8 @@ type CodeEditor struct {
 	focus   *anim.Float
 	caretAt *anim.Point
 	band    *anim.Float
+	// rows carries how many lines tall the editor is under MaxRows.
+	rows    *anim.Float
 	scrollX *anim.Float
 	scrollY *anim.Float
 	marks   []*codeMark
@@ -195,12 +207,13 @@ func NewCodeEditor() *CodeEditor {
 		focus:     anim.NewFloat(0),
 		caretAt:   anim.NewPoint(geom.Point{}),
 		band:      anim.NewFloat(0),
+		rows:      anim.NewFloat(0),
 		scrollX:   anim.NewFloat(0),
 		scrollY:   anim.NewFloat(0),
 		numbers:   map[int]text.Run{},
 	}
 	c.multiline, c.tabs, c.Numbers = true, true, true
-	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY)
+	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY, c.rows)
 	c.changed = func(u *gunim.UI) {
 		if c.OnChange != nil {
 			send(u, c, c.OnChange(c.Text(), u))
@@ -438,6 +451,10 @@ func (c *CodeEditor) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		c.edit(e, u)
 	case input.KeyPress:
+		if c.submits(e) {
+			send(u, c, c.OnCommit(c.Text(), u))
+			return true
+		}
 		if !c.codeKey(e, u) && !c.key(e, u, codeNav{c}) {
 			return false
 		}
@@ -449,6 +466,12 @@ func (c *CodeEditor) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	u.Invalidate()
 	return true
+}
+
+// submits reports whether k is an Enter that runs OnCommit.
+func (c *CodeEditor) submits(k input.KeyPress) bool {
+	enter := k.Key == input.KeyEnter || k.Key == input.KeyKPEnter
+	return enter && c.OnCommit != nil && !k.Mods.Has(input.ModShift) && len(c.preedit) == 0
 }
 
 // typed puts typed text in, taking an indent back for a closing brace
@@ -828,7 +851,16 @@ func (c *CodeEditor) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Childre
 	if own.W <= 0 {
 		own.W = AreaWidth.Get(th)
 	}
-	if own.H <= 0 {
+	switch {
+	case c.MaxRows > 0:
+		want := float32(min(max(len(c.lines), 1), c.MaxRows))
+		if !c.laid {
+			c.rows.Jump(want)
+		} else if want != c.rows.Target() {
+			c.rows.Animate(want, Quick.Get(th))
+		}
+		own.H = c.rows.Value()*c.lineH + 2*c.pad
+	case own.H <= 0:
 		own.H = float32(max(len(c.lines), 1))*c.lineH + 2*c.pad
 	}
 	own = cs.Constrain(own)

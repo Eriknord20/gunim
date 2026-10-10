@@ -95,6 +95,10 @@ func (m *Menu) openSub(i int, keys bool, u *gunim.UI) {
 			m.pickSub(append([]int{i}, path...), u)
 			return nil
 		}
+		if len(m.chosen) > 1 && m.chosen[0] == i {
+			sm.chosen = m.chosen[1:]
+			sm.Highlight(sm.chosen[0])
+		}
 		s := &subMenu{item: i, menu: sm, anchor: m.subAnchor(i)}
 		s.popup = u.OpenPopup(m, sm, gunim.PopupOptions{Anchor: s.anchor, Max: geom.Sz(600, 480), Beside: true})
 		m.sub = s

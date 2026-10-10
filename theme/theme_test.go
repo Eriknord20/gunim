@@ -217,3 +217,24 @@ func TestDeclaredListsTokensWithTheirDefaults(t *testing.T) {
 		t.Fatal("Has does not match what the theme sets")
 	}
 }
+
+// Using the theme a scope wears already leaves its text alone: a
+// foreground fades through on a switch, and a switch to the same colour
+// would dip the text and bring it back.
+func TestUsingTheSameThemeAgainLeavesTheTextAlone(t *testing.T) {
+	ink := Foreground("test.same.ink", color.NRGBA{R: 200, G: 208, B: 218, A: 255})
+	th := Make("dark", Set(ink, color.NRGBA{R: 10, G: 20, B: 30, A: 255}))
+	l := NewLive(th)
+	_ = ink.Get(l)
+	step(l, 300)
+	want := ink.Get(l)
+	for range 3 {
+		l.Use(th.With())
+		for f := range 10 {
+			step(l, 1)
+			if got := ink.Get(l); got != want {
+				t.Fatalf("frame %d after using the same theme again, the ink is %v, want %v", f, got, want)
+			}
+		}
+	}
+}

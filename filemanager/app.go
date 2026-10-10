@@ -40,9 +40,9 @@ type Options struct {
 	// as the window is open on another. An AnyFSFavourites keeps them
 	// on any file system, and the window lists them all.
 	Favourites FavouriteStore
-	// Log, when set, hears each failure and warning the window shows, as
-	// one line, for a program to keep in a log of its own: what the
-	// window says goes once it is dismissed.
+	// Log, when set, hears each failure and warning the window shows,
+	// and each notice, as one line, for a program to keep in a log of its
+	// own: what the window says goes once it is dismissed.
 	Log func(line string)
 	// Visit goes to the folder at path on the file system of ID fs, for
 	// a place or a favourite on another file system than the window's,
@@ -104,9 +104,10 @@ type Options struct {
 }
 
 // Transfer is items going from one file system to another, which the
-// window cannot do itself: copied, or moved when Move is set. A drop or
-// a paste of items from several folders makes one Transfer for each,
-// and each runs as an operation of its own.
+// window cannot do itself: copied, or moved when Move is set, or put
+// into a new zip file when Zip is set. A drop or a paste of items from
+// several folders makes one Transfer for each, and each runs as an
+// operation of its own; a paste as a zip makes one Transfer of all.
 type Transfer struct {
 	// FromFS is the ID of the file system the items are on, and Paths
 	// the items, all in one folder.
@@ -117,6 +118,10 @@ type Transfer struct {
 	ToFS string
 	Into string
 	Move bool
+	// Zip, when set, is the name of a new zip file in Into that the
+	// items go into, with all that folders among them hold: ZipFiles
+	// makes it. Nothing may be at its path already.
+	Zip string
 }
 
 // app is the application half. Everything on it runs on the serve loop;
@@ -158,6 +163,7 @@ type app struct {
 	preview previewState
 	thumbs  thumbState
 	viewer  viewerState
+	reading readingState
 	search  searchState
 	places  []Place
 	favs    []Favourite
@@ -170,8 +176,12 @@ type app struct {
 	// closeAsked says the user is being asked whether to stop what runs
 	// and close.
 	closeAsked bool
-	// title is the file system and the folder the pane's host was last told of.
-	title string
+	// title is the file system and the folder the pane's host was last told of,
+	// and folder the file system and the path.
+	title, folder string
+	// note is what the program said of a folder for the status bar,
+	// shown while that folder is.
+	note note
 	// script is what is left of the steps to run, once the first folder
 	// is read.
 	script    []string
@@ -275,7 +285,7 @@ func (a *app) join(h *Hub, w *Window) {
 	w.a = a
 	a.publishClip()
 	a.handlers = []handler{a.handleDnd, a.handleNav, a.handleOps, a.handlePreview, a.handlePlaces, a.handleShell,
-		a.handleIcons, a.handleViewer, a.handleSearch, a.handleTheme}
+		a.handleIcons, a.handleViewer, a.handleReading, a.handleSearch, a.handleTheme}
 	a.startup(a.opts)
 }
 
@@ -470,25 +480,46 @@ func (a *app) patch(v any) {
 	a.send(a.c.Patch(string(a.ids.browser()), v))
 }
 
-// logShown tells Options.Log of a failure or a warning v shows.
+// logShown tells Options.Log of a failure or a warning v shows, and of
+// every notice.
 func (a *app) logShown(v any) {
-	if a.opts.Log == nil {
-		return
-	}
 	switch v := v.(type) {
 	case Banner:
 		if v.Text != "" {
-			a.opts.Log("files: " + v.Text)
+			a.logLine(v.Text)
 		}
 	case Notice:
-		if v.Kind == "warning" || v.Kind == "error" {
-			line := "files: " + v.Title
-			if v.Body != "" {
-				line += ": " + v.Body
-			}
-			a.opts.Log(line)
+		a.logLine(v.Title, v.Body)
+	case ErrorBox:
+		a.logLine(v.Title, v.Body)
+	case Preview:
+		if v.Err != "" {
+			a.logLine("Previewing "+v.Shown, v.Err)
+		}
+	case Counted:
+		if v.Err != "" {
+			a.logLine("Counting what a folder holds", v.Err)
+		}
+	case PropsCounted:
+		if v.Err != "" {
+			a.logLine("Counting the items for Properties", v.Err)
 		}
 	}
+}
+
+// logLine tells Options.Log of a failure: what failed, then why, when
+// it says something.
+func (a *app) logLine(what string, why ...string) {
+	if a.opts.Log == nil {
+		return
+	}
+	parts := []string{"files: " + what}
+	for _, w := range why {
+		if w != "" {
+			parts = append(parts, w)
+		}
+	}
+	a.opts.Log(strings.Join(parts, ": "))
 }
 
 // send logs a command the window did not take. A window that has closed

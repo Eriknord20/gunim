@@ -294,8 +294,8 @@ JNIEXPORT void JNICALL Java_gunim_android_Native_surfaceChanged(JNIEnv *env, jcl
 	goSurfaceChanged(ANativeWindow_fromSurface(env, surface), w, h);
 }
 
-JNIEXPORT void JNICALL Java_gunim_android_Native_surfaceDestroyed(JNIEnv *env, jclass c) {
-	goSurfaceDestroyed();
+JNIEXPORT void JNICALL Java_gunim_android_Native_surfaceDestroyed(JNIEnv *env, jclass c, jobject surface) {
+	goSurfaceDestroyed(surface != NULL ? ANativeWindow_fromSurface(env, surface) : NULL);
 }
 
 JNIEXPORT void JNICALL Java_gunim_android_Native_metrics(JNIEnv *env, jclass c, jfloat density, jfloat rate) {

@@ -444,3 +444,40 @@ func TestTileGridGroupsStartNewRowsUnderHeaders(t *testing.T) {
 		t.Fatalf("%d headers left without groups", len(g.headers))
 	}
 }
+
+func TestTileGridReorderBeforeItsTilesWereLaidOut(t *testing.T) {
+	// A grid laid out empty, told of an order that says items were there:
+	// they were never laid out, so they come in new, not from nowhere.
+	g, w, run := tileStage(t, 0)
+	do(t, w, func(u *gunim.UI) { g.Reorder([]int{0, 1, 2}, u) })
+	run(1)
+	if len(g.live) != 3 {
+		t.Fatalf("%d tiles built, want 3", len(g.live))
+	}
+	for i, tc := range g.live {
+		if f := tc.fade.Value(); f > 0.01 {
+			t.Fatalf("tile %d shows at once, faded in %v; want it fading in, new", i, f)
+		}
+	}
+	run(120)
+
+	// Two reorders before one layout: the second's order is over the
+	// first's, and the tiles glide from where they last showed.
+	was := map[int]geom.Rect{}
+	for i := range 3 {
+		was[i] = g.live[i].rect()
+	}
+	do(t, w, func(u *gunim.UI) {
+		g.Reorder([]int{2, 1, 0, -1}, u)
+		g.Reorder([]int{1, 0, 2, 3}, u)
+	})
+	run(1)
+	// Item 0 now was item 1 of the first reorder, which was item 1: it
+	// starts near where item 1 showed.
+	if r := g.live[0].rect(); r.Min.Sub(was[1].Min).X > 20 || was[1].Min.Sub(r.Min).X > 20 {
+		t.Fatalf("a frame in, the first tile is at %v; want it gliding from item 1's %v", r, was[1])
+	}
+	if f := g.live[3].fade.Value(); f > 0.01 {
+		t.Fatalf("the new tile shows at once, faded in %v", f)
+	}
+}

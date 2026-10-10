@@ -162,3 +162,94 @@ func TestTheAddressBarEditsOnAClickBesideThePlaces(t *testing.T) {
 		t.Fatal("a click beside the places does not edit the path")
 	}
 }
+
+// longCrumbs are the places of a path too long for a narrow bar.
+func longCrumbs() []Crumb {
+	cs := make([]Crumb, 0, 8)
+	path := ""
+	for _, name := range []string{"home", "someone", "projects", "gunim", "widget", "testdata", "fonts", "noto"} {
+		path += "/" + name
+		cs = append(cs, Crumb{name, path})
+	}
+	return cs
+}
+
+// The wheel scrolls places that overflow back to the first and on to the
+// last again, and they fade at an edge only while more lie past it.
+func TestTheWheelScrollsAddressPlacesThatOverflow(t *testing.T) {
+	a, w, run, _ := addressStage(t, 200, longCrumbs())
+	u := stageUI(t, w, run)
+	ps := a.Places(u)
+	if first := ps[0]; first.Rect.Min.X >= 0 {
+		t.Fatalf("the first place shows at %v before any scroll", first.Rect)
+	}
+	fade := func() geom.Insets {
+		t.Helper()
+		f, ok := fadeIn(painted(a.crumbs, a.crumbs.size))
+		if !ok {
+			t.Fatal("the places paint in no layer")
+		}
+		return f
+	}
+	if f := fade(); f.Left == 0 || f.Right != 0 {
+		t.Fatalf("at the end the places fade by %v, want only at the left", f)
+	}
+	w.Input(input.Scroll{Pos: geom.Pt(100, 20), Delta: geom.Pt(0, 5000)})
+	run(40)
+	if first := a.Places(u)[0]; first.Rect.Min.X < 0 {
+		t.Fatalf("the wheel back left the first place at %v", first.Rect)
+	}
+	if f := fade(); f.Left != 0 || f.Right == 0 {
+		t.Fatalf("at the start the places fade by %v, want only at the right", f)
+	}
+	w.Input(input.Scroll{Pos: geom.Pt(100, 20), Delta: geom.Pt(0, -5000)})
+	run(40)
+	if last := a.Places(u)[len(ps)-1]; last.Rect.Max.X > 200.5 {
+		t.Fatalf("the wheel on left the last place at %v", last.Rect)
+	}
+}
+
+// Places that fit do not scroll.
+func TestAddressPlacesThatFitDoNotScroll(t *testing.T) {
+	a, w, run, _ := addressStage(t, 400, []Crumb{{"x", "/x"}})
+	w.Input(input.Scroll{Pos: geom.Pt(100, 20), Delta: geom.Pt(0, 300)})
+	run(20)
+	if at := a.crumbs.shift.Value(); at != 0 {
+		t.Fatalf("places that fit scrolled to %v", at)
+	}
+}
+
+// The lead shows before the places, which start past it, and a click on
+// it runs OnLead.
+func TestTheAddressLeadShowsBeforeThePlaces(t *testing.T) {
+	type leadClicked struct{}
+	a, w, run, _ := addressStage(t, 400, []Crumb{{"x", "/x"}, {"y", "/x/y"}})
+	u := stageUI(t, w, run)
+	before := a.Places(u)[0].Rect.Min.X
+	a.OnLead = func(*gunim.UI) gunim.Intent { return leadClicked{} }
+	type set struct{}
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, _ set, u *gunim.UI) { a.SetLead(AddressLead{Name: "web"}, u) })
+	if err := w.Client().Patch("stage", set{}); err != nil {
+		t.Fatal(err)
+	}
+	run(20)
+	lead, ok := u.Bounds(a.crumbs.lead)
+	if !ok || lead.Size().W <= 0 {
+		t.Fatal("the lead does not show")
+	}
+	if first := a.Places(u)[0].Rect; first.Min.X <= lead.Max.X || first.Min.X <= before {
+		t.Fatalf("the first place is at %v, over the lead at %v", first, lead)
+	}
+	c := lead.Center()
+	click(w, c.X, c.Y)
+	run(5)
+	got := false
+	for _, ev := range sent(w) {
+		if _, ok := ev.(leadClicked); ok {
+			got = true
+		}
+	}
+	if !got {
+		t.Fatal("a click on the lead ran nothing")
+	}
+}

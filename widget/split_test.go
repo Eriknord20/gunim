@@ -8,6 +8,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
 )
 
 type splitMoved struct{ Share float32 }
@@ -188,5 +189,42 @@ func TestASplitAskedToSlideFromAShareGlidesFromThereOnEveryFrame(t *testing.T) {
 	run(5)
 	if at := s.share.Value(); at > 0.401 {
 		t.Fatalf("SlideFrom after the first layout moved the share to %v", at)
+	}
+}
+
+// widths is a node that notes every width it is laid out at.
+type widths struct{ seen []float32 }
+
+func (n *widths) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	if len(n.seen) == 0 || n.seen[len(n.seen)-1] != c.Max.W {
+		n.seen = append(n.seen, c.Max.W)
+	}
+	return c.Max
+}
+
+func (n *widths) Paint(*paint.Painter, gunim.Frame, geom.Size, gunim.Children) {}
+
+// A pane sliding in is laid out at the size it ends at from the start,
+// and the pane it slides in beside keeps its size until the slide is
+// over: a terminal in either is resized once, not on every frame, and
+// what it shows is not wrapped to the sizes on the way.
+func TestASlideLaysThePanesOutAtTheirOwnSizes(t *testing.T) {
+	a, b := &widths{}, &widths{}
+	s := NewSplit(a, b)
+	s.SlideFrom(1)
+	s.SetShare(0.5, nil)
+	_, run := stage(t, &frame{child: s, size: geom.Sz(606, 300)})
+	run(120)
+	if len(a.seen) != 2 || a.seen[0] != 606 || a.seen[1] != 300 {
+		t.Fatalf("the pane slid beside was laid out at %v, want 606 until the slide ended, then 300", a.seen)
+	}
+	if len(b.seen) != 1 || b.seen[0] != 300 {
+		t.Fatalf("the pane sliding in was laid out at %v, want 300 throughout", b.seen)
+	}
+	// Moved by hand, the divider sizes the panes as it goes.
+	s.SetShare(0.3, nil)
+	run(1)
+	if a.seen[len(a.seen)-1] == 300 {
+		t.Fatal("set by hand, the share left the first pane as it was")
 	}
 }

@@ -73,6 +73,34 @@ func TestInsetShadowsShadeInsideTheShapeAlone(t *testing.T) {
 	}
 }
 
+func TestAShadowOutsideLeavesTheShapeClear(t *testing.T) {
+	r, done := hiddenGL(t)
+	defer done()
+	// Grey under a see-through shape with a dark shadow kept outside it:
+	// the grey shows through the shape undarkened, and the shadow darkens
+	// the grey around it.
+	pix := drawn(r, func(p *paint.Painter) {
+		p.RRect(geom.Rc(50, 50, 300, 300), 0, paint.Solid(color.NRGBA{0x80, 0x80, 0x80, 0xff}))
+		p.ShadowRRect(geom.Rc(100, 100, 200, 100), 12, paint.Solid(color.NRGBA{A: 0}),
+			paint.Shadow{Offset: geom.Pt(0, 10), Blur: 8, Color: black, Outside: true})
+	})
+	if got := pixelAt(pix, 200, 150); !near(got, [4]byte{0x80, 0x80, 0x80, 0xff}, 2) {
+		t.Errorf("under the shape the grey is %v, want it undarkened", got)
+	}
+	if got := pixelAt(pix, 200, 204); got[0] > 0x60 {
+		t.Errorf("just below the shape the grey is %v, want the shadow's dark", got)
+	}
+	// Without Outside the shadow darkens under the shape too.
+	pix = drawn(r, func(p *paint.Painter) {
+		p.RRect(geom.Rc(50, 50, 300, 300), 0, paint.Solid(color.NRGBA{0x80, 0x80, 0x80, 0xff}))
+		p.ShadowRRect(geom.Rc(100, 100, 200, 100), 12, paint.Solid(color.NRGBA{A: 0}),
+			paint.Shadow{Offset: geom.Pt(0, 10), Blur: 8, Color: black})
+	})
+	if got := pixelAt(pix, 200, 150); got[0] > 0x20 {
+		t.Errorf("under a shape with a plain shadow the grey is %v, want the shadow's dark", got)
+	}
+}
+
 func TestARadialGradientRunsOutFromItsCentre(t *testing.T) {
 	r, done := hiddenGL(t)
 	defer done()

@@ -298,3 +298,46 @@ func TestCodeKeepsTheCaretInViewAsItShrinks(t *testing.T) {
 		t.Fatalf("line 12 spans %v to %v, outside the view from %v to %v", y, y+c.lineH, top, top+c.view.H)
 	}
 }
+
+func TestCodeEnterCommitsAndShiftEnterStartsALine(t *testing.T) {
+	c, w, run := codeStage(t, "")
+	c.OnCommit = func(s string, u *gunim.UI) gunim.Intent { return submitted{s} }
+	w.Input(input.TextInput{Text: "if x {"})
+	run(1)
+	typeKeys(w, run, input.ModShift, input.KeyEnter)
+	if got := c.Text(); got != "if x {\n\t" {
+		t.Fatalf("Shift+Enter left %q, want a new line indented", got)
+	}
+	sent(w)
+	typeKeys(w, run, 0, input.KeyEnter)
+	if got := c.Text(); got != "if x {\n\t" {
+		t.Fatalf("Enter changed the code to %q", got)
+	}
+	if got := sent(w); len(got) != 1 || got[0] != (submitted{"if x {\n\t"}) {
+		t.Fatalf("intents %v, want the code committed", got)
+	}
+}
+
+func TestCodeGrowsWithItsLinesUpToMaxRows(t *testing.T) {
+	c := NewCodeEditor()
+	c.MaxRows = 3
+	c.SetText("one", nil)
+	col := Column(c)
+	col.Cross = CrossStretch
+	_, run := stage(t, col)
+	run(60)
+	shown := func() float32 { return c.view.H / c.lineH }
+	if n := shown(); abs32(n-1) > 0.01 {
+		t.Fatalf("one line shows %v lines, want 1", n)
+	}
+	c.SetText("one\ntwo", nil)
+	run(60)
+	if n := shown(); abs32(n-2) > 0.01 {
+		t.Fatalf("two lines show %v lines, want 2", n)
+	}
+	c.SetText(strings.Repeat("line\n", 9), nil)
+	run(60)
+	if n := shown(); abs32(n-3) > 0.01 {
+		t.Fatalf("ten lines show %v lines, want MaxRows, 3", n)
+	}
+}

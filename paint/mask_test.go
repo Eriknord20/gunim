@@ -102,3 +102,22 @@ func TestAMaskOfAShapeThatCannotBeComparedPanicsAtOnce(t *testing.T) {
 	p.Mask(sliced{}, geom.Rc(0, 0, 10, 10), color.NRGBA{A: 0xff})
 	t.Fatal("Mask took a shape that cannot be compared")
 }
+
+func TestMasksDrawnEveryFrameAllocateNothing(t *testing.T) {
+	var p Painter
+	var shape Shape = square{true}
+	shade := &Gradient{To: geom.Pt(16, 0), Start: color.NRGBA{A: 0xff}, End: color.NRGBA{R: 0xff, A: 0xff}}
+	frame := func() {
+		p.Reset()
+		for i := range 500 {
+			r := geom.Rc(float32(i), 0, 16, 16)
+			p.Mask(shape, r, color.NRGBA{R: 0xff, A: 0xff})
+			p.MaskFill(shape, r, Fill{Gradient: shade})
+		}
+	}
+	frame()
+	frame()
+	if n := testing.AllocsPerRun(20, frame); n != 0 {
+		t.Fatalf("a frame of a thousand masks allocated %v times, want none", n)
+	}
+}

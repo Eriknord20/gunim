@@ -88,6 +88,21 @@ type sceneState struct {
 	frame     uint64
 	// order is scratch: the see-through items of the scene drawing.
 	order []seen
+	// v holds the values a scene hands its uniforms, here rather than
+	// on the stack, where passing them to the GL through its interface
+	// would move them to the heap, an allocation for each one each item.
+	v sceneValues
+}
+
+// sceneValues is what a scene and each of its items hand the program's
+// uniforms.
+type sceneValues struct {
+	mvp, model geom.Mat4
+	normal     [9]float32
+	tint       [4]float32
+	shine      [1]float32
+	mirror     [1]float32
+	vec3       [3]float32
 }
 
 // meshBuffers is a mesh uploaded to the GPU.
@@ -245,14 +260,10 @@ func (r *Renderer) scene(op *paint.SceneOp) {
 	cam := op.Scene.Camera
 	vp := cam.Matrix(size.W / size.H)
 	dir, lc, amb := op.Scene.Lighting()
-	rgb := func(c color.NRGBA) []float32 {
-		v := rgba(c)
-		return []float32{v[0] * v[3], v[1] * v[3], v[2] * v[3]}
-	}
-	g.Uniform3fv(st.u.light, []float32{dir.X, dir.Y, dir.Z})
-	g.Uniform3fv(st.u.lightColor, rgb(lc))
-	g.Uniform3fv(st.u.ambient, rgb(amb))
-	g.Uniform3fv(st.u.eye, []float32{cam.Eye.X, cam.Eye.Y, cam.Eye.Z})
+	r.uniform3(st.u.light, dir.X, dir.Y, dir.Z)
+	r.uniformRGB(st.u.lightColor, lc)
+	r.uniformRGB(st.u.ambient, amb)
+	r.uniform3(st.u.eye, cam.Eye.X, cam.Eye.Y, cam.Eye.Z)
 
 	// The solid items first, hiding what they stand in front of; then
 	// the see-through ones, furthest first, each blended over what is
@@ -329,22 +340,38 @@ type seen struct {
 func (r *Renderer) drawItem(it paint.SceneItem, vp geom.Mat4, now time.Time) {
 	g, st := r.GL, &r.scenes
 	mb := r.meshBuffers(it.Mesh, now)
-	model := it.Matrix()
-	mvp := vp.Mul(model)
-	normal := model.NormalMatrix()
-	tc := rgba(it.Color())
-	g.UniformMatrix4fv(st.u.mvp, mvp[:])
-	g.UniformMatrix4fv(st.u.model, model[:])
-	g.UniformMatrix3fv(st.u.normal, normal[:])
-	g.Uniform4fv(st.u.tint, tc[:])
-	g.Uniform1fv(st.u.shine, []float32{it.Shine})
-	mirror := float32(1)
-	if mirrored(model) {
-		mirror = -1
+	v := &st.v
+	v.model = it.Matrix()
+	v.mvp = vp.Mul(v.model)
+	v.normal = v.model.NormalMatrix()
+	v.tint = rgba(it.Color())
+	v.shine[0] = it.Shine
+	v.mirror[0] = 1
+	if mirrored(v.model) {
+		v.mirror[0] = -1
 	}
-	g.Uniform1fv(st.u.mirror, []float32{mirror})
+	g.UniformMatrix4fv(st.u.mvp, v.mvp[:])
+	g.UniformMatrix4fv(st.u.model, v.model[:])
+	g.UniformMatrix3fv(st.u.normal, v.normal[:])
+	g.Uniform4fv(st.u.tint, v.tint[:])
+	g.Uniform1fv(st.u.shine, v.shine[:])
+	g.Uniform1fv(st.u.mirror, v.mirror[:])
 	g.BindVertexArray(mb.vao)
 	g.DrawElements(gl.TRIANGLES, mb.n, gl.UNSIGNED_INT, 0)
+}
+
+// uniform3 sets the scene program's vec3 uniform at loc.
+func (r *Renderer) uniform3(loc int32, x, y, z float32) {
+	v := &r.scenes.v.vec3
+	*v = [3]float32{x, y, z}
+	r.GL.Uniform3fv(loc, v[:])
+}
+
+// uniformRGB sets the scene program's vec3 uniform at loc to c,
+// premultiplied.
+func (r *Renderer) uniformRGB(loc int32, c color.NRGBA) {
+	v := rgba(c)
+	r.uniform3(loc, v[0]*v[3], v[1]*v[3], v[2]*v[3])
 }
 
 // mirrored reports whether m mirrors what it moves, as a scale by a

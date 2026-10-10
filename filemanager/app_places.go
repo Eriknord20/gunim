@@ -109,6 +109,7 @@ func (a *app) loadPlaces() {
 			if err != nil {
 				a.fail("Finding the places for the sidebar: " + err.Error())
 			}
+			a.logPlaceErrs(ps)
 			a.places = ps
 			a.publishPlaces()
 		})
@@ -183,4 +184,19 @@ func (a *app) publishPlaces() {
 		Order: slices.Clone(a.prefs.SidebarOrder), Collapsed: slices.Clone(a.prefs.SidebarCollapsed)}
 	a.patch(s)
 	a.publishVolumes(s)
+}
+
+// logPlaceErrs tells Options.Log of each place in ps the sidebar shows
+// a failure in, which it did not show the last time: the places are
+// found again each time the window gets the keyboard back.
+func (a *app) logPlaceErrs(ps []Place) {
+	was := map[string]string{}
+	for _, p := range a.places {
+		was[p.FS+"\x00"+p.Path] = p.Err
+	}
+	for _, p := range ps {
+		if p.Err != "" && was[p.FS+"\x00"+p.Path] != p.Err {
+			a.logLine("Reading "+p.Name, p.Err)
+		}
+	}
 }

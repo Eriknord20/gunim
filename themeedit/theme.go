@@ -63,7 +63,8 @@ var (
 	// SliderPadding is the room round a spring's Speed and Bounce
 	// sliders, under its row.
 	SliderPadding = theme.Insets("themeedit.sliders.padding", geom.Insets{Top: 10})
-	// ValueWidth is the width of the value written beside a slider.
+	// ValueWidth is the width of the field for the value beside a
+	// slider.
 	ValueWidth = theme.Length("themeedit.value.width", 52)
 	// PreviewWidth is the width of the preview beside the controls, and
 	// Narrow the editor's width below which the preview goes above them.

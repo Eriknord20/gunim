@@ -22,14 +22,6 @@ type CursorSetter interface {
 // operating system gunim is running on.
 var ErrNoDriver = errors.New("driver: no platform driver for this operating system")
 
-// A Raiser is a [Window] that can raise the priority of the calling
-// thread. The engine calls RaiseThread from its UI goroutine, which it
-// keeps on one thread for life, so the work of making frames stays on
-// time when other programs load the CPU.
-type Raiser interface {
-	RaiseThread()
-}
-
 // A TextInputter is a [Window] that can be told when the application is
 // taking text, so the platform's input method composes into it: it
 // holds the key presses it needs while the user composes, and reports
@@ -345,6 +337,14 @@ type FullScreener interface {
 // task bar, or bounces it in the dock.
 type Attender interface {
 	RequestAttention()
+}
+
+// A Cloaker is a [Window] that can be taken off the screen while it
+// stays open, out of the pointer's way, and put back as it was: on
+// Windows cloaked, as the system does a window on another desktop,
+// keeping its button on the task bar; elsewhere hidden.
+type Cloaker interface {
+	SetCloaked(on bool)
 }
 
 // A Fronter is a [Window] that can come to the front with the keyboard,

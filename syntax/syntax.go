@@ -3,8 +3,10 @@
 // own, as rune offsets, so an editor can paint each in its kind's
 // colour and leave the text between them plain.
 //
-// Go is the first language. A highlighter for another language is a
-// function with the same signature.
+// Go reads Go. Bash, PowerShell and Batch read what is typed at a
+// shell: bash and the shells like it, PowerShell, and the Windows
+// Command Prompt. A highlighter for another language is a function with
+// the same signature.
 package syntax
 
 // Kind is what a token is, which picks its colour.
@@ -30,8 +32,11 @@ const (
 	Number
 	// Comment is a comment, with its markers.
 	Comment
-	// Operator is an operator, such as + or :=.
+	// Operator is an operator, such as + or :=, or a shell's pipe.
 	Operator
+	// Variable is a variable where a shell reads or sets it, such as
+	// $HOME or %PATH%.
+	Variable
 )
 
 // String names the kind.
@@ -55,6 +60,8 @@ func (k Kind) String() string {
 		return "comment"
 	case Operator:
 		return "operator"
+	case Variable:
+		return "variable"
 	}
 	return "invalid"
 }

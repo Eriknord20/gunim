@@ -48,7 +48,9 @@ final class GunimView extends SurfaceView implements SurfaceHolder.Callback {
 
 	@Override
 	public void surfaceDestroyed(SurfaceHolder h) {
-		Native.surfaceDestroyed();
+		// The surface goes by name: a new activity's may have come
+		// already, as when Android replaces the activity at start.
+		Native.surfaceDestroyed(h.getSurface());
 	}
 
 	@Override
@@ -139,7 +141,11 @@ final class GunimView extends SurfaceView implements SurfaceHolder.Callback {
 	@Override
 	public void onWindowFocusChanged(boolean focused) {
 		super.onWindowFocusChanged(focused);
-		Native.focus(focused);
+		// An old activity's view, losing the focus after its
+		// replacement came, speaks no more for the program.
+		if (Native.view == this) {
+			Native.focus(focused);
+		}
 	}
 
 	/**

@@ -144,6 +144,7 @@ func (a *app) countProps(ctx context.Context, d *dialog, paths []string) {
 				c.Token = p.Token
 				p.Size, p.Holds, p.Counting, p.Err = c.Size, c.Holds, c.Counting, c.Err
 				d.state = p
+				a.logShown(c)
 				if len(a.ops.dialogs) > 0 && a.ops.dialogs[0] == d {
 					a.send(a.c.Patch(string(d.id), c))
 				}

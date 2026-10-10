@@ -43,6 +43,55 @@ func TestAWindowHiddenAndShownTellsTheFocusedNode(t *testing.T) {
 	}
 }
 
+// modalShown is hearsShown holding the keyboard, as a dialog or an
+// intro over a game does.
+type modalShown struct{ hearsShown }
+
+func (*modalShown) Modal() bool { return true }
+
+func TestEveryViewHearsTheWindowHiddenAndShownOnce(t *testing.T) {
+	w := NewOffscreen(geom.Sz(200, 200), nil)
+	type game struct{}
+	type intro struct{}
+	g, m := &hearsShown{}, &modalShown{}
+	RegisterView(w, "game", func(game) *hearsShown { return g }, func(*hearsShown, game, *UI) {})
+	RegisterView(w, "intro", func(intro) *modalShown { return m }, func(*modalShown, intro, *UI) {})
+	c := w.Client()
+	if err := c.Mount(Root, "game", "game", game{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Focus("game")
+	w.Frame(time.Second / 60)
+	// The game alone, with the keyboard: it hears each once.
+	w.Input(driver.WindowShown{Shown: false})
+	w.Input(driver.WindowShown{Shown: true})
+	if len(g.got) != 2 {
+		t.Fatalf("the focused game heard %v, want hidden and shown once each", g.got)
+	}
+	// The intro over it holds the keyboard and takes what it hears; the
+	// game under it hears the window go and come back all the same.
+	if err := c.Mount(Root, "intro", "intro", intro{}); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Focus("intro")
+	w.Frame(time.Second / 60)
+	g.got = nil
+	w.Input(driver.WindowShown{Shown: false})
+	if len(m.got) != 1 || len(g.got) != 1 {
+		t.Fatalf("hidden under the intro: the intro heard %v, the game %v; want one each", m.got, g.got)
+	}
+	if _, ok := g.got[0].(input.WindowHidden); !ok {
+		t.Fatalf("the game heard %T, want WindowHidden", g.got[0])
+	}
+	w.Input(driver.WindowShown{Shown: true})
+	if len(m.got) != 2 || len(g.got) != 2 {
+		t.Fatalf("shown again: the intro heard %v, the game %v; want two each", m.got, g.got)
+	}
+	if _, ok := g.got[1].(input.WindowShown); !ok {
+		t.Fatalf("the game heard %T, want WindowShown", g.got[1])
+	}
+}
+
 func TestAHiddenWindowDrawsNothingUntilShownOrLeaving(t *testing.T) {
 	w := NewOffscreen(geom.Sz(200, 200), &hearsShown{})
 	w.Frame(time.Second / 60)

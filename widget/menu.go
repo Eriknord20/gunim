@@ -123,6 +123,9 @@ type Menu struct {
 	sub    *subMenu
 	parent *Menu
 	side   driver.Room
+	// chosen is the path of a drop-down's chosen item, from this menu's items: the submenu of its first item opens with
+	// the next highlighted.
+	chosen []int
 	// wait cancels a submenu waiting to open, or to close for another item, as the pointer rests; waitFor is the item
 	// it waits on.
 	wait    func()
@@ -1061,14 +1064,20 @@ func (m *Menu) gutter() float32 {
 // pick another. The list opens below the drop-down, or above it where
 // the screen runs out, with the chosen item highlighted.
 //
+// An item with a [MenuItem.Sub] opens its submenu beside the list, and
+// an item picked there becomes the one chosen, as a song in a list of
+// categories. The chosen item is then a path, as [Menu.OnPickSub] gives
+// one: [Dropdown.SelectedPath] reads it and [Dropdown.OnChangeSub] hears
+// it change. Its submenu opens with it highlighted.
+//
 // With focus, Space, Enter and the arrow keys open the list; the arrow
 // keys, Home and End move through it; Enter or Space picks; Escape and
 // Tab close it.
 type Dropdown struct {
 	Control
 
-	// selected is the chosen item.
-	selected int
+	// selected is the chosen item's path: an item of the list, then of its submenu, and on down. It is never empty.
+	selected []int
 	// Label names the drop-down for a screen reader, as the label
 	// beside it does on screen.
 	Label string
@@ -1080,6 +1089,10 @@ type Dropdown struct {
 	// through u, such as filling in a form from a saved entry; a non-nil
 	// result is sent to the application as the drop-down's intent.
 	OnChange func(i int, u *gunim.UI) gunim.Intent
+	// OnChangeSub runs in the same way when the user picks an item of a
+	// submenu other than the chosen one, with its path; see
+	// [Menu.OnPickSub].
+	OnChangeSub func(path []int, u *gunim.UI) gunim.Intent
 
 	turn *anim.Float
 
@@ -1100,9 +1113,10 @@ type Dropdown struct {
 // list, and before the chosen one on the drop-down itself.
 func NewDropdown(items []MenuItem) *Dropdown {
 	d := &Dropdown{
-		Control: newControl(),
-		list:    newMenuList(items),
-		turn:    anim.NewFloat(0),
+		Control:  newControl(),
+		selected: []int{0},
+		list:     newMenuList(items),
+		turn:     anim.NewFloat(0),
 	}
 	d.Add(d.turn)
 	return d
@@ -1115,21 +1129,33 @@ func (d *Dropdown) Items() []MenuItem { return d.list.items }
 // list open shows them at once.
 func (d *Dropdown) SetItems(items []MenuItem) { d.list = newMenuList(items) }
 
-// Selected returns the chosen item.
-func (d *Dropdown) Selected() int { return d.selected }
+// Selected returns the chosen item, or for an item of a submenu, the item of the list whose submenu holds it.
+func (d *Dropdown) Selected() int { return d.selected[0] }
+
+// SelectedPath returns the chosen item's path: the item of the list, then the item of its submenu, and on down. The
+// drop-down keeps the slice; change a copy.
+func (d *Dropdown) SelectedPath() []int { return d.selected }
 
 // SetSelected chooses item i and sends no intent. The drop-down shows it at once, and the list open glides its
 // highlight there; before the first layout, or with a nil u, the highlight jumps.
-func (d *Dropdown) SetSelected(i int, u *gunim.UI) {
-	if i == d.selected {
+func (d *Dropdown) SetSelected(i int, u *gunim.UI) { d.SetSelectedPath([]int{i}, u) }
+
+// SetSelectedPath chooses the item at path, as [Dropdown.SelectedPath] gives it, and sends no intent. It does as
+// [Dropdown.SetSelected] does, and an empty path chooses the first item.
+func (d *Dropdown) SetSelectedPath(path []int, u *gunim.UI) {
+	if len(path) == 0 {
+		path = []int{0}
+	}
+	if slices.Equal(path, d.selected) {
 		return
 	}
-	d.selected = i
+	d.selected = slices.Clone(path)
 	if d.menu == nil || !d.IsOpen() {
 		return
 	}
 	m := d.menu
-	m.Highlight(i)
+	m.chosen = d.selected
+	m.Highlight(d.selected[0])
 	if u == nil {
 		m.hotY.Jump(m.hotY.Target())
 		m.hotOn.Jump(m.hotOn.Target())
@@ -1203,8 +1229,24 @@ func (d *Dropdown) key(k input.KeyPress, u *gunim.UI) bool {
 func (d *Dropdown) listMenu() *Menu {
 	m := NewMenu(nil)
 	d.sync(m)
-	m.Highlight(d.selected)
+	m.chosen = d.selected
+	m.Highlight(d.selected[0])
 	return m
+}
+
+// chosen returns the chosen item, or nil where its path is past the items.
+func (d *Dropdown) chosen() *MenuItem {
+	items := d.list.items
+	for n, i := range d.selected {
+		if i < 0 || i >= len(items) {
+			return nil
+		}
+		if n == len(d.selected)-1 {
+			return &items[i]
+		}
+		items = items[i].subItems()
+	}
+	return nil
 }
 
 // sync gives the menu the drop-down's items as they are now, with their width as the drop-down measured it.
@@ -1220,10 +1262,20 @@ func (d *Dropdown) open(u *gunim.UI) {
 	m := d.listMenu()
 	m.OnPick = func(i int, u *gunim.UI) gunim.Intent {
 		d.close(u)
-		if i != d.selected {
-			d.selected = i
+		if !slices.Equal(d.selected, []int{i}) {
+			d.selected = []int{i}
 			if d.OnChange != nil {
 				send(u, d, d.OnChange(i, u))
+			}
+		}
+		return nil
+	}
+	m.OnPickSub = func(path []int, u *gunim.UI) gunim.Intent {
+		d.close(u)
+		if !slices.Equal(d.selected, path) {
+			d.selected = slices.Clone(path)
+			if d.OnChangeSub != nil {
+				send(u, d, d.OnChangeSub(path, u))
 			}
 		}
 		return nil
@@ -1282,9 +1334,26 @@ func (d *Dropdown) measure(face *text.Face, size float32) float32 {
 		for _, i := range l.longest {
 			w = max(w, face.Shape(l.items[i].Label, size).Advance)
 		}
+		// An item of a submenu shows on the drop-down once it is chosen.
+		if leaves := subLabels(l.items, nil); len(leaves) > 0 {
+			for _, i := range longest(leaves, menuMeasured) {
+				w = max(w, face.Shape(leaves[i], size).Advance)
+			}
+		}
 		d.widest, d.widthOf = w, key
 	}
 	return d.widest
+}
+
+// subLabels appends to out the labels of the items in the submenus of items, and in theirs, on down.
+func subLabels(items []MenuItem, out []string) []string {
+	for i := range items {
+		for _, it := range items[i].subItems() {
+			out = append(out, it.Label)
+		}
+		out = subLabels(items[i].subItems(), out)
+	}
+	return out
 }
 
 // chevron is the width of the drop-down's arrow.
@@ -1301,13 +1370,15 @@ func (d *Dropdown) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	p.RRectStroke(r, radius, paint.Solid(fill), paint.Stroke{Width: 1, Color: FieldBorder.Get(th)})
 
 	pad := FieldPadding.Get(th)
-	if items := d.list.items; d.selected >= 0 && d.selected < len(items) {
-		it := &items[d.selected]
+	if it := d.chosen(); it != nil {
 		x := pad
-		if it.Icon != nil {
+		// The room for an icon is the list's: an item of a submenu shows its icon where the list has icons.
+		switch {
+		case d.iconSpace == 0:
+		case it.Icon != nil:
 			s := IconSize.Get(th)
 			paintIcon(p, th, it.Icon, geom.Rc(x, (box.H-s)/2, s, s), Ink.Get(th), 1)
-		} else if it.Swatch.A > 0 {
+		case it.Swatch.A > 0:
 			paintSwatch(p, th, it.Swatch, geom.Pt(x, box.H/2))
 		}
 		x += d.iconSpace

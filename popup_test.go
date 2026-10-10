@@ -1,6 +1,9 @@
 package gunim
 
 import (
+	"fmt"
+	"image/color"
+	"reflect"
 	"runtime"
 	"testing"
 	"time"
@@ -362,5 +365,94 @@ func TestAnOwnedPopupKeepsItsWindowToItself(t *testing.T) {
 	run(w, 1)
 	if popupWindow(t, w) == owned {
 		t.Fatal("the menu opened in the owned popup's window")
+	}
+}
+
+// sprites is popup content that draws something new each frame from
+// every buffer a painter reuses: a shape, a mask, text and a scene.
+type sprites struct {
+	menu
+	n    int
+	mesh *paint.Mesh
+}
+
+// fill is a mask shape that covers its box.
+type fill struct{}
+
+func (fill) Coverage(w, h int) []byte { return make([]byte, w*h) }
+func (fill) Settled() bool            { return true }
+
+func (s *sprites) Paint(p *paint.Painter, _ Frame, box geom.Size, _ Children) {
+	s.n++
+	at := float32(s.n)
+	p.RRect(geom.Rc(at, 0, 10, 10), 2, paint.Solid(color.NRGBA{R: uint8(s.n), A: 0xff}))
+	p.Mask(fill{}, geom.Rc(at, 10, 16, 16), color.NRGBA{G: uint8(s.n), A: 0xff})
+	p.Text([]paint.Glyph{{ID: uint32(s.n), At: geom.Pt(at, 40)}}, 12, color.NRGBA{A: 0xff}, geom.Rc(at, 30, 20, 12))
+	items := []paint.SceneItem{{Mesh: s.mesh, Model: geom.Move3(geom.V3(at, 0, 0))}}
+	p.Scene(geom.Rect{Max: box.Point()}, paint.Scene{Items: items})
+}
+
+// watched is a popup's window that keeps every frame it is given twice
+// over: the engine's own ops, and the copy the offscreen window makes.
+type watched struct {
+	*driver.OffscreenWindow
+	given, copies [][]paint.Op
+}
+
+func (w *watched) Present(ops []paint.Op, damage geom.Rect) error {
+	err := w.OffscreenWindow.Present(ops, damage)
+	w.given, w.copies = append(w.given, ops), append(w.copies, w.Ops())
+	return err
+}
+
+// A popup records frames while one is on its way to its window, and
+// none of them reuses the buffers of the frame in flight or of the one
+// the window last showed, which it may draw again at any time.
+func TestAPopupLeavesTheFramesItsWindowHoldsAsTheyWere(t *testing.T) {
+	w, _, opener := newStage(t, paint.Identity)
+	var pw *watched
+	open := w.open
+	w.open = func(o driver.Options) (driver.Window, error) {
+		dw, err := open(o)
+		if off, ok := dw.(*driver.OffscreenWindow); ok && err == nil {
+			pw = &watched{OffscreenWindow: off}
+			return pw, nil
+		}
+		return dw, err
+	}
+	content := &sprites{menu: *newMenu(), mesh: paint.NewBox(geom.V3(1, 1, 1), color.NRGBA{A: 0xff})}
+	w.ui.OpenPopup(opener, content, PopupOptions{Anchor: geom.Rect{Max: geom.Pt(100, 50)}})
+	run(w, 1)
+	if pw == nil || len(pw.given) != 1 {
+		t.Fatal("the popup's window was not given its first frame")
+	}
+	// held checks the frames the window holds: the one in flight, and
+	// the one it showed before, -1 for none.
+	shownAt := -1
+	held := func(when string) {
+		t.Helper()
+		for _, i := range []int{shownAt, len(pw.given) - 1} {
+			if i >= 0 && !reflect.DeepEqual(pw.given[i], pw.copies[i]) {
+				t.Fatalf("%s, frame %d of %d given to the window changed", when, i, len(pw.given))
+			}
+		}
+	}
+	// The window takes one frame, two, three, none, then one again,
+	// while the popup records on.
+	for cycle, waits := range []int{1, 2, 3, 0, 1, 4} {
+		for f := range waits {
+			run(w, 1)
+			held(fmt.Sprintf("cycle %d, %d frames on", cycle, f+1))
+		}
+		shownAt = len(pw.given) - 1
+		shown(w, pw.OffscreenWindow)
+		run(w, 1)
+		if len(pw.given) != shownAt+2 {
+			t.Fatalf("cycle %d: the frame after the one shown was never given", cycle)
+		}
+		held(fmt.Sprintf("cycle %d, as the next frame went", cycle))
+	}
+	if content.n < 15 {
+		t.Fatalf("the popup recorded %d frames, want one each run", content.n)
 	}
 }

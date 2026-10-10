@@ -127,6 +127,18 @@ func (w *Window) Notify(title, body, kind string) {
 	w.do(func(a *app) { a.patch(Notice{Title: title, Body: body, Kind: kind}) })
 }
 
+// SetNote puts text on the status bar while the window shows the folder
+// path on the file system with ID fs, as a program says what it knows of
+// the folder: where it stands in version control, say. It is not shown
+// in another folder, so a note that comes late for a folder the user has
+// left is never shown in the next. An empty text takes the note away.
+func (w *Window) SetNote(fs, path, text string) {
+	w.do(func(a *app) {
+		a.note = note{fs: fs, path: path, text: text}
+		a.publishStatus()
+	})
+}
+
 // Running is how many operations the window is running: its own, such
 // as a copy, and the transfers it has asked the program for. A program
 // asks before it closes the window, as closing stops them. It is zero

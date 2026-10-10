@@ -59,11 +59,18 @@ func (d *Driver) render() {
 			return
 		case sc := <-d.surfaces:
 			if sc.gone != nil {
-				C.gunim_egl_detach()
-				attached = false
-				if surface != nil {
-					C.gunim_window_release(surface)
-					surface = nil
+				// A surface other than the one drawn on is an old
+				// activity's, going after its replacement came.
+				if sc.window == nil || sc.window == surface {
+					C.gunim_egl_detach()
+					attached = false
+					if surface != nil {
+						C.gunim_window_release(surface)
+						surface = nil
+					}
+				}
+				if sc.window != nil {
+					C.gunim_window_release(sc.window)
 				}
 				close(sc.gone)
 				continue
@@ -121,10 +128,11 @@ func (d *Driver) idle() {
 			return
 		case <-d.wake:
 		case sc := <-d.surfaces:
+			if sc.window != nil {
+				C.gunim_window_release(sc.window)
+			}
 			if sc.gone != nil {
 				close(sc.gone)
-			} else {
-				C.gunim_window_release(sc.window)
 			}
 		}
 	}
@@ -336,6 +344,9 @@ type compositor struct {
 	// last is the stack laid last, so a change in it, as a popup
 	// moving or hiding, draws a frame with no window presenting.
 	last []layer
+	// at holds a layer's rect for the GL, kept here so handing it
+	// through gl.Context allocates nothing.
+	at [4]float32
 }
 
 const compositeVertex = `#version 300 es
@@ -452,7 +463,8 @@ func (c *compositor) draw(g gl.Context, stack []layer, w, h int) {
 		x1 := 2*float32(l.x+l.w.texW)/float32(w) - 1
 		y1 := 1 - 2*float32(l.y)/float32(h)
 		y0 := 1 - 2*float32(l.y+l.w.texH)/float32(h)
-		g.Uniform4fv(c.rect, []float32{x0, y0, x1, y1})
+		c.at = [4]float32{x0, y0, x1, y1}
+		g.Uniform4fv(c.rect, c.at[:])
 		g.BindTexture(gl.TEXTURE_2D, l.w.tex)
 		g.DrawElements(gl.TRIANGLES, 6, glUnsignedShort, 0)
 	}

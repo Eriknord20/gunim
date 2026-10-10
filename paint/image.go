@@ -95,6 +95,11 @@ type ImageOp struct {
 	Opacity float32
 	// Transform is the transform in force when the op was recorded.
 	Transform Transform
+	// Blend is how the image meets what is beneath it, set from the
+	// blend in force as the op is recorded; see [Painter.Blend]. An
+	// image added with [BlendAdd] adds its colours, as a picture of a
+	// flare on black does.
+	Blend Blend
 }
 
 func (*ImageOp) isOp() {}
@@ -116,5 +121,6 @@ func (p *Painter) Image(img *Image, r geom.Rect, o ImageOpts) {
 	if img == nil || o.Opacity <= 0 {
 		return
 	}
-	p.record(&ImageOp{Image: img, Rect: r, Src: o.Src, Radius: o.Radius, Opacity: o.Opacity, Transform: p.at()}, r)
+	p.record(&ImageOp{Image: img, Rect: r, Src: o.Src, Radius: o.Radius, Opacity: o.Opacity, Transform: p.at(),
+		Blend: p.blendNow()}, r)
 }

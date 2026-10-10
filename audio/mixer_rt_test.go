@@ -55,9 +55,9 @@ func TestMixingMakesNothingAsTheSoundsChange(t *testing.T) {
 		case 1:
 			v.SetPan(float32(i%3)-1, nil)
 		case 2:
-			v.Pause()
+			v.Pause(0)
 		case 3:
-			v.Resume()
+			v.Resume(0)
 		case 4:
 			_ = v.Seek(time.Duration(i) * time.Millisecond)
 		case 5:
@@ -108,7 +108,7 @@ func TestMixingRunsAsEveryMethodIsCalledMeanwhile(t *testing.T) {
 				v := m.Play(&endless{}, Options{Insert: eq.Insert(), Paused: i%4 == 0})
 				v.SetVolume(0.5, anim.Tween{Duration: time.Millisecond})
 				v.SetPan(float32(g)-1, nil)
-				v.Resume()
+				v.Resume(0)
 				_ = v.Seek(time.Duration(i) * time.Millisecond)
 				_ = v.Position()
 				_ = v.Len()

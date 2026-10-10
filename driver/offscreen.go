@@ -35,8 +35,9 @@ type OffscreenWindow struct {
 	mu    sync.Mutex
 	size  geom.Size
 	scale float32
-	// pinned says the window was last asked to stay above other windows.
-	pinned bool
+	// pinned says the window was last asked to stay above other windows,
+	// and cloaked that it was last taken off the screen.
+	pinned, cloaked bool
 	// zoom multiplies scale, and divides the size the content is laid out in.
 	zoom float32
 	rate float64
@@ -219,11 +220,51 @@ func (w *OffscreenWindow) Post(ev any) { w.input <- ev }
 func (w *OffscreenWindow) Present(ops []paint.Op, damage geom.Rect) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// The engine reuses its buffers once the frame is reported shown,
-	// so keep a copy for Ops to return.
-	w.ops = slices.Clone(ops)
+	// The engine reuses its buffers, the ops themselves among them, two
+	// frames on, so keep a copy for Ops to return.
+	w.ops = keepOps(ops)
 	w.damage = damage
 	return nil
+}
+
+// keepOps copies ops deep enough that later frames leave the copy as
+// it is: each op, and the glyphs, items or cells it lists. What an op
+// points to that the engine never reuses, such as a mesh, an image or
+// a gradient, is shared.
+func keepOps(ops []paint.Op) []paint.Op {
+	kept := make([]paint.Op, len(ops))
+	for i, op := range ops {
+		switch op := op.(type) {
+		case *paint.RRectOp:
+			c := *op
+			kept[i] = &c
+		case *paint.TextOp:
+			c := *op
+			c.Glyphs = slices.Clone(op.Glyphs)
+			kept[i] = &c
+		case *paint.MaskOp:
+			c := *op
+			kept[i] = &c
+		case *paint.SceneOp:
+			c := *op
+			c.Scene.Items = slices.Clone(op.Scene.Items)
+			kept[i] = &c
+		case *paint.ImageOp:
+			c := *op
+			kept[i] = &c
+		case *paint.CellsOp:
+			c := *op
+			c.Cells = slices.Clone(op.Cells)
+			kept[i] = &c
+		case *paint.LayerOp:
+			c := *op
+			kept[i] = &c
+		default:
+			// A LayerEndOp holds nothing.
+			kept[i] = op
+		}
+	}
+	return kept
 }
 
 // SetCursor implements [CursorSetter].
@@ -486,16 +527,37 @@ func (w *OffscreenWindow) ClipboardImage() ([]byte, error) {
 	return w.clipImage, nil
 }
 
-// SetClipboardImage puts a picture, as PNG, on the window's clipboard, as a test's stand-in for copying one; nil
-// takes it off.
-func (w *OffscreenWindow) SetClipboardImage(png []byte) {
+// SetClipboardImage implements [ImageClipboard]: it puts a picture, as PNG, on the window's clipboard, where
+// [OffscreenWindow.ClipboardImage] reads it back. A test calls it too, as its stand-in for copying one in another
+// program, so it takes png as it is without checking it is a PNG, and nil takes the picture off but leaves the
+// text. The window keeps a copy, so the caller may reuse png.
+func (w *OffscreenWindow) SetClipboardImage(png []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.clipImage = png
+	if png == nil {
+		w.clipImage = nil
+		return nil
+	}
+	w.clipImage = append([]byte{}, png...)
+	return nil
 }
 
 // Close implements [Window].
 func (w *OffscreenWindow) Close() error { return nil }
+
+// SetCloaked implements [Cloaker]: Cloaked reports it.
+func (w *OffscreenWindow) SetCloaked(on bool) {
+	w.mu.Lock()
+	w.cloaked = on
+	w.mu.Unlock()
+}
+
+// Cloaked reports whether the window was last cloaked; see [Cloaker].
+func (w *OffscreenWindow) Cloaked() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.cloaked
+}
 
 // Hide implements [Recycler].
 func (w *OffscreenWindow) Hide() error {

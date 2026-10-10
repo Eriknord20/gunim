@@ -14,6 +14,11 @@
 // quits. The other flags set the editor up for the picture first:
 //
 //	CGO_ENABLED=0 go run ./example/themeedit -shot all.png -tab all -filter changed -changes
+//
+// With -drag, the picture catches a number field mid-drag: the pointer
+// presses at a point and is held some pixels up from it.
+//
+//	CGO_ENABLED=0 go run ./example/themeedit -shot drag.png -tab all -search padding -drag 700,200,24
 package main
 
 import (
@@ -33,6 +38,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/themeedit"
 	"github.com/marrasen/gunim/widget"
@@ -75,6 +81,10 @@ type options struct {
 	light         bool
 	changes       bool
 	setup         Setup
+	// drag, when set, is where a press goes down for the shot, and
+	// dragUp how far up from there the pointer is then held.
+	drag   *geom.Point
+	dragUp float32
 }
 
 func main() {
@@ -92,9 +102,18 @@ func main() {
 	flag.StringVar(&o.setup.Filter, "filter", "", "filter All values: all, changed, colours, sizes, motion or other")
 	flag.StringVar(&o.setup.Picker, "picker", "", "open the colour picker of this key")
 	flag.StringVar(&o.setup.Play, "play", "", "play the motion of this key in the preview")
+	var drag string
+	flag.StringVar(&drag, "drag", "", "press at X,Y and hold the pointer DY pixels up from there, as X,Y,DY, for a shot of a number field mid-drag")
 	flag.Parse()
 	if _, err := fmt.Sscanf(size, "%fx%f", &o.size.W, &o.size.H); err != nil {
 		log.Fatalf("-size %q: want WxH, such as 1100x700", size)
+	}
+	if drag != "" {
+		var at geom.Point
+		if _, err := fmt.Sscanf(drag, "%f,%f,%f", &at.X, &at.Y, &o.dragUp); err != nil {
+			log.Fatalf("-drag %q: want X,Y,DY, such as 700,200,24", drag)
+		}
+		o.drag = &at
 	}
 	if err := run(o); err != nil {
 		log.Fatal(err)
@@ -264,14 +283,23 @@ func serve(ctx context.Context, c gunim.Client, o options) error {
 			return err
 		}
 	}
-	var shoot <-chan time.Time
+	var shoot, drag <-chan time.Time
 	if o.shot != "" {
 		shoot = time.After(o.after)
+	}
+	if o.drag != nil {
+		// Half way to the shot, so the field is laid out and has done
+		// moving by the time it is taken.
+		drag = time.After(o.after / 2)
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-drag:
+			if err := hold(ctx, c, *o.drag, o.dragUp); err != nil {
+				return err
+			}
 		case <-shoot:
 			if err := writeShot(ctx, c, o.shot); err != nil {
 				return err
@@ -306,6 +334,24 @@ func serve(ctx context.Context, c gunim.Client, o options) error {
 			}
 		}
 	}
+}
+
+// hold presses the primary button at p and moves the pointer up from
+// there in a few steps, leaving it held.
+func hold(ctx context.Context, c gunim.Client, p geom.Point, up float32) error {
+	evs := []input.Event{
+		input.PointerMove{Pos: p, Time: time.Now()},
+		input.PointerDown{Pos: p, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()},
+	}
+	for i := float32(1); i <= 4; i++ {
+		evs = append(evs, input.PointerMove{Pos: p.Add(geom.Pt(0, -up*i/4)), Time: time.Now()})
+	}
+	for _, ev := range evs {
+		if err := c.Input(ctx, ev); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeShot writes what the window shows to a PNG file.

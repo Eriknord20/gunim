@@ -26,6 +26,12 @@ type PaneHost struct {
 	// where it names its panes. It is called on the pane's serve loop,
 	// so it must be quick, and must not wait for the program.
 	Title func(fs, folder string)
+	// Folder hears the ID of the file system the pane shows and the
+	// whole path of the folder, each time either changes, for the
+	// program to say something of it with [Window.SetNote]. It is called
+	// on the pane's serve loop, so it must be quick, and must not wait
+	// for the program.
+	Folder func(fs, path string)
 	// Commands are the file manager's commands the program's own menus
 	// offer for the pane, as CmdCopy and CmdPaste in an Edit menu of its
 	// own, which run them with [Run]. The pane's menus leave them out.
@@ -227,6 +233,9 @@ func (a *app) attach(c gunim.Client, parent gunim.ID) {
 	clear(a.iconsSent)
 	a.send(a.c.Mount(parent, a.ids.browser(), "browser", a.shell))
 	a.republish()
+	// So those of the folder showing are sent again: the next listing
+	// may be a long way off, and its rows draw none until then.
+	a.keyIcons(a.nav.path, a.nav.all)
 }
 
 // detach takes the pane out of its window. The dialog asking stays
@@ -336,6 +345,15 @@ func (s screen) Open(path string) error {
 	return s.c.Open(path)
 }
 
+// OpenLink opens a web address in the browser, as
+// [gunim.Client.OpenLink] does.
+func (s screen) OpenLink(url string) error {
+	if !s.on {
+		return nil
+	}
+	return s.c.OpenLink(url)
+}
+
 // Reveal shows a file in the system's file manager, as [gunim.Client.Reveal] does.
 func (s screen) Reveal(path string) error {
 	if !s.on {
@@ -362,6 +380,9 @@ func (v viewIDs) browser() gunim.ID { return gunim.ID(v.prefix) + browserID }
 func (v viewIDs) dialog(n int) gunim.ID {
 	return gunim.ID(v.prefix) + dialogID + gunim.ID("-"+strconv.Itoa(n))
 }
+
+// reading is the ID of the nth text viewer.
+func (v viewIDs) reading(n int) gunim.ID { return gunim.ID(v.prefix + "reading-" + strconv.Itoa(n)) }
 
 // viewer is the ID of the nth picture viewer.
 func (v viewIDs) viewer(n int) gunim.ID { return gunim.ID(v.prefix + "viewer-" + strconv.Itoa(n)) }

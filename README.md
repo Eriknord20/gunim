@@ -12,8 +12,8 @@ still changes as the examples ask more of it.
 
 Text shapes and wraps in pure Go, including right-to-left and mixed
 scripts. Sound plays in pure Go on the desktop. The examples below are
-full programs: a file manager, a calendar, a chat client and a candy
-sudoku among them.
+full programs: a file manager, a calendar and a chat client among
+them.
 
 `example/twowindows` is where gunim started: two windows, each
 animating a rounded rectangle on its own render thread, built with
@@ -128,30 +128,9 @@ masters an album, an EP or a single, through chains of VST3 plugins. It
 started here as `example/mastering` and is now a project of its own,
 built on gunim's `audio`, `audio/vst3` and `audioui`.
 
-`example/sudoku` is a sudoku of candies, made for a phone and laid out
-for a desktop too, to see how far the animation goes. Each digit is a
-candy of its own colour and shape. Candies drop in and wobble like
-jelly; a wrong one shakes, crumbles and breaks a heart as the board
-shakes; a finished row sweeps with light; quick candies build a combo
-that calls out "Sweet!" with stars; a won board bounces under fireworks.
-Picking a candy sets every candy of its digit hopping, a new level's
-candies run in and leap into their cells, and after a win Pac-Man eats
-the board row by row. Each digit is a note on a marimba, so filling the
-board plays tunes. The music is a song in ten synths, each coming and
-going in 16-bar phrases, so it never plays the same twice: Greek
-Themes, which package `audio/band` plays. A map winds
-through 60 levels, from Easy to Expert, in three layers that scroll at
-their own speeds, and a heart hops along it as each level opens.
-
-```sh
-go run ./example/sudoku
-```
-
-Tap a cell, then a candy; or a candy, then each cell it goes in. On a
-desktop the arrows move, digits place, and Shift with a digit pencils a
-note. Progress is kept between runs.
-
-![The candy sudoku and its map](example/sudoku/sudoku.png)
+Bonbon Sudoku, a sudoku of candies made for a phone, started here as
+`example/sudoku`, to see how far the animation goes. It is now an app of
+Skalarit AB's, on its way to Google Play.
 
 Three smaller examples show one thing each. `example/widgets` is a
 gallery of the widgets, with a dark and a light theme to switch
@@ -288,7 +267,9 @@ and `UI`:
   system keeps for it, and `Client.Reveal` shows it in the system's file
   manager.
 - **The clipboard.** `UI.SetClipboard` and `UI.ReadClipboard` carry
-  text, and `UI.ClipboardImage` reads a picture.
+  text. `UI.ClipboardImage` reads a picture, and `UI.SetClipboardImage`
+  and `Client.SetClipboardImage` put one there, on Windows, X11 and
+  macOS.
 - **Drag and drop.** Files and pictures drag between windows, out to
   other programs and in from them, and a drop target lights while
   another program's files hover over it. With
@@ -760,11 +741,11 @@ path data.
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
 | `gunim/audio/vst3` | Hosts VST3 effects: their sound, state, parameters and editors |
 | `gunim/audioui` | Meters and faders, a spectrum and a spectrogram, a waveform, and loudness readings for audio programs |
-| `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, layers that clip and tilt, and 3D scenes |
+| `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, light that adds, layers that clip and tilt, and 3D scenes |
 | `gunim/icon` | Lucide's icons as strokes, drawn as tinted masks; `icon/byname` looks them up by name |
 | `gunim/shape` | Vector art: SVG path data filled or stroked as a mask, and SVG files read into figures |
 | `gunim/geom` | float32 points, sizes, rectangles, and 3D vectors and matrices |
-| `gunim/syntax` | Splits source code into tokens to colour; `syntax.Go` reads Go with `go/scanner` |
+| `gunim/syntax` | Splits source code into tokens to colour; `syntax.Go` reads Go with `go/scanner`, and `Bash`, `PowerShell` and `Batch` read what is typed at bash, PowerShell and the Command Prompt |
 | `gunim/markdown` | Shows Markdown as gunim text that the reader can select and copy |
 | `gunim/match` | Finds a typed query in lines of text, ranked as a command palette ranks them |
 | `gunim/emoji` | The emoji in a picker's groups, with their names for searching |
@@ -780,7 +761,7 @@ path data.
 | `gunim/filemanager` | A file manager to open in any program, on the local disk or on a file system of its own, such as a server's |
 | `gunim/themeedit` | A theme editor to show in any program: the values the program picks out, every token in the theme with a search, a control for each kind of value, live edits and JSON files |
 | `gunim/calendar` | A calendar's views: a day or a week by the hour, a month, and a small month to pick a day from |
-| `gunim/widget` | `Row`, `Column`, `Scroll`, a `TileGrid` that builds only the tiles in view and selects with a band, `Label` whose text the mouse can select and copy when `Selectable`, `TextField`, `NumberField` that steps with the arrows and the wheel and holds itself to its bounds, `TextArea`, `Card`, `Button`, `Icon`, `IconButton`, `Checkbox`, `Switch`, `Slider`, which runs up the height as a fader when its `Axis` is vertical, fills from a resting value a double click glides back to, colours its track with a `Gradient` and drags finely with Shift, a `SliderRow` that labels one with a readout counting along and a reset mark, a `ToneCurve` that edits a monotone curve through points, a `Histogram` of red, green and blue mixed as light, `Tabs`, a `Segmented` control whose pill springs to the option chosen, `Dropdown`, a `ColorPicker` of a square, a hue strip, an opacity strip and a hex field, and a `ColorButton` that opens one in a popup, `ContextMenu`, `Tooltip`, `Image`, `Hero` for elements that fly between screens, `Draggable` and `DropTarget` for drag and drop within and between windows and to and from file managers, a `DragGhost` that trails the pointer and says what a drop would do, a `DropZone` that lights the spot under a drag and springs it open, `Dialog`, a keyed `List`, a `VirtualList` that builds only the rows in view, a `DataGrid` that draws millions of rows of styled cells by index and drags the rows selected, an `Overview` strip that maps and scrolls it, a `MenuButton` whose menu can stay open to tick several items, removable `Chip`s and a `Wrap` that flows them onto lines, `RichText` that wraps text in several styles with links, a `CodeEditor` with line numbers, tab stops, highlighting and marks such as a compiler's errors, and their theme tokens |
+| `gunim/widget` | `Row`, `Column`, `Scroll`, a `TileGrid` that builds only the tiles in view and selects with a band, `Label` whose text the mouse can select and copy when `Selectable`, `TextField`, `NumberField` that sits at the right, steps with the arrows and the wheel, drags up and down as in a design tool, and holds itself to its bounds, `TextArea`, `Card`, `Button`, `Icon`, `IconButton`, `Checkbox`, `Switch`, `Slider`, which runs up the height as a fader when its `Axis` is vertical, fills from a resting value a double click glides back to, colours its track with a `Gradient` and drags finely with Shift, a `SliderRow` that labels one with a readout counting along and a reset mark, a `ToneCurve` that edits a monotone curve through points, a `Histogram` of red, green and blue mixed as light, `Tabs`, a `Segmented` control whose pill springs to the option chosen, `Dropdown`, a `ColorPicker` of a square, a hue strip, an opacity strip and a hex field, and a `ColorButton` that opens one in a popup, `ContextMenu`, `Tooltip`, `Image`, `Hero` for elements that fly between screens, `Draggable` and `DropTarget` for drag and drop within and between windows and to and from file managers, a `DragGhost` that trails the pointer and says what a drop would do, a `DropZone` that lights the spot under a drag and springs it open, `Dialog`, a keyed `List`, a `VirtualList` that builds only the rows in view, a `DataGrid` that draws millions of rows of styled cells by index and drags the rows selected, an `Overview` strip that maps and scrolls it, a `MenuButton` whose menu can stay open to tick several items, removable `Chip`s and a `Wrap` that flows them onto lines, `RichText` that wraps text in several styles with links, a `CodeEditor` with line numbers, tab stops, highlighting and marks such as a compiler's errors, and their theme tokens |
 
 Commands, intents, topics and the `Client` live in `wire.go` and
 `view.go`. `driver.Offscreen` plus `Window.Frame` run a window with no
@@ -844,6 +825,29 @@ drawn once per set of colours. An opaque layer clipped to an ellipse,
 `LayerOpts.Ellipse`, draws in place, with no offscreen pass: each quad
 inside it is cut to the ellipse as it draws.
 
+Shapes, masks, images, text and whole layers can add their light to
+what is beneath them rather than cover it, as a game's sparks, trails
+and glows do: where two of them overlap they brighten each other, up
+to white. `p.Blend(paint.BlendAdd)` draws so until the function it
+returns is called. Each op records the blend in force as it records
+its transform, unless it asks for its own: an `RRectOp` or
+`LayerOpts` with `Blend: paint.BlendNormal` covers what is beneath
+even inside an added stretch. A shape's shadow adds too, which makes
+a halo. Under the premultiplied blending everything draws with, a
+colour with an alpha of 0 adds itself and hides nothing, so the shader
+gives an added quad's colour that alpha, and it shares the batch of
+the quads around it. Inside a layer the light adds to what lies
+beneath the layer as it composites, times the layer's opacity. A layer
+with `Blend: paint.BlendAdd` adds all it holds, times its opacity.
+Cells and scenes draw normally whatever the blend.
+
+```go
+defer p.Blend(paint.BlendAdd)()
+for _, s := range v.sparks {
+	p.ShadowRRect(s.Rect, s.Rect.Size().W/2, paint.Solid(s.Core), paint.Shadow{Blur: 12, Color: s.Glow})
+}
+```
+
 `LayerOpts.Tilt` turns a layer in depth, in perspective, about the
 middle of its bounds: a card turning over, a page leaning back. A
 one-sided layer shows only its front, so two of them back to back make
@@ -872,7 +876,11 @@ tap on the head puts a glass bubble round it.
 The painter compares each frame with the one before, and the driver
 redraws only the part that changed into a canvas it keeps, then copies
 the canvas to the window. A button easing into its hover colour costs
-the button. Images upload to the GPU once, with mipmaps, and stay while
+the button. The painter records each frame into the storage of the
+frame before last, which the driver is done with: shapes, text, masks
+and scenes, a scene's items too. So a game that draws a scene of
+thousands of items and hundreds of masks every frame makes no garbage
+for the collector, which on a phone would otherwise cost frames. Images upload to the GPU once, with mipmaps, and stay while
 frames draw them. A layer's `Blur` and `Backdrop` are Gaussian
 blurs, run at half or a quarter of the resolution when they are wide.
 Text is shaped and wrapped by go-text/typesetting, a

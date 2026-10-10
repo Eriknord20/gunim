@@ -21,12 +21,15 @@ const block = 128
 const historyFrames = 1 << 18
 
 // declick is how long a pause, a resume and a stop with no fade of
-// their own take to fade, so the sound never clicks off; declickFade
-// is the fade, made once, as a motion made as the mixer mixes would be
-// made anew each time.
+// their own take to fade, so the sound never clicks off.
 const declick = 6 * time.Millisecond
 
-var declickFade anim.Motion = anim.Tween{Duration: declick, Ease: anim.Linear}
+// fadeOver is a fade over d, or declick where d is shorter. It is made
+// where a fade is asked for, as a motion made as the mixer mixes would
+// be made anew each time.
+func fadeOver(d time.Duration) anim.Motion {
+	return anim.Tween{Duration: max(d, declick), Ease: anim.Linear}
+}
 
 // A Mixer sums the sounds playing into one stream. Its methods, and
 // its voices', are safe to call from any goroutine, but Mix and Read,
@@ -60,6 +63,16 @@ type Mixer struct {
 	ringsMu sync.Mutex
 	// gain is the limiter's gain, 1 while the mix fits.
 	gain float32
+	// fade lowers the whole mix, from 1 to silence, for FadeOut and
+	// FadeIn, as fadeAsk asks: the mixer's alone.
+	fade    *anim.Float
+	fadeAsk atomic.Pointer[motionAsk]
+	// sounding says a voice sounded in the last block mixed; sounds
+	// counts the plays and resumes asked, and soundsSeen those the last
+	// block took up, so a sound asked for since counts as sounding.
+	sounding   atomic.Bool
+	sounds     atomic.Int64
+	soundsSeen atomic.Int64
 	// out is Read's buffer; Read runs on one goroutine at a time.
 	out []float32
 	// rate is how many frames a second the mixer gives, and every
@@ -87,7 +100,7 @@ type mixRings struct {
 // NewMixer returns a mixer playing nothing, at [SampleRate].
 func NewMixer() *Mixer {
 	m := &Mixer{history: make([]atomic.Uint32, historyFrames), buf: make([]float32, 2*block), gain: 1,
-		out: make([]float32, 2*1024)}
+		fade: anim.NewFloat(1), out: make([]float32, 2*1024)}
 	m.rate.Store(SampleRate)
 	m.rings.Store(&mixRings{})
 	return m
@@ -180,6 +193,9 @@ func (m *Mixer) Play(src Source, o Options) *Voice {
 	if o.Insert != nil {
 		m.wantRings(true, false, false)
 	}
+	if !o.Paused {
+		m.sounds.Add(1)
+	}
 	v.marks[0].set(mark{mixed: m.played.Load()})
 	v.nextMark = 1
 	v.markAt.Store(1)
@@ -234,6 +250,26 @@ func (m *Mixer) wantRings(dry, stereo, dryStereo bool) {
 
 // Playing returns how many voices are playing or paused.
 func (m *Mixer) Playing() int { return int(m.count.Load()) }
+
+// Sounding reports whether a voice sounds: one playing, or fading as
+// it pauses or stops, or played or resumed since the mixer last mixed.
+// Voices paused, and none, are silence.
+func (m *Mixer) Sounding() bool {
+	return m.sounding.Load() || m.sounds.Load() != m.soundsSeen.Load()
+}
+
+// FadeOut fades the whole mix to silence over fade, and holds it
+// silent until [Mixer.FadeIn]; the voices play on under it. Package
+// audio/speaker fades out so as the speakers suspend.
+func (m *Mixer) FadeOut(fade time.Duration) {
+	m.fadeAsk.Store(&motionAsk{to: 0, m: fadeOver(fade)})
+}
+
+// FadeIn fades the whole mix back in over fade, after
+// [Mixer.FadeOut].
+func (m *Mixer) FadeIn(fade time.Duration) {
+	m.fadeAsk.Store(&motionAsk{to: 1, m: fadeOver(fade)})
+}
 
 // SetLatency tells the mixer how many of the frames it mixed are still
 // to be heard, as the speakers hold them back. Package audio/speaker
@@ -307,7 +343,11 @@ func (m *Mixer) takeIncoming() {
 
 // mixBlock mixes one block, at most block frames, into dst.
 func (m *Mixer) mixBlock(dst []float32) {
+	seen := m.sounds.Load()
 	m.takeIncoming()
+	if a := m.fadeAsk.Swap(nil); a != nil {
+		set(m.fade, a.to, a.m)
+	}
 	clear(dst)
 	frames := len(dst) / 2
 	rate := int(m.rate.Load())
@@ -319,9 +359,11 @@ func (m *Mixer) mixBlock(dst []float32) {
 		dry = rings.dry[:2*frames]
 		clear(dry)
 	}
+	sounding := false
 	for link := &m.voices; *link != nil; {
 		v := *link
 		if v.mix(dst, dry, m.buf[:2*frames], dt, played, rate) {
+			sounding = sounding || !v.paused
 			link = &v.next
 			continue
 		}
@@ -330,6 +372,8 @@ func (m *Mixer) mixBlock(dst []float32) {
 		m.count.Add(-1)
 		m.tell(v, true)
 	}
+	m.sounding.Store(sounding)
+	m.soundsSeen.Store(seen)
 	// The limiter: where the block would pass full scale, the gain
 	// drops to fit it from the block's start, as its peak is known
 	// before any of it is heard, and glides back up after.
@@ -344,8 +388,14 @@ func (m *Mixer) mixBlock(dst []float32) {
 		g0 = min(g0, g1)
 	}
 	m.gain = g1
+	// The fade, as the voices' own, moves in a straight line within
+	// the block.
+	f0 := m.fade.Value()
+	m.fade.Step(dt)
+	f1 := m.fade.Value()
 	for i := range frames {
-		g := g0 + (g1-g0)*float32(i+1)/float32(frames)
+		t := float32(i+1) / float32(frames)
+		g := (g0 + (g1-g0)*t) * (f0 + (f1-f0)*t)
 		l, r := clip(dst[2*i]*g), clip(dst[2*i+1]*g)
 		dst[2*i], dst[2*i+1] = l, r
 		at := (played + int64(i)) & (historyFrames - 1)
@@ -464,7 +514,7 @@ type motionAsk struct {
 	m  anim.Motion
 }
 
-// gateAsk is a pause, a resume or a stop asked; a stop fades as fade
+// gateAsk is a pause, a resume or a stop asked, which fades as fade
 // moves.
 type gateAsk struct {
 	pause, resume, stop bool
@@ -547,10 +597,10 @@ func (v *Voice) take(played int64, rate int) {
 		switch {
 		case a.pause && !v.paused:
 			v.pausing = true
-			v.gate.Animate(0, declickFade)
+			v.gate.Animate(0, a.fade)
 		case a.resume:
 			v.paused, v.pausing = false, false
-			v.gate.Animate(1, declickFade)
+			v.gate.Animate(1, a.fade)
 		}
 	}
 	if a := v.seekAsk.Swap(nil); a != nil {
@@ -802,25 +852,30 @@ func (v *Voice) Err() error {
 // takes a few milliseconds, so the sound never clicks off.
 func (v *Voice) Stop(fade time.Duration) {
 	v.stopped.Store(true)
-	v.stopAsk.Store(&gateAsk{stop: true, fade: anim.Tween{Duration: max(fade, declick), Ease: anim.Linear}})
+	v.stopAsk.Store(&gateAsk{stop: true, fade: fadeOver(fade)})
 }
 
-// Pause holds the voice where it is, after a short fade.
-func (v *Voice) Pause() {
+// Pause fades the voice out over fade and holds it where it is. A fade
+// of zero still takes a few milliseconds, so the sound never clicks
+// off.
+func (v *Voice) Pause(fade time.Duration) {
 	if v.stopped.Load() {
 		return
 	}
 	v.pausedTo.Store(true)
-	v.gateAsk.Store(&gateAsk{pause: true})
+	v.gateAsk.Store(&gateAsk{pause: true, fade: fadeOver(fade)})
 }
 
-// Resume plays a paused voice on from where it paused.
-func (v *Voice) Resume() {
+// Resume plays a paused voice on from where it paused, fading in over
+// fade. A fade of zero still takes a few milliseconds, so the sound
+// never clicks on.
+func (v *Voice) Resume(fade time.Duration) {
 	if v.stopped.Load() {
 		return
 	}
 	v.pausedTo.Store(false)
-	v.gateAsk.Store(&gateAsk{resume: true})
+	v.m.sounds.Add(1)
+	v.gateAsk.Store(&gateAsk{resume: true, fade: fadeOver(fade)})
 }
 
 // Paused reports whether the voice is paused, or pausing.

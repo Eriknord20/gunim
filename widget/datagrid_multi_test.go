@@ -288,3 +288,98 @@ func TestOnCopiedSaysHowManyRowsWereCopied(t *testing.T) {
 		t.Fatalf("OnCopied heard %v, want 50 rows copied of 100", got)
 	}
 }
+
+// between reports whether v is strictly between a and b.
+func between(v, a, b float64) bool { return v > min(a, b) && v < max(a, b) }
+
+func TestWithGlideTheSelectionSlidesAsTheKeysMoveIt(t *testing.T) {
+	g, w, run, clickRow := multiGrid(t)
+	g.Glide = true
+	clickRow(5, 0)
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	run(1)
+	if !g.gliding() || !between(g.glideAt[0], 5, 6) || !between(g.glideAt[1], 6, 7) {
+		t.Fatalf("a frame after Down from 5 the selection is at %v, sliding %v; want on its way to 6", g.glideAt, g.gliding())
+	}
+	// A key pressed again on the way goes on from where the slide is.
+	at := g.glideAt[0]
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	if !g.gliding() || g.glideAt[0] != at {
+		t.Fatalf("Down again started the slide from %v, not from %v where it was", g.glideAt[0], at)
+	}
+	run(60)
+	if g.gliding() || lastChange(t, w).Cursor != 7 || g.glideAt != [2]float64{7, 8} {
+		t.Fatalf("the slide did not settle on 7: at %v, sliding %v", g.glideAt, g.gliding())
+	}
+	w.Input(input.KeyPress{Key: input.KeyEnd})
+	run(1)
+	if g.gliding() {
+		t.Fatal("End slid the selection across more than the view")
+	}
+
+	g.Glide = false
+	clickRow(2, 0)
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	run(1)
+	if g.gliding() {
+		t.Fatal("without Glide the selection slid")
+	}
+}
+
+func TestWithGlideShiftStretchesTheSelection(t *testing.T) {
+	g, w, run, clickRow := multiGrid(t)
+	g.Glide = true
+	clickRow(5, 0)
+	w.Input(input.KeyPress{Key: input.KeyDown, Mods: input.ModShift})
+	run(1)
+	if !g.gliding() || g.glideAt[0] != 5 || !between(g.glideAt[1], 6, 7) {
+		t.Fatalf("a frame after Shift+Down from 5 the selection is at %v, sliding %v; want its end on its way to 7",
+			g.glideAt, g.gliding())
+	}
+	run(60)
+	w.Input(input.KeyPress{Key: input.KeyUp, Mods: input.ModShift})
+	run(1)
+	if !g.gliding() || g.glideAt[0] != 5 || !between(g.glideAt[1], 6, 7) {
+		t.Fatalf("a frame after Shift+Up the selection is at %v, sliding %v; want its end on its way back to 6",
+			g.glideAt, g.gliding())
+	}
+	run(60)
+	clickRow(8, input.ModShift)
+	run(1)
+	if !g.gliding() || g.glideAt[0] != 5 || !between(g.glideAt[1], 6, 9) {
+		t.Fatalf("a frame after Shift and a click on 8 the selection is at %v, sliding %v", g.glideAt, g.gliding())
+	}
+	clickRow(2, input.ModControl)
+	if g.gliding() {
+		t.Fatal("Ctrl and a click made two blocks, and one slid")
+	}
+}
+
+func TestWithGlideAClickSlidesTheSelection(t *testing.T) {
+	g, _, run, clickRow := multiGrid(t)
+	g.Glide = true
+	clickRow(2, 0)
+	run(60)
+	clickRow(6, 0)
+	if !g.gliding() || !between(g.glideAt[0], 2, 6) {
+		t.Fatalf("a frame after a click on 6 the selection is at %v, sliding %v; want on its way from 2", g.glideAt, g.gliding())
+	}
+}
+
+func TestSlideSelectedRowsSlidesWhatTheProgramSelects(t *testing.T) {
+	g, w, run, clickRow := multiGrid(t)
+	g.Glide = true
+	clickRow(2, 0)
+	run(60)
+	u := stageUI(t, w, run)
+	g.SlideSelectedRows([][2]int{{9, 10}}, 9, u)
+	run(1)
+	if !g.gliding() || !between(g.glideAt[0], 2, 9) {
+		t.Fatalf("a frame after SlideSelectedRows to 9 the selection is at %v, sliding %v", g.glideAt, g.gliding())
+	}
+	run(60)
+	g.SetSelectedRows([][2]int{{3, 4}}, 3, u)
+	if g.gliding() {
+		t.Fatal("SetSelectedRows slid the selection")
+	}
+}

@@ -84,17 +84,24 @@ func (f filtering) within(g filtering) bool {
 		f.sort == g.sort && f.desc == g.desc
 }
 
-// visited is a folder in the history, and the file system it is on.
+// visited is a folder in the history, the file system it is on, and the
+// name the keyboard was on when the user left it, to be there again on
+// the way back.
 type visited struct {
-	fs   FS
-	path string
+	fs     FS
+	path   string
+	cursor string
 }
 
+// here is the folder showing, as the history keeps it.
+func (a *app) here() visited { return visited{a.fs, a.nav.path, a.nav.cursor} }
+
 // hop is a step through the history to a folder on another file system:
-// step is -1 back and 1 forward.
+// step is -1 back and 1 forward, and cursor the name to put the keyboard
+// on there.
 type hop struct {
-	id, path string
-	step     int
+	id, path, cursor string
+	step             int
 }
 
 func (n *navState) init() { n.sel = map[string]bool{} }
@@ -246,7 +253,7 @@ func (a *app) goHistory(step int) {
 	at := (*from)[len(*from)-1]
 	if id := at.fs.ID(); id != a.fs.ID() {
 		n.dropHop()
-		n.hop = &hop{id: id, path: at.path, step: step}
+		n.hop = &hop{id: id, path: at.path, cursor: at.cursor, step: step}
 		if a.opts.Visit == nil {
 			// Shown here before, so the window has the file system.
 			a.showFS(at.fs, at.path)
@@ -256,10 +263,27 @@ func (a *app) goHistory(step int) {
 		return
 	}
 	*from = (*from)[:len(*from)-1]
-	if n.path != "" {
-		*to = append(*to, visited{a.fs, n.path})
+	left := n.path
+	if left != "" {
+		*to = append(*to, a.here())
 	}
 	a.navigate(at.path, step, false)
+	a.pickAgain(at.cursor, left)
+}
+
+// pickAgain puts the keyboard, in a folder gone back or forward to, on
+// cursor, the name it was on there; or, with none, on the folder in it
+// that leads to left, the folder the user came from.
+func (a *app) pickAgain(cursor, left string) {
+	n := &a.nav
+	if cursor == "" && left != "" {
+		if rel, err := a.ps.Rel(n.path, left); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			cursor, _, _ = strings.Cut(rel, a.ps.Sep())
+		}
+	}
+	if cursor != "" {
+		n.pick = []string{cursor}
+	}
 }
 
 // maxDropped is how many dropped hops a window keeps: a Visit that fails
@@ -321,7 +345,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 		return
 	}
 	if record && n.path != "" && !a.ps.Same(abs, n.path) {
-		n.back = append(n.back, visited{a.fs, n.path})
+		n.back = append(n.back, a.here())
 		n.fwd = nil
 	}
 	n.dropHop()
@@ -452,6 +476,8 @@ func (a *app) listed(gen int, path string, es []entry, mod time.Time, err error)
 		if errors.Is(err, fs.ErrNotExist) {
 			n.err = fmt.Errorf("%s no longer exists", a.ps.Show(path))
 		}
+		// Once: a poll that finds it still failing does not list again.
+		a.logLine("Listing "+a.ps.Show(path), n.err.Error())
 		a.publishListing()
 		a.publishStatus()
 		return
@@ -574,6 +600,10 @@ func (a *app) publishListing() {
 	if t := a.fs.ID() + "\x00" + l.Title; a.pane != nil && a.pane.host.Title != nil && t != a.title {
 		a.title = t
 		a.pane.host.Title(a.fs.ID(), l.Title)
+	}
+	if f := a.fs.ID() + "\x00" + l.Path; a.pane != nil && a.pane.host.Folder != nil && l.Path != "" && f != a.folder {
+		a.folder = f
+		a.pane.host.Folder(a.fs.ID(), l.Path)
 	}
 }
 
@@ -732,9 +762,13 @@ func (a *app) selected(v Selected) {
 
 // publishSelection sends the rows holding the names selected, for the
 // grid to select.
-func (a *app) publishSelection() {
+func (a *app) publishSelection() { a.sendSelection(false) }
+
+// sendSelection sends the rows holding the names selected, sliding the
+// selection there with slide.
+func (a *app) sendSelection(slide bool) {
 	n := &a.nav
-	s := Selection{Gen: n.gen, Cursor: -1}
+	s := Selection{Gen: n.gen, Cursor: -1, Slide: slide}
 	for i, e := range n.rows {
 		if n.sel[e.Name] {
 			if k := len(s.Runs); k > 0 && s.Runs[k-1][1] == i {
@@ -768,7 +802,7 @@ func (a *app) typed(v Typed) {
 	clear(n.sel)
 	n.sel[n.rows[i].Name] = true
 	n.cursor = n.rows[i].Name
-	a.publishSelection()
+	a.sendSelection(true)
 	a.publishStatus()
 	a.showPreview()
 }
@@ -860,8 +894,14 @@ func (a *app) publishStatusOf(selected func() []entry) {
 	case n.space.total > 0:
 		s.Right = fmt.Sprintf("%s free of %s", humanBytes(int64(n.space.free)), humanBytes(int64(n.space.total)))
 	}
+	if a.note.fs == a.fs.ID() && a.note.path == n.path {
+		s.Note = a.note.text
+	}
 	a.patch(s)
 }
+
+// note is what the program said of the folder path on file system fs.
+type note struct{ fs, path, text string }
 
 func plural(n int, what string) string {
 	if n == 1 {
@@ -901,6 +941,9 @@ func (a *app) readSpace() {
 		}
 		a.post(func() {
 			if a.ps.Same(a.nav.path, path) {
+				if err != nil && (a.nav.spaceErr == nil || a.nav.spaceErr.Error() != err.Error()) {
+					a.logLine("Reading the free space of "+a.ps.Show(path), err.Error())
+				}
 				a.nav.space, a.nav.spaceErr = s, err
 				a.publishStatus()
 			}

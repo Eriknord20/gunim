@@ -36,6 +36,7 @@ func registerIcons(w *gunim.Window) {
 		u.Invalidate()
 	})
 	registerViewer(w)
+	registerReading(w)
 }
 
 // setView shows the folder at v.Path as icons or as details, sliding from one to the other on the page showing.

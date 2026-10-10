@@ -30,12 +30,12 @@ func (r *placeRow) AccessAct(req access.Request, u *gunim.UI) bool {
 }
 
 // Access implements [gunim.Accessible].
-func (t *typeTile) Access() access.Info {
-	name := t.label + " file"
+func (i *previewIcon) Access() access.Info {
+	name := i.pic.ext + " file"
 	switch {
-	case t.tint == TintFolder:
+	case i.pic.dir:
 		name = "Folder"
-	case t.label == "":
+	case i.pic.ext == "":
 		name = "File"
 	}
 	return access.Info{Role: access.RoleImage, Name: name}

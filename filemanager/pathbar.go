@@ -40,6 +40,8 @@ func newPathBar(b *browser) *pathBar {
 	p.addr = widget.NewAddressBar()
 	// A path entered in the field was typed; one of the places was not.
 	p.addr.OnGo = func(path string, u *gunim.UI) gunim.Intent { return Navigate{Path: path, Typed: p.addr.Editing()} }
+	// The machine the path is on goes to its home there.
+	p.addr.OnLead = widget.Sends(Command{Name: CmdHome})
 	p.addr.OnDone = func(u *gunim.UI) gunim.Intent {
 		b.focusListing(u)
 		return nil
@@ -154,6 +156,19 @@ func (p *pathBar) setListing(l Listing, u *gunim.UI) {
 		p.addr.SetPath(p.b.shell.Paths.Show(l.Path), cs, u)
 		p.filter.SetText(l.Filter, u)
 	}
+}
+
+// setShell names the file system the path is on before its folders, as
+// the title does.
+func (p *pathBar) setShell(s Shell, u *gunim.UI) {
+	lead := widget.AddressLead{Name: s.Where}
+	if s.Where != "" {
+		lead.Icon, lead.Tooltip = icon.Server, "Home on "+s.Where
+		if s.FS == "" {
+			lead.Icon = icon.Monitor
+		}
+	}
+	p.addr.SetLead(lead, u)
 }
 
 // edit turns the folders into a field holding the path, all selected.

@@ -35,7 +35,7 @@ func goSurfaceChanged(w *C.ANativeWindow, width, height C.int) {
 }
 
 //export goSurfaceDestroyed
-func goSurfaceDestroyed() { theDriver.surfaceDestroyed() }
+func goSurfaceDestroyed(w *C.ANativeWindow) { theDriver.surfaceDestroyed(w) }
 
 //export goMetrics
 func goMetrics(density, rate C.float) { theDriver.metrics(float32(density), float64(rate)) }

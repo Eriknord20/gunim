@@ -134,3 +134,38 @@ func TestATallFormScrollsInItsDialog(t *testing.T) {
 		t.Fatalf("the wheel moved the first field from %v to %v", before.Min.Y, after.Min.Y)
 	}
 }
+
+// A dialog that would only just fit in the window, in its margin but not
+// past the window's edge, scrolls too: it keeps its margin rather than
+// running up to the top of the window, under a title bar drawn there.
+func TestADialogThatOnlyJustFitsKeepsItsMargin(t *testing.T) {
+	open := func(h float32) (*Dialog, func(int)) {
+		form := NewForm()
+		for range 6 {
+			form.Add("Field", NewTextField())
+		}
+		d := NewDialog("Snug")
+		d.Body = form
+		d.SetButtons("OK", "Cancel")
+		w := gunimtest.New(t, geom.Sz(800, h), nil)
+		gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
+		if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
+			t.Fatal(err)
+		}
+		run := func(n int) {
+			for range n {
+				w.Frame(time.Second / 60)
+			}
+		}
+		run(40)
+		return d, run
+	}
+	roomy, _ := open(2000)
+	natural := roomy.height
+	margin := DialogMargin.Get(nil)
+	h := natural + margin/2
+	d, _ := open(h)
+	if d.height > h-margin {
+		t.Fatalf("a dialog %v high in a window %v high is %v high, past its margin of %v", natural, h, d.height, margin)
+	}
+}

@@ -157,7 +157,20 @@ func (g *TileGrid) Rebuild(u *gunim.UI) {
 // selection go. Tile builds the new items' tiles; the tiles that stay are kept, so the application must know them
 // by their new places.
 func (g *TileGrid) Reorder(from []int, u *gunim.UI) {
-	g.reorder, g.was = slices.Clone(from), g.lay
+	if g.reorder != nil {
+		// A reorder not laid out yet: from is over its order, so each item
+		// is carried back to where it was at the last layout.
+		composed := make([]int, len(from))
+		for j, i := range from {
+			composed[j] = -1
+			if i >= 0 && i < len(g.reorder) {
+				composed[j] = g.reorder[i]
+			}
+		}
+		g.reorder = composed
+	} else {
+		g.reorder, g.was = slices.Clone(from), g.lay
+	}
 	if g.reorder == nil {
 		g.reorder = []int{}
 	}
@@ -792,7 +805,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 				tc = newTileCell(g.Tile(i))
 				tc.jump(g.target(i))
 				switch {
-				case from != nil && i < len(from) && from[i] >= 0:
+				case from != nil && i < len(from) && from[i] >= 0 && from[i] < g.was.n:
 					// It comes from where it was, out of view.
 					tc.jump(g.was.target(from[i]))
 				case from != nil:

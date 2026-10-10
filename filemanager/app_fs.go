@@ -24,7 +24,7 @@ func (a *app) showFS(fsys FS, dir string) {
 		// The user went on from that step back or forward.
 		return
 	}
-	from, h := visited{a.fs, a.nav.path}, a.nav.hop
+	from, h := a.here(), a.nav.hop
 	a.nav.hop = nil
 	a.closeViewer()
 	a.search.stop()
@@ -48,6 +48,9 @@ func (a *app) showFS(fsys FS, dir string) {
 	a.loadPlaces()
 	if h != nil && h.id == fsys.ID() && h.path == dir && a.hopped(h, from) {
 		a.navigate(dir, h.step, false)
+		// The folder left is on another file system: only the name
+		// remembered can be gone back to.
+		a.pickAgain(h.cursor, "")
 		return
 	}
 	if dir == "" {

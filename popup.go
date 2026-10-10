@@ -79,7 +79,7 @@ func (u *UI) OpenPopup(opener, content Node, o PopupOptions) *Popup {
 	}
 	root := &state{node: &popupRoot{}, presence: Present, opener: from}
 	u.index[root.node] = root
-	s := &surface{root: root, opts: o, held: -1, opened: time.Now()}
+	s := &surface{root: root, opts: o, opened: time.Now()}
 	u.popups = append(u.popups, s)
 	u.Insert(root.node, content)
 	return &Popup{u: u, s: s}
@@ -143,12 +143,14 @@ type surface struct {
 	// pixels, anchor in the parent window's space.
 	size   geom.Size
 	anchor geom.Rect
-	// painters alternate, so the next frame can be recorded while the
-	// driver still holds the last. held is the one the driver holds,
-	// or -1.
-	painters [2]paint.Painter
-	held     int
-	inFlight bool
+	// painter records the frames the window is given, one at a time:
+	// the next only once the window has reported the last shown, as the
+	// main window's painter does. By then the window draws nothing of
+	// the frame before, whose buffers painter reuses. A frame recorded
+	// while one is in flight, to lay the popup out and place its nodes
+	// for input, goes to scratch, and the window is never given it.
+	painter, scratch paint.Painter
+	inFlight         bool
 	// stale is set when a frame was recorded while one was in flight,
 	// and so never shown.
 	stale   bool
@@ -365,11 +367,10 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		s.size, s.anchor = size, anchor
 	}
 
-	i := 0
-	if s.held == 0 {
-		i = 1
+	pp := &s.painter
+	if s.inFlight {
+		pp = &s.scratch
 	}
-	pp := &s.painters[i]
 	pp.Reset()
 	s.root.toWindow, s.root.drawn = paint.Identity, u.seq
 	s.root.node.Paint(pp, f, s.root.size, Children{ns: s.root.kids, f: f, s: s.root})
@@ -384,7 +385,7 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		u.closePopup(s)
 		return
 	}
-	s.held, s.inFlight, s.stale = i, true, false
+	s.inFlight, s.stale = true, false
 }
 
 // fitPopup tells content that fits itself to the screen how much room there is round its anchor, asking the parent
@@ -770,7 +771,7 @@ func (u *UI) popupEvent(e popupEvent) {
 				float64(time.Since(e.s.opened).Microseconds())/1000, e.s.window)
 		}
 		e.s.shown = true
-		e.s.inFlight, e.s.held = false, -1
+		e.s.inFlight = false
 		if e.s.stale {
 			u.invalid = true
 		}

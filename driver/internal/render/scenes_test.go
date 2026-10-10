@@ -202,3 +202,73 @@ func TestTheScenesTargetShrinksAndGoes(t *testing.T) {
 		t.Error("with no scene for a while, the target stayed")
 	}
 }
+
+// sceneOps records a frame holding a scene of n items, the odd ones see
+// through and every third mirrored, so a frame takes both of a scene's
+// passes.
+func sceneOps(n int) []paint.Op {
+	ball := paint.NewSphere(6, 12, red)
+	items := make([]paint.SceneItem, n)
+	for i := range items {
+		x := float32(i%25)/12 - 1
+		y := float32(i/25)/10 - 1
+		items[i] = paint.SceneItem{Mesh: ball, Model: geom.Move3(geom.V3(x, y, 0)).Mul(geom.Scale3(geom.V3(0.05, 0.05, 0.05)))}
+		if i%2 == 1 {
+			items[i].Tint = color.NRGBA{0xff, 0xff, 0xff, 0x80}
+		}
+		if i%3 == 0 {
+			items[i].Model = items[i].Model.Mul(geom.Scale3(geom.V3(-1, 1, 1)))
+		}
+	}
+	var p paint.Painter
+	p.RRect(geom.Rect{Max: benchSize.Point()}, 0, paint.Solid(black))
+	p.Scene(geom.Rc(100, 100, 600, 400), paint.Scene{Camera: paint.Camera{Eye: geom.V3(0, 0, 3)}, Items: items})
+	return p.Ops()
+}
+
+// sceneFrameAllocs is how many allocations drawing a frame of
+// sceneOps(n) takes, once the meshes are on the GPU.
+func sceneFrameAllocs(r *Renderer, n int) float64 {
+	ops := sceneOps(n)
+	w, h := int(benchSize.W), int(benchSize.H)
+	draw := func() { r.Draw(ops, paint.Everything, w, h, 1) }
+	for range 3 {
+		draw()
+	}
+	return testing.AllocsPerRun(10, draw)
+}
+
+// Drawing a scene's items allocates nothing for each: a game drawing
+// thousands of them a frame would otherwise make garbage by the
+// megabyte each second.
+func TestASceneItemDrawsWithoutAllocating(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	r, done := hiddenGL(t)
+	defer done()
+	one, many := sceneFrameAllocs(r, 1), sceneFrameAllocs(r, 500)
+	t.Logf("a frame allocates %v times with a scene of 1 item, %v with 500", one, many)
+	// A few to spare, for what the runtime may allocate now and then,
+	// as a pool emptied by a collection; an allocation for each item
+	// would be hundreds.
+	if many > one+4 {
+		t.Errorf("a frame with a scene of 500 items allocates %v times, and of 1 item %v; want no more", many, one)
+	}
+}
+
+// BenchmarkRenderScene draws a frame holding a scene of 500 items.
+func BenchmarkRenderScene(b *testing.B) {
+	r, done := hiddenGL(b)
+	defer done()
+	ops := sceneOps(500)
+	w, h := int(benchSize.W), int(benchSize.H)
+	r.Draw(ops, paint.Everything, w, h, 1)
+	r.GL.Finish()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		r.Draw(ops, paint.Everything, w, h, 1)
+		r.GL.Finish()
+	}
+}

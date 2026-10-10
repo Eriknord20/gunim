@@ -139,6 +139,11 @@ func (a *app) indexed(gen int, items []indexed, errs []walkError, stopped string
 	if done {
 		s.walking, s.stopped, s.done = false, stopped, time.Now()
 		s.cancel()
+		if len(s.errs) > 0 {
+			// Once for the walk: there may be a great many.
+			a.logLine("Searching under "+a.ps.Show(s.root), plural(len(s.errs), "folder")+" could not be read, the first "+
+				a.ps.Show(a.ps.Join(s.root, s.errs[0].rel))+": "+s.errs[0].err.Error())
+		}
 	}
 	if done || time.Since(s.reranked) > 4*indexReport {
 		a.rank()

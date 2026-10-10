@@ -81,7 +81,7 @@ func newBrowser() *browser {
 	b.banner = newBannerView(b.focusListing)
 	b.side = newSidebar()
 	b.listing = newListingArea(b)
-	b.preview = newPreviewPane()
+	b.preview = newPreviewPane(func(key string) *paint.Image { return b.icons[key].Large })
 	b.ops = newOpsPanel()
 	b.status = newStatusBar()
 	b.palette = newFilesPalette(b)
@@ -137,6 +137,7 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 		b.main.SetShare(b.previewShare(), nil)
 	}
 	b.title.setShell(s, u)
+	b.path.setShell(s, u)
 	b.side.fs, b.side.ps = s.FS, s.Paths
 	b.dnd.u = u
 	b.shown = true
