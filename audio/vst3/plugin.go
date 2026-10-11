@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -125,14 +124,17 @@ type Plugin struct {
 	inChanges     *paramChanges
 	outChanges    *paramChanges
 	chans         [][]float32
-	latency       atomic.Int32
-	restarts      atomic.Int32
+	// procArgs are the arguments of the call that processes, the same
+	// each time, kept with the plugin so the call makes nothing.
+	procArgs [2]uintptr
+	latency  atomic.Int32
+	restarts atomic.Int32
 
-	// edits are the changes from the editor, waiting for the processor,
-	// and outs the processor's own, waiting for the controller.
-	mu        sync.Mutex
-	edits     []point2
-	outputs   map[uint32]float64
+	// edits are the parameters set, by the editor or Set, waiting for
+	// the processor, and outputs the processor's own, waiting for the
+	// controller: neither side waits for the other.
+	edits     *paramBox
+	outputs   *paramBox
 	editsMade atomic.Uint64
 
 	closed bool
@@ -145,12 +147,6 @@ type Plugin struct {
 	onEdit func(id uint32, v float64)
 }
 
-// point2 is a parameter's new value.
-type point2 struct {
-	id    uint32
-	value float64
-}
-
 // New makes an effect of class c, set up as cfg says, ready to process.
 func (m *Module) New(c Class, cfg Config) (*Plugin, error) {
 	if cfg.Block <= 0 {
@@ -159,7 +155,7 @@ func (m *Module) New(c Class, cfg Config) (*Plugin, error) {
 	if cfg.Rate <= 0 {
 		return nil, errors.New("vst3: no sample rate")
 	}
-	p := &Plugin{Class: c, cfg: cfg, outputs: map[uint32]float64{}}
+	p := &Plugin{Class: c, cfg: cfg, edits: newParamBox(nil), outputs: newParamBox(nil)}
 	var err error
 	onUI(func() { err = p.create(m) })
 	if err != nil {
@@ -218,6 +214,19 @@ func (p *Plugin) create(m *Module) error {
 				drop(sp)
 			}
 		}
+	}
+	if p.ctrl != 0 {
+		// A slot for each parameter, each way, made now, so that
+		// processing makes none.
+		n := int(i32(call(p.ctrl, mGetParameterCount)))
+		ids := make([]uint32, 0, n)
+		for i := range n {
+			var info paramInfo
+			if result(call(p.ctrl, mGetParameterInfo, uintptr(i), uintptr(unsafe.Pointer(&info)))) == resultOK {
+				ids = append(ids, info.id)
+			}
+		}
+		p.edits, p.outputs = newParamBox(ids), newParamBox(ids)
 	}
 	if err := p.setupBuses(); err != nil {
 		return err
@@ -293,6 +302,7 @@ func (p *Plugin) setupBuses() error {
 	}
 	p.data.outputs = uintptr(unsafe.Pointer(&p.outs[0]))
 	p.data.context = uintptr(unsafe.Pointer(&p.ctx))
+	p.procArgs = [2]uintptr{p.proc, uintptr(unsafe.Pointer(&p.data))}
 	p.ctx = processContext{state: ctxTempo | ctxTimeSig | ctxContTime | ctxMusicTime, rate: float64(p.cfg.Rate),
 		tempo: 120, sigNumerator: 4, sigDenominator: 4}
 	return nil
@@ -405,33 +415,32 @@ func (p *Plugin) block(frames []float32, k int) {
 		inL[i], inR[i] = frames[2*i], frames[2*i+1]
 	}
 	p.inChanges.clear()
-	p.mu.Lock()
-	for _, e := range p.edits {
-		if q := p.inChanges.queue(e.id); q >= 0 {
-			p.inChanges.queues[q].add(0, e.value)
+	if p.edits.look() {
+		for i := range p.edits.slots {
+			if id, v, ok := p.edits.take(i); ok {
+				if q := p.inChanges.queue(id); q >= 0 {
+					p.inChanges.queues[q].add(0, v)
+				}
+			}
 		}
 	}
-	p.edits = p.edits[:0]
-	p.mu.Unlock()
 	p.outChanges.clear()
 	p.data.frames = int32(k)
 	p.ctx.state |= ctxPlaying
 	p.ctx.musicTime = float64(p.ctx.projectTime) / float64(p.cfg.Rate) * p.ctx.tempo / 60
 	p.ctx.barPosition = float64(int(p.ctx.musicTime/4) * 4)
-	call(p.proc, mProcess, uintptr(unsafe.Pointer(&p.data)))
+	callN(method(p.proc, mProcess), p.procArgs[:])
 	p.ctx.projectTime += int64(k)
 	p.ctx.contTime += int64(k)
 	for i := range k {
 		frames[2*i], frames[2*i+1] = outL[i], outR[i]
 	}
 	if p.outChanges.n > 0 && p.ctrl != 0 {
-		p.mu.Lock()
 		for _, q := range p.outChanges.queues[:p.outChanges.n] {
 			if q.n > 0 {
-				p.outputs[q.id] = q.points[q.n-1].value
+				p.outputs.put(q.id, q.points[q.n-1].value)
 			}
 		}
-		p.mu.Unlock()
 	}
 }
 
@@ -443,10 +452,7 @@ func (p *Plugin) Flush() {
 	if p.closed || !p.active {
 		return
 	}
-	p.mu.Lock()
-	waiting := len(p.edits) > 0
-	p.mu.Unlock()
-	if !waiting {
+	if !p.edits.waits() {
 		return
 	}
 	p.Process(make([]float32, 2*32))
@@ -457,9 +463,7 @@ func (p *Plugin) edited(id uint32, v float64) {
 	if p.onEdit != nil {
 		p.onEdit(id, v)
 	}
-	p.mu.Lock()
-	p.edits = append(p.edits, point2{id, v})
-	p.mu.Unlock()
+	p.edits.put(id, v)
 	p.editsMade.Add(1)
 }
 
@@ -473,16 +477,13 @@ func (p *Plugin) restart(flags int32) { p.restarts.Or(flags) }
 // flushOutputs passes the processor's changes to the controller, on the
 // plugins' thread.
 func (p *Plugin) flushOutputs() {
-	p.mu.Lock()
-	if len(p.outputs) == 0 {
-		p.mu.Unlock()
+	if !p.outputs.look() {
 		return
 	}
-	outs := p.outputs
-	p.outputs = map[uint32]float64{}
-	p.mu.Unlock()
-	for id, v := range outs {
-		callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
+	for i := range p.outputs.slots {
+		if id, v, ok := p.outputs.take(i); ok {
+			callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
+		}
 	}
 }
 
@@ -507,14 +508,12 @@ func (p *Plugin) Params() []Param {
 }
 
 // Set sets parameter id to v, from 0 to 1, in the controller and the
-// processor.
+// processor. A parameter the controller does not list is not set.
 func (p *Plugin) Set(id uint32, v float64) {
 	if p.ctrl != 0 {
 		onUI(func() { callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v) })
 	}
-	p.mu.Lock()
-	p.edits = append(p.edits, point2{id, v})
-	p.mu.Unlock()
+	p.edits.put(id, v)
 }
 
 func utf16String(u []uint16) string {
