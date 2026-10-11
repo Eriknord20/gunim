@@ -49,6 +49,7 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"TileGrid.SetLen":         func() { NewTileGrid(geom.Sz(10, 10)).SetLen(5, u) },
 		"TileGrid.SetSelected":    func() { g := NewTileGrid(geom.Sz(10, 10)); g.SetLen(5, u); g.SetSelected([][2]int{{1, 2}}, 1, u) },
 		"TileGrid.ShowTile":       func() { g := NewTileGrid(geom.Sz(10, 10)); g.SetLen(5, u); g.ShowTile(3, u) },
+		"TileGrid.Reshape":        func() { NewTileGrid(geom.Sz(10, 10)).Reshape(u) },
 		"ToneCurve.SetPoints":     func() { NewToneCurve().SetPoints([]geom.Point{{X: 0, Y: 0}, {X: 1, Y: 1}}, u) },
 		"Dropdown.SetSelected":    func() { NewDropdown(Labels("a", "b")).SetSelected(1, u) },
 		"ColorPicker.SetValue":    func() { NewColorPicker(color.NRGBA{}).SetValue(color.NRGBA{R: 1}, u) },

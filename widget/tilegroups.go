@@ -12,33 +12,30 @@ import (
 )
 
 // tileLayout is where a grid's tiles go: in rows of cols tiles, step apart, from left and pad, each group of them
-// starting a new row under a header head tall.
+// starting a new row under a header head tall; or, with just, in justified rows, each tile its own width.
 type tileLayout struct {
 	n          int
 	cols       int
 	left, pad  float32
+	gap        float32
 	step, size geom.Size
+	// span is how wide the rows are, from left.
+	span float32
 	// starts holds each group's first tile, the first 0, and rowBase each group's first row, counted over all
-	// groups; head is a header's height, nought for tiles in one run with no headers.
+	// groups, and the count of rows after the last; head is a header's height, nought for tiles in one run with no
+	// headers.
 	starts  []int
 	rowBase []int
 	head    float32
+	// just holds the rows, for tiles in justified rows; nil for rows of cols.
+	just *tileRows
 }
 
 // newTileLayout lays n tiles out in groups from starts, nil for one run.
-func newTileLayout(n, cols int, left, pad float32, step, size geom.Size, starts []int, head float32) tileLayout {
-	l := tileLayout{n: n, cols: max(cols, 1), left: left, pad: pad, step: step, size: size}
-	for _, s := range starts {
-		if s >= 0 && s < n && (len(l.starts) == 0 || s > l.starts[len(l.starts)-1]) {
-			l.starts = append(l.starts, s)
-		}
-	}
-	if len(l.starts) == 0 || l.starts[0] != 0 {
-		l.starts = append([]int{0}, l.starts...)
-	}
-	if len(starts) > 0 {
-		l.head = head
-	}
+func newTileLayout(n, cols int, left, pad, gap float32, step, size geom.Size, starts []int, head float32) tileLayout {
+	l := tileLayout{n: n, cols: max(cols, 1), left: left, pad: pad, gap: gap, step: step, size: size}
+	l.span = float32(l.cols)*step.W - gap
+	l.starts, l.head = groupStarts(n, starts, head)
 	row := 0
 	for k := range l.starts {
 		l.rowBase = append(l.rowBase, row)
@@ -46,6 +43,34 @@ func newTileLayout(n, cols int, left, pad float32, step, size geom.Size, starts 
 	}
 	l.rowBase = append(l.rowBase, row)
 	return l
+}
+
+// groupStarts returns the groups' first tiles of n from starts, the first 0, and their headers' height, nought
+// with no groups.
+func groupStarts(n int, starts []int, head float32) (firsts []int, headH float32) {
+	for _, s := range starts {
+		if s >= 0 && s < n && (len(firsts) == 0 || s > firsts[len(firsts)-1]) {
+			firsts = append(firsts, s)
+		}
+	}
+	if len(firsts) == 0 || firsts[0] != 0 {
+		firsts = append([]int{0}, firsts...)
+	}
+	if len(starts) > 0 {
+		headH = head
+	}
+	return firsts, headH
+}
+
+// laid reports whether the layout was laid out, rather than the zero one before the first layout.
+func (l tileLayout) laid() bool { return l.cols != 0 || l.just != nil }
+
+// same reports whether o puts every tile where l does.
+func (l tileLayout) same(o tileLayout) bool {
+	if l.just != nil || o.just != nil {
+		return l.just == o.just
+	}
+	return l.step == o.step && l.cols == o.cols && l.pad == o.pad
 }
 
 // end returns group k's end, past its last tile.
@@ -57,7 +82,12 @@ func (l tileLayout) end(k int) int {
 }
 
 // rowsOf returns how many rows group k takes.
-func (l tileLayout) rowsOf(k int) int { return (l.end(k) - l.starts[k] + l.cols - 1) / l.cols }
+func (l tileLayout) rowsOf(k int) int {
+	if l.just != nil {
+		return l.rowBase[k+1] - l.rowBase[k]
+	}
+	return (l.end(k) - l.starts[k] + l.cols - 1) / l.cols
+}
 
 // rows returns how many rows the tiles take, over all groups.
 func (l tileLayout) rows() int { return l.rowBase[len(l.rowBase)-1] }
@@ -74,16 +104,34 @@ func (l tileLayout) groupOfRow(r int) int {
 
 // headerY returns where group k's header starts.
 func (l tileLayout) headerY(k int) float32 {
+	if l.just != nil {
+		return l.just.headY[k]
+	}
 	return l.pad + float32(k)*l.head + float32(l.rowBase[k])*l.step.H
 }
 
 // rowY returns where row r starts.
 func (l tileLayout) rowY(r int) float32 {
+	if l.just != nil {
+		return l.just.top[r]
+	}
 	return l.pad + float32(l.groupOfRow(r)+1)*l.head + float32(r)*l.step.H
+}
+
+// rowH returns how tall row r's tiles are.
+func (l tileLayout) rowH(r int) float32 {
+	if l.just != nil {
+		return l.just.h[r]
+	}
+	return l.size.H
 }
 
 // rowCol returns tile i's row and column.
 func (l tileLayout) rowCol(i int) (int, int) {
+	if j := l.just; j != nil {
+		r := sort.Search(len(j.first)-1, func(r int) bool { return j.first[r+1] > i })
+		return r, i - j.first[min(r, len(j.first)-1)]
+	}
 	k := l.groupOf(i)
 	local := i - l.starts[k]
 	return l.rowBase[k] + local/l.cols, local % l.cols
@@ -91,6 +139,12 @@ func (l tileLayout) rowCol(i int) (int, int) {
 
 // at returns the tile at row r and column c, or -1.
 func (l tileLayout) at(r, c int) int {
+	if j := l.just; j != nil {
+		if r < 0 || r >= l.rows() || c < 0 || j.first[r]+c >= j.first[r+1] {
+			return -1
+		}
+		return j.first[r] + c
+	}
 	if r < 0 || r >= l.rows() || c < 0 || c >= l.cols {
 		return -1
 	}
@@ -106,12 +160,22 @@ func (l tileLayout) at(r, c int) int {
 func (l tileLayout) rowFirst(r int) int { return l.at(r, 0) }
 
 func (l tileLayout) rowLast(r int) int {
+	if l.just != nil {
+		return l.just.first[r+1] - 1
+	}
 	k := l.groupOfRow(r)
 	return min(l.end(k), l.starts[k]+(r-l.rowBase[k]+1)*l.cols) - 1
 }
 
 // target returns where tile i belongs, in the content's space.
 func (l tileLayout) target(i int) geom.Rect {
+	if j := l.just; j != nil {
+		if i < 0 || i >= l.n {
+			return geom.Rect{}
+		}
+		r, _ := l.rowCol(i)
+		return geom.Rc(j.x[i], j.top[r], j.w[i], j.h[r])
+	}
 	r, c := l.rowCol(i)
 	return geom.Rc(l.left+float32(c)*l.step.W, l.rowY(r), l.size.W, l.size.H)
 }
@@ -128,6 +192,11 @@ func (l tileLayout) rowAt(y float32) (int, bool) {
 	if rel < 0 {
 		return l.rowBase[k], false
 	}
+	if j := l.just; j != nil {
+		lo, hi := l.rowBase[k], l.rowBase[k+1]
+		r := max(lo, lo+sort.Search(hi-lo, func(d int) bool { return j.top[lo+d] > y })-1)
+		return r, y <= j.top[r]+j.h[r]
+	}
 	local := int(math.Floor(float64(rel / l.step.H)))
 	if local >= l.rowsOf(k) {
 		return l.rowBase[k+1] - 1, false
@@ -137,6 +206,9 @@ func (l tileLayout) rowAt(y float32) (int, bool) {
 
 // content returns the content's height.
 func (l tileLayout) content(gap float32) float32 {
+	if l.just != nil {
+		return max(0, l.just.bottom+l.pad-gap)
+	}
 	groups := float32(0)
 	if l.head > 0 {
 		groups = float32(len(l.starts)) * l.head
@@ -194,9 +266,9 @@ func (g *TileGrid) SetGroups(starts []int, u *gunim.UI) {
 	u.Invalidate()
 }
 
-// placeHeaders builds the headers of the groups in view, from first to last of the tiles, width wide, and lays them
-// out; those gone out of view, or of groups that changed, go.
-func (g *TileGrid) placeHeaders(first, last int, offset, width float32, kids gunim.Children, motion, settle anim.Spring) {
+// placeHeaders builds the headers of the groups in view, from first to last of the tiles, as wide as the rows, and lays
+// them out; those gone out of view, or of groups that changed, go.
+func (g *TileGrid) placeHeaders(first, last int, offset float32, kids gunim.Children, motion, settle anim.Spring) {
 	children := map[*headerCell]gunim.Child{}
 	for kid := range kids.All {
 		if h, ok := kid.Node().(*headerCell); ok {
@@ -234,7 +306,7 @@ func (g *TileGrid) placeHeaders(first, last int, offset, width float32, kids gun
 		}
 		h.y.Animate(y, motion)
 		kid := children[h]
-		kid.Layout(gunim.Tight(geom.Sz(max(0, width), l.head)))
+		kid.Layout(gunim.Tight(geom.Sz(max(0, l.span), l.head)))
 		kid.Place(geom.Pt(l.left, h.y.Value()-offset))
 	}
 }
