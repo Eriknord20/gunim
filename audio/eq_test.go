@@ -288,6 +288,12 @@ func TestADynamicBandTurnsItsBandDownOverItsThreshold(t *testing.T) {
 	if r, ok := in.Reduction(1); !ok || math.Abs(r+10.5) > 0.5 {
 		t.Errorf("the band says it turns down %.2f dB (%v), want -10.5", r, ok)
 	}
+	if h, ok := in.Heard(1); !ok || math.Abs(h-db(0.5)) > 0.5 {
+		t.Errorf("the band says it hears %.2f dB (%v), want the sine's peak, %.2f", h, ok, db(0.5))
+	}
+	if _, ok := in.Heard(2); ok {
+		t.Error("the insert says it hears a band it has not")
+	}
 	// Under the threshold, it lets go over its release, and the sound
 	// passes as it is.
 	got = db(playFor(in, 0.5, 1000, 0.01, &at)) - db(0.01)
@@ -324,6 +330,9 @@ func TestADynamicBandTurnsItsBandDownOverItsThreshold(t *testing.T) {
 	got = db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5)
 	if math.Abs(got) > 0.2 {
 		t.Errorf("its dynamics off, the band turns down %+.2f dB", got)
+	}
+	if h, _ := in.Heard(1); h != silentDB {
+		t.Errorf("its dynamics off, the band says it hears %.2f dB", h)
 	}
 }
 

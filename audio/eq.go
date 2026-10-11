@@ -351,11 +351,12 @@ type liveBand struct {
 	played float64
 	state  [maxStages][4]float64
 	// A dynamic band hears its band through side, with its state; level
-	// is the band's power, smoothed, and down how far it turns down, in
-	// decibels.
+	// is the band's power, smoothed, heard that level in decibels, as a
+	// sine's peak, and down how far it turns down, in decibels.
 	side      biquad
 	sideState [4]float64
 	level     float64
+	heard     float64
 	down      float64
 }
 
@@ -442,7 +443,7 @@ func (b *liveBand) hear(frames []float32, rate, shift float64) {
 	n := len(frames) / 2
 	if !b.want.dynamic() || b.kind != b.want.Kind {
 		// No longer dynamic: back up over 50 ms, without a click.
-		b.level = 0
+		b.level, b.heard = 0, silentDB
 		if b.down *= math.Exp(-float64(n) / (0.05 * rate)); b.down < 0.01 {
 			b.down = 0
 		}
@@ -467,6 +468,7 @@ func (b *liveBand) hear(frames []float32, rate, shift float64) {
 	b.level += (sum/float64(n) - b.level) * (1 - math.Exp(-float64(n)/(window*rate)))
 	// A sine's peak is 3 dB over its power.
 	db := 10*math.Log10(max(b.level, 1e-12)) + 3
+	b.heard = db
 	d := b.want.Dynamic
 	want := min(max(curve(db-float64(d.Threshold)-shift, float64(d.Ratio)), 0), float64(max(d.Range, 0)))
 	ms := float64(d.Release)
@@ -535,6 +537,22 @@ func (e *eqInsert) Reduction(id int) (float64, bool) {
 	return 0, false
 }
 
+// silentDB is the level a band that hears nothing hears.
+const silentDB = -120
+
+// Heard returns the level the insert's dynamic band id hears now, about
+// its frequency, in decibels, as a sine's peak: the level its threshold
+// is set against. A band that is not dynamic hears silentDB, and false
+// says there is no band id.
+func (e *eqInsert) Heard(id int) (float64, bool) {
+	for _, b := range e.bands {
+		if b.id == id {
+			return b.heard, true
+		}
+	}
+	return 0, false
+}
+
 // follow moves each band a block's way toward its settings, adding
 // bands new to the EQ and dropping those faded out. A band new while
 // the room is full of bands fading out comes in once one has.
@@ -556,7 +574,7 @@ func (e *eqInsert) follow(want []Band) {
 			}
 			lb = e.free[len(e.free)-1]
 			e.free = e.free[:len(e.free)-1]
-			*lb = liveBand{id: w.ID, kind: w.Kind, slope: w.Slope, fresh: true,
+			*lb = liveBand{id: w.ID, kind: w.Kind, slope: w.Slope, fresh: true, heard: silentDB,
 				logFreq: math.Log(float64(max(w.Freq, 10))), gain: float64(w.Gain), logQ: math.Log(float64(max(w.Q, 0.025)))}
 			e.bands = append(e.bands, lb)
 		}
