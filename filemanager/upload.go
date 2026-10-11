@@ -362,7 +362,7 @@ func (a *app) upload(k copyKey) {
 			a.ask(Confirm{Title: name + " also changed on " + a.uploadWhere(k.path),
 				Body: "It changed there since you opened it. Replace it with your copy, or keep both, with yours as " +
 					ps.Base(alt) + "?",
-				OK: "Replace", Alt: "Keep both"}, func(v Confirmed) {
+				OK: "Replace", Alt: "Keep Both"}, func(v Confirmed) {
 				switch {
 				case v.OK:
 					a.startUpload(k, k.path)

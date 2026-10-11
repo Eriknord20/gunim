@@ -289,7 +289,7 @@ func TestARemoteFileChangedMeanwhileAsksAndKeepsBoth(t *testing.T) {
 	u.answerOffer(0, false)
 	u.until("the question shows", func() bool { return len(u.a.ops.dialogs) == 1 })
 	c, ok := u.a.ops.dialogs[0].state.(Confirm)
-	if !ok || c.Title != "report.txt also changed on "+u.a.uploadWhere(u.remote) || c.OK != "Replace" || c.Alt != "Keep both" ||
+	if !ok || c.Title != "report.txt also changed on "+u.a.uploadWhere(u.remote) || c.OK != "Replace" || c.Alt != "Keep Both" ||
 		!strings.Contains(c.Body, "report (2).txt") {
 		t.Fatalf("the dialog is %+v", u.a.ops.dialogs[0].state)
 	}
@@ -298,7 +298,7 @@ func TestARemoteFileChangedMeanwhileAsksAndKeepsBoth(t *testing.T) {
 	u.until("the copy goes up beside", func() bool { return contents(t, both) == "mine" })
 	u.idle()
 	if got := contents(t, u.remote); got != "theirs, longer" {
-		t.Fatalf("Keep both replaced the remote file with %q", got)
+		t.Fatalf("Keep Both replaced the remote file with %q", got)
 	}
 	u.until("the window lists both", func() bool { return slices.Contains(u.shown(), "report (2).txt") })
 	// The copy now goes with the file it went up as.

@@ -26,16 +26,26 @@ type clashBody struct {
 func (b *clashBody) Focusables() []gunim.Node { return []gunim.Node{b.all} }
 
 // newClashDialog asks what to do about an item going where one of its
-// name is: replace it, keep both, skip it, or stop.
+// name is, as file managers ask it: replace it, keep both, skip it, or
+// stop. It says what each one is, the one there and the new one, and
+// offers the same answer for all the rest.
 func newClashDialog(s ClashAsk) *widget.Dialog {
-	d := widget.NewDialog("“" + s.Name + "” is already in " + s.Where)
-	arriving := widget.NewLabel("Arriving: " + s.New)
-	there := widget.NewLabel("Already there: " + s.Old)
-	for _, l := range []*widget.Label{arriving, there} {
+	kind := "a file"
+	if s.OldFolder {
+		kind = "a folder"
+	}
+	d := widget.NewDialog("Replace “" + s.Name + "”?")
+	if !s.SameKind {
+		d.Title = "“" + s.Name + "” is already there"
+	}
+	says := widget.NewLabel(s.Where + " already has " + kind + " named “" + s.Name + "”.")
+	existing := widget.NewLabel("Existing: " + s.Old)
+	coming := widget.NewLabel("New: " + s.New)
+	for _, l := range []*widget.Label{existing, coming} {
 		l.Size, l.Color = SmallText, Faint
 	}
-	all := widget.NewCheckbox("Do the same for every clash in this operation")
-	col := widget.Column(arriving, there, all)
+	all := widget.NewCheckbox("Apply to all")
+	col := widget.Column(says, existing, coming, all)
 	col.Cross = widget.CrossStretch
 	body := &clashBody{Flex: col, all: all}
 	if !s.CanForAll {
@@ -48,11 +58,11 @@ func newClashDialog(s ClashAsk) *widget.Dialog {
 	d.OnDismiss = widget.Sends(ClashAnswered{Op: s.Op, Stop: true})
 	d.AddButton("Skip", answer(ChoiceSkip))
 	if s.SameKind {
-		d.AddButton("Keep both", answer(ChoiceKeepBoth))
+		d.AddButton("Keep Both", answer(ChoiceKeepBoth))
 		d.SetButtons("Replace", "Stop")
 		d.OnAccept = answer(ChoiceReplace)
 	} else {
-		d.SetButtons("Keep both", "Stop")
+		d.SetButtons("Keep Both", "Stop")
 		d.OnAccept = answer(ChoiceKeepBoth)
 	}
 	d.Careful = true

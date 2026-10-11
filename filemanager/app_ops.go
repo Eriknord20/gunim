@@ -603,6 +603,9 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 	a.post(func() {
 		ask := ClashAsk{Op: op, Name: a.ps.Base(c.dst), Where: a.ps.placeName(a.ps.Dir(c.dst)),
 			New: c.from, Old: describe(a.fs, c.dst), SameKind: c.sameKind, CanForAll: true}
+		if e, err := statEntry(a.fs, c.dst); err == nil {
+			ask.OldFolder = e.Dir
+		}
 		if ask.New == "" {
 			ask.New = describe(a.fs, c.src)
 		}
@@ -629,13 +632,24 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 func describe(fsys FS, path string) string {
 	e, err := statEntry(fsys, path)
 	if err != nil {
-		return "cannot be read: " + err.Error()
+		return "can't be read: " + err.Error()
 	}
-	s := e.Type
-	if !e.Dir {
-		s += ", " + humanBytes(e.Size)
+	return ItemFacts(e.Size, e.Dir, e.Mod)
+}
+
+// ItemFacts says what an item is, as the dialog that asks whether to
+// replace it compares two: "219 bytes · 10 Oct 2026 15:15", or for a
+// folder "Folder · 10 Oct 2026 15:15". A program that asks through
+// [TransferProgress.Clash] says the item coming the same way.
+func ItemFacts(size int64, dir bool, mod time.Time) string {
+	s := humanBytes(size)
+	if dir {
+		s = "Folder"
 	}
-	return s + ", modified " + e.Mod.Format("2006-01-02 15:04")
+	if !mod.IsZero() {
+		s += " · " + mod.Format("2 Jan 2006 15:04")
+	}
+	return s
 }
 
 // confirm asks c, and runs yes once the user agrees.
