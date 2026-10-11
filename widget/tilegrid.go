@@ -97,7 +97,10 @@ type TileGrid struct {
 	jumpRow    int
 	// rebuild drops the tiles built at the next layout.
 	rebuild bool
-	lift    tileLift
+	// gap, less one, is the tile the keyboard waits at with no tile
+	// selected, as SetGap puts it; 0 for none.
+	gap  int
+	lift tileLift
 	// reorder is where each tile was, for the next layout to carry the tiles from there, as Reorder sets it; leaving
 	// holds the tiles of items gone, fading out, and of items that moved out of view, gliding there.
 	reorder []int
@@ -212,6 +215,17 @@ func (g *TileGrid) SetSelected(runs [][2]int, cursor int, u *gunim.UI) {
 		g.anchor = g.cursor
 	}
 	u.Invalidate()
+}
+
+// SetGap puts the keyboard, while no tile is selected, at tile i, which
+// has taken the place of a tile taken away: Right goes to tile i, and the
+// other arrows from its place, as they would have from the tile gone. -1
+// takes it away, and so does any tile selected.
+func (g *TileGrid) SetGap(i int) {
+	g.gap = 0
+	if i >= 0 {
+		g.gap = i + 1
+	}
 }
 
 // ShowTile scrolls tile i into view, at the next layout.
@@ -548,6 +562,11 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 	l := g.lay
 	pageRows := max(1, int(g.viewport/max(l.step.H, 1)))
 	at := g.cursor
+	gap := at < 0 && g.gap > 0 && g.gap-1 <= g.n
+	if gap {
+		at = min(g.gap-1, g.n-1)
+		g.anchor = -1
+	}
 	// rowsBy is the tile rows away from the keyboard's, in its column, or the row's last where it is shorter, and
 	// no further than the first or last row.
 	rowsBy := func(d int) int {
@@ -564,6 +583,9 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 		to = at - 1
 	case input.KeyRight:
 		to = at + 1
+		if gap {
+			to = g.gap - 1
+		}
 	case input.KeyUp:
 		to = rowsBy(-1)
 	case input.KeyDown:
@@ -601,7 +623,9 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 	to = min(max(to, 0), g.n-1)
 	g.setCursor(to, u)
 	if e.Mods.Has(input.ModShift) {
-		if g.anchor < 0 {
+		if g.anchor < 0 && gap {
+			g.anchor = to
+		} else if g.anchor < 0 {
 			g.anchor = max(at, 0)
 		}
 		g.setRuns([][2]int{{min(g.anchor, to), max(g.anchor, to) + 1}}, u)
@@ -644,6 +668,9 @@ func (g *TileGrid) pick(i int, mods input.Mods, u *gunim.UI) {
 
 // setCursor puts the keyboard on tile i; the setRuns that follows tells OnSelect.
 func (g *TileGrid) setCursor(i int, _ *gunim.UI) {
+	if i >= 0 {
+		g.gap = 0
+	}
 	if i != g.cursor {
 		g.cursor, g.moved = i, true
 	}

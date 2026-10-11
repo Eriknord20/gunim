@@ -115,6 +115,10 @@ func (a *listingArea) selection(s Selection, u *gunim.UI) {
 	} else {
 		g.SetSelectedRows(s.Runs, s.Cursor, u)
 	}
+	g.SetGap(-1)
+	if s.Cursor < 0 {
+		g.SetGap(s.Gap)
+	}
 	if s.Cursor >= 0 && s.Show {
 		top, vis := g.Top(), g.Visible()
 		if float64(s.Cursor) < top || float64(s.Cursor) > top+vis-1 {

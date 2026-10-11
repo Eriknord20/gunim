@@ -402,3 +402,41 @@ func TestTheArrowsWalkASidebarTooTallForItsWindow(t *testing.T) {
 		t.Fatal("Up from the first favourite did not go back to the favourites' heading")
 	}
 }
+
+// After the row the keyboard is on is deleted, Down goes to the row that
+// came after it and Up to the one before, in the order the rows are
+// sorted in, not from the top of the list.
+func TestTheArrowsGoOnFromARowDeleted(t *testing.T) {
+	for _, key := range []input.Key{input.KeyDown, input.KeyUp, input.KeyRight} {
+		h := newHarness(t, "a.txt", "b.go", "c.md", "d.png", "e.txt")
+		h.until("the rows arrive", func() bool { return len(h.shown()) == 5 })
+		h.do(Command{Name: CmdSortType})
+		h.until("the rows sort by type", func() bool { return h.a.nav.sort == SortType })
+		h.frames(2)
+		h.do(FocusListing{})
+		// The middle row in the order by type goes.
+		order := h.shown()
+		gone, before, after := order[2], order[1], order[3]
+		h.press(input.KeyDown, 0)
+		for range 2 {
+			h.press(input.KeyDown, 0)
+		}
+		h.until("the keys reach the middle row", func() bool { return h.a.nav.cursor == gone })
+		if key == input.KeyRight {
+			h.do(Command{Name: CmdViewIcons})
+			h.frames(30)
+		}
+		h.w.Input(input.KeyPress{Key: input.KeyDelete, Time: time.Now()})
+		h.until(gone+" goes", func() bool { return !h.exists(gone) && len(h.shown()) == 4 })
+		h.frames(2)
+		want := after
+		if key == input.KeyUp {
+			want = before
+		}
+		h.press(key, 0)
+		h.until(fmt.Sprintf("%v goes to %s, next to %s deleted", key, want, gone), func() bool { return h.a.nav.cursor == want })
+		if len(h.a.nav.sel) != 1 || !h.a.nav.sel[want] {
+			t.Fatalf("%v after the delete selected %v, want %s alone", key, h.a.nav.sel, want)
+		}
+	}
+}

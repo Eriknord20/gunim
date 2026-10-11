@@ -269,6 +269,9 @@ type DataGrid struct {
 	// scale is the window's device pixels to a logical one, which the
 	// rows scroll by whole ones of.
 	scale float32
+	// gap, less one, is the row the keyboard waits above with no row
+	// selected, as SetGap puts it; 0 for none.
+	gap int
 
 	// links are where the last paint drew spans that are links.
 	links []gridLink
@@ -411,6 +414,18 @@ func (g *DataGrid) SelectedRows() [][2]int {
 	return slices.Clone(g.runs)
 }
 
+// SetGap puts the keyboard, while no row is selected, just above row i,
+// where a row taken away was: Down goes on to row i and Up to the row
+// above it, as they would have from the row gone. -1 takes it away, and
+// so does any row selected. With none, the keys start from the top of
+// the view.
+func (g *DataGrid) SetGap(i int) {
+	g.gap = 0
+	if i >= 0 {
+		g.gap = i + 1
+	}
+}
+
 // SetSelectedRows selects the rows in sel, runs of a first row and an end
 // row left out, and puts the keyboard on row cursor, -1 for none, without
 // telling OnSelect or OnSelectRows. It is for a grid with Multi.
@@ -505,6 +520,9 @@ func (g *DataGrid) selectAndTell(i int, u *gunim.UI) {
 	}
 	if i >= 0 {
 		i = min(max(i, 0), g.rows-1)
+	}
+	if i >= 0 {
+		g.gap = 0
 	}
 	if i == g.selected {
 		if i >= 0 {
@@ -1540,8 +1558,21 @@ func (g *DataGrid) key(e input.KeyPress, u *gunim.UI) bool {
 	}
 	page := max(1, int(g.Visible())-1)
 	at := g.selected
-	if at < 0 {
+	gap := at < 0 && g.gap > 0 && g.gap-1 <= g.rows
+	switch {
+	case gap && (e.Key == input.KeyUp || e.Key == input.KeyPageUp):
+		// From the gap, as from the row that was there.
+		at = g.gap - 1
+	case gap:
+		// The row after the gap is where the one gone was: Down is
+		// the next row.
+		at = g.gap - 2
+	case at < 0:
 		at = int(math.Ceil(g.top)) - 1
+	}
+	if gap {
+		// Shift selects from the row the keys reach.
+		g.anchor = -1
 	}
 	if g.Multi && g.moveKey(e, at, page, u) {
 		u.Invalidate()
@@ -1618,9 +1649,12 @@ func (g *DataGrid) moveKey(e input.KeyPress, at, page int, u *gunim.UI) bool {
 	to = min(max(to, 0), g.rows-1)
 	was, had := g.block()
 	defer g.slideFrom(was, had)
+	fromGap := g.selected < 0 && g.gap > 0
 	g.selectAndTell(to, u)
 	if e.Mods.Has(input.ModShift) {
-		if g.anchor < 0 {
+		if g.anchor < 0 && fromGap {
+			g.anchor = to
+		} else if g.anchor < 0 {
 			g.anchor = max(at, 0)
 		}
 		g.setRuns([][2]int{{min(g.anchor, to), max(g.anchor, to) + 1}}, u)

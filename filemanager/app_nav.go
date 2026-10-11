@@ -54,6 +54,11 @@ type navState struct {
 	sel    map[string]bool
 	cursor string
 	pick   []string
+	// gap says the row the keyboard was on went, as one deleted does, and
+	// after names the row that came after it, "" for the end: the keys go
+	// on from there, not from the top.
+	gap   bool
+	after string
 	// space is the free space of the folder's volume, or spaceErr why it
 	// is unknown.
 	space    space
@@ -363,7 +368,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 	n.all, n.rows, n.err = nil, nil, nil
 	n.filter, n.pick = "", nil
 	clear(n.sel)
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	a.enteredFolder()
 	a.list()
 	a.readSpace()
@@ -565,6 +570,9 @@ func (a *app) refilter() {
 			n.cursor = n.rows[i].Name
 		}
 		n.pick = nil
+		n.gap = false
+	} else if n.cursor != "" && !slices.ContainsFunc(n.rows, func(e entry) bool { return e.Name == n.cursor }) {
+		a.leaveGap(was)
 	}
 	if picked {
 		a.showSelection()
@@ -573,6 +581,32 @@ func (a *app) refilter() {
 	}
 	a.publishStatus()
 	a.showPreview()
+}
+
+// leaveGap notes where the keyboard's row was, in the rows was showed
+// before, now that it is gone: the row after it that is still there, and
+// the end where none is. The names selected that went go with it.
+func (a *app) leaveGap(was []entry) {
+	n := &a.nav
+	here := make(map[string]bool, len(n.rows))
+	for _, e := range n.rows {
+		here[e.Name] = true
+	}
+	n.gap, n.after = true, ""
+	if i := slices.IndexFunc(was, func(e entry) bool { return e.Name == n.cursor }); i >= 0 {
+		for _, e := range was[i+1:] {
+			if here[e.Name] {
+				n.after = e.Name
+				break
+			}
+		}
+	}
+	n.cursor = ""
+	for name := range n.sel {
+		if !here[name] {
+			delete(n.sel, name)
+		}
+	}
 }
 
 // sortBy sorts the rows by column; toggle turns the order round when they
@@ -757,7 +791,7 @@ func (a *app) selected(v Selected) {
 	if !ordered {
 		sel = a.selectedEntries()
 	}
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	if v.Cursor >= 0 && v.Cursor < len(n.rows) {
 		n.cursor = n.rows[v.Cursor].Name
 	}
@@ -778,7 +812,7 @@ func (a *app) showSelection() { a.sendSelection(false, true) }
 // show.
 func (a *app) sendSelection(slide, show bool) {
 	n := &a.nav
-	s := Selection{Gen: n.gen, Cursor: -1, Slide: slide, Show: show}
+	s := Selection{Gen: n.gen, Cursor: -1, Gap: -1, Slide: slide, Show: show}
 	for i, e := range n.rows {
 		if n.sel[e.Name] {
 			if k := len(s.Runs); k > 0 && s.Runs[k-1][1] == i {
@@ -790,6 +824,12 @@ func (a *app) sendSelection(slide, show bool) {
 		if e.Name == n.cursor {
 			s.Cursor = i
 		}
+		if n.gap && e.Name == n.after {
+			s.Gap = i
+		}
+	}
+	if n.gap && n.cursor == "" && n.after == "" {
+		s.Gap = len(n.rows)
 	}
 	a.patch(s)
 }
