@@ -240,9 +240,12 @@ content clear of both. A `widget.TitleBar` with a `Name` shows that
 name whatever the window's title says, and `TitleAtStart` puts it at
 the left.
 
-`Window.Placement` says where a window is and how big, for the
-application to keep as it closes, and `WindowOptions.Place` opens it
-there next time. A placement whose monitor is gone opens centred on the
+`WindowOptions.PlaceFile` opens a window where the user left it: gunim
+writes where the window is to that file as it closes, and opens it
+there next time. For an application that keeps it with its own
+settings, `Window.Placement` says where a window is and how big, and
+still answers once the window has closed, and `WindowOptions.Place`
+opens it there. A placement whose monitor is gone opens centred on the
 primary monitor, and one larger than its monitor shrinks to fit. A
 window also goes full screen, stays above other windows with
 `WindowOptions.Pinned`, zooms with Ctrl and +, - and 0 or the wheel
