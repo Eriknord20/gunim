@@ -42,7 +42,37 @@ type Band struct {
 	Slope int
 	// On says the band changes the sound.
 	On bool
+	// Dynamic, where on, turns a bell's or a shelf's gain down as the
+	// sound about its frequency rises over a threshold: a compressor of
+	// that band alone. Other kinds ignore it.
+	Dynamic Dynamics
 }
+
+// Dynamics is how a dynamic band turns itself down.
+type Dynamics struct {
+	On bool
+	// Threshold is the level of the band's sound, in decibels, where it
+	// starts to turn down, and Ratio how far over it: at 4, a sound 8 dB
+	// over is turned down 6. It bends into it over a few decibels.
+	Threshold, Ratio float32
+	// Attack and Release are how fast it turns down and lets go again,
+	// in milliseconds.
+	Attack, Release float32
+	// Range is the most it turns down, in decibels.
+	Range float32
+}
+
+// dynamic says the band turns itself down.
+func (b Band) dynamic() bool {
+	return b.Dynamic.On && hasGain(b.Kind)
+}
+
+// hasGain says a band of kind k lifts and lowers by its Gain.
+func hasGain(k FilterKind) bool { return k == Bell || k == LowShelf || k == HighShelf }
+
+// bandPass is the shape of the filter a dynamic bell hears its band
+// through: the pitches about its frequency, at their own level.
+const bandPass FilterKind = -1
 
 // stages returns how many second-order sections the band takes.
 func (b Band) stages() int {
@@ -112,6 +142,9 @@ func section(kind FilterKind, freq, gain, q, rate float64) biquad {
 	case Notch:
 		b0, b1, b2 = 1, -2*cos, 1
 		a0, a1, a2 = 1+alpha, -2*cos, 1-alpha
+	case bandPass:
+		b0, b1, b2 = alpha, 0, -alpha
+		a0, a1, a2 = 1+alpha, -2*cos, 1-alpha
 	}
 	return biquad{b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0}
 }
@@ -162,6 +195,7 @@ func Response(bands []Band, hz float64) float64 {
 type EQ struct {
 	settings atomic.Pointer[eqSettings]
 	bypass   atomic.Bool
+	amount   atomic.Uint64
 }
 
 // MaxBands is how many bands an EQ plays. [EQ.Set] keeps the first
@@ -178,8 +212,20 @@ type eqSettings struct {
 func NewEQ() *EQ {
 	e := &EQ{}
 	e.settings.Store(&eqSettings{})
+	e.SetAmount(1)
 	return e
 }
+
+// SetAmount scales the EQ's bells' and shelves' gains, and how far its
+// dynamic bands turn down, by a, from 0 to 2, gliding there: 1 plays
+// them as set, and 0 leaves them flat. Cuts and notches stay as set: a
+// cut has no gain to scale, and a cut mixed with the sound it cut, to
+// do it by halves, would cancel some of what it passes. It is real
+// time, as SetBypass is.
+func (e *EQ) SetAmount(a float64) { e.amount.Store(math.Float64bits(max(0, min(a, 2)))) }
+
+// amountNow returns the amount set.
+func (e *EQ) amountNow() float64 { return math.Float64frombits(e.amount.Load()) }
 
 // Set sets the EQ's bands. Each glides from where it was, matched by
 // its ID; a band new to the EQ fades in, and one gone fades out.
@@ -225,15 +271,17 @@ type eqInsert struct {
 	pool  [liveBands]liveBand
 	bands []*liveBand
 	free  []*liveBand
-	// mix fades the whole EQ in and out for a bypass.
-	mix float64
+	// mix fades the whole EQ in and out for a bypass, and amount
+	// glides to the EQ's.
+	mix, amount float64
 	// rate is the mixer's, which the bands' sections are worked out
 	// for, and glide how far they glide each block at it.
 	rate, glide float64
 }
 
 func newEQInsert(e *EQ) *eqInsert {
-	in := &eqInsert{eq: e, bands: make([]*liveBand, 0, liveBands), free: make([]*liveBand, 0, liveBands)}
+	in := &eqInsert{eq: e, bands: make([]*liveBand, 0, liveBands), free: make([]*liveBand, 0, liveBands),
+		amount: e.amountNow()}
 	for i := range in.pool {
 		in.free = append(in.free, &in.pool[i])
 	}
@@ -265,12 +313,26 @@ type liveBand struct {
 	want Band
 	gone bool
 	// secs are the band's sections, in room, and fresh says they are
-	// to be worked out anew.
-	secs  []biquad
-	room  [maxStages]biquad
-	fresh bool
-	state [maxStages][4]float64
+	// to be worked out anew; dirty says its settings moved since, and
+	// played is the gain they were last worked out for.
+	secs   []biquad
+	room   [maxStages]biquad
+	fresh  bool
+	dirty  bool
+	played float64
+	state  [maxStages][4]float64
+	// A dynamic band hears its band through side, with its state; level
+	// is the band's power, smoothed, and down how far it turns down, in
+	// decibels.
+	side      biquad
+	sideState [4]float64
+	level     float64
+	down      float64
 }
+
+// dynSub is how many frames a dynamic band, or an EQ whose amount
+// moves, plays between working its sections out anew.
+const dynSub = 32
 
 // Process implements [Insert]: it follows the EQ's settings a block's
 // way, and filters frames through each band in turn.
@@ -292,29 +354,144 @@ func (e *eqInsert) Process(frames []float32) {
 		e.mix = 0
 		return
 	}
+	want := e.eq.amountNow()
+	e.amount += (want - e.amount) * e.glide
+	if math.Abs(want-e.amount) < 1e-4 {
+		e.amount = want
+	}
 	n := len(frames) / 2
-	for _, b := range e.bands {
-		if b.mix == 0 {
-			continue
-		}
-		wet := b.mix * e.mix
-		for i := range n {
-			for ch := range 2 {
-				x := float64(frames[2*i+ch])
-				y := x
-				for k, s := range b.secs {
-					st := &b.state[k]
-					// Transposed direct form II, a channel's two
-					// values side by side.
-					out := s.b0*y + st[2*ch]
-					st[2*ch] = s.b1*y - s.a1*out + st[2*ch+1]
-					st[2*ch+1] = s.b2*y - s.a2*out
-					y = out
-				}
-				frames[2*i+ch] = float32(x + (y-x)*wet)
+	for at := 0; at < n; at += dynSub {
+		part := frames[2*at : 2*min(at+dynSub, n)]
+		for _, b := range e.bands {
+			if b.mix == 0 {
+				continue
 			}
+			b.hear(part, e.rate)
+			b.shape(e.rate, e.amount)
+			b.filter(part, b.mix*e.mix)
 		}
 	}
+}
+
+// filter filters frames through the band, mixed in by wet.
+func (b *liveBand) filter(frames []float32, wet float64) {
+	for i := range len(frames) / 2 {
+		for ch := range 2 {
+			x := float64(frames[2*i+ch])
+			y := x
+			for k, s := range b.secs {
+				st := &b.state[k]
+				// Transposed direct form II, a channel's two values side
+				// by side.
+				out := s.b0*y + st[2*ch]
+				st[2*ch] = s.b1*y - s.a1*out + st[2*ch+1]
+				st[2*ch+1] = s.b2*y - s.a2*out
+				y = out
+			}
+			frames[2*i+ch] = float32(x + (y-x)*wet)
+		}
+	}
+}
+
+// hear has a dynamic band hear frames, the sound coming to it, about
+// its frequency, and work out how far to turn down: its power, smoothed
+// over a few of its periods, over the threshold by the ratio, gliding
+// there at its attack and back at its release.
+func (b *liveBand) hear(frames []float32, rate float64) {
+	n := len(frames) / 2
+	if !b.want.dynamic() || b.kind != b.want.Kind {
+		// No longer dynamic: back up over 50 ms, without a click.
+		b.level = 0
+		if b.down *= math.Exp(-float64(n) / (0.05 * rate)); b.down < 0.01 {
+			b.down = 0
+		}
+		return
+	}
+	s, st := b.side, &b.sideState
+	var sum float64
+	for i := range n {
+		power := 0.0
+		for ch := range 2 {
+			x := float64(frames[2*i+ch])
+			y := s.b0*x + st[2*ch]
+			st[2*ch] = s.b1*x - s.a1*y + st[2*ch+1]
+			st[2*ch+1] = s.b2*x - s.a2*y
+			power = max(power, y*y)
+		}
+		sum += power
+	}
+	// Smoothed over two periods of the band's frequency, and no less
+	// than 5 ms, so a low band's own waves do not move it.
+	window := max(0.005, 2/math.Exp(b.logFreq))
+	b.level += (sum/float64(n) - b.level) * (1 - math.Exp(-float64(n)/(window*rate)))
+	// A sine's peak is 3 dB over its power.
+	db := 10*math.Log10(max(b.level, 1e-12)) + 3
+	d := b.want.Dynamic
+	want := min(max(curve(db-float64(d.Threshold), float64(d.Ratio)), 0), float64(max(d.Range, 0)))
+	ms := float64(d.Release)
+	if want > b.down {
+		ms = float64(d.Attack)
+	}
+	b.down += (want - b.down) * (1 - math.Exp(-float64(n)/(max(ms, 0.05)/1000*rate)))
+}
+
+// dynKnee is how far, in decibels, a dynamic band bends into its ratio
+// about its threshold.
+const dynKnee = 6
+
+// curve returns how far a compressor at ratio turns down a sound over
+// its threshold by over decibels, bending in over dynKnee.
+func curve(over, ratio float64) float64 {
+	slope := 1 - 1/max(ratio, 1)
+	switch {
+	case 2*over <= -dynKnee:
+		return 0
+	case 2*over < dynKnee:
+		x := over + dynKnee/2
+		return slope * x * x / (2 * dynKnee)
+	default:
+		return slope * over
+	}
+}
+
+// shape works the band's sections out anew where its settings moved,
+// or the gain it plays at, scaled by amount and turned down as it hears
+// its band, moved.
+func (b *liveBand) shape(rate, amount float64) {
+	gain := (b.gain - b.down) * amount
+	if !b.dirty && math.Abs(gain-b.played) < 0.005 {
+		return
+	}
+	now := Band{Kind: b.kind, Slope: b.slope, Freq: float32(math.Exp(b.logFreq)), Gain: float32(gain), Q: float32(math.Exp(b.logQ))}
+	n := len(b.secs)
+	b.secs = now.appendSections(b.room[:0], rate)
+	if len(b.secs) != n {
+		// Other sections start from silence.
+		b.state = [maxStages][4]float64{}
+	}
+	if b.dirty {
+		switch b.kind {
+		case LowShelf:
+			b.side = section(HighCut, float64(now.Freq), 0, 0.707, rate)
+		case HighShelf:
+			b.side = section(LowCut, float64(now.Freq), 0, 0.707, rate)
+		default:
+			b.side = section(bandPass, float64(now.Freq), 0, float64(now.Q), rate)
+		}
+	}
+	b.played, b.dirty = gain, false
+}
+
+// Reduction returns how far the insert's band id turns itself down now,
+// in decibels, below zero, as the amount scales it; zero for a band
+// that is not dynamic, and false for none.
+func (e *eqInsert) Reduction(id int) (float64, bool) {
+	for _, b := range e.bands {
+		if b.id == id {
+			return -b.down * e.amount, true
+		}
+	}
+	return 0, false
 }
 
 // follow moves each band a block's way toward its settings, adding
@@ -368,7 +545,7 @@ func (e *eqInsert) follow(want []Band) {
 			e.free = append(e.free, b)
 			continue
 		}
-		b.move(e.rate, e.glide)
+		b.move(e.glide)
 		live = append(live, b)
 	}
 	clear(e.bands[len(live):])
@@ -376,8 +553,8 @@ func (e *eqInsert) follow(want []Band) {
 }
 
 // move glides the band's frequency, gain and Q toward its settings,
-// and works out its sections again where they moved.
-func (b *liveBand) move(rate, glide float64) {
+// and marks its sections to be worked out again where they moved.
+func (b *liveBand) move(glide float64) {
 	w := b.want
 	tf, tg, tq := math.Log(float64(max(w.Freq, 10))), float64(w.Gain), math.Log(float64(max(w.Q, 0.025)))
 	moved := b.fresh
@@ -395,15 +572,7 @@ func (b *liveBand) move(rate, glide float64) {
 	step(&b.logFreq, tf, 1e-4)
 	step(&b.gain, tg, 1e-3)
 	step(&b.logQ, tq, 1e-4)
-	if !moved {
-		return
+	if moved {
+		b.dirty, b.fresh = true, false
 	}
-	now := Band{Kind: b.kind, Slope: b.slope, Freq: float32(math.Exp(b.logFreq)), Gain: float32(b.gain), Q: float32(math.Exp(b.logQ))}
-	n := len(b.secs)
-	b.secs = now.appendSections(b.room[:0], rate)
-	if len(b.secs) != n {
-		// Other sections start from silence.
-		b.state = [maxStages][4]float64{}
-	}
-	b.fresh = false
 }

@@ -184,7 +184,14 @@ func TestAnEQInsertMakesNothingNewAsItsSettingsChange(t *testing.T) {
 		again[k] = Band{ID: 100 + k, Kind: HighCut, Slope: 48, Freq: 8000, Q: 0.7, On: true}
 	}
 	steps = append(steps, &eqSettings{bands: again})
-	frames := make([]float32, 2*block)
+	// Dynamic bands, turning down and back, their dynamics on and off.
+	dyn := make([]Band, MaxBands)
+	for k := range dyn {
+		dyn[k] = Band{ID: 200 + k, Kind: FilterKind(k % 3), Freq: float32(60 + 400*k), Gain: 3, Q: 1, On: true,
+			Dynamic: Dynamics{On: k%2 == 0, Threshold: -60, Ratio: 4, Attack: 1, Release: 20, Range: 12}}
+	}
+	steps = append(steps, &eqSettings{bands: dyn})
+	frames := sine(block, 300, 0.5, 0)
 	// Every allocation counted, not their mean a block, which rounds
 	// the few a change makes down to none.
 	if raceOn {
@@ -194,6 +201,7 @@ func TestAnEQInsertMakesNothingNewAsItsSettingsChange(t *testing.T) {
 		for i := range 4 * len(steps) {
 			eq.settings.Store(steps[i/4])
 			eq.SetBypass(i%28 == 13)
+			eq.SetAmount(float64(i%5) / 2)
 			in.Process(frames)
 		}
 	})
@@ -241,5 +249,103 @@ func TestAnEQPlaysAtMostMaxBands(t *testing.T) {
 	in.Process(make([]float32, 2*block))
 	if len(in.bands) != MaxBands || in.bands[MaxBands-1].id != MaxBands {
 		t.Fatalf("the EQ plays %d bands, want the first %d", len(in.bands), MaxBands)
+	}
+}
+
+// playFor plays seconds of a stereo sine at hz, amplitude amp, through
+// in, a block at a time, and returns the peak of the last block.
+func playFor(in Insert, seconds, hz, amp float64, from *int) float64 {
+	var last float64
+	n := int(seconds * SampleRate / block)
+	for i := range n {
+		frames := sine(block, hz, amp, *from)
+		*from += block
+		in.Process(frames)
+		// The peak over the last 100 ms, a few of a low sine's periods.
+		if n-i <= SampleRate/10/block {
+			last = max(last, peak(frames))
+		}
+	}
+	return last
+}
+
+func db(v float64) float64 { return 20 * math.Log10(v) }
+
+func TestADynamicBandTurnsItsBandDownOverItsThreshold(t *testing.T) {
+	eq := NewEQ()
+	eq.Set([]Band{{ID: 1, Kind: Bell, Freq: 1000, Q: 1, On: true,
+		Dynamic: Dynamics{On: true, Threshold: -20, Ratio: 4, Attack: 1, Release: 50, Range: 12}}})
+	in, ok := eq.InsertAt(SampleRate).(*eqInsert)
+	if !ok {
+		t.Fatal("the EQ's insert is of another type")
+	}
+	at := 0
+	// At 1 kHz, 14 dB over the threshold at 4:1: turned down 10.5 dB.
+	got := db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5)
+	if math.Abs(got+10.5) > 0.5 {
+		t.Errorf("a sine at 1 kHz, 14 dB over at 4:1, comes out %+.2f dB, want -10.5", got)
+	}
+	if r, ok := in.Reduction(1); !ok || math.Abs(r+10.5) > 0.5 {
+		t.Errorf("the band says it turns down %.2f dB (%v), want -10.5", r, ok)
+	}
+	// Under the threshold, it lets go over its release, and the sound
+	// passes as it is.
+	got = db(playFor(in, 0.5, 1000, 0.01, &at)) - db(0.01)
+	if math.Abs(got) > 0.2 {
+		t.Errorf("a sine at 1 kHz under the threshold comes out %+.2f dB, want as it was", got)
+	}
+	// Far from its frequency, the band does not hear it.
+	got = db(playFor(in, 0.5, 100, 0.5, &at)) - db(0.5)
+	if r, _ := in.Reduction(1); math.Abs(got) > 0.2 || r < -0.5 {
+		t.Errorf("a loud sine at 100 Hz through a dynamic band at 1 kHz comes out %+.2f dB, the band turned down %.2f dB", got, r)
+	}
+	// At half the amount, it turns down half as far.
+	eq.SetAmount(0.5)
+	got = db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5)
+	if math.Abs(got+5.25) > 0.5 {
+		t.Errorf("at half the amount, the sine 14 dB over comes out %+.2f dB, want -5.25", got)
+	}
+	eq.SetAmount(1)
+	// Turned down no further than its range.
+	set := eq.settings.Load().bands[0]
+	set.Dynamic.Threshold, set.Dynamic.Ratio = -40, 20
+	eq.Set([]Band{set})
+	got = db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5)
+	if math.Abs(got+12) > 0.5 {
+		t.Errorf("far over the threshold the band turns down %+.2f dB, want its range, 12", got)
+	}
+	// Dynamics off: back to as set, gliding, not at once.
+	set.Dynamic.On = false
+	eq.Set([]Band{set})
+	playFor(in, 0.003, 1000, 0.5, &at)
+	if r, _ := in.Reduction(1); r > -3 {
+		t.Errorf("3 ms after its dynamics went off, the band is back up from -12 to %.2f dB at once", r)
+	}
+	got = db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5)
+	if math.Abs(got) > 0.2 {
+		t.Errorf("its dynamics off, the band turns down %+.2f dB", got)
+	}
+}
+
+func TestTheAmountScalesTheGainsAndLeavesTheCuts(t *testing.T) {
+	eq := NewEQ()
+	eq.Set([]Band{{ID: 1, Kind: Bell, Freq: 1000, Gain: 6, Q: 1, On: true}, {ID: 2, Kind: LowCut, Freq: 400, Q: 0.707, Slope: 48, On: true}})
+	in := eq.InsertAt(SampleRate)
+	at := 0
+	for _, c := range []struct{ amount, bell, cut float64 }{
+		{1, 6, -80},
+		{0.5, 3, -80},
+		{2, 12, -80},
+		{0, 0, -80},
+	} {
+		eq.SetAmount(c.amount)
+		bell := db(playFor(in, 0.3, 1000, 0.1, &at)) - db(0.1)
+		cut := db(playFor(in, 0.3, 50, 0.1, &at)) - db(0.1)
+		if math.Abs(bell-c.bell) > 0.3 {
+			t.Errorf("at an amount of %v the bell of +6 dB lifts %+.2f dB, want %+.1f", c.amount, bell, c.bell)
+		}
+		if cut > -50 {
+			t.Errorf("at an amount of %v the cut lets 50 Hz through at %+.1f dB", c.amount, cut)
+		}
 	}
 }
