@@ -81,6 +81,10 @@ type Renderer struct {
 	// clipProg is drawProg cutting each quad to the ellipse it carries,
 	// for what draws inside a layer clipped to one in place.
 	clipProg program
+	// convertProg is drawProg converting to the display's colours, for
+	// the copy to the window, and color the conversion; see color.go.
+	convertProg program
+	color       colorState
 
 	// verts is the batch being built: vertFloats floats a vertex, four
 	// vertices a quad. tex is the texture the batch's images or layers
@@ -496,6 +500,11 @@ void main() {
 		col.a = 0.0;
 		cover = vec4(0.0);
 	}
+#ifdef CONVERT
+	// The copy to the window, in the display's colours.
+	col = toDisplay(col);
+	cover = vec4(col.a);
+#endif
 	fragColor = col;
 #ifdef DUAL
 	fragCover = cover;
@@ -569,7 +578,7 @@ func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 // dual-source blending, and dual says so. clip is the draw program that
 // cuts what it draws to an ellipse; the plain one leaves that work out
 // of every other pixel.
-func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, err error) {
+func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) {
 	header, dualHeader := "#version 150\n", "#version 330\n#define DUAL\n"
 	if isES {
 		header = "#version 300 es\nprecision highp float;\n"
@@ -584,12 +593,12 @@ func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool
 		}
 		dualHeader = header
 		if draw, err = link(g, header+vertexShader, header+sdfFunc+drawOut+drawShader); err != nil {
-			return program{}, program{}, program{}, false, err
+			return program{}, program{}, program{}, false, "", err
 		}
 	}
 	ellipse := dualHeader + "#define ELLIPSE\n"
 	if clip, err = link(g, ellipse+vertexShader, ellipse+sdfFunc+drawOut+drawShader); err != nil {
-		return program{}, program{}, program{}, false, err
+		return program{}, program{}, program{}, false, "", err
 	}
 	for _, p := range []program{draw, clip} {
 		g.UseProgram(p.id)
@@ -600,11 +609,31 @@ func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool
 		g.Uniform1i(g.GetUniformLocation(p.id, "u_ramp"), 6)
 	}
 	if blur, err = link(g, header+vertexShader, header+blurShader); err != nil {
-		return program{}, program{}, program{}, false, err
+		return program{}, program{}, program{}, false, "", err
 	}
 	g.UseProgram(blur.id)
 	g.Uniform1i(g.GetUniformLocation(blur.id, "u_tex"), 1)
-	return draw, clip, blur, dual, nil
+	return draw, clip, blur, dual, dualHeader, nil
+}
+
+// buildConvert compiles the draw program that converts what it draws to
+// the display's colours, with header, the one the draw program was
+// built with, so it blends as that does. Its samplers are the draw
+// program's, and the colour table on unit 7.
+func buildConvert(g gl.Context, header string) (program, error) {
+	h := header + "#define CONVERT\n#define LUT_N " + lutN + "\n#ifdef GL_ES\nprecision highp sampler2D;\n#endif\n"
+	p, err := link(g, h+vertexShader, h+sdfFunc+drawOut+convertShader+drawShader)
+	if err != nil {
+		return program{}, err
+	}
+	g.UseProgram(p.id)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_atlas"), 0)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_tex"), 1)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_lcd"), 2)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_color"), 3)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_ramp"), 6)
+	g.Uniform1i(g.GetUniformLocation(p.id, "u_lut"), 7)
+	return p, nil
 }
 
 // noDual is set by GUNIM_NO_DUAL_SOURCE=1, which draws as a context
@@ -677,6 +706,7 @@ func (r *Renderer) Release() {
 	}
 	r.releaseScenes()
 	r.releaseBigMasks()
+	r.releaseColor()
 	if r.lcdGlyphs.tex != 0 {
 		g.DeleteTexture(r.lcdGlyphs.tex)
 	}
@@ -735,7 +765,7 @@ func (r *Renderer) Draw(ops []paint.Op, damage geom.Rect, fbW, fbH int, scale fl
 	// next small one to draw the whole window.
 	s, ws := box.Size(), window.Size()
 	big := s.W*s.H > ws.W*ws.H/2
-	r.direct = !backdrop && !r.FlipWindow && big && r.big && r.Corner == 0
+	r.direct = !backdrop && !r.FlipWindow && big && r.big && r.Corner == 0 && r.color.lut == nil
 	r.big = big
 	if r.fit(&r.layers[0]) || !r.canvasOK || scale != r.canvasScale {
 		if !r.direct {
@@ -743,6 +773,11 @@ func (r *Renderer) Draw(ops []paint.Op, damage geom.Rect, fbW, fbH int, scale fl
 		}
 	}
 	r.Redrawn = box
+	if r.color.changed {
+		// The whole window changes colour.
+		r.Redrawn = window
+		r.color.changed = false
+	}
 	if r.direct {
 		// Straight to the window, which holds nothing after a swap.
 		box = window
@@ -777,6 +812,9 @@ func (r *Renderer) Draw(ops []paint.Op, damage geom.Rect, fbW, fbH int, scale fl
 	if !r.direct {
 		r.canvasOK, r.canvasScale = true, scale
 		g.BindFramebuffer(gl.FRAMEBUFFER, r.WindowFBO)
+		// The background is in the window's colours, as the canvas is
+		// once copied.
+		bg := r.toDisplay(bg)
 		if r.Corner > 0 {
 			// Transparent outside the rounded corners, the background inside them
 			g.Clear(glColorBufferBit)
@@ -841,8 +879,13 @@ func background(ops []paint.Op) (bg [4]float32, alpha float32) {
 }
 
 // present queues the canvas's copy to the window, upside down for a
-// window that reads its rows from the top.
+// window that reads its rows from the top, and converted to the
+// display's colours where the renderer converts.
 func (r *Renderer) present(canvas uint32) {
+	if r.color.lut != nil {
+		r.beginConvert()
+		defer r.endConvert()
+	}
 	if !r.FlipWindow {
 		r.composite(canvas, nil, 1, false, 0, false)
 		return

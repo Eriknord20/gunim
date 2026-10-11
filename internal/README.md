@@ -66,6 +66,19 @@ gunim's changes are marked `gunim change` in the code:
   every GL call. The `Uniform*v` calls copy up to 16 values into the
   context's scratch and pass its address the same way; longer ones, and
   the calls that pass other memory, call `SyscallN` as before.
+- `glfw` reads display colour profiles, for colour management. On X11,
+  `ICCProfile` reads a screen's `_ICC_PROFILE` property from the root
+  window, `SetICCProfileCallback` hears it change, and
+  `Monitor.X11Screen` gives a monitor's screen number
+  (`x11_icc_linbsd.go`, hooked into `processEvent`). On Win32,
+  `SetColorChangeCallback` hears the messages that may mean a display's
+  colours changed (`win32_color_windows.go`, called from `windowProc`).
+  On Cocoa, `SetSRGBColorSpace` tells the system a window's content is
+  sRGB, and `ColorSpaceName` names the screen's colour space
+  (`cocoa_colorspace_darwin.go`).
+
+`icc` is gunim's own: a reader for the matrix/TRC ICC profiles of
+displays, and the table that converts sRGB to one.
 
 To take a newer Ebitengine, copy the same files again and reapply those
 changes.
