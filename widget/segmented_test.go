@@ -192,3 +192,27 @@ func TestASegmentedTrackStandsApartFromALightCard(t *testing.T) {
 		t.Fatal("in the dark theme the track is the card's colour")
 	}
 }
+
+func TestASegmentedOptionsLabelFadesInUnderThePointerAndOut(t *testing.T) {
+	s := NewSegmented("One", "Two", "Three")
+	w, run := stage(t, &frame{child: Row(s), size: geom.Sz(600, 40)})
+	run(1)
+	w.Input(input.PointerMove{Pos: geom.Pt(s.width*1.5, 14)})
+	run(1)
+	if g := s.glow[1].Value(); g <= 0 || g >= 1 {
+		t.Fatalf("a frame after the pointer came over Two its label has lit %v, want on its way", g)
+	}
+	run(60)
+	if g := s.glow[1].Value(); g < 0.99 {
+		t.Fatalf("Two's label has lit %v under the pointer, want fully", g)
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(s.width*2.5, 14)})
+	run(1)
+	if g, h := s.glow[1].Value(), s.glow[2].Value(); g <= 0 || g >= 1 || h <= 0 {
+		t.Fatalf("a frame after the pointer moved on to Three, Two has lit %v and Three %v, want Two fading and Three lighting", g, h)
+	}
+	run(120)
+	if g := s.glow[1].Value(); g > 0.01 {
+		t.Fatalf("Two's label is still lit %v after the pointer left it", g)
+	}
+}
