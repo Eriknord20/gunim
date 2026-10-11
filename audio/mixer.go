@@ -51,8 +51,10 @@ type Mixer struct {
 	buf      []float32
 	// count counts the voices played and not yet dropped.
 	count atomic.Int64
-	// played counts the frames mixed so far.
-	played atomic.Int64
+	// played counts the frames mixed so far, and heardTop the most
+	// heard has returned.
+	played   atomic.Int64
+	heardTop atomic.Int64
 	// latency returns how many of the frames mixed the speakers have
 	// still to play.
 	latency atomic.Pointer[func() int64]
@@ -280,13 +282,25 @@ func (m *Mixer) SetLatency(f func() int64) { m.latency.Store(&f) }
 // Mixed returns how many frames the mixer has mixed.
 func (m *Mixer) Mixed() int64 { return m.played.Load() }
 
-// heard returns how many frames have been heard.
+// heard returns how many frames have been heard. It never goes back:
+// played and the frames the speakers hold are read a moment apart, and
+// where the mixer hands the speakers a block between the two, the
+// speakers hold it before played counts it, and the frames heard would
+// seem to go back a block.
 func (m *Mixer) heard() int64 {
-	played := m.played.Load()
+	h := m.played.Load()
 	if f := m.latency.Load(); f != nil {
-		return max(0, played-(*f)())
+		h = max(0, h-(*f)())
 	}
-	return played
+	for {
+		top := m.heardTop.Load()
+		if h <= top {
+			return top
+		}
+		if m.heardTop.CompareAndSwap(top, h) {
+			return h
+		}
+	}
 }
 
 // Mix fills dst, len(dst)/2 frames, with the sounds playing, and

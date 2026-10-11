@@ -357,6 +357,29 @@ func TestAVoiceIsHeardAtTheTurnOnlyOnceTheSpeakersReachIt(t *testing.T) {
 	}
 }
 
+func TestAVoicesPositionNeverGoesBackAsTheSpeakersTakeABlock(t *testing.T) {
+	m := NewMixer()
+	held := int64(300)
+	m.SetLatency(func() int64 { return held })
+	v := m.Play(&level{v: 0.5, n: 1 << 20}, Options{})
+	m.Mix(make([]float32, 2*2000))
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("2000 mixed, 300 held, the voice says %v", p)
+	}
+	// The speakers took a block of 1000 the mixer has yet to count as
+	// mixed, as happens between the two reads: the frames heard do not
+	// go back.
+	held = 1300
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("with a block taken before it is counted, the voice says %v, back from 1700", p)
+	}
+	m.Mix(make([]float32, 2*1000))
+	held = 1200
+	if p := v.Position(); p != Duration(1800) {
+		t.Fatalf("counted, the voice says %v, want 1800", p)
+	}
+}
+
 // swapInsert swaps a voice's channels, as an insert that changes what is
 // heard.
 type swapInsert struct{}
