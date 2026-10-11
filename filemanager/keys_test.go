@@ -347,3 +347,58 @@ func TestShiftDownKeepsItsStartWhenTheFolderIsReadAgain(t *testing.T) {
 			len(h.a.nav.sel), h.a.nav.sel["f000.txt"])
 	}
 }
+
+// In a sidebar too tall for its window, Down and Up still move the
+// keyboard from section to section, as in a short one, and the sidebar
+// scrolls to keep it in sight. The scroll took them to scroll instead.
+func TestTheArrowsWalkASidebarTooTallForItsWindow(t *testing.T) {
+	spec := make([]string, 0, 12)
+	for i := range 12 {
+		spec = append(spec, fmt.Sprintf("d%02d/x.txt", i))
+	}
+	h := newHarness(t, spec...)
+	for i := range 12 {
+		h.do(Navigate{Path: filepath.Join(h.dir, fmt.Sprintf("d%02d", i))})
+		h.do(Command{Name: CmdPin})
+		h.do(Command{Name: CmdUp})
+	}
+	h.until("the favourites show", func() bool { return h.b.side.favs.Len() == 12 })
+	h.w.Offscreen().Resize(geom.Sz(1100, 260))
+	h.frames(30)
+	b := h.b
+	if b.side.scroll.Offset() != 0 {
+		t.Fatalf("the sidebar starts scrolled to %v", b.side.scroll.Offset())
+	}
+	for range 40 {
+		if h.focused() == b.side.firstHead() {
+			break
+		}
+		h.press(input.KeyTab, 0)
+	}
+	if h.focused() != b.side.firstHead() {
+		t.Fatal("Tab never reached the sidebar")
+	}
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.byID[b.side.order[0]].list {
+		t.Fatal("Down from the first heading did not go into its places")
+	}
+	h.press(input.KeyEnd, 0)
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.favSec.head {
+		t.Fatalf("Down from the last place went to %T, not on to the favourites' heading", h.focused())
+	}
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.favs {
+		t.Fatal("Down from the favourites' heading did not go on into the favourites")
+	}
+	h.press(input.KeyEnd, 0)
+	h.frames(60)
+	if b.side.scroll.Offset() <= 0 {
+		t.Fatal("the last favourite has the keyboard, and the sidebar did not scroll to it")
+	}
+	h.press(input.KeyHome, 0)
+	h.press(input.KeyUp, 0)
+	if h.focused() != b.side.favSec.head {
+		t.Fatal("Up from the first favourite did not go back to the favourites' heading")
+	}
+}
