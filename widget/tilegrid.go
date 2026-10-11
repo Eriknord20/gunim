@@ -206,7 +206,11 @@ func (g *TileGrid) SetSelected(runs [][2]int, cursor int, u *gunim.UI) {
 	if cursor >= g.n {
 		g.cursor = -1
 	}
-	g.anchor = g.cursor
+	// As in [DataGrid.SetSelectedRows], the selection sent again keeps
+	// the tile Shift extends from.
+	if !anchorsRuns(g.anchor, g.cursor, g.runs) {
+		g.anchor = g.cursor
+	}
 	u.Invalidate()
 }
 

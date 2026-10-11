@@ -423,7 +423,13 @@ func (g *DataGrid) SetSelectedRows(sel [][2]int, cursor int, u *gunim.UI) {
 	if cursor < 0 || cursor >= g.rows {
 		cursor = -1
 	}
-	g.selected, g.anchor = cursor, cursor
+	// The selection sent again as it is, as an application does when it
+	// reads its rows again, keeps the row Shift extends from: the next
+	// Shift+Down goes on from where the selection started.
+	if !anchorsRuns(g.anchor, cursor, g.runs) {
+		g.anchor = cursor
+	}
+	g.selected = cursor
 	if !g.gliding() {
 		g.glideOn = false
 	}
@@ -1893,4 +1899,13 @@ func (g *DataGrid) selectedCount() int {
 		n += r[1] - r[0]
 	}
 	return n
+}
+
+// anchorsRuns reports whether runs are the rows from anchor to cursor,
+// both included, as Shift and a key that moves select them.
+func anchorsRuns(anchor, cursor int, runs [][2]int) bool {
+	if anchor < 0 || cursor < 0 || len(runs) != 1 {
+		return false
+	}
+	return runs[0] == [2]int{min(anchor, cursor), max(anchor, cursor) + 1}
 }

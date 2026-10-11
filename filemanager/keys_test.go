@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -311,5 +312,38 @@ func TestDismissingTheBannerByKeyboardSendsTheKeyboardToTheListing(t *testing.T)
 	h.frames(30)
 	if f := h.focused(); f != h.b.listing.cur.focusNode() {
 		t.Fatalf("with the banner dismissed, the keyboard is on %T, want the listing", f)
+	}
+}
+
+// Shift and Down go on from where the selection started after the folder
+// is read again, as it is every few seconds. The selection sent again
+// made the row the keyboard was on the new start, so a long Shift+Down
+// lost the rows above it.
+func TestShiftDownKeepsItsStartWhenTheFolderIsReadAgain(t *testing.T) {
+	names := make([]string, 0, 100)
+	for i := range 100 {
+		names = append(names, fmt.Sprintf("f%03d.txt", i))
+	}
+	h := newHarness(t, names...)
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 100 })
+	h.do(FocusListing{})
+	h.press(input.KeyDown, 0)
+	h.until("Down selects the first row", func() bool { return h.a.nav.cursor == "f000.txt" })
+	shiftDown := func(n int) {
+		for range n {
+			h.press(input.KeyDown, input.ModShift)
+		}
+	}
+	shiftDown(30)
+	h.until("Shift+Down selects 31 rows", func() bool { return len(h.a.nav.sel) == 31 })
+	gen := h.a.nav.gen
+	h.w.Input(input.KeyPress{Key: input.KeyF5, Time: time.Now()})
+	h.until("F5 reads the folder again", func() bool { return h.a.nav.gen > gen })
+	h.frames(2)
+	shiftDown(5)
+	h.until("Shift+Down goes on to f035", func() bool { return h.a.nav.cursor == "f035.txt" })
+	if len(h.a.nav.sel) != 36 || !h.a.nav.sel["f000.txt"] {
+		t.Fatalf("after the folder was read again, Shift+Down selected %d rows, f000 among them %v; want 36 from f000",
+			len(h.a.nav.sel), h.a.nav.sel["f000.txt"])
 	}
 }
