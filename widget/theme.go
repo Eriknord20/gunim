@@ -25,6 +25,13 @@ var (
 	ItalicFont     = theme.Choice("text.font.italic", text.GoSans(false, true))
 	BoldItalicFont = theme.Choice("text.font.bold.italic", text.GoSans(true, true))
 	MonoFont       = theme.Choice("text.font.mono", text.GoMono(false, false))
+	// The edit menu's words, as a text field's long press or right
+	// click opens it: English unless a theme says them in its own
+	// language, as an app for children in Swedish does.
+	EditCut       = theme.Choice("edit.cut", "Cut")
+	EditCopy      = theme.Choice("edit.copy", "Copy")
+	EditPaste     = theme.Choice("edit.paste", "Paste")
+	EditSelectAll = theme.Choice("edit.selectall", "Select all")
 	// CodeFill is the fill behind code in text, and QuoteBar the bar beside a quote.
 	CodeFill = theme.Color("text.code.fill", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x12})
 	QuoteBar = theme.Color("text.quote.bar", color.NRGBA{R: 0x4a, G: 0x50, B: 0x60, A: 0xff})

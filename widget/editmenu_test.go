@@ -7,6 +7,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/theme"
 )
 
 // uiOf returns the typer's window's UI, caught by a key no field takes
@@ -167,5 +168,49 @@ func TestAFingerHeldOnAWordDragsOverMoreWords(t *testing.T) {
 	hold(15, 1) // from four back to one
 	if s, e := ty.field.Selection(); s != 0 || e != 18 {
 		t.Fatalf("dragging from four back to one selected %d–%d, want 0–18", s, e)
+	}
+}
+
+// menuLabels are the labels of the field's open edit menu.
+func (ty *typer) menuLabels() []string {
+	ty.t.Helper()
+	m := ty.field.menuItems
+	if m == nil {
+		ty.t.Fatal("no edit menu is open")
+	}
+	var out []string
+	for _, it := range m.list.items {
+		out = append(out, it.Label)
+	}
+	return out
+}
+
+func TestTheEditMenuSaysCutCopyPasteAndSelectAll(t *testing.T) {
+	ty := newTyper(t)
+	ty.typeText("hello")
+	ty.secondary(20, false)
+	if got, want := ty.menuLabels(), []string{"Cut", "Copy", "Paste", "Select all"}; !slices.Equal(got, want) {
+		t.Fatalf("the edit menu says %q, want %q", got, want)
+	}
+}
+
+func TestTheEditMenuSaysWhatItsThemeSays(t *testing.T) {
+	sv := theme.Make("sv",
+		theme.Set(EditCut, "Klipp ut"),
+		theme.Set(EditCopy, "Kopiera"),
+		theme.Set(EditPaste, "Klistra in"),
+		theme.Set(EditSelectAll, "Markera allt"),
+	)
+	field := NewTextField()
+	fr := &frame{child: NewThemed(field, sv), size: geom.Sz(300, 36)}
+	w, run := stage(t, fr)
+	w.Input(input.PointerDown{Pos: geom.Pt(20, 18), Clicks: 1})
+	w.Input(input.PointerUp{Pos: geom.Pt(20, 18)})
+	run(1)
+	ty := &typer{t: t, w: w, run: run, field: field, fr: fr}
+	ty.typeText("hej")
+	ty.secondary(20, false)
+	if got, want := ty.menuLabels(), []string{"Klipp ut", "Kopiera", "Klistra in", "Markera allt"}; !slices.Equal(got, want) {
+		t.Fatalf("under a Swedish theme the edit menu says %q, want %q", got, want)
 	}
 }
