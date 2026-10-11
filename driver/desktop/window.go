@@ -213,6 +213,11 @@ type Window struct {
 	// in screen coordinates as x, y, width, height. The latest is where
 	// the window goes back to; see noteNormal.
 	normals [][4]int
+	// gone says the window has been destroyed, and final where it was
+	// as it was, kept says whether it could say. They are held by mu, for
+	// Placement asks of them from any goroutine.
+	gone, kept bool
+	final      driver.Placement
 }
 
 func newWindow(d *Driver, gw *glfw.Window) *Window {
@@ -456,6 +461,11 @@ func (w *Window) shutdown() {
 	if w.closed {
 		return
 	}
+	// Where the window was as it closed, for Placement to say after.
+	p, ok := w.placementNow()
+	w.mu.Lock()
+	w.gone, w.final, w.kept = true, p, ok
+	w.mu.Unlock()
 	w.closed = true
 	w.debugf("closed")
 	w.accessClose()
