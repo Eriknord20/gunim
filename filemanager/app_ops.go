@@ -485,7 +485,11 @@ func (a *app) finish(id int, j job, rec record, err error) {
 	case errors.Is(err, errStopped):
 		a.patch(Notice{Title: "Stopped: " + r.title, Body: done + " done before it stopped.", Undo: undo, Kind: "warning"})
 	default:
-		box := ErrorBox{Title: failedTitle(j), Body: explain(err, a.ps), Detail: err.Error()}
+		item := ""
+		if len(j.srcs) == 1 {
+			item = a.ps.Base(j.srcs[0])
+		}
+		box := ErrorBox{Title: failedTitle(j), Body: explain(err, a.ps, item), Detail: err.Error()}
 		if box.Body == "" {
 			box.Body, box.Detail = err.Error(), ""
 		}
