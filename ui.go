@@ -362,6 +362,11 @@ type WindowOptions struct {
 	// press there, as without it. The title bar and the edges bring the
 	// window to the front on a press as ever.
 	DragFromBehind bool
+	// NoColorManagement leaves the window's colours unconverted. Without it, on a display whose colours are not
+	// sRGB's, such as a wide gamut monitor, each frame is converted from sRGB to the display's ICC profile, so colours
+	// and pictures look as they do in a browser, not oversaturated. [Client.ColorProfile] says what the window does.
+	// GUNIM_COLOR=off turns it off for every window, for debugging.
+	NoColorManagement bool
 }
 
 // NewWindow opens a window and starts its UI goroutine.
@@ -373,7 +378,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 		Title: o.Title, Size: o.Size, Monitor: o.Monitor,
 		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Text: o.Text, Place: o.Place,
-		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed,
+		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw

@@ -76,6 +76,9 @@ type Driver struct {
 	// dxgi is set where windows present through DXGI; see
 	// present_windows.go.
 	dxgi bool
+	// colors holds the display profiles read, by their bytes; see
+	// color.go. It belongs to the main thread.
+	colors map[string]colorEntry
 	// acc is the connection to assistive technology.
 	acc driverAccess //nolint:unused // used on Linux
 }
@@ -93,6 +96,7 @@ func Open() (*Driver, error) {
 	}
 	d := &Driver{isES: probe.IsES(), windows: map[*glfw.Window]*Window{}, posted: make(chan struct{}, 1)}
 	d.dxgi = d.presentsThroughDXGI()
+	d.startColor()
 	return d, nil
 }
 
@@ -533,7 +537,9 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			return nil, fmt.Errorf("desktop: own popup: %w", err)
 		}
 	}
+	w.noColor = o.NoColorManagement || colorOff
 	if p, ok := o.Parent.(*Window); ok {
+		w.noColor = w.noColor || p.noColor
 		w.textRendering = o.Text.Or(p.textRendering)
 	} else {
 		sys, err := systemText()
@@ -615,6 +621,8 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		_ = gw.Maximize()
 	}
 	w.measure()
+	setupColor(w)
+	w.updateColor(true)
 	d.windows[gw] = w
 	d.opened = true
 	go w.render()
