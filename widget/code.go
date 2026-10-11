@@ -14,6 +14,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/shape"
 	"github.com/marrasen/gunim/syntax"
 	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
@@ -84,10 +85,23 @@ func syntaxInk(k syntax.Kind) theme.Token[color.NRGBA] {
 
 // A CodeMark points at a place in the code with a message, such as a
 // compiler's error. Line and Col count from 1, as compilers write them.
+// End, past Col, is the column just after the last one the mark is
+// about, and the editor underlines Col to End with a wave; zero
+// underlines nothing.
 type CodeMark struct {
-	Line, Col int
-	Message   string
+	Line, Col, End int
+	Message        string
 }
+
+// codeWave is one wave of the line under a mark's columns, two units
+// tall and four long, drawn again along them.
+var codeWave = func() shape.Stroke {
+	p, err := shape.NewPath("M0 2Q1 0 2 2T4 2")
+	if err != nil {
+		panic(err)
+	}
+	return p.Stroke(1)
+}()
 
 // CodeEditor edits source code: a monospaced face, tab stops, line
 // numbers, and each token in its kind's colour, from Highlight.
@@ -980,6 +994,17 @@ func (c *CodeEditor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		}
 	}
 
+	// A wave under each mark's columns.
+	for _, m := range c.marks {
+		if m.Line < 1 || m.Line > len(c.lines) || m.Line-1 < first || m.Line-1 >= last || m.End <= m.Col || m.Col < 1 {
+			continue
+		}
+		l := c.lines[m.Line-1]
+		x0 := o.X + c.xOf(min(l.start+m.Col-1, l.end))
+		x1 := o.X + c.xOf(min(l.start+m.End-1, l.end))
+		c.paintWave(p, x0, x1, o.Y+float32(m.Line)*c.lineH-lift+1, fadedBy(problem, m.shown.Value()))
+	}
+
 	// Each mark's message, after its line's code, sliding in as it
 	// fades in.
 	for _, m := range c.marks {
@@ -1047,6 +1072,22 @@ func (c *CodeEditor) paintGutter(p *paint.Painter, th *theme.Live, box geom.Size
 		}
 		x := c.gutterW - c.pad - run.Advance
 		run.Paint(p, geom.Pt(x, o.Y+float32(li)*c.lineH+lift), col)
+	}
+}
+
+// paintWave draws a wavy line from x0 to x1 with its top at y, as an
+// editor underlines a mistake: a wave of codeWave every four pixels,
+// the last cut to x1.
+func (c *CodeEditor) paintWave(p *paint.Painter, x0, x1, y float32, col color.NRGBA) {
+	if x1 <= x0 || col.A == 0 {
+		return
+	}
+	box := geom.Rc(0, 0, 4, 2)
+	cut := geom.Rc(x0, y-2, x1-x0, 6)
+	defer p.Layer(paint.LayerOpts{Bounds: cut, Opacity: 1, Clip: true})()
+	for x := x0; x < x1; x += 4 {
+		r := geom.Rc(x, y, 4, 2)
+		p.Mask(codeWave, codeWave.In(box, r), col)
 	}
 }
 

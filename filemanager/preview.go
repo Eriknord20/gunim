@@ -3,6 +3,7 @@ package filemanager
 import (
 	"cmp"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/marrasen/gunim"
@@ -25,6 +26,8 @@ type previewPane struct {
 	deck *deck
 	cur  *previewPage
 	seq  int
+	// shown is the preview the page on show was made from.
+	shown Preview
 	// systemIcon returns the system icon of a key, nil for none yet.
 	systemIcon func(key string) *paint.Image
 }
@@ -38,11 +41,26 @@ func (p *previewPane) show(s Preview, u *gunim.UI) {
 		return
 	}
 	p.seq = s.Seq
+	// The folder read again, or the item changed, shows again where it
+	// is: the page slides in only for something else.
+	again := p.cur != nil && s.Path != "" && s.Path == p.shown.Path && s.Title == p.shown.Title
+	was := p.shown
+	p.shown = s
+	if again {
+		was.Seq = s.Seq
+		if reflect.DeepEqual(was, s) {
+			return
+		}
+	}
 	var system *paint.Image
 	if s.IconKey != "" && p.systemIcon != nil {
 		system = p.systemIcon(s.IconKey)
 	}
 	p.cur = newPreviewPage(s, system)
+	if again {
+		p.deck.swap(p.cur, u)
+		return
+	}
 	p.deck.show(p.cur, 0, u)
 }
 

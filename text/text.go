@@ -607,7 +607,7 @@ func direction(runes []rune) di.Direction {
 
 // shapeLocked shapes runes as a single run in f. It runs with mu held.
 func (f *Face) shapeLocked(runes []rune, size float32, dir di.Direction) shaping.Output {
-	return shaper.Shape(shaping.Input{
+	return shape(shaping.Input{
 		Text:      runes,
 		RunEnd:    len(runes),
 		Direction: dir,
@@ -615,7 +615,39 @@ func (f *Face) shapeLocked(runes []rune, size float32, dir di.Direction) shaping
 		Size:      toFixed(size),
 		Script:    language.Common,
 		Language:  language.DefaultLanguage(),
-	})
+	}, size)
+}
+
+// shape shapes in at size, as fractional as it is. The shaper sets text
+// at the size rounded up to a whole pixel, so text at 13.5 pixels was
+// spaced as wide as at 14, and text whose size animated was spaced for
+// the size it was leaving until it all but arrived, when it jumped.
+// Spacing is in proportion to the size: in is shaped at the whole size
+// the shaper takes, and the result scaled to size, which is exact where
+// in's own size keeps a sixty-fourth of a pixel. It runs with mu held.
+func shape(in shaping.Input, size float32) shaping.Output {
+	whole := float32(math.Ceil(float64(size)))
+	if whole <= 0 || whole == size {
+		return shaper.Shape(in)
+	}
+	in.Size = fixed.I(int(whole))
+	out := shaper.Shape(in)
+	k := float64(size) / float64(whole)
+	scale := func(v *fixed.Int26_6) { *v = fixed.Int26_6(math.Round(float64(*v) * k)) }
+	for i := range out.Glyphs {
+		g := &out.Glyphs[i]
+		// XAdvance and YAdvance, gone from the shaper's interface, are
+		// left: Advance is the one read.
+		for _, v := range []*fixed.Int26_6{&g.Width, &g.Height, &g.XBearing, &g.YBearing, &g.Advance, &g.XOffset, &g.YOffset} {
+			scale(v)
+		}
+	}
+	scale(&out.LineBounds.Ascent)
+	scale(&out.LineBounds.Descent)
+	scale(&out.LineBounds.Gap)
+	out.Size = toFixed(size)
+	out.RecalculateAll()
+	return out
 }
 
 // wrapLocked splits one paragraph into runs, shapes them, and wraps them
@@ -637,7 +669,7 @@ func (f *Face) wrapLocked(runes []rune, size, width float32, cfg shaping.WrapCon
 	}, fm), fm)
 	outs := make([]shaping.Output, len(inputs))
 	for i, in := range inputs {
-		outs[i] = shaper.Shape(in)
+		outs[i] = shape(in, size)
 		inkWidths(&outs[i], runes)
 	}
 	maxWidth := fixed.Int26_6(math.MaxInt32)

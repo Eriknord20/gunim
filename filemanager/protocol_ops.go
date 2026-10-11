@@ -129,13 +129,17 @@ type Prompt struct {
 	// Paths is how the file system the name is for writes paths, which
 	// says what a name cannot hold.
 	Paths PathStyle
+	// Check, when not empty, labels a tick box under the name, whose
+	// state the answer carries.
+	Check string
 }
 
-// Prompted answers a Prompt.
+// Prompted answers a Prompt. Checked says its tick box was ticked.
 type Prompted struct {
-	Token int
-	Text  string
-	OK    bool
+	Token   int
+	Text    string
+	OK      bool
+	Checked bool
 }
 
 // ErrorBox is the state of a dialog that says an operation failed.

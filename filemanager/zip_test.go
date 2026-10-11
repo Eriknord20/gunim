@@ -46,7 +46,7 @@ func TestZipFilesWritesTheItemsAndAllTheyHold(t *testing.T) {
 	tree(t, root, "src/a.txt", "src/sub/b.txt", "src/sub/empty/", "out/")
 	src, out := at(root, "src"), at(root, "out")
 	fsys := LocalFS()
-	err := ZipFiles(context.Background(), fsys, []string{at(root, "src/a.txt"), at(root, "src/sub")}, fsys, out, "x.zip", nil)
+	err := ZipFiles(context.Background(), fsys, []string{at(root, "src/a.txt"), at(root, "src/sub")}, fsys, out, "x.zip", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +59,12 @@ func TestZipFilesWritesTheItemsAndAllTheyHold(t *testing.T) {
 		t.Fatalf("a part file is left: %v", es)
 	}
 	// Not over a file that is there.
-	err = ZipFiles(context.Background(), fsys, []string{src}, fsys, out, "x.zip", nil)
+	err = ZipFiles(context.Background(), fsys, []string{src}, fsys, out, "x.zip", "", nil)
 	if err == nil {
 		t.Fatal("a zip was written over one that was there")
 	}
 	// A folder zipped into itself leaves its own zip out.
-	if err := ZipFiles(context.Background(), fsys, []string{src}, fsys, src, "self.zip", nil); err != nil {
+	if err := ZipFiles(context.Background(), fsys, []string{src}, fsys, src, "self.zip", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	names := slices.Sorted(maps.Keys(zipped(t, filepath.Join(src, "self.zip"))))

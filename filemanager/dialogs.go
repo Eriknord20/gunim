@@ -11,6 +11,7 @@ func registerDialogs(w *gunim.Window) {
 	gunim.RegisterView(w, "prompt", newPromptDialog, nil)
 	gunim.RegisterView(w, "error", newErrorDialog, nil)
 	gunim.RegisterView(w, "favourite", newFavouriteDialog, nil)
+	gunim.RegisterView(w, "password", newPasswordDialog, nil)
 }
 
 // clashBody says what the two items are, and offers to answer the same
@@ -73,22 +74,44 @@ func newConfirmDialog(s Confirm) *widget.Dialog {
 	return d
 }
 
-// promptBody is the field a prompt asks in.
-type promptBody struct {
-	*widget.TextField
+// fieldsBody is a dialog's body of fields, and the tick boxes under
+// them, which Tab moves through in turn.
+type fieldsBody struct {
+	*widget.Flex
+	parts []gunim.Node
 }
 
 // Focusables is what Tab moves through in the dialog's body.
-func (b *promptBody) Focusables() []gunim.Node { return []gunim.Node{b} }
+func (b *fieldsBody) Focusables() []gunim.Node { return b.parts }
+
+// newFieldsBody lays parts out in a column, with notes, which take no
+// keyboard, among them.
+func newFieldsBody(parts ...gunim.Node) *fieldsBody {
+	col := widget.Column(parts...)
+	col.Cross = widget.CrossStretch
+	b := &fieldsBody{Flex: col}
+	for _, p := range parts {
+		if _, note := p.(*widget.Label); !note {
+			b.parts = append(b.parts, p)
+		}
+	}
+	return b
+}
 
 // newPromptDialog asks for a name, with the name without its extension
 // selected, and will not take one an item cannot have.
 func newPromptDialog(s Prompt) *widget.Dialog {
 	d := widget.NewDialog(s.Title)
-	field := &promptBody{TextField: widget.NewTextField()}
+	field := widget.NewTextField()
 	field.SetText(s.Text, nil)
 	field.Select(0, s.Stem)
-	d.Body = field
+	parts := []gunim.Node{field}
+	var box *widget.Checkbox
+	if s.Check != "" {
+		box = widget.NewCheckbox(s.Check)
+		parts = append(parts, box)
+	}
+	d.Body = newFieldsBody(parts...)
 	d.SetButtons(s.OK, "Cancel")
 	d.Check = func() string {
 		if err := checkName(s.Paths, field.Text()); err != nil {
@@ -96,8 +119,47 @@ func newPromptDialog(s Prompt) *widget.Dialog {
 		}
 		return ""
 	}
-	d.OnAccept = func(u *gunim.UI) gunim.Intent { return Prompted{Token: s.Token, Text: field.Text(), OK: true} }
+	d.OnAccept = func(u *gunim.UI) gunim.Intent {
+		return Prompted{Token: s.Token, Text: field.Text(), OK: true, Checked: box != nil && box.Checked()}
+	}
 	d.OnDismiss = widget.Sends(Prompted{Token: s.Token})
+	return d
+}
+
+// newPasswordDialog asks for the password of a zip: once to open one,
+// and twice, the same both times, to protect one being made.
+func newPasswordDialog(s PasswordPrompt) *widget.Dialog {
+	d := widget.NewDialog(s.Title)
+	text := widget.NewLabel(s.Text)
+	text.Color = Faint
+	field := widget.NewTextField()
+	field.Secret, field.Placeholder = true, "Password"
+	parts := []gunim.Node{text}
+	if s.Problem != "" {
+		problem := widget.NewLabel(s.Problem)
+		problem.Color = ErrorInk
+		parts = append(parts, problem)
+	}
+	parts = append(parts, field)
+	var again *widget.TextField
+	if s.Make {
+		again = widget.NewTextField()
+		again.Secret, again.Placeholder = true, "The same again"
+		parts = append(parts, again)
+	}
+	d.Body = newFieldsBody(parts...)
+	d.SetButtons(s.OK, "Cancel")
+	d.Check = func() string {
+		switch {
+		case field.Text() == "":
+			return "Type the password."
+		case again != nil && again.Text() != field.Text():
+			return "The two passwords are not the same."
+		}
+		return ""
+	}
+	d.OnAccept = func(u *gunim.UI) gunim.Intent { return PasswordGiven{Token: s.Token, Text: field.Text(), OK: true} }
+	d.OnDismiss = widget.Sends(PasswordGiven{Token: s.Token})
 	return d
 }
 

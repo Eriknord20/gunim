@@ -601,6 +601,20 @@ func (s *sidePad) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim
 	kids.At(0).Paint(p)
 }
 
+// Handle implements [gunim.Handler]: Up and Down that a heading or the
+// end of a section leave go on to the next heading or section, as the
+// sidebar's group would move them. They come here first: the scroll
+// around would take them to scroll a sidebar too tall for its window,
+// and the keyboard stayed where it was. Past the first or the last,
+// they go on to the scroll.
+func (s *sidePad) Handle(e input.Event, u *gunim.UI) bool {
+	k, ok := e.(input.KeyPress)
+	if !ok || k.Mods != 0 || k.Key != input.KeyUp && k.Key != input.KeyDown {
+		return false
+	}
+	return u.FocusWithin(s, k.Key == input.KeyDown)
+}
+
 // placeRow is one place in the sidebar: a mark in its colour, its name,
 // and for a volume a bar of how full it is.
 type placeRow struct {

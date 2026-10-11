@@ -89,7 +89,7 @@ func (a *app) handleOps(in gunim.Intent) bool {
 		}
 	case UndoOp:
 		a.undo(v.ID)
-	case ClashAnswered, Confirmed, Prompted, DialogClosed, FavouriteEdited:
+	case ClashAnswered, Confirmed, Prompted, PasswordGiven, DialogClosed, FavouriteEdited:
 		a.answered(in)
 	case NoticeAnswered:
 		a.uploadAnswered(v)
@@ -242,19 +242,45 @@ func (a *app) askZip(fs string, ps PathStyle, paths []string, dest string) {
 	}
 	base := a.ps.Base(name)
 	stem := utf8.RuneCountInString(strings.TrimSuffix(base, zipExt))
-	a.prompt(Prompt{Title: "Create zip", Text: base, OK: "Create", Stem: stem}, func(name string) {
-		name = withZipExt(name)
+	p := Prompt{Title: "Create zip", Text: base, OK: "Create", Stem: stem, Check: "Protect with a password"}
+	// The file system the zip goes on, which the window may turn from
+	// while the password is asked for.
+	here := a.fs
+	a.promptWith(p, func(v Prompted) {
+		name := withZipExt(v.Text)
 		what := whatIn(ps, paths)
-		if fs != a.fs.ID() {
-			if a.opts.Transfer == nil {
-				a.fail("A zip of items elsewhere cannot be made here.")
+		start := func(pw Password) {
+			if a.fs != here {
+				a.fail("The window turned to another place while the password was asked for, so " + name + " was not made.")
 				return
 			}
-			a.startTransfer(Transfer{FromFS: fs, Paths: paths, ToFS: a.fs.ID(), Into: dest, Zip: name}, ps)
+			if fs != a.fs.ID() {
+				if a.opts.Transfer == nil {
+					a.fail("A zip of items elsewhere cannot be made here.")
+					return
+				}
+				a.startTransfer(Transfer{FromFS: fs, Paths: paths, ToFS: a.fs.ID(), Into: dest, Zip: name, Password: pw.Text}, ps, pw.Worked)
+				return
+			}
+			a.nav.pick = []string{name}
+			a.startOp(job{kind: OpZip, srcs: paths, dest: dest, name: name, password: pw.Text, worked: pw.Worked},
+				"Zipping "+what+" to "+name)
+		}
+		if !v.Checked {
+			start(Password{})
 			return
 		}
-		a.nav.pick = []string{name}
-		a.startOp(job{kind: OpZip, srcs: paths, dest: dest, name: name}, "Zipping "+what+" to "+name)
+		at := a.ps.Join(dest, name)
+		ask := PasswordAsk{FS: a.fs.ID(), Path: at, Where: a.ps.Show(at), Make: true}
+		// Asked until the window closes, which waits for the question.
+		ctx, cancel := a.untilStopped()
+		a.ops.wg.Go(func() {
+			defer cancel()
+			// No password, and no zip: the user turned it down.
+			if pw, err := a.askPassword(ctx, 0, ask); err == nil && pw.Text != "" {
+				a.post(func() { start(pw) })
+			}
+		})
 	})
 }
 
@@ -299,6 +325,13 @@ func (a *app) startOp(j job, title string) {
 		report: func(p progress) { a.post(func() { a.progressed(id, p) }) },
 		limit:  a.ops.limit,
 	}
+	if j.kind == OpExtract {
+		ask := PasswordAsk{FS: a.fs.ID(), Path: j.srcs[0], Where: a.ps.Show(j.srcs[0])}
+		e.password = func(ctx context.Context, wrong bool) (Password, error) {
+			ask.Wrong = wrong
+			return a.askPassword(ctx, id, ask)
+		}
+	}
 	a.ops.wg.Go(func() {
 		rec, err := runJob(ctx, j, e)
 		a.post(func() { a.finish(id, j, rec, err) })
@@ -339,6 +372,10 @@ func (r *opRun) tick(ps PathStyle, now time.Time) OpTick {
 	p := r.last
 	t := OpTick{ID: r.id}
 	switch {
+	case p.waiting != "":
+		t.Unknown = true
+		t.Detail = p.waiting
+		return t
 	case p.bytesTotal > 0:
 		t.Done = float32(float64(p.bytes) / float64(p.bytesTotal))
 		t.Detail = humanBytes(p.bytes) + " of " + humanBytes(p.bytesTotal)
@@ -430,6 +467,9 @@ func (a *app) finish(id int, j job, rec record, err error) {
 	case err == nil && j.kind == OpUndo:
 		a.patch(Notice{Title: "Undone", Body: r.title, Kind: "success"})
 	case err == nil:
+		if j.worked != nil {
+			j.worked()
+		}
 		n := Notice{Title: a.doneTitle(j, rec), Undo: undo, Kind: "success"}
 		switch {
 		case rec.replaced > 0:
@@ -606,11 +646,16 @@ func (a *app) ask(c Confirm, got func(v Confirmed)) {
 
 // prompt asks for a name, and runs got with it once the user gives one.
 func (a *app) prompt(p Prompt, got func(name string)) {
+	a.promptWith(p, func(v Prompted) { got(v.Text) })
+}
+
+// promptWith is prompt, handing got the whole answer, with its tick box.
+func (a *app) promptWith(p Prompt, got func(v Prompted)) {
 	a.ops.tokens++
 	p.Token, p.Paths = a.ops.tokens, a.ps
 	a.showDialog(&dialog{view: "prompt", state: p, answer: func(in gunim.Intent) {
 		if v, ok := in.(Prompted); ok && v.OK {
-			got(v.Text)
+			got(v)
 		}
 	}})
 }
@@ -674,6 +719,9 @@ func answers(in gunim.Intent, state any) bool {
 		return ok && s.Token == v.Token
 	case Prompted:
 		s, ok := state.(Prompt)
+		return ok && s.Token == v.Token
+	case PasswordGiven:
+		s, ok := state.(PasswordPrompt)
 		return ok && s.Token == v.Token
 	case PropsApplied:
 		s, ok := state.(Props)

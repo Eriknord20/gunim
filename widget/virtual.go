@@ -525,7 +525,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 			}
 		}
 		r.y.Animate(y, move)
-		kid.Place(geom.Pt(0, r.y.Value()-offset))
+		kid.Place(geom.Pt(0, r.y.Value()-onPixels(offset, f.Scale)))
 		y += l.entry[i]
 	}
 	// Rows that have scrolled away go at once.
@@ -554,7 +554,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 		if at := l.stickTo(content, own.H); at != offset {
 			for k := range keep {
 				r := l.live[k]
-				children[r].Place(geom.Pt(0, r.y.Value()-at))
+				children[r].Place(geom.Pt(0, r.y.Value()-onPixels(at, f.Scale)))
 			}
 			l.again = true
 		}
