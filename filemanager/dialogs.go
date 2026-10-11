@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -166,11 +167,25 @@ func newPasswordDialog(s PasswordPrompt) *widget.Dialog {
 // newErrorDialog says an operation failed, and why.
 func newErrorDialog(s ErrorBox) *widget.Dialog {
 	d := widget.NewDialog(s.Title)
+	d.Icon = icon.TriangleAlert
 	body := widget.NewLabel(s.Body)
 	body.Selectable = true
 	d.Body = body
+	if s.Detail != "" {
+		// The error as the system said it, small and faint, to copy.
+		detail := widget.NewLabel(s.Detail)
+		detail.Size, detail.Color, detail.Selectable = SmallText, Faint, true
+		col := widget.Column(body, detail)
+		col.Cross = widget.CrossStretch
+		d.Body = col
+	}
+	d.OnDismiss = widget.Sends(DialogClosed{})
+	if s.Retry {
+		d.SetButtons("Retry", "Close")
+		d.OnAccept = widget.Sends(DialogClosed{Retry: true})
+		return d
+	}
 	d.SetButtons("OK", "")
 	d.OnAccept = widget.Sends(DialogClosed{})
-	d.OnDismiss = widget.Sends(DialogClosed{})
 	return d
 }

@@ -142,13 +142,18 @@ type Prompted struct {
 	Checked bool
 }
 
-// ErrorBox is the state of a dialog that says an operation failed.
+// ErrorBox is the state of a dialog that says an operation failed: in
+// Body, in words, and the error itself in Detail, small, under it.
+// Retry offers to try again.
 type ErrorBox struct {
 	Title, Body string
+	Detail      string
+	Retry       bool
 }
 
-// DialogClosed says a dialog that only tells has closed.
-type DialogClosed struct{}
+// DialogClosed says a dialog that only tells has closed, and with Retry
+// that the operation it was about is to be tried again.
+type DialogClosed struct{ Retry bool }
 
 func init() {
 	gunim.RegisterType[Ops]("files.ops")
