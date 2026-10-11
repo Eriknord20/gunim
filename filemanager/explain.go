@@ -32,10 +32,9 @@ func explain(err error, ps PathStyle, item string) string {
 }
 
 // explainItem is the item err is about and what could not be done to it.
-func explainItem(err error, ps PathStyle, item string) (string, string) {
+func explainItem(err error, ps PathStyle, item string) (name, did string) {
 	var link *os.LinkError
 	var path *fs.PathError
-	var name, did string
 	switch {
 	case errors.As(err, &link):
 		// A copy is written beside its place and renamed into it: the
