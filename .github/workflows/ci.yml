@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    # Both platforms gunim draws on. The tests run offscreen, so a
+    # runner needs no display and no sound card: anything that wants
+    # real hardware skips itself.
+    name: Vet, test, build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      # unsafeptr off: the platform code pokes at the system's own
+      # structures, which is what it is for, and the check cannot tell
+      # that from a mistake. golangci-lint runs the rest of govet.
+      - name: Vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Nothing gunim ships needs cgo: the window, the sound and the
+      # rest reach the system at run time. A build without it is what
+      # keeps that true.
+      - name: Build without cgo
+        run: go build ./...
+        env:
+          CGO_ENABLED: 0
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.2
