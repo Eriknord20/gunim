@@ -1,12 +1,15 @@
 package widget
 
 import (
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/shape"
 	"github.com/marrasen/gunim/syntax"
 )
 
@@ -339,5 +342,51 @@ func TestCodeGrowsWithItsLinesUpToMaxRows(t *testing.T) {
 	run(60)
 	if n := shown(); abs32(n-3) > 0.01 {
 		t.Fatalf("ten lines show %v lines, want MaxRows, 3", n)
+	}
+}
+
+// A mark with an end underlines its columns with a wave, in the problem
+// colour, from the first column's left to the end column's: on the
+// mark's line, under its text.
+func TestACodeMarkUnderlinesItsColumns(t *testing.T) {
+	c, w, run := codeStage(t, "echo one\nexport A=1 && b\nc")
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, ms []CodeMark, u *gunim.UI) { c.SetMarks(ms, u) })
+	if err := w.Client().Patch("stage", []CodeMark{{Line: 2, Col: 1, End: 7, Message: "export is bash's"}}); err != nil {
+		t.Fatal(err)
+	}
+	run(40)
+	waves := func() (lo, hi, top float32, n int) {
+		lo, hi = float32(math.Inf(1)), float32(math.Inf(-1))
+		for _, op := range w.Offscreen().Ops() {
+			m, ok := op.(*paint.MaskOp)
+			if !ok {
+				continue
+			}
+			if _, ok := m.Shape.(shape.Stroke); !ok {
+				continue
+			}
+			r := geom.Rect{Min: m.Transform.Apply(m.Rect.Min), Max: m.Transform.Apply(m.Rect.Max)}
+			lo, hi, top, n = min(lo, r.Min.X), max(hi, r.Max.X), r.Min.Y, n+1
+		}
+		return lo, hi, top, n
+	}
+	lo, hi, top, n := waves()
+	if n == 0 {
+		t.Fatal("no wave under the mark")
+	}
+	l := c.lines[1]
+	x0, x1 := c.xOf(l.start), c.xOf(l.start+6)
+	if span := hi - lo; span < (x1-x0)-1 || span > (x1-x0)+5 {
+		t.Fatalf("the wave runs %v wide, want about the %v of export", span, x1-x0)
+	}
+	if line := float32(1) * c.lineH; top < line || top > 2*c.lineH+c.pad*2 {
+		t.Fatalf("the wave is at %v, want under line 2, which starts %v down", top, line)
+	}
+	if err := w.Client().Patch("stage", []CodeMark{{Line: 2, Col: 1, Message: "no columns"}}); err != nil {
+		t.Fatal(err)
+	}
+	run(60)
+	if _, _, _, n := waves(); n != 0 {
+		t.Fatalf("a mark with no end drew %d waves", n)
 	}
 }
