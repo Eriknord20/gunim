@@ -266,6 +266,9 @@ type DataGrid struct {
 
 	// th is the window's live theme, kept from Layout for Step.
 	th *theme.Live
+	// scale is the window's device pixels to a logical one, which the
+	// rows scroll by whole ones of.
+	scale float32
 
 	// links are where the last paint drew spans that are links.
 	links []gridLink
@@ -644,10 +647,21 @@ func (g *DataGrid) before(i int) (at, above int) {
 	return at, above
 }
 
+// scrolled is how far the rows are scrolled up, in logical pixels, on
+// whole device pixels: a row's text and icon move alike, as onPixels
+// says.
+func (g *DataGrid) scrolled() float64 {
+	off := g.top * float64(g.rowH)
+	if g.scale <= 0 {
+		return off
+	}
+	return math.Round(off*float64(g.scale)) / float64(g.scale)
+}
+
 // rowY returns where row i sits in the grid, below the rows still
 // leaving above it.
 func (g *DataGrid) rowY(i int) float32 {
-	y := g.header + float32((float64(i)-g.top)*float64(g.rowH))
+	y := g.header + float32(float64(i)*float64(g.rowH)-g.scrolled())
 	if len(g.gone) == 0 {
 		return y
 	}
@@ -669,7 +683,7 @@ func (g *DataGrid) arrived(i int) float32 {
 func (g *DataGrid) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
 	th := f.Theme
 	g.view = c.Max
-	g.th = th
+	g.th, g.scale = th, f.Scale
 	g.rowH = GridRowHeight.Get(th)
 	g.header = 0
 	if !g.NoHeader {
@@ -753,8 +767,7 @@ func (g *DataGrid) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 				return
 			}
 			for i := first; i < last; i++ {
-				y := g.header + float32((float64(i)-g.top)*float64(g.rowH))
-				g.paintRow(p, th, i, y, bodyW, size, pad)
+				g.paintRow(p, th, i, g.rowY(i), bodyW, size, pad)
 			}
 		}()
 	}
@@ -778,7 +791,7 @@ func (g *DataGrid) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 // still below where the rows leaving were, and those rows shutting.
 func (g *DataGrid) paintLeaving(p *paint.Painter, th *theme.Live, first, last int, bodyW, size, pad float32) {
 	open := 1 - g.shut()
-	top := g.header + float32(-g.top*float64(g.rowH))
+	top := g.header - float32(g.scrolled())
 	for i := max(0, first-len(g.leaving)-1); i < last; i++ {
 		y := g.rowY(i)
 		if y > g.view.H || y+g.rowH < g.header {

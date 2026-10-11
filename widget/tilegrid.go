@@ -737,13 +737,16 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 		first = g.lay.rowFirst(max(0, r0-1))
 		last = g.lay.rowLast(min(g.lay.rows()-1, r1+2))
 	}
-	g.placeHeaders(first, last, offset, float32(g.cols)*g.step.W-gap, kids, motion, Settle.Get(th))
+	// What scrolls is placed by whole device pixels; which rows are in
+	// view goes by the offset itself.
+	placed := onPixels(offset, f.Scale)
+	g.placeHeaders(first, last, placed, float32(g.cols)*g.step.W-gap, kids, motion, Settle.Get(th))
 	from := g.reorder
 	g.reorder = nil
 	if from != nil {
 		g.reordered(from, first, last, th)
 	}
-	g.placeLeaving(children, offset, kids)
+	g.placeLeaving(children, placed, kids)
 	if !g.departing {
 		for i, tc := range g.live {
 			if i < first || i > last {
@@ -784,7 +787,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 		tc.cursor = g.cue.on && i == g.cursor
 		r := tc.rect()
 		kid.Layout(gunim.Tight(geom.Sz(max(r.Size().W, 0), max(r.Size().H, 0))))
-		kid.Place(geom.Pt(r.Min.X, r.Min.Y-offset))
+		kid.Place(geom.Pt(r.Min.X, r.Min.Y-placed))
 		order++
 	}
 	if g.departing {
