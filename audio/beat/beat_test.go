@@ -105,7 +105,7 @@ func TestASteadyClickTrackIsFound(t *testing.T) {
 // the beat people would clap, not the half bar or the eighth note.
 func TestTheTempoIsNotHalvedOrDoubled(t *testing.T) {
 	const rate = 48000
-	for _, bpm := range []float64{75, 90, 128, 140, 175} {
+	for _, bpm := range []float64{72, 75, 90, 110, 128, 140, 150, 160, 175} {
 		want := beats(time.Second, int(bpm/60*18), func(int) float64 { return bpm })
 		r := scan(rate, render(rate, want, 4, 21*time.Second), nil)
 		if math.Abs(r.BPM-bpm) > bpm*0.005 {

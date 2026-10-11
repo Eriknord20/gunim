@@ -16,8 +16,15 @@ const Tightness = 100.0
 // octaves away that leaning reaches half its strength. Without it a
 // recording at 140 is as well explained by beats at 70, and both by
 // beats at 280.
+//
+// The lean sits a little above the 120 a listener would guess at,
+// because the two mistakes are not equally likely. Half a recording's
+// tempo always explains its onsets, since every other beat is still a
+// beat; twice its tempo only explains them where something falls
+// between the beats. Leaning high is what keeps a track at 175 from
+// being read as one at 87.
 const (
-	Centre = 120.0
+	Centre = 130.0
 	Spread = 0.9
 )
 
@@ -65,6 +72,12 @@ func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bo
 	if hi <= lo || len(f) < 4*hi {
 		return 0, 0, false
 	}
+	// The onsets are softened first, each spread over the columns
+	// either side. A beat's length is rarely a whole number of columns
+	// — at 150 a beat is 37.5 of them — and sharp onsets half a column
+	// out line up no better than ones a whole beat out, which is how a
+	// tempo comes back halved.
+	soft := spread(f)
 	score := make([]float64, hi+2)
 	// alike is the lining up itself, without the lean, which is what
 	// says whether there is a beat there at all.
@@ -72,10 +85,10 @@ func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bo
 	best, at := 0.0, 0
 	for lag := lo; lag <= hi; lag++ {
 		var sum float64
-		for i := 0; i+lag < len(f); i++ {
-			sum += float64(f[i]) * float64(f[i+lag])
+		for i := 0; i+lag < len(soft); i++ {
+			sum += float64(soft[i]) * float64(soft[i+lag])
 		}
-		alike[lag] = sum / float64(len(f)-lag)
+		alike[lag] = sum / float64(len(soft)-lag)
 		lean := math.Exp(-0.5 * math.Pow(math.Log2(60*fps/float64(lag)/Centre)/Spread, 2))
 		score[lag] = alike[lag] * lean
 		if score[lag] > best {
@@ -103,6 +116,25 @@ func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bo
 		}
 	}
 	return per, clear, true
+}
+
+// spread softens the onsets, each column taking in a little of the
+// columns either side.
+func spread(f []float32) []float32 {
+	out := make([]float32, len(f))
+	for i := range f {
+		sum, weight := 0.0, 0.0
+		for k := -2; k <= 2; k++ {
+			if i+k < 0 || i+k >= len(f) {
+				continue
+			}
+			w := []float64{0.2, 0.6, 1, 0.6, 0.2}[k+2]
+			sum += w * float64(f[i+k])
+			weight += w
+		}
+		out[i] = float32(sum / weight)
+	}
+	return out
 }
 
 // walk picks the columns the beats fall on: the run of them catching
