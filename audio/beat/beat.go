@@ -149,9 +149,9 @@ type Scan struct {
 	// rise is how much the bands rose at each column, and bass rise the
 	// same over the bass alone.
 	rise, bassRise []float32
-	// warm counts the columns taken so far. Until the window holds
-	// nothing but the recording itself, the rises are the recording
-	// starting rather than anything in it, and are left out.
+	// warm counts the columns taken so far. Until a window holds
+	// nothing but the recording itself, what rises in it is the
+	// recording starting rather than anything in it.
 	warm int
 	done bool
 	out  Result
@@ -234,7 +234,7 @@ func (s *Scan) column() {
 		}
 	}
 	s.warm++
-	if s.warm <= s.size/s.hop {
+	if s.warm <= s.edge() {
 		all, bass = 0, 0
 	}
 	s.rise = append(s.rise, float32(all))
@@ -248,9 +248,15 @@ func (s *Scan) Done() (r Result) {
 		return s.out
 	}
 	// Run the last frames out through half a window of silence, so the
-	// final column is taken like the rest.
+	// final column is taken like the rest. The recording ending is a
+	// rise of its own — cutting sound off spreads it over every band —
+	// so the columns that hear the end are quieted, as those that hear
+	// the start are.
 	s.Write(make([]float32, 2*(s.size/2)))
 	s.done = true
+	for i := max(len(s.rise)-s.edge(), 0); i < len(s.rise); i++ {
+		s.rise[i], s.bassRise[i] = 0, 0
+	}
 
 	defer func() { s.out = r }()
 	r = Result{PerBar: s.perBar()}
@@ -275,6 +281,10 @@ func (s *Scan) Done() (r Result) {
 	r.Confidence = clear
 	return r
 }
+
+// edge is how many columns at each end of a recording hear its start or
+// its end in their window, rather than only what is in it.
+func (s *Scan) edge() int { return s.size / (2 * s.hop) }
 
 func (s *Scan) perBar() int {
 	if s.PerBar > 0 {

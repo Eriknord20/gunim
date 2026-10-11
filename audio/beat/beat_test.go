@@ -240,3 +240,73 @@ func TestFindReadsASoundToItsEnd(t *testing.T) {
 		t.Errorf("%d beats found, the furthest %v from a click", len(got.Beats), worst)
 	}
 }
+
+// TestASongLikePatternIsFound: something closer to music than a click
+// track — kick, snare, hats on the eighths and a bass note held under
+// them — comes back at the right tempo, on the beat, and with the bars
+// starting where the kick does.
+func TestASongLikePatternIsFound(t *testing.T) {
+	const rate, bpm, bars = 48000, 124.0, 14
+	beat := 60 / bpm
+	total := int(float64(rate) * beat * 4 * bars)
+	out := make([]float32, 2*total)
+	r := rand.New(rand.NewPCG(7, 9))
+	hit := func(at, hz, decay, gain float64, noise bool) {
+		start := int(at * float64(rate))
+		for k := range int(decay * 5 * float64(rate)) {
+			if start+k >= total {
+				return
+			}
+			level := gain * math.Exp(-float64(k)/float64(rate)/decay)
+			s := level * math.Sin(2*math.Pi*hz*float64(k)/float64(rate))
+			if noise {
+				s = level * (r.Float64()*2 - 1)
+			}
+			out[2*(start+k)] += float32(s)
+			out[2*(start+k)+1] += float32(s)
+		}
+	}
+	// A bar of silence first, so the recording does not begin on the
+	// very beat it is being asked about.
+	lead := 4 * beat
+	var want []time.Duration
+	for b := range bars*4 - 4 {
+		at := lead + float64(b)*beat
+		want = append(want, time.Duration(at*float64(time.Second)))
+		switch b % 4 {
+		case 0, 2:
+			hit(at, 55, 0.12, 0.9, false) // the kick, on one and three
+		default:
+			hit(at, 180, 0.08, 0.5, true) // the snare, on two and four
+		}
+		hit(at+beat/2, 8000, 0.02, 0.15, true) // a hat on the and
+		hit(at, 6000, 0.01, 0.1, true)
+		hit(at, 82.4, 0.3, 0.35, false) // a bass note, held, with no attack of its own
+	}
+
+	got := scan(rate, out, nil)
+	if math.Abs(got.BPM-bpm) > 0.5 {
+		t.Errorf("the tempo came out at %v, want %v", got.BPM, bpm)
+	}
+	if worst, over := stray(got.Beats, want); worst > 15*time.Millisecond || over < -2 || over > 2 {
+		t.Errorf("%d beats found of %d, the furthest %v from where it was played",
+			len(got.Beats), len(want), worst)
+	}
+	if got.Confidence < 0.5 {
+		t.Errorf("the scan is only %v sure of a plain pattern", got.Confidence)
+	}
+	// The bars have to start on a kick: every beat called a downbeat
+	// falls where one was played.
+	for i := got.Downbeat; i < len(got.Beats); i += got.PerBar {
+		var played int
+		for j, w := range want {
+			if d := got.Beats[i] - w; d < 20*time.Millisecond && d > -20*time.Millisecond {
+				played = j
+			}
+		}
+		if played%4 != 0 {
+			t.Fatalf("beat %d at %v is called a downbeat, but beat %d of the bar was played there",
+				i, got.Beats[i], played%4+1)
+		}
+	}
+}
