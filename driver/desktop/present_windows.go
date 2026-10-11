@@ -202,6 +202,17 @@ type presenter struct {
 	wglDXOpenDevice, wglDXCloseDevice       uintptr
 	wglDXRegisterObject, wglDXUnregisterObj uintptr
 	wglDXLockObjects, wglDXUnlockObjects    uintptr
+
+	// hdr says the window shows in scRGB, the HDR spike; see
+	// hdr_windows.go. The renderer draws into texture as ever, and
+	// pass turns it into hdrTexture, which the swap chain shows.
+	hdr            bool
+	pass           *hdrPass
+	hdrTexture     uintptr
+	hdrTex, hdrFbo uint32
+	hdrObject      uintptr
+	hwnd           windows.HWND
+	adapter        uintptr
 }
 
 // newPresenter sets up DXGI presentation for the window hwnd.
@@ -247,8 +258,13 @@ func newPresenter(g gl.Context, hwnd windows.HWND) (*presenter, error) {
 	}
 	defer release(factory)
 
+	p.hdr, p.hwnd = hdrWanted(), hwnd
+	format := uint32(dxgiFormatR8G8B8A8)
+	if p.hdr {
+		format = dxgiFormatR16G16B16A16Float
+	}
 	desc := swapChainDesc{
-		Width: 1, Height: 1, Format: dxgiFormatR8G8B8A8,
+		Width: 1, Height: 1, Format: format,
 		SampleCount: 1, BufferUsage: dxgiUsageRenderTarget, BufferCount: 2,
 		Scaling: dxgiScalingStretch, SwapEffect: dxgiSwapEffectFlipSequential, AlphaMode: dxgiAlphaPremultiplied,
 	}
@@ -257,6 +273,18 @@ func newPresenter(g gl.Context, hwnd windows.HWND) (*presenter, error) {
 		return nil, fmt.Errorf("desktop: CreateSwapChainForComposition: HRESULT %#x", uint32(hr))
 	}
 	p.w, p.h = 1, 1
+	if p.hdr {
+		if err := useScRGB(p.swap); err != nil {
+			setHDRStatus("scRGB refused: %v", err)
+		}
+		pass, err := newHDRPass(g)
+		if err != nil {
+			setHDRStatus("no HDR pass: %v", err)
+			return nil, err
+		}
+		p.pass = pass
+		p.adapter = adapterOf(p.device)
+	}
 
 	// DirectComposition shows the swap chain in the window.
 	if hr, _, _ := procDCompositionCreateDevice.Call(dxgiDevice, uintptr(unsafe.Pointer(&iidIDCompositionDevice)),
@@ -286,6 +314,9 @@ func newPresenter(g gl.Context, hwnd windows.HWND) (*presenter, error) {
 	}
 	p.share = share
 	p.fbo = g.CreateFramebuffer()
+	if p.hdr {
+		p.hdrFbo = g.CreateFramebuffer()
+	}
 	ok = true
 	return p, nil
 }
@@ -327,8 +358,8 @@ func (p *presenter) begin(w, h int) (uint32, error) {
 			return 0, err
 		}
 	}
-	obj := p.object
-	if r, _, _ := syscall.SyscallN(p.wglDXLockObjects, p.share, 1, uintptr(unsafe.Pointer(&obj))); r == 0 {
+	objs := p.objects()
+	if r, _, _ := syscall.SyscallN(p.wglDXLockObjects, p.share, uintptr(len(objs)), uintptr(unsafe.Pointer(&objs[0]))); r == 0 {
 		return 0, errors.New("desktop: wglDXLockObjectsNV failed")
 	}
 	// OpenGL may touch the texture only while it holds the lock.
@@ -340,15 +371,23 @@ func (p *presenter) begin(w, h int) (uint32, error) {
 // present hands the frame drawn since begin to the window, where it differs from the last one within dirty, in
 // device pixels from the top left.
 func (p *presenter) present(dirty geom.Rect) error {
-	obj := p.object
-	if r, _, _ := syscall.SyscallN(p.wglDXUnlockObjects, p.share, 1, uintptr(unsafe.Pointer(&obj))); r == 0 {
+	shown := p.texture
+	if p.hdr {
+		// The frame in scRGB, all of it: the compositor takes the dirty
+		// rectangle from the copy below.
+		p.pass.measure(monitorDevice(p.hwnd), p.adapter)
+		p.pass.draw(p.g, p.hdrFbo, p.tex, p.w, p.h)
+		shown = p.hdrTexture
+	}
+	objs := p.objects()
+	if r, _, _ := syscall.SyscallN(p.wglDXUnlockObjects, p.share, uintptr(len(objs)), uintptr(unsafe.Pointer(&objs[0]))); r == 0 {
 		return errors.New("desktop: wglDXUnlockObjectsNV failed")
 	}
 	var back uintptr
 	if hr := call(p.swap, dxgiSwapChainGetBuffer, 0, uintptr(unsafe.Pointer(&iidID3D11Texture2D)), uintptr(unsafe.Pointer(&back))); failed(hr) {
 		return fmt.Errorf("desktop: GetBuffer: HRESULT %#x", uint32(hr))
 	}
-	call(p.context, d3d11ContextCopyResource, back, p.texture)
+	call(p.context, d3d11ContextCopyResource, back, shown)
 	release(back)
 	// The pacing is the vertical blank wait's, so present at once.
 	rect := &[4]int32{
@@ -401,12 +440,46 @@ func (p *presenter) resize(w, h int) error {
 		return errors.New("desktop: wglDXRegisterObjectNV failed")
 	}
 	p.object = obj
+	if p.hdr {
+		desc.Format = dxgiFormatR16G16B16A16Float
+		if hr := call(p.device, d3d11DeviceCreateTexture2D, uintptr(unsafe.Pointer(&desc)), 0, uintptr(unsafe.Pointer(&p.hdrTexture))); failed(hr) {
+			p.hdrTexture = 0
+			return fmt.Errorf("desktop: CreateTexture2D, 16-bit float: HRESULT %#x", uint32(hr))
+		}
+		p.hdrTex = p.g.CreateTexture()
+		obj, _, _ := syscall.SyscallN(p.wglDXRegisterObject, p.share, p.hdrTexture, uintptr(p.hdrTex), glTexture2D, wglAccessWriteDiscardNV)
+		if obj == 0 {
+			return errors.New("desktop: wglDXRegisterObjectNV failed for the 16-bit float texture")
+		}
+		p.hdrObject = obj
+		p.g.BindFramebuffer(gl.FRAMEBUFFER, p.hdrFbo)
+		p.g.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, p.hdrTex, 0)
+	}
 	p.w, p.h, p.whole = w, h, true
 	return nil
 }
 
+// objects are the interop's handles of the textures OpenGL draws into:
+// the renderer's, and in HDR the scRGB one.
+func (p *presenter) objects() []uintptr {
+	if p.hdr && p.hdrObject != 0 {
+		return []uintptr{p.object, p.hdrObject}
+	}
+	return []uintptr{p.object}
+}
+
 // dropTexture lets go of the shared texture.
 func (p *presenter) dropTexture() {
+	if p.hdrObject != 0 {
+		_, _, _ = syscall.SyscallN(p.wglDXUnregisterObj, p.share, p.hdrObject)
+		p.hdrObject = 0
+	}
+	if p.hdrTex != 0 {
+		p.g.DeleteTexture(p.hdrTex)
+		p.hdrTex = 0
+	}
+	release(p.hdrTexture)
+	p.hdrTexture = 0
 	if p.object != 0 {
 		_, _, _ = syscall.SyscallN(p.wglDXUnregisterObj, p.share, p.object)
 		p.object = 0
@@ -426,6 +499,12 @@ func (p *presenter) close() {
 		p.g.DeleteFramebuffer(p.fbo)
 		p.fbo = 0
 	}
+	if p.hdrFbo != 0 {
+		p.g.DeleteFramebuffer(p.hdrFbo)
+		p.hdrFbo = 0
+	}
+	release(p.adapter)
+	p.adapter = 0
 	if p.share != 0 {
 		_, _, _ = syscall.SyscallN(p.wglDXCloseDevice, p.share)
 		p.share = 0
