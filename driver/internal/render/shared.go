@@ -36,8 +36,14 @@ type Shared struct {
 	clip  program
 	blur  program
 	// dual says the draw program gives a second colour to blend by, for
-	// glyphs on subpixels.
-	dual bool
+	// glyphs on subpixels, and header is the start of its source.
+	dual   bool
+	header string
+	// convert is the draw program that converts to a display's colours,
+	// built the first time a window needs it; see color.go.
+	convert      program
+	convertBuilt bool
+	convertErr   error
 	// atlas holds greyscale glyphs, lcd glyphs rendered for
 	// subpixels, and color glyphs in colours of their own.
 	atlas, lcd, color sharedAtlas
@@ -50,12 +56,26 @@ func (s *Shared) programs(g gl.Context, isES bool) (draw, clip, blur program, du
 	defer s.mu.Unlock()
 	if !s.built {
 		s.built = true
-		s.draw, s.clip, s.blur, s.dual, s.err = buildPrograms(g, isES)
+		s.draw, s.clip, s.blur, s.dual, s.header, s.err = buildPrograms(g, isES)
 		// The other threads may use them as soon as the lock goes, so
 		// they must be complete in the share group by then.
 		g.Finish()
 	}
 	return s.draw, s.clip, s.blur, s.dual, s.err
+}
+
+// convertProgram returns the program that converts to a display's
+// colours, building it on first use with the calling thread's context.
+// The other programs must have been built.
+func (s *Shared) convertProgram(g gl.Context) (program, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.convertBuilt {
+		s.convertBuilt = true
+		s.convert, s.convertErr = buildConvert(g, s.header)
+		g.Finish()
+	}
+	return s.convert, s.convertErr
 }
 
 // sharedAtlas packs glyph masks into an atlasSize square, in shelves, above the scratch strip at its foot.
