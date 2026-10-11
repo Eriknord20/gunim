@@ -349,3 +349,49 @@ func TestTheAmountScalesTheGainsAndLeavesTheCuts(t *testing.T) {
 		}
 	}
 }
+
+func TestTheQScaleNarrowsTheBellsAndLeavesTheCuts(t *testing.T) {
+	bands := []Band{{ID: 1, Kind: Bell, Freq: 1000, Gain: 12, Q: 1, On: true},
+		{ID: 2, Kind: LowCut, Freq: 100, Q: 0.707, Slope: 12, On: true}}
+	eq := NewEQ()
+	eq.Set(bands)
+	in := eq.InsertAt(SampleRate)
+	at := 0
+	// An octave over the bell, and at the cut, at the bands' Q and at a
+	// quarter and four times it: as the bands scaled by Scaled sound.
+	for _, scale := range []float64{1, 4, 0.25} {
+		eq.SetQScale(scale)
+		playFor(in, 0.3, 2000, 0.1, &at)
+		for _, hz := range []float64{2000, 100} {
+			want := Response([]Band{bands[0].Scaled(scale), bands[1].Scaled(scale)}, hz)
+			if got := db(playFor(in, 0.2, hz, 0.1, &at)) - db(0.1); math.Abs(got-want) > 0.3 {
+				t.Errorf("at a Q scale of %v the EQ is %+.2f dB at %v Hz, want %+.2f", scale, got, hz, want)
+			}
+		}
+	}
+	if b := bands[1].Scaled(4); b.Q != 0.707 {
+		t.Errorf("a cut scaled has a Q of %v", b.Q)
+	}
+	if b := (Band{Kind: Notch, Q: 2}).Scaled(10); b.Q != 8 {
+		t.Errorf("a notch scaled past the most has a Q of %v, want 8", b.Q)
+	}
+	if narrow, wide := Response([]Band{bands[0].Scaled(4)}, 2000), Response([]Band{bands[0].Scaled(0.25)}, 2000); narrow > 1 || wide < 9 {
+		t.Errorf("an octave over a bell of 12 dB, at four times its Q it lifts %+.2f dB, at a quarter %+.2f dB", narrow, wide)
+	}
+}
+
+func TestTheThresholdShiftMovesEveryDynamicBand(t *testing.T) {
+	eq := NewEQ()
+	eq.Set([]Band{{ID: 1, Kind: Bell, Freq: 1000, Q: 1, On: true,
+		Dynamic: Dynamics{On: true, Threshold: -20, Ratio: 4, Attack: 1, Release: 50, Range: 24}}})
+	in := eq.InsertAt(SampleRate)
+	at := 0
+	// A sine 14 dB over: with the thresholds up 8 dB, 6 dB over, so
+	// turned down 4.5 dB; down 4 dB, 18 dB over, so 13.5 dB.
+	for _, c := range []struct{ shift, want float64 }{{0, -10.5}, {8, -4.5}, {-4, -13.5}} {
+		eq.SetThresholdShift(c.shift)
+		if got := db(playFor(in, 0.5, 1000, 0.5, &at)) - db(0.5); math.Abs(got-c.want) > 0.5 {
+			t.Errorf("with the thresholds moved %+v dB, a sine 14 dB over comes out %+.2f dB, want %+.1f", c.shift, got, c.want)
+		}
+	}
+}
