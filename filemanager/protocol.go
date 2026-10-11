@@ -173,6 +173,10 @@ type Selection struct {
 	// Slide has the selection slide there, as it does for a key that
 	// moves it, for a row found by the name typed.
 	Slide bool
+	// Show brings the cursor into view, for a row the program moved the
+	// keyboard to. The selection sent again as the folder is read leaves
+	// the view where the user paged or scrolled it.
+	Show bool
 }
 
 // Band is what the overview strip shows for a stretch of rows: the

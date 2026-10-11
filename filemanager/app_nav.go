@@ -553,7 +553,8 @@ func (a *app) refilter() {
 		a.patch(RowsLeft{Gen: n.gen, Rows: left})
 	}
 	a.publishBands()
-	if len(n.pick) > 0 {
+	picked := len(n.pick) > 0
+	if picked {
 		clear(n.sel)
 		for _, name := range n.pick {
 			n.sel[name] = true
@@ -565,7 +566,11 @@ func (a *app) refilter() {
 		}
 		n.pick = nil
 	}
-	a.publishSelection()
+	if picked {
+		a.showSelection()
+	} else {
+		a.publishSelection()
+	}
 	a.publishStatus()
 	a.showPreview()
 }
@@ -761,14 +766,19 @@ func (a *app) selected(v Selected) {
 }
 
 // publishSelection sends the rows holding the names selected, for the
-// grid to select.
-func (a *app) publishSelection() { a.sendSelection(false) }
+// grid to select, leaving the view where it is.
+func (a *app) publishSelection() { a.sendSelection(false, false) }
+
+// showSelection sends the selection as publishSelection does, for one
+// the program moved: the view goes to the cursor.
+func (a *app) showSelection() { a.sendSelection(false, true) }
 
 // sendSelection sends the rows holding the names selected, sliding the
-// selection there with slide.
-func (a *app) sendSelection(slide bool) {
+// selection there with slide, and bringing the cursor into view with
+// show.
+func (a *app) sendSelection(slide, show bool) {
 	n := &a.nav
-	s := Selection{Gen: n.gen, Cursor: -1, Slide: slide}
+	s := Selection{Gen: n.gen, Cursor: -1, Slide: slide, Show: show}
 	for i, e := range n.rows {
 		if n.sel[e.Name] {
 			if k := len(s.Runs); k > 0 && s.Runs[k-1][1] == i {
@@ -802,7 +812,7 @@ func (a *app) typed(v Typed) {
 	clear(n.sel)
 	n.sel[n.rows[i].Name] = true
 	n.cursor = n.rows[i].Name
-	a.sendSelection(true)
+	a.sendSelection(true, true)
 	a.publishStatus()
 	a.showPreview()
 }
