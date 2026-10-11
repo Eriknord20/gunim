@@ -280,7 +280,7 @@ func TestADragLeavesOnlyOnceFarFromEveryWindow(t *testing.T) {
 // application's windows within the screen rectangle over.
 type fakeCoverer struct{ over geom.Rect }
 
-func (f fakeCoverer) Covered(_ []driver.Window, p geom.Point) (bool, bool) {
+func (f fakeCoverer) Covered(_ []driver.Window, p geom.Point) (covered, known bool) {
 	return f.over.Contains(p), true
 }
 

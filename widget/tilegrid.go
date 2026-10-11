@@ -718,7 +718,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 			// The first row of a group shows its header too.
 			y -= g.lay.head
 		}
-		g.jumpTo(max(0, y))
+		g.jumpToY(max(0, y))
 	}
 	g.jumpRow = -1
 	g.fit(max(content, 0), own, th)

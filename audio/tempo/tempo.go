@@ -39,11 +39,15 @@ import (
 // ticks.
 const PPQ = 960
 
-// DefaultBPM is the tempo a map with no tempo of its own reads as, and
-// DefaultBeats and DefaultUnit the meter: a steady 120 in four four.
+// DefaultBPM is the tempo a map with no tempo of its own reads as: a
+// steady 120.
+const DefaultBPM = 120.0
+
+// DefaultBeats and DefaultUnit are the meter a map with no meter of
+// its own reads as: four beats of a quarter note each, which is 4/4.
 const (
-	DefaultBPM                = 120.0
-	DefaultBeats, DefaultUnit = 4, 4
+	DefaultBeats = 4
+	DefaultUnit  = 4
 )
 
 // MinBPM and MaxBPM bound a tempo, since a tempo of zero or less has no
@@ -150,13 +154,15 @@ func (m *Map) Start() time.Duration { return m.start }
 // is and every time it falls at the later for it.
 func (m *Map) SetStart(d time.Duration) { m.start = d }
 
-// Tempos and Meters are the changes the map holds, in order, the first
-// of each at tick 0. The slices returned are copies.
+// Tempos are the tempo changes the map holds, in order, the first at
+// tick 0. The slice returned is a copy.
 func (m *Map) Tempos() []Tempo {
 	m.prep()
 	return slices.Clone(m.tempos)
 }
 
+// Meters are the meter changes the map holds, in order, the first at
+// tick 0. The slice returned is a copy.
 func (m *Map) Meters() []Meter {
 	m.prep()
 	return slices.Clone(m.meters)
@@ -328,9 +334,9 @@ func (m *Map) span(i int, to Ticks) float64 {
 	return 60 * q / a.BPM
 }
 
-// at is the ticks reached s seconds after tempo change i, which must
-// not be more than the segment lasts.
-func (m *Map) at(i int, s float64) Ticks {
+// ticksAfter is the position reached s seconds after tempo change i,
+// which must not be more than the segment lasts.
+func (m *Map) ticksAfter(i int, s float64) Ticks {
 	a := m.tempos[i]
 	if b, ramp := m.ramp(i); ramp {
 		total := float64(b.At-a.At) / PPQ
@@ -387,11 +393,11 @@ func (m *Map) Time(t Ticks) time.Duration {
 func (m *Map) At(d time.Duration) Ticks {
 	m.prep()
 	s := float64(d-m.start) / float64(time.Second)
-	i, found := slices.BinarySearchFunc(m.secs, s, func(x float64, s float64) int { return cmp.Compare(x, s) })
+	i, found := slices.BinarySearchFunc(m.secs, s, cmp.Compare[float64])
 	if !found {
 		i = max(i-1, 0)
 	}
-	return m.at(i, s-m.secs[i])
+	return m.ticksAfter(i, s-m.secs[i])
 }
 
 // Frames is where a musical position falls, in frames at rate, as a
@@ -441,8 +447,8 @@ func (m *Map) Pos(t Ticks) Pos {
 }
 
 // Ticks is the position a bar and beat falls on. A beat past the end of
-// its bar carries into the bars after it, so bar 1 beat 5 of four four
-// is bar 2 beat 1.
+// its bar carries into the bars after it, so bar 1 beat 5 of 4/4 is
+// bar 2 beat 1.
 func (m *Map) Ticks(p Pos) Ticks {
 	m.prep()
 	// The meter in force is the last one starting at or before this

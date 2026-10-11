@@ -20,9 +20,11 @@ func beats(lead time.Duration, n int, bpm func(k int) float64) []time.Duration {
 	return out
 }
 
-// render makes a recording of a click at each beat, every accent-th one
-// a bass drum rather than a tick, over a quiet hiss.
-func render(rate int, at []time.Duration, accent int, total time.Duration) []float32 {
+// render makes a recording of a click at each beat, every fourth one a
+// bass drum rather than a tick, over a quiet hiss. Four, because that
+// is the bar these tests count in.
+func render(rate int, at []time.Duration, total time.Duration) []float32 {
+	const accent = 4
 	n := int(total.Seconds() * float64(rate))
 	out := make([]float32, 2*n)
 	r := rand.New(rand.NewPCG(1, 2))
@@ -50,11 +52,8 @@ func render(rate int, at []time.Duration, accent int, total time.Duration) []flo
 
 // scan runs a recording through a scan in the chunks a player would
 // read it in.
-func scan(rate int, frames []float32, set func(*Scan)) Result {
+func scan(rate int, frames []float32) Result {
 	s := NewScan(rate)
-	if set != nil {
-		set(s)
-	}
 	for i := 0; i < len(frames); i += 2 * 4096 {
 		s.Write(frames[i:min(i+2*4096, len(frames))])
 	}
@@ -62,9 +61,8 @@ func scan(rate int, frames []float32, set func(*Scan)) Result {
 }
 
 // stray is the furthest any beat found falls from the nearest beat
-// played, and how many were found against how many were played.
-func stray(got []time.Duration, want []time.Duration) (time.Duration, int) {
-	var worst time.Duration
+// played, and how many more were found than were played.
+func stray(got, want []time.Duration) (worst time.Duration, over int) {
 	for _, g := range got {
 		near := time.Duration(math.MaxInt64)
 		for _, w := range want {
@@ -84,7 +82,7 @@ func stray(got []time.Duration, want []time.Duration) (time.Duration, int) {
 func TestASteadyClickTrackIsFound(t *testing.T) {
 	const rate = 48000
 	want := beats(2*time.Second, 36, func(int) float64 { return 120 })
-	r := scan(rate, render(rate, want, 4, 21*time.Second), nil)
+	r := scan(rate, render(rate, want, 21*time.Second))
 
 	if math.Abs(r.BPM-120) > 0.5 {
 		t.Errorf("the tempo came out at %v, want 120", r.BPM)
@@ -107,7 +105,7 @@ func TestTheTempoIsNotHalvedOrDoubled(t *testing.T) {
 	const rate = 48000
 	for _, bpm := range []float64{72, 75, 90, 110, 128, 140, 150, 160, 175} {
 		want := beats(time.Second, int(bpm/60*18), func(int) float64 { return bpm })
-		r := scan(rate, render(rate, want, 4, 21*time.Second), nil)
+		r := scan(rate, render(rate, want, 21*time.Second))
 		if math.Abs(r.BPM-bpm) > bpm*0.005 {
 			t.Errorf("a track at %v came out at %v", bpm, r.BPM)
 		}
@@ -119,7 +117,7 @@ func TestADriftingTrackIsFollowed(t *testing.T) {
 	const rate = 44100
 	const n = 44
 	want := beats(0, n, func(k int) float64 { return 120 + 12*float64(k)/n })
-	r := scan(rate, render(rate, want, 4, 22*time.Second), nil)
+	r := scan(rate, render(rate, want, 22*time.Second))
 
 	worst, over := stray(r.Beats, want)
 	if worst > 30*time.Millisecond {
@@ -140,7 +138,7 @@ func TestADriftingTrackIsFollowed(t *testing.T) {
 func TestTheBarStartsOnTheBassDrum(t *testing.T) {
 	const rate = 48000
 	want := beats(1500*time.Millisecond, 40, func(int) float64 { return 126 })
-	r := scan(rate, render(rate, want, 4, 22*time.Second), nil)
+	r := scan(rate, render(rate, want, 22*time.Second))
 
 	if r.PerBar != 4 {
 		t.Fatalf("the scan counted in %d, want 4", r.PerBar)
@@ -174,12 +172,12 @@ func TestSoundWithNoBeatSaysSo(t *testing.T) {
 	for i := range hiss {
 		hiss[i] = float32(0.2 * (r.Float64()*2 - 1))
 	}
-	if got := scan(rate, hiss, nil); got.Confidence > 0.3 {
+	if got := scan(rate, hiss); got.Confidence > 0.3 {
 		t.Errorf("the scan is %v sure of a beat in white noise", got.Confidence)
 	}
 
 	silence := make([]float32, 2*rate*12)
-	got := scan(rate, silence, nil)
+	got := scan(rate, silence)
 	if len(got.Beats) != 0 {
 		t.Errorf("%d beats were found in silence", len(got.Beats))
 	}
@@ -187,7 +185,7 @@ func TestSoundWithNoBeatSaysSo(t *testing.T) {
 		t.Errorf("the scan is %v sure of a beat in silence", got.Confidence)
 	}
 	// A recording too short to hold a beat is not guessed at either.
-	if short := scan(rate, make([]float32, 2*rate/2), nil); len(short.Beats) != 0 {
+	if short := scan(rate, make([]float32, 2*rate/2)); len(short.Beats) != 0 {
 		t.Errorf("%d beats were found in half a second", len(short.Beats))
 	}
 }
@@ -196,7 +194,7 @@ func TestSoundWithNoBeatSaysSo(t *testing.T) {
 func TestTheBeatsBecomeATempoMap(t *testing.T) {
 	const rate = 48000
 	want := beats(900*time.Millisecond, 40, func(int) float64 { return 128 })
-	r := scan(rate, render(rate, want, 4, 21*time.Second), nil)
+	r := scan(rate, render(rate, want, 21*time.Second))
 	m := r.Map(0)
 
 	if math.Abs(m.BPM(0)-128) > 2 {
@@ -229,7 +227,7 @@ func (r *reader) Read(dst []float32) (int, error) {
 func TestFindReadsASoundToItsEnd(t *testing.T) {
 	const rate = 48000
 	want := beats(time.Second, 28, func(int) float64 { return 100 })
-	got, err := Find(&reader{frames: render(rate, want, 4, 19*time.Second)}, rate)
+	got, err := Find(&reader{frames: render(rate, want, 19*time.Second)}, rate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +267,7 @@ func TestASongLikePatternIsFound(t *testing.T) {
 	// A bar of silence first, so the recording does not begin on the
 	// very beat it is being asked about.
 	lead := 4 * beat
-	var want []time.Duration
+	want := make([]time.Duration, 0, bars*4-4)
 	for b := range bars*4 - 4 {
 		at := lead + float64(b)*beat
 		want = append(want, time.Duration(at*float64(time.Second)))
@@ -284,7 +282,7 @@ func TestASongLikePatternIsFound(t *testing.T) {
 		hit(at, 82.4, 0.3, 0.35, false) // a bass note, held, with no attack of its own
 	}
 
-	got := scan(rate, out, nil)
+	got := scan(rate, out)
 	if math.Abs(got.BPM-bpm) > 0.5 {
 		t.Errorf("the tempo came out at %v, want %v", got.BPM, bpm)
 	}

@@ -308,7 +308,9 @@ func (v *chatView) messagesBetween(from, to string) []string {
 func (v *chatView) jump(id string, u *gunim.UI) {
 	v.list.ScrollToKey(widget.Key(id), u)
 	if n, ok := v.list.Row(widget.Key(id)); ok {
-		n.(*msgRow).Flash()
+		if row, is := n.(*msgRow); is {
+			row.Flash()
+		}
 	}
 }
 
@@ -366,7 +368,9 @@ func (v *chatView) set(s Chat, u *gunim.UI) {
 		keys[i], items[k] = k, it
 		if old, ok := v.items[k]; ok && !same(old, it) {
 			if n, built := v.list.Row(k); built {
-				n.(*msgRow).set(it, u)
+				if row, is := n.(*msgRow); is {
+					row.set(it, u)
+				}
 			}
 		}
 	}
@@ -743,6 +747,8 @@ func (b *linkBar) set(l Link, u *gunim.UI) {
 		b.msg = "You are offline. Messages and files you send wait, and go when the connection is back."
 	case Reconnecting:
 		b.msg = "Connecting…"
+	default:
+		// Online says nothing: the banner is closing.
 	}
 	b.open.Animate(map[bool]float32{false: 0, true: 1}[l != Online], widget.Settle.Get(u.Theme()))
 	u.Invalidate()

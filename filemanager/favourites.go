@@ -374,21 +374,22 @@ func (a *app) addFavourites(paths []string) int {
 		defaults = a.defaultFavourites()
 	}
 	for _, p := range paths {
-		if !slices.ContainsFunc(favs, func(f Favourite) bool { return a.isFav(f, a.fs.ID(), p) }) {
-			f := Favourite{Path: p}
-			if s, ok := a.favStore().(prefsFavourites); ok {
-				f = s.kept(p)
-			}
-			if i := slices.IndexFunc(defaults, func(d Favourite) bool { return a.ps.Same(d.Path, p) }); i >= 0 && f.Icon == "" {
-				f.Icon = defaults[i].Icon
-			}
-			if f.Color == "" {
-				f.Color = nextColor(favs)
-			}
-			f.FS = a.fs.ID()
-			favs = append(favs, f)
-			added++
+		if slices.ContainsFunc(favs, func(f Favourite) bool { return a.isFav(f, a.fs.ID(), p) }) {
+			continue
 		}
+		f := Favourite{Path: p}
+		if s, ok := a.favStore().(prefsFavourites); ok {
+			f = s.kept(p)
+		}
+		if i := slices.IndexFunc(defaults, func(d Favourite) bool { return a.ps.Same(d.Path, p) }); i >= 0 && f.Icon == "" {
+			f.Icon = defaults[i].Icon
+		}
+		if f.Color == "" {
+			f.Color = nextColor(favs)
+		}
+		f.FS = a.fs.ID()
+		favs = append(favs, f)
+		added++
 	}
 	if added > 0 {
 		a.setFavourites(favs)

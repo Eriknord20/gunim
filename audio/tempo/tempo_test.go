@@ -140,7 +140,8 @@ func TestAMeterChangeStartsItsOwnBar(t *testing.T) {
 	}
 }
 
-// TestLinesAreABeatEachAndMarkTheBars.
+// TestLinesAreABeatEachAndMarkTheBars: a ruler asks for the beats in
+// a stretch and is told which of them start a bar.
 func TestLinesAreABeatEachAndMarkTheBars(t *testing.T) {
 	m := New(120, 4, 4)
 	m.SetMeter(Meter{At: 8 * PPQ, Beats: 3, Unit: 4})

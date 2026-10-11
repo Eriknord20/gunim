@@ -320,7 +320,7 @@ func (s *Segmented) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			if size > room {
 				continue
 			}
-			paintIcon(p, th, ic, geom.Rc(x, (h-size)/2, size, size), ink, 1)
+			drawIcon(p, th, ic, geom.Rc(x, (h-size)/2, size, size), ink, 1)
 			x += size + IconGap.Get(th)
 			room -= size + IconGap.Get(th)
 		}

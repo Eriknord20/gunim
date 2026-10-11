@@ -46,15 +46,19 @@ import (
 	"github.com/marrasen/gunim/audio/tempo"
 )
 
-// The pitches the onsets are measured in: Bands bands from BandLow to
-// BandHigh, evenly by octaves, and the bands under BassTop counted
-// again on their own, since it is the bass drum that says which beat
-// starts a bar.
+// Bands is how many bands of pitch the onsets are measured in, evenly
+// by octaves.
+const Bands = 40
+
+// BandLow and BandHigh are the pitches those bands span.
 const (
-	Bands             = 40
-	BandLow, BandHigh = 30.0, 10000.0
-	BassTop           = 150.0
+	BandLow  = 30.0
+	BandHigh = 10000.0
 )
+
+// BassTop is the top of the bands counted again on their own, since it
+// is the bass drum that says which beat starts a bar.
+const BassTop = 150.0
 
 // DefaultMinBPM and DefaultMaxBPM are the tempos a scan looks between
 // when it is told no others: wide enough for a ballad and for drum and
@@ -263,7 +267,7 @@ func (s *Scan) Done() (r Result) {
 	fps := float64(s.rate) / float64(s.hop)
 	strength := level(s.rise, int(fps/2))
 	bass := level(s.bassRise, int(fps/2))
-	per, clear, ok := period(strength, fps, s.minBPM(), s.maxBPM())
+	per, clarity, ok := period(strength, fps, s.minBPM(), s.maxBPM())
 	if !ok {
 		return r
 	}
@@ -278,7 +282,7 @@ func (s *Scan) Done() (r Result) {
 	}
 	r.BPM = 60 / middle(r.Beats).Seconds()
 	r.Downbeat = downbeat(bass, at, r.PerBar)
-	r.Confidence = clear
+	r.Confidence = clarity
 	return r
 }
 

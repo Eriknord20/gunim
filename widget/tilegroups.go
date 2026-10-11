@@ -83,7 +83,7 @@ func (l tileLayout) rowY(r int) float32 {
 }
 
 // rowCol returns tile i's row and column.
-func (l tileLayout) rowCol(i int) (int, int) {
+func (l tileLayout) rowCol(i int) (row, col int) {
 	k := l.groupOf(i)
 	local := i - l.starts[k]
 	return l.rowBase[k] + local/l.cols, local % l.cols
@@ -150,7 +150,6 @@ type headerCell struct {
 	child gunim.Node
 	y     *anim.Float
 	fade  *anim.Float
-	w     float32
 }
 
 func newHeaderCell(child gunim.Node, y float32) *headerCell {

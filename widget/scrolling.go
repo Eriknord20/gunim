@@ -96,12 +96,12 @@ func (s *scrolling) Offset() float32 { return s.offset.Value() }
 
 // JumpTo puts the view at y at once, for content that is new rather
 // than moved, as another list shown in the same place.
-func (s *scrolling) JumpTo(y float32) { s.jumpTo(y) }
+func (s *scrolling) JumpTo(y float32) { s.jumpToY(y) }
 
 // jumpTo puts the view at y at once, for content that is new rather
 // than moved: a folder opened in a table, whose rows would otherwise
 // glide in from wherever the last folder was scrolled to.
-func (s *scrolling) jumpTo(y float32) {
+func (s *scrolling) jumpToY(y float32) {
 	s.flinging = false
 	s.target = max(0, y)
 	s.offset.Jump(s.target)

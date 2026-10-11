@@ -149,11 +149,14 @@ func (s *series) next(day time.Time) time.Time {
 		return calendar.AddDays(day, 7)
 	case Monthly:
 		return day.AddDate(0, 1, 0)
+	default:
+		// A series that never repeats has no next day.
 	}
 	return time.Time{}
 }
 
-// times returns each time s happens that touches the days from from to to, with the day it would be.
+// times returns each time s happens that touches the days between
+// from and to, with the day it would be.
 func (s *series) times(from, to time.Time) []struct {
 	day        time.Time
 	start, end time.Time
@@ -196,7 +199,7 @@ func (s *series) times(from, to time.Time) []struct {
 }
 
 // shownDays returns the days the view shows.
-func (a *app) shownDays() (time.Time, time.Time) {
+func (a *app) shownDays() (from, to time.Time) {
 	switch a.view {
 	case DayView:
 		return a.day, calendar.AddDays(a.day, 1)
@@ -206,6 +209,8 @@ func (a *app) shownDays() (time.Time, time.Time) {
 			return f, calendar.AddDays(f, 5)
 		}
 		return f, calendar.AddDays(f, 7)
+	default:
+		// The month view asks for its own span, below.
 	}
 	f := calendar.WeekStart(calendar.MonthStart(a.day), time.Monday)
 	return f, calendar.AddDays(f, 42)
@@ -228,6 +233,8 @@ func (a *app) title() string {
 			return w + from.Format("2 Jan") + " – " + to.Format("2 Jan 2006")
 		}
 		return w + from.Format("2 Jan 2006") + " – " + to.Format("2 Jan 2006")
+	default:
+		// The month view asks for its own title, below.
 	}
 	return a.day.Format("January 2006")
 }
@@ -438,7 +445,7 @@ func (a *app) handle(v gunim.Intent) {
 			return
 		}
 		a.publish()
-		a.patch(Reveal{ID: v.ID})
+		a.patch(Reveal(v))
 		return
 	case ThemeToggled:
 		a.light = !a.light

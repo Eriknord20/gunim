@@ -11,8 +11,8 @@ import (
 )
 
 // fakeIcons has the window show icons of the system's, each a square of
-// one colour, as Windows' would, and counts the reads.
-func fakeIcons(t *testing.T) *int {
+// one colour, as Windows' would.
+func fakeIcons(t *testing.T) {
 	reads := 0
 	wasHere, wasOf := iconsHere, systemIconOf
 	iconsHere = true
@@ -29,7 +29,6 @@ func fakeIcons(t *testing.T) *int {
 		return square(64), square(32), nil
 	}
 	t.Cleanup(func() { iconsHere, systemIconOf = wasHere, wasOf })
-	return &reads
 }
 
 // The window shows the icon the system does for each kind of item, read

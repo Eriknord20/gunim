@@ -90,7 +90,7 @@ func (l *Link) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	x := l.iconWidth(f.Theme)
 	if l.Icon != nil {
 		s := l.textSize(f.Theme)
-		paintIcon(p, f.Theme, l.Icon, geom.Rc(0, (run.Height()-s)/2, s, s), ink, 1)
+		drawIcon(p, f.Theme, l.Icon, geom.Rc(0, (run.Height()-s)/2, s, s), ink, 1)
 	}
 	wide := run.Advance
 	if run.Advance > box.W-x+0.5 {

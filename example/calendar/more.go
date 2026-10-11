@@ -45,7 +45,8 @@ func newMoreCard(day time.Time, evs []calendar.Event, left bool, pick func(id st
 		}
 		return a.Start.Compare(b.Start)
 	})
-	rows := []gunim.Node{head}
+	rows := make([]gunim.Node, 0, len(evs)+2)
+	rows = append(rows, head)
 	for _, e := range evs {
 		label := e.Start.Format("15:04") + "  " + e.Title
 		if e.AllDay {

@@ -66,7 +66,7 @@ func level(rise []float32, win int) []float32 {
 // every other spacing, from 0 for sound that repeats no more at one
 // spacing than another to near 1 for a plain steady beat. It reports
 // false for sound too short or too still to tell.
-func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bool) {
+func period(f []float32, fps, minBPM, maxBPM float64) (per, clarity float64, ok bool) {
 	lo := max(int(math.Floor(60*fps/maxBPM)), 2)
 	hi := int(math.Ceil(60 * fps / minBPM))
 	if hi <= lo || len(f) < 4*hi {
@@ -104,7 +104,7 @@ func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bo
 	}
 	mean /= float64(hi - lo + 1)
 	if alike[at] > 0 && mean < alike[at] {
-		clear = 1 - mean/alike[at]
+		clarity = 1 - mean/alike[at]
 	}
 	// Sharpen the peak between the lags either side of it, so a beat's
 	// length is not rounded to a whole column.
@@ -115,7 +115,7 @@ func period(f []float32, fps, minBPM, maxBPM float64) (per, clear float64, ok bo
 			per += min(max(0.5*(a-c)/bend, -0.5), 0.5)
 		}
 	}
-	return per, clear, true
+	return per, clarity, true
 }
 
 // spread softens the onsets, each column taking in a little of the

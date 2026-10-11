@@ -4,6 +4,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image/png"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -75,7 +77,7 @@ type places struct {
 	apps, mimes string
 }
 
-func where(a *App) (places, error) {
+func placesFor(a *App) (places, error) {
 	d, err := dataHome()
 	if err != nil {
 		return places{}, err
@@ -138,7 +140,7 @@ func write(path string, data []byte, mode os.FileMode) error {
 // session. What was not picked is taken away, as after an install that
 // had it.
 func register(a *App, in Installation) error {
-	p, err := where(a)
+	p, err := placesFor(a)
 	if err != nil {
 		return err
 	}
@@ -187,7 +189,7 @@ func register(a *App, in Installation) error {
 			// GNOME runs a desktop file on the desktop only once it is
 			// marked trusted; without gio this is left for the user.
 			if gio, err := exec.LookPath("gio"); err == nil {
-				_ = exec.Command(gio, "set", p.desk, "metadata::trusted", "true").Run()
+				runTool(gio, "set", p.desk, "metadata::trusted", "true")
 			}
 		}
 	} else if launches(a, in, p.desk) {
@@ -204,7 +206,7 @@ func register(a *App, in Installation) error {
 	for _, t := range a.FileTypes {
 		if t.Default && in.Chose(FileTypeKey(t)) {
 			if xdg, err := exec.LookPath("xdg-mime"); err == nil {
-				_ = exec.Command(xdg, "default", a.id()+".desktop", mimeOf(a, t)).Run()
+				runTool(xdg, "default", a.id()+".desktop", mimeOf(a, t))
 			}
 		}
 	}
@@ -216,7 +218,7 @@ func register(a *App, in Installation) error {
 // session.
 func detect(a *App, _ string) map[string]bool {
 	out := map[string]bool{}
-	p, err := where(a)
+	p, err := placesFor(a)
 	if err != nil {
 		return out
 	}
@@ -234,7 +236,7 @@ func detect(a *App, _ string) map[string]bool {
 // same name that starts another program stays, and with it the icon,
 // the kinds of file and the defaults of that name.
 func unregister(a *App, in Installation) error {
-	p, err := where(a)
+	p, err := placesFor(a)
 	if err != nil {
 		return err
 	}
@@ -372,11 +374,11 @@ func forgetDefaults(a *App) {
 func refresh(p places) {
 	if tool, err := exec.LookPath("update-mime-database"); err == nil {
 		if _, err := os.Stat(filepath.Join(p.mimes, "packages")); err == nil {
-			_ = exec.Command(tool, p.mimes).Run()
+			runTool(tool, p.mimes)
 		}
 	}
 	if tool, err := exec.LookPath("update-desktop-database"); err == nil {
-		_ = exec.Command(tool, p.apps).Run()
+		runTool(tool, p.apps)
 	}
 }
 
@@ -530,7 +532,7 @@ func freeSpace(dir string) (int64, error) {
 	if err := unix.Statfs(dir, &st); err != nil {
 		return 0, err
 	}
-	return int64(st.Bavail) * int64(st.Bsize), nil
+	return int64(st.Bavail) * st.Bsize, nil
 }
 
 // watchProcess watches the process pid: alive reports whether it still
@@ -568,10 +570,13 @@ func procStart(pid int) (string, bool) {
 	return f[19], true
 }
 
+// procDir is where the kernel lists the processes.
+const procDir = "/proc"
+
 // running lists the processes running the program at exe.
 func running(exe string) ([]int, error) {
 	want := resolve(exe)
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procDir)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +586,7 @@ func running(exe string) ([]int, error) {
 		if err != nil {
 			continue
 		}
-		to, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
+		to, err := os.Readlink(filepath.Join(procDir, e.Name(), "exe"))
 		if err != nil {
 			continue
 		}
@@ -594,10 +599,26 @@ func running(exe string) ([]int, error) {
 	return pids, nil
 }
 
+// toolWait is how long one of the desktop's own tools is given before
+// it is given up on. They are housekeeping — a mime database caught
+// up, an icon marked trusted — and a hung one must not hold the
+// installer.
+const toolWait = 10 * time.Second
+
+// runTool runs one of those tools and says nothing about how it went.
+// Whether the desktop takes the hint is its own business.
+func runTool(name string, args ...string) {
+	ctx, cancel := context.WithTimeout(context.Background(), toolWait)
+	defer cancel()
+	_ = exec.CommandContext(ctx, name, args...).Run()
+}
+
 // launch starts the program at exe with args, on its own, with env
 // added to this program's environment.
 func launch(exe string, args []string, env ...string) error {
-	cmd := exec.Command(exe, args...)
+	// No context: the program started here outlives this one, which is
+	// the whole point of starting it this way.
+	cmd := exec.Command(exe, args...) //nolint:noctx
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

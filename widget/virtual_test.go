@@ -521,18 +521,18 @@ func TestVirtualListLoadsOlderItemsAtTheTopWithoutMoving(t *testing.T) {
 
 // mountTimeline mounts a 300 by 400 list of 40-pixel rows that sticks to its end and asks for older items, holding
 // its view as they arrive when hold is set, and returns a way to count the asks.
-func mountTimeline(t *testing.T, hold bool, ks []Key) (*gunim.Window, *VirtualList, func(int), func() int) {
+func mountTimeline(t *testing.T, hold bool, ks []Key) (w *gunim.Window, list *VirtualList, run func(int), built func() int) {
 	t.Helper()
-	l := NewVirtualList(func(k Key) gunim.Node { return &block{key: k, h: 40} })
-	l.StickToEnd, l.HoldOnPrepend = true, hold
-	l.OnReachStart = func(u *gunim.UI) gunim.Intent { return olderAsked{} }
-	w := gunimtest.New(t, geom.Sz(300, 400), nil)
-	gunim.RegisterView(w, "v", func(shownKeys) gunim.Node { return l },
-		func(_ gunim.Node, s shownKeys, u *gunim.UI) { l.SetKeys(s.Keys, u) })
+	list = NewVirtualList(func(k Key) gunim.Node { return &block{key: k, h: 40} })
+	list.StickToEnd, list.HoldOnPrepend = true, hold
+	list.OnReachStart = func(u *gunim.UI) gunim.Intent { return olderAsked{} }
+	w = gunimtest.New(t, geom.Sz(300, 400), nil)
+	gunim.RegisterView(w, "v", func(shownKeys) gunim.Node { return list },
+		func(_ gunim.Node, s shownKeys, u *gunim.UI) { list.SetKeys(s.Keys, u) })
 	if err := w.Client().Mount(gunim.Root, "v", "v", shownKeys{ks}); err != nil {
 		t.Fatal(err)
 	}
-	run := func(n int) {
+	run = func(n int) {
 		for range n {
 			w.Frame(time.Second / 60)
 		}
@@ -551,7 +551,7 @@ func mountTimeline(t *testing.T, hold bool, ks []Key) (*gunim.Window, *VirtualLi
 			}
 		}
 	}
-	return w, l, run, asked
+	return w, list, run, asked
 }
 
 func TestVirtualListHoldsTheRowReadAsADayHeadingMovesUp(t *testing.T) {

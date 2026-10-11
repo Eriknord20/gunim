@@ -394,7 +394,7 @@ func (g *DataGrid) Reveal(i int, u *gunim.UI) {
 	if i < 0 || i >= g.rows {
 		return
 	}
-	g.reveal(i)
+	g.revealRow(i)
 	if u == nil || g.rowH <= 0 {
 		g.top, g.vel = g.goal, 0
 		return
@@ -504,7 +504,7 @@ func (g *DataGrid) clampTop(row float64) float64 {
 }
 
 // reveal scrolls just far enough to show row i whole.
-func (g *DataGrid) reveal(i int) {
+func (g *DataGrid) revealRow(i int) {
 	vis := g.Visible()
 	switch {
 	case float64(i) < g.goal:
@@ -526,13 +526,13 @@ func (g *DataGrid) selectAndTell(i int, u *gunim.UI) {
 	}
 	if i == g.selected {
 		if i >= 0 {
-			g.reveal(i)
+			g.revealRow(i)
 		}
 		return
 	}
 	g.selected = i
 	if i >= 0 {
-		g.reveal(i)
+		g.revealRow(i)
 	}
 	if g.OnSelect != nil {
 		g.send(g.OnSelect(i, u), u)
@@ -972,7 +972,7 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 		start := pen
 		switch {
 		case s.Icon != nil:
-			paintIcon(p, th, s.Icon, geom.Rc(pen, y+(g.rowH-size)/2, size, size), ink, 1)
+			drawIcon(p, th, s.Icon, geom.Rc(pen, y+(g.rowH-size)/2, size, size), ink, 1)
 			pen += iconW
 		case s.Image != nil:
 			side := min(spanImageSide(size), g.rowH-2)

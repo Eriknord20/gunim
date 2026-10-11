@@ -20,7 +20,7 @@ func TestAnotherProgramsInstallStays(t *testing.T) {
 	shared := filepath.Join(t.TempDir(), "apps")
 	dir := func() (string, error) { return shared, nil }
 	alpha := App{Name: "alpha", Version: "v1.0.0", Dir: dir}
-	s, err := newSession(alpha, program, false)
+	s, err := sessionFor(alpha, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestAnotherProgramsInstallStays(t *testing.T) {
 	}
 	beta := App{Name: "beta", Version: "v2.0.0", Dir: dir}
 	for _, uninstall := range []bool{false, true} {
-		if _, err := newSession(beta, program, uninstall); !errors.Is(err, errOther) {
+		if _, err := sessionFor(beta, program, uninstall); !errors.Is(err, errOther) {
 			t.Errorf("a session for beta in alpha's folder (uninstall %v): %v", uninstall, err)
 		}
 	}
@@ -60,7 +60,7 @@ func TestMoveInLeavesANewerInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := App{Name: "kakel", Version: "v0.6.0", Formerly: []string{old}}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestOtherProgramsEntriesStay(t *testing.T) {
 		}
 	}
 
-	s, err := newSession(a, program, true)
+	s, err := sessionFor(a, program, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestOtherProgramsEntriesStay(t *testing.T) {
 	}
 	stays("after an uninstall with nothing installed")
 
-	s, err = newSession(a, program, false)
+	s, err = sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestACopyRunningFromAnOldPlaceCounts(t *testing.T) {
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	a := App{Name: "kakel", Version: "v0.6.0", Formerly: []string{old}}
 	for _, uninstall := range []bool{false, true} {
-		s, err := newSession(a, program, uninstall)
+		s, err := sessionFor(a, program, uninstall)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestStartsBesideARunningCopyAreNotCounted(t *testing.T) {
 func TestAnInstallByHandEndsTheTrial(t *testing.T) {
 	_, program := testHome(t)
 	a := App{Name: "studio", Version: "v2.0.0"}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestAnInstallByHandEndsTheTrial(t *testing.T) {
 func TestAStoppedFreshInstallLeavesNothing(t *testing.T) {
 	_, program := testHome(t)
 	a := testApp()
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}

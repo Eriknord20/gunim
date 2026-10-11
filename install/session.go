@@ -201,24 +201,24 @@ func NewSession(a App, uninstall bool) (*Session, error) {
 		return nil, err
 	}
 	self = resolve(self)
-	return newSession(a, self, uninstall)
+	return sessionFor(a, self, uninstall)
 }
 
-// NewSessionFor is [NewSession] for the program at path in place of
-// the one running, as for a test, or a program that installs another it
+// NewSessionFor is [NewSession] for the program at exe in place of the
+// one running, as for a test, or a program that installs another it
 // holds.
-func NewSessionFor(a App, path string, uninstall bool) (*Session, error) {
+func NewSessionFor(a App, exe string, uninstall bool) (*Session, error) {
 	if err := a.check(); err != nil {
 		return nil, err
 	}
 	if !supported {
 		return nil, ErrUnsupported
 	}
-	return newSession(a, resolve(path), uninstall)
+	return sessionFor(a, resolve(exe), uninstall)
 }
 
-// newSession is NewSession for the program at self.
-func newSession(a App, self string, uninstall bool) (*Session, error) {
+// sessionFor is NewSession for the program at self.
+func sessionFor(a App, self string, uninstall bool) (*Session, error) {
 	dir, err := a.dir()
 	if err != nil {
 		return nil, err
@@ -301,11 +301,11 @@ func (a *App) ours(in Installation, p string) bool {
 	return samePath(p, in.Exe) || a.former(p)
 }
 
-// former reports whether path is one of the places older versions put
+// former reports whether exe is one of the places older versions put
 // the program.
-func (a *App) former(path string) bool {
+func (a *App) former(exe string) bool {
 	for _, f := range a.Formerly {
-		if samePath(f, path) {
+		if samePath(f, exe) {
 			return true
 		}
 	}
@@ -381,11 +381,11 @@ func (s *Session) Running() []int {
 // Install installs the program with the offers picked, telling progress
 // how it goes. It returns the installation.
 func (s *Session) Install(ctx context.Context, picks map[string]bool, progress func(Progress)) (Installation, error) {
-	return s.install(ctx, picks, progress, true)
+	return s.installTo(ctx, picks, progress, true)
 }
 
-// install is Install, checking there is room first with room.
-func (s *Session) install(ctx context.Context, picks map[string]bool, progress func(Progress), room bool) (Installation, error) {
+// installTo is Install, checking there is room first with room.
+func (s *Session) installTo(ctx context.Context, picks map[string]bool, progress func(Progress), room bool) (Installation, error) {
 	if progress == nil {
 		progress = func(Progress) {}
 	}
@@ -636,10 +636,11 @@ func (a *App) copyFiles(ctx context.Context, dir string, progress func(float32))
 	return names, nil
 }
 
-// writeFile writes data to path through a file beside it that is moved
-// into place, so path holds the old bytes or the new, never part.
-func writeFile(path string, data []byte, mode os.FileMode) error {
-	return writeVia(path, mode, Replace, func(f *os.File) error {
+// writeFile writes data to the file at to, through one beside it that
+// is moved into place, so it holds the old bytes or the new, never
+// part.
+func writeFile(to string, data []byte, mode os.FileMode) error {
+	return writeVia(to, mode, Replace, func(f *os.File) error {
 		_, err := f.Write(data)
 		return err
 	})
@@ -734,7 +735,7 @@ func copyFile(ctx context.Context, from, to string, progress func(float32)) erro
 // one is moved aside to path.old first, which [CleanOld] takes away
 // later, and moved back if the new one cannot be put in place, so path
 // is never left missing.
-func Replace(part, path string) error { return replaceKeeping(part, path, false) }
+func Replace(part, to string) error { return replaceKeeping(part, to, false) }
 
 // replaceKeeping is Replace of the file at to, which with keep leaves
 // to.old as it is, for an update to give way to: where the program is
@@ -780,12 +781,12 @@ func moveAside(file string, keep bool) (string, error) {
 	return old, nil
 }
 
-// CleanOld takes away the copy a replace moved aside from path, once
+// CleanOld takes away the copy a replace moved aside from exe, once
 // the program that ran from it has gone, and those moveAside moved out
 // of its way.
-func CleanOld(path string) {
-	_ = os.Remove(path + ".old")
-	for _, f := range leftovers(path, ".old") {
+func CleanOld(exe string) {
+	_ = os.Remove(exe + ".old")
+	for _, f := range leftovers(exe, ".old") {
 		_ = os.Remove(f)
 	}
 }
@@ -816,8 +817,8 @@ func samePath(a, b string) bool {
 
 // resolve is path cleaned, with its links resolved where it exists.
 func resolve(p string) string {
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return real
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
 	}
 	return filepath.Clean(p)
 }

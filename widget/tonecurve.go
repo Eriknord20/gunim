@@ -100,7 +100,7 @@ type goneDot struct {
 func NewToneCurve() *ToneCurve {
 	c := &ToneCurve{morph: anim.NewFloat(1), held: -1, hover: -1, ring: anim.NewFloat(0), nudge: anim.NewPoint(geom.Point{})}
 	c.Add(c.morph, c.ring, c.nudge)
-	c.setPoints(nil)
+	c.replacePoints(nil)
 	c.from = c.to
 	return c
 }
@@ -115,7 +115,7 @@ func (c *ToneCurve) SetPoints(pts []geom.Point, u *gunim.UI) {
 		return
 	}
 	c.from = c.shown()
-	c.setPoints(pts)
+	c.replacePoints(pts)
 	// Before the first layout, or with no UI, the curve takes its shape at once.
 	if !c.laid || u == nil {
 		c.from = c.to
@@ -132,7 +132,7 @@ func isStraight(pts []geom.Point) bool {
 }
 
 // setPoints takes pts, or the straight line, and its samples.
-func (c *ToneCurve) setPoints(pts []geom.Point) {
+func (c *ToneCurve) replacePoints(pts []geom.Point) {
 	if len(pts) < 2 {
 		pts = []geom.Point{{X: 0, Y: 0}, {X: 1, Y: 1}}
 	}
@@ -500,9 +500,10 @@ func (c *ToneCurve) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			at = at.Add(c.nudge.Value())
 			grow += 0.25 * min(max(ring, 0), 1)
 		}
-		if i == c.held {
+		switch i {
+		case c.held:
 			grow = 1.45
-		} else if i == c.hover {
+		case c.hover:
 			grow = max(grow, 1.25)
 		}
 		d := dot * grow * c.size[i].Value()
