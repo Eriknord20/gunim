@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// listen makes this the one running for dir, taking each handover with
+// startOne makes this the one running for dir, taking each handover with
 // take, and returns what it took.
-func listen(t *testing.T, dir string, take bool) (<-chan Handover, func()) {
+func startOne(t *testing.T, dir string, take bool) (took <-chan Handover, stop func()) {
 	t.Helper()
 	in, stop, err := Listen(t.Context(), dir)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestACommandLineIsHandedOver(t *testing.T) {
 	if ok, err := Hand(dir, Handover{Args: []string{"-ssh", "x"}}); ok || err != nil {
 		t.Fatalf("with none running, the handover was taken %v, %v", ok, err)
 	}
-	got, _ := listen(t, dir, true)
+	got, _ := startOne(t, dir, true)
 	ok, err := Hand(dir, Handover{Args: []string{"-ssh", "x"}, Dir: "/srv"})
 	if !ok || err != nil {
 		t.Fatalf("the handover was taken %v, %v", ok, err)
@@ -61,7 +61,7 @@ func TestACommandLineIsHandedOver(t *testing.T) {
 // said to be taken: the copy handing it over runs as the one.
 func TestAHandoverNotTakenIsSaidSo(t *testing.T) {
 	dir := t.TempDir()
-	listen(t, dir, false)
+	startOne(t, dir, false)
 	if ok, _ := Hand(dir, Handover{Args: []string{"-e", "x"}}); ok {
 		t.Fatal("a handover not taken was said to be")
 	}
@@ -70,11 +70,12 @@ func TestAHandoverNotTakenIsSaidSo(t *testing.T) {
 // A handover without the token is not heard.
 func TestAHandoverWithoutTheTokenIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	got, _ := listen(t, dir, true)
+	got, _ := startOne(t, dir, true)
 	raw, _ := os.ReadFile(filepath.Join(dir, File))
 	var r running
 	_ = json.Unmarshal(raw, &r)
-	conn, err := net.Dial("tcp", r.Addr)
+	var d net.Dialer
+	conn, err := d.DialContext(t.Context(), "tcp", r.Addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestAHandoverWithoutTheTokenIsRefused(t *testing.T) {
 // runs as the one.
 func TestTheFileGoesWithTheOneRunning(t *testing.T) {
 	dir := t.TempDir()
-	_, stop := listen(t, dir, true)
+	_, stop := startOne(t, dir, true)
 	stop()
 	if _, err := os.Stat(filepath.Join(dir, File)); !os.IsNotExist(err) {
 		t.Fatalf("stopped, the file is still there: %v", err)
@@ -111,7 +112,8 @@ func TestTheFileGoesWithTheOneRunning(t *testing.T) {
 // on its port now.
 func TestAFileLeftBehindIsNotBelieved(t *testing.T) {
 	dir := t.TempDir()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
