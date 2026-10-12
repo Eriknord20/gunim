@@ -220,3 +220,24 @@ func TestTheChipsBarsHoldBetweenTheChunksTheSoundComesIn(t *testing.T) {
 		t.Errorf("between chunks the level swings %.1f dB, from %.1f to %.1f; want -6 held", high-low, low, high)
 	}
 }
+
+func TestAnEffectPlaysTheSameWithNotesInItsBlocks(t *testing.T) {
+	d, _ := plug.Lookup("marrasen.trim")
+	if d.Instrument() || d.Notes {
+		t.Fatalf("the trim lists as an instrument, or as taking notes")
+	}
+	play := func(events []plug.Event) []float32 {
+		p, _ := newPlugin(t)
+		pr := p.Processor()
+		pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
+		ch := [][]float32{ones(512), ones(512)}
+		pr.Process(&plug.Block{In: ch, Out: ch, Frames: 512, Events: events,
+			Changes: []plug.Change{{ID: GainID, Value: -6}, {Frame: 100, ID: GainID, Value: 3}}})
+		return ch[0]
+	}
+	notes := []plug.Event{{Frame: 10, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 1},
+		{Frame: 200, Kind: plug.Pedal, Value: 1}, {Frame: 300, Kind: plug.NoteOff, Note: 1}}
+	if !slices.Equal(play(nil), play(notes)) {
+		t.Errorf("the trim's sound changed with notes in its block")
+	}
+}

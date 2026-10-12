@@ -48,6 +48,7 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			Patches: []Patch{{Name: "A", Params: map[uint32]float64{2: 0}}}},
 		"patch of a meter": {ID: "test.meter", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Flags: ReadOnly}},
 			Patches: []Patch{{Name: "A", Params: map[uint32]float64{1: 0}}}},
+		"instrument without notes": {ID: "test.deaf", Name: "X", New: newer, Kind: "Instrument|Synth"},
 	} {
 		func() {
 			defer func() {
@@ -89,4 +90,26 @@ func TestRegisteredPluginsAreListedAndFound(t *testing.T) {
 		}
 	}()
 	Register(Descriptor{ID: prefix + "a", Name: "Again", New: newer})
+}
+
+func TestAnInstrumentIsKnownByItsKind(t *testing.T) {
+	for kind, want := range map[string]bool{
+		"Instrument": true, "Instrument|Synth": true, "Instrument|Drum": true,
+		"": false, "Fx|EQ": false, "Fx|Instrument": false, "Instruments|Synth": false,
+	} {
+		d := Descriptor{Kind: kind}
+		if got := d.Instrument(); got != want {
+			t.Errorf("of kind %q, Instrument = %v, want %v", kind, got, want)
+		}
+	}
+	// An instrument registers as it takes notes, and so does an effect
+	// that takes them beside its sound.
+	listedRuns++
+	prefix := fmt.Sprintf("listed%d.", listedRuns)
+	newer := func(Host) Plugin { return nil }
+	Register(Descriptor{ID: prefix + "synth", Name: "Synth", Kind: "Instrument|Synth", Notes: true, New: newer})
+	Register(Descriptor{ID: prefix + "vocoder", Name: "Vocoder", Kind: "Fx|Modulation", Notes: true, New: newer})
+	if d, _ := Lookup(prefix + "synth"); !d.Instrument() || !d.Notes {
+		t.Errorf("the synth registered as %+v", d)
+	}
 }
