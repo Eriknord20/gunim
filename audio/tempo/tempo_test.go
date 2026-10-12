@@ -12,6 +12,16 @@ import (
 // near reports whether two durations are within tol of one another.
 func near(a, b, tol time.Duration) bool { return a-b < tol && b-a < tol }
 
+// TestTupletsLandOnWholeTicks: a quarter note splits into two to eight
+// equal notes with no tick left over, so a septuplet snaps exactly.
+func TestTupletsLandOnWholeTicks(t *testing.T) {
+	for n := Ticks(2); n <= 8; n++ {
+		if PPQ%n != 0 {
+			t.Errorf("a quarter note of %d ticks leaves %d over in %d parts", PPQ, PPQ%n, n)
+		}
+	}
+}
+
 // TestTheZeroMapIsASteadyFourFour: a map nobody filled in still answers,
 // so a recording with no tempo set reads as 120 in four four.
 func TestTheZeroMapIsASteadyFourFour(t *testing.T) {

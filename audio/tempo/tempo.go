@@ -37,7 +37,7 @@ import (
 // PPQ is the ticks in a quarter note. It divides by 2, 3, 4, 5, 6, 7
 // and 8, so triplets, quintuplets and septuplets all land on whole
 // ticks.
-const PPQ = 960
+const PPQ = 3360
 
 // DefaultBPM is the tempo a map with no tempo of its own reads as: a
 // steady 120.
