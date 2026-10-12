@@ -41,8 +41,16 @@ func goSurfaceDestroyed(w *C.ANativeWindow) { theDriver.surfaceDestroyed(w) }
 func goMetrics(density, rate C.float) { theDriver.metrics(float32(density), float64(rate)) }
 
 //export goTouch
-func goTouch(action C.int, x, y C.float, ms C.longlong) {
-	theDriver.touch(int(action), float32(x), float32(y), time.Now())
+func goTouch(action, id C.int, x, y C.float, ms C.longlong) C.int {
+	if theDriver.touch(int(action), int(id), float32(x), float32(y), time.Now()) {
+		return 1
+	}
+	return 0
+}
+
+//export goFinger
+func goFinger(action, id C.int, x, y C.float) {
+	theDriver.finger(int(action), int(id), float32(x), float32(y), time.Now())
 }
 
 //export goPinch
@@ -212,6 +220,16 @@ func goMedia(action C.int, ms C.longlong) {
 
 // buzz gives the short buzz a long press gives.
 func buzz() { C.gunim_buzz() }
+
+// takeFingers tells the view whether a touch's fingers are fingers of
+// their own, or the second one pinches.
+func takeFingers(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.gunim_take_fingers(v)
+}
 
 // excludeGestures keeps the system's edge gestures out of rects, four
 // pixel coordinates each: left, top, right, bottom.

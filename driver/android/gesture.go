@@ -28,9 +28,15 @@ type gesture struct {
 // out from what the finger does and what it pressed whether it taps,
 // drags, scrolls or long presses. x and y are in device pixels.
 //
+// In a window that takes fingers the first finger is a finger of its
+// own as well: as it comes down, its [input.Finger] goes ahead of the
+// press, so the node that takes it holds it as the press arrives, and
+// touch reports true, for the view to send the rest of it through
+// finger. id is the finger's.
+//
 // The events go to the window's queue with the driver's lock held, so a
 // touch and a pinch reach the engine in the order they happened.
-func (d *Driver) touch(action int, x, y float32, now time.Time) {
+func (d *Driver) touch(action, id int, x, y float32, now time.Time) (own bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// The windows are drawn slid up by the pan, so the point touched
@@ -39,8 +45,13 @@ func (d *Driver) touch(action int, x, y float32, now time.Time) {
 	g := &d.gesture
 	w := d.touched
 	if action == touchDown {
+		// A finger of its own still down from a touch before had its
+		// lift lost; it lifts now, so no node waits on it.
+		d.liftFingersLocked(now)
 		w = d.hitLocked(at)
 		d.touched = w
+		own = w != nil && w.takesFingers
+		d.takeFingersLocked(w)
 		d.keyed, d.refit = false, false
 		*g = gesture{}
 		if now.Sub(d.lastAt) < doubleTapTime && abs(at.X-d.lastTap.X) < doubleTapSpace && abs(at.Y-d.lastTap.Y) < doubleTapSpace {
@@ -54,7 +65,7 @@ func (d *Driver) touch(action int, x, y float32, now time.Time) {
 		d.touched = nil
 	}
 	if w == nil {
-		return
+		return false
 	}
 	pos := at.Sub(w.pos)
 	if g.pinched && action != touchDown {
@@ -63,10 +74,17 @@ func (d *Driver) touch(action int, x, y float32, now time.Time) {
 			d.endPinchLocked(w, now)
 			w.in.Push(input.PointerLeave{Time: now})
 		}
-		return
+		return false
 	}
 	switch action {
 	case touchDown:
+		if own {
+			if d.fingers == nil {
+				d.fingers = map[int]*Window{}
+			}
+			d.fingers[id] = w
+			w.in.Push(input.Finger{ID: id, Pos: pos, Phase: input.FingerDown, Time: now})
+		}
 		w.in.Push(input.PointerMove{Pos: pos, Touch: true, Time: now})
 		w.in.Push(input.PointerDown{Pos: pos, Button: input.ButtonPrimary, Clicks: d.clicks, Touch: true, Time: now})
 	case touchMove:
@@ -78,6 +96,76 @@ func (d *Driver) touch(action int, x, y float32, now time.Time) {
 		w.in.Push(input.PointerUp{Pos: input.Away, Button: input.ButtonPrimary, Touch: true, Time: now})
 		w.in.Push(input.PointerLeave{Time: now})
 	}
+	return own
+}
+
+// finger turns a finger of its own, in a touch whose window takes
+// fingers, into [input.Finger] for the window it came down in, wherever
+// it goes after. A finger beyond the first comes down here; the first
+// comes down through touch, and moves and lifts here. action is a
+// touch's; a cancel lifts every finger at [input.Away]. x and y are in
+// device pixels.
+func (d *Driver) finger(action, id int, x, y float32, now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if action == touchCancel {
+		d.liftFingersLocked(now)
+		return
+	}
+	at := geom.Pt(x/d.density, (y+float32(math.Round(d.pan)))/d.density)
+	w := d.fingers[id]
+	phase := input.FingerMove
+	switch action {
+	case touchDown:
+		// The id is free again once its finger lifted, so a finger still
+		// held under it had its lift lost: it lifts first.
+		if w != nil {
+			w.in.Push(input.Finger{ID: id, Pos: input.Away, Phase: input.FingerUp, Time: now})
+			delete(d.fingers, id)
+		}
+		if w = d.hitLocked(at); w == nil {
+			return
+		}
+		if d.fingers == nil {
+			d.fingers = map[int]*Window{}
+		}
+		d.fingers[id] = w
+		phase = input.FingerDown
+	case touchUp:
+		delete(d.fingers, id)
+		phase = input.FingerUp
+	}
+	if w == nil {
+		return
+	}
+	w.in.Push(input.Finger{ID: id, Pos: at.Sub(w.pos), Phase: phase, Time: now})
+}
+
+// liftFingersLocked lifts every finger of its own still down at
+// [input.Away].
+func (d *Driver) liftFingersLocked(now time.Time) {
+	for id, w := range d.fingers {
+		w.in.Push(input.Finger{ID: id, Pos: input.Away, Phase: input.FingerUp, Time: now})
+	}
+	clear(d.fingers)
+}
+
+// takeFingersLocked hands the view the setting of the window the touch
+// in progress started in, where it differs from the last it handed.
+// changed is the window whose setting may have changed: the view hears
+// only the touch's window, and as a touch starts, the window it starts
+// in, nil for none. It runs with mu held, so the calls reach Java in
+// the order the windows made them.
+func (d *Driver) takeFingersLocked(changed *Window) {
+	if changed != d.touched {
+		return
+	}
+	on := changed != nil && changed.takesFingers
+	if on == d.fingersOn {
+		return
+	}
+	d.fingersOn = on
+	takeFingers(on)
 }
 
 // Pinch actions, as GunimView sends them.

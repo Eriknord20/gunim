@@ -93,6 +93,11 @@ type Driver struct {
 	// keeps the touch until it lifts. lastTap and lastAt are the last
 	// press, for a double tap.
 	touched *Window
+	// fingers is the window each finger of its own came down in, by its
+	// id.
+	fingers map[int]*Window
+	// fingersOn is what the view last heard from takeFingers.
+	fingersOn bool
 	// gesture is what the touch in progress has become.
 	gesture gesture
 	lastTap geom.Point
@@ -688,6 +693,11 @@ func (d *Driver) closed(w *Window) {
 	}
 	if d.touched == w {
 		d.touched = nil
+	}
+	for id, x := range d.fingers {
+		if x == w {
+			delete(d.fingers, id)
+		}
 	}
 	if d.typing == w {
 		d.typing = nil

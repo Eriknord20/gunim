@@ -13,7 +13,7 @@
 static JavaVM *vm;
 static jclass nativeClass;
 static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder;
-static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
+static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
 
 // JNI_OnLoad runs on the thread that loads the library, which has the
@@ -34,6 +34,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 		"(ZZLjava/lang/String;Ljava/lang/String;Ljava/lang/String;JJ[B)V");
 	midCaret = (*env)->GetStaticMethodID(env, c, "caret", "(IIII)V");
 	midBuzz = (*env)->GetStaticMethodID(env, c, "buzz", "()V");
+	midFingers = (*env)->GetStaticMethodID(env, c, "takeFingers", "(Z)V");
 	midShare = (*env)->GetStaticMethodID(env, c, "share", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
 	midVibrate = (*env)->GetStaticMethodID(env, c, "vibrate", "([J)Z");
 	midExclude = (*env)->GetStaticMethodID(env, c, "excludeGestures", "([I)V");
@@ -215,6 +216,13 @@ void gunim_buzz(void) {
 	envPut(a);
 }
 
+void gunim_take_fingers(int on) {
+	int a;
+	JNIEnv *env = envGet(&a);
+	(*env)->CallStaticVoidMethod(env, nativeClass, midFingers, on ? JNI_TRUE : JNI_FALSE);
+	envPut(a);
+}
+
 int gunim_share(const uint16_t *text, int nt, const uint16_t *subject, int ns, const uint16_t *paths, int np) {
 	int a;
 	JNIEnv *env = envGet(&a);
@@ -315,8 +323,12 @@ JNIEXPORT void JNICALL Java_gunim_android_Native_metrics(JNIEnv *env, jclass c, 
 	goMetrics(density, rate);
 }
 
-JNIEXPORT void JNICALL Java_gunim_android_Native_touch(JNIEnv *env, jclass c, jint action, jfloat x, jfloat y, jlong ms) {
-	goTouch(action, x, y, ms);
+JNIEXPORT jboolean JNICALL Java_gunim_android_Native_touch(JNIEnv *env, jclass c, jint action, jint id, jfloat x, jfloat y, jlong ms) {
+	return goTouch(action, id, x, y, ms) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_gunim_android_Native_finger(JNIEnv *env, jclass c, jint action, jint id, jfloat x, jfloat y) {
+	goFinger(action, id, x, y);
 }
 
 JNIEXPORT void JNICALL Java_gunim_android_Native_pinch(JNIEnv *env, jclass c, jint action, jfloat x0, jfloat y0, jfloat x1, jfloat y1) {

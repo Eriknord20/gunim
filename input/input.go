@@ -123,6 +123,32 @@ type Pinch struct {
 	Time  time.Time
 }
 
+// Finger carries a finger on a touch screen, in a window that takes
+// more than one: see gunim's Client.TakeFingers. Every finger, the first
+// as well, comes down, moves and lifts as Fingers with an ID of its own,
+// the same from its FingerDown to its FingerUp, at the node that took
+// its FingerDown, wherever it goes after. The first finger drives the
+// pointer too, for nodes that take the pointer; the pointer's events
+// stop at a node holding a finger, so that node hears its fingers as
+// Fingers alone. Pos is in the node's own space. A touch called off
+// lifts every finger with a FingerUp at [Away].
+type Finger struct {
+	ID    int
+	Pos   geom.Point
+	Phase FingerPhase
+	Time  time.Time
+}
+
+// FingerPhase says where a [Finger] is: coming down, moving or lifting.
+type FingerPhase uint8
+
+// The phases of a finger.
+const (
+	FingerDown FingerPhase = iota
+	FingerMove
+	FingerUp
+)
+
 // PinchPhase says where a [Pinch] is in its gesture.
 type PinchPhase uint8
 
@@ -365,6 +391,7 @@ func (PointerDown) isEvent()  {}
 func (PointerUp) isEvent()    {}
 func (Scroll) isEvent()       {}
 func (Pinch) isEvent()        {}
+func (Finger) isEvent()       {}
 func (Heading) isEvent()      {}
 func (KeyPress) isEvent()     {}
 func (KeyRelease) isEvent()   {}

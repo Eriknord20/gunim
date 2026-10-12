@@ -63,6 +63,8 @@ type OffscreenWindow struct {
 	// SetVibrator.
 	share   func(Share) error
 	vibrate func([]time.Duration) error
+	// fingers is what TakeFingers last said.
+	fingers bool
 	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
 	edgeSwipes     []geom.Rect
 	edgeSwipeCalls int
@@ -842,6 +844,23 @@ func (w *OffscreenWindow) Vibrate(pattern ...time.Duration) error {
 		return ErrNoVibrator
 	}
 	return fn(pattern)
+}
+
+// TakeFingers implements [FingerTaker] by keeping on, for a test to read
+// with FingersTaken; a test hands the window its fingers as
+// [input.Finger].
+func (w *OffscreenWindow) TakeFingers(on bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.fingers = on
+	return nil
+}
+
+// FingersTaken is what TakeFingers last said.
+func (w *OffscreenWindow) FingersTaken() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fingers
 }
 
 // KeepEdgeSwipes implements [EdgeSwipeKeeper] by keeping bands, for a test to read with EdgeSwipesKept.

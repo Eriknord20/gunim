@@ -44,3 +44,16 @@ type Vibrator interface {
 // ErrNoVibrator is returned where the device has no vibration motor
 // gunim can run.
 var ErrNoVibrator = errors.New("driver: no vibration motor on this device")
+
+// A FingerTaker is a [Window] on a touch screen that can take more than
+// one finger at once. TakeFingers on sends every finger of a touch that
+// starts in the window as [input.Finger], a second one in place of a
+// pinch, with the first finger's FingerDown ahead of its press, and the
+// first finger drives the pointer as well; off gives pinches back.
+type FingerTaker interface {
+	TakeFingers(on bool) error
+}
+
+// ErrNoFingers is returned where the window has no touch screen gunim
+// reads more than one finger of.
+var ErrNoFingers = errors.New("driver: no multi-touch screen")

@@ -205,7 +205,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 			u.shapePointer(root, e.Pos)
 			return
 		}
-		u.dispatchAt(root, e.Pos, mk)
+		u.dispatchTouch(root, e.Pos, mk, e.Touch)
 		u.shapePointer(root, e.Pos)
 		if root == u.root {
 			u.movedAt(e.Mods)
@@ -242,9 +242,9 @@ func (u *UI) handleRaw(root *state, ev any) {
 		focusing := u.focus != was
 		held := u.capture
 		// Whoever takes the press keeps the pointer until the release.
-		u.capture = u.dispatchAt(root, e.Pos, func(local geom.Point) input.Event {
+		u.capture = u.dispatchTouch(root, e.Pos, func(local geom.Point) input.Event {
 			return input.PointerDown{Pos: local, Button: e.Button, Mods: e.Mods, Clicks: e.Clicks, Focusing: focusing, Behind: e.Behind, Touch: e.Touch, Time: e.Time}
-		})
+		}, e.Touch)
 		if pointerDebug {
 			pointerf("press %d at %.1f,%.1f in the %s: under it %s, taken by %s; held before %s, %d popups, drag %v, focus %s",
 				e.Button, e.Pos.X, e.Pos.Y, u.rootName(root), u.chainAt(root, e.Pos), nodeName(u.capture), nodeName(held),
@@ -292,17 +292,19 @@ func (u *UI) handleRaw(root *state, ev any) {
 			u.shapePointer(root, e.Pos)
 			return
 		}
-		u.dispatchAt(root, e.Pos, mk)
+		u.dispatchTouch(root, e.Pos, mk, e.Touch)
 	case input.Scroll:
 		u.altAlone = false
 		if !u.wheelZoomerAt(root, e.Pos) && u.zoomKey(e) {
 			return
 		}
-		u.dispatchAt(root, e.Pos, func(local geom.Point) input.Event {
+		u.dispatchTouch(root, e.Pos, func(local geom.Point) input.Event {
 			return input.Scroll{Pos: local, Delta: e.Delta, Notches: e.Notches, Mods: e.Mods, Touch: e.Touch, Time: e.Time}
-		})
+		}, e.Touch)
 	case input.Pinch:
 		u.pinchEvent(root, e)
+	case input.Finger:
+		u.fingerEvent(root, e)
 	case input.PointerLeave:
 		if root == u.root {
 			u.pointerIn = false
@@ -817,7 +819,18 @@ func (u *UI) updateHover(root *state, p geom.Point, t time.Time) {
 // node that declines it passes the event on to its ancestors. It
 // returns the node that took the event, or nil.
 func (u *UI) dispatchAt(root *state, p geom.Point, mk func(local geom.Point) input.Event) *state {
+	return u.dispatchTouch(root, p, mk, false)
+}
+
+// dispatchTouch is dispatchAt, which stops at a node holding a finger
+// when touch says the event is a touch pointer's: the nodes inside it
+// may take the event, and it and those around it hear the finger as
+// [input.Finger] alone.
+func (u *UI) dispatchTouch(root *state, p geom.Point, mk func(local geom.Point) input.Event, touch bool) *state {
 	for s := u.hit(root, p); s != nil; s = s.parent {
+		if touch && u.holdsFinger(s) {
+			return nil
+		}
 		if h, ok := s.node.(Handler); ok {
 			var took bool
 			u.on(s, func() { took = h.Handle(mk(u.local(s, p)), u) })

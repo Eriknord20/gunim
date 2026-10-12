@@ -12,8 +12,8 @@ import android.view.inputmethod.InputMethodManager;
 
 /**
  * GunimView is the surface gunim draws every window into. It hands Go
- * the surface, the first finger's touches, the keys, and through
- * GunimInput the soft keyboard.
+ * the surface, the first finger's touches, each finger of its own, the
+ * keys, and through GunimInput the soft keyboard.
  */
 final class GunimView extends SurfaceView implements SurfaceHolder.Callback {
 	final GunimInput input;
@@ -25,6 +25,14 @@ final class GunimView extends SurfaceView implements SurfaceHolder.Callback {
 	private int pointer = -1;
 	private int second = -1;
 	private boolean pinching;
+	// own holds, a bit per id, the fingers sent to Go as fingers of
+	// their own and not lifted yet, the first among them in a window
+	// that takes fingers; each lifts as itself, whatever
+	// Native.fingers says by then. ownX and ownY are where each was
+	// sent last, so a finger that stays put sends no move.
+	private int own;
+	private final float[] ownX = new float[32];
+	private final float[] ownY = new float[32];
 
 	GunimView(Context c) {
 		super(c);
@@ -61,52 +69,99 @@ final class GunimView extends SurfaceView implements SurfaceHolder.Callback {
 			pointer = e.getPointerId(0);
 			second = -1;
 			pinching = false;
+			own = 0;
 			requestFocus();
-			Native.touch(0, e.getX(0), e.getY(0), e.getEventTime());
+			// In a window that takes fingers the first finger is a
+			// finger of its own too, which Go sends down with the press.
+			if (Native.touch(0, pointer, e.getX(0), e.getY(0), e.getEventTime()) && pointer < 32) {
+				own = 1 << pointer;
+				ownX[pointer] = e.getX(0);
+				ownY[pointer] = e.getY(0);
+			}
 			return true;
-		case MotionEvent.ACTION_POINTER_DOWN:
+		case MotionEvent.ACTION_POINTER_DOWN: {
+			int i = e.getActionIndex();
+			int id = e.getPointerId(i);
+			if (Native.fingers && !pinching && id >= 0 && id < 32) {
+				// A finger of its own, while the first goes on as the
+				// pointer.
+				own |= 1 << id;
+				ownX[id] = e.getX(i);
+				ownY[id] = e.getY(i);
+				Native.finger(0, id, ownX[id], ownY[id]);
+				return true;
+			}
 			if (pointer >= 0 && !pinching) {
-				second = e.getPointerId(e.getActionIndex());
+				second = id;
 				pinching = true;
 				pinch(0, e);
 			}
 			return true;
+		}
 		case MotionEvent.ACTION_MOVE: {
+			for (int k = 0; own != 0 && k < e.getPointerCount(); k++) {
+				int id = e.getPointerId(k);
+				if (isOwn(id) && (e.getX(k) != ownX[id] || e.getY(k) != ownY[id])) {
+					ownX[id] = e.getX(k);
+					ownY[id] = e.getY(k);
+					Native.finger(1, id, ownX[id], ownY[id]);
+				}
+			}
 			if (pinching) {
 				pinch(1, e);
 				return true;
 			}
 			int i = e.findPointerIndex(pointer);
 			if (i >= 0) {
-				Native.touch(1, e.getX(i), e.getY(i), e.getEventTime());
+				Native.touch(1, pointer, e.getX(i), e.getY(i), e.getEventTime());
 			}
 			return true;
 		}
 		case MotionEvent.ACTION_POINTER_UP: {
-			int id = e.getPointerId(e.getActionIndex());
+			int i = e.getActionIndex();
+			int id = e.getPointerId(i);
 			if (pinching && (id == pointer || id == second)) {
 				pinch(2, e);
 				pinching = false;
 			} else if (!pinching && id == pointer) {
-				int i = e.getActionIndex();
-				Native.touch(2, e.getX(i), e.getY(i), e.getEventTime());
+				Native.touch(2, id, e.getX(i), e.getY(i), e.getEventTime());
 				pointer = -1;
+			}
+			// The pointer lets go before its finger lifts, so the node
+			// holding the finger still holds it as the release passes.
+			if (isOwn(id)) {
+				own &= ~(1 << id);
+				Native.finger(2, id, e.getX(i), e.getY(i));
 			}
 			return true;
 		}
-		case MotionEvent.ACTION_UP:
-			// The last finger lifts: the touch ends, whatever it became.
-			Native.touch(2, e.getX(0), e.getY(0), e.getEventTime());
+		case MotionEvent.ACTION_UP: {
+			// The last finger lifts: the touch ends, whatever it became,
+			// and then a finger of its own lifts as itself.
+			int id = e.getPointerId(0);
+			Native.touch(2, id, e.getX(0), e.getY(0), e.getEventTime());
+			if (isOwn(id)) {
+				Native.finger(2, id, e.getX(0), e.getY(0));
+			}
+			own = 0;
 			pointer = -1;
 			pinching = false;
 			return true;
+		}
 		case MotionEvent.ACTION_CANCEL:
-			Native.touch(3, 0, 0, e.getEventTime());
+			Native.touch(3, -1, 0, 0, e.getEventTime());
+			Native.finger(3, -1, 0, 0);
+			own = 0;
 			pointer = -1;
 			pinching = false;
 			return true;
 		}
 		return true;
+	}
+
+	/** isOwn says the finger id was sent to Go as a finger of its own. */
+	private boolean isOwn(int id) {
+		return id >= 0 && id < 32 && (own & (1 << id)) != 0;
 	}
 
 	/** pinch hands Go the two pinching fingers. */

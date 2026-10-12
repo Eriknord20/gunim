@@ -868,6 +868,29 @@ func (c Client) Vibrate(pattern ...time.Duration) error {
 	return v.Vibrate(pattern...)
 }
 
+// TakeFingers says whether the window takes more than one finger at
+// once on a touch screen, as a game steered with one thumb while the
+// other taps does. On, every finger of a touch that starts in the window
+// arrives as [input.Finger] at the node it came down on, and a second
+// finger makes a finger of its own in place of a pinch. The first finger
+// drives the pointer as well, so a button still takes a tap. A node that
+// takes a FingerDown holds that finger until its FingerUp, and the
+// pointer's events stop at it meanwhile: a node inside it, as a button
+// on a game's board, still takes the pointer, and the node and those
+// around it hear the finger only as Fingers, so a game reads every thumb
+// alike. Off, as a window starts, a second finger pinches. Each window
+// keeps its own setting, which a touch follows from the window it
+// started in. It returns
+// [driver.ErrNoFingers] where the window has no touch screen gunim reads
+// more than one finger of. It is safe from any goroutine.
+func (c Client) TakeFingers(on bool) error {
+	f, ok := c.w.dw.(driver.FingerTaker)
+	if !ok {
+		return driver.ErrNoFingers
+	}
+	return f.TakeFingers(on)
+}
+
 // SetClipboardImage puts the picture png, a PNG file's bytes, on the system clipboard in place of what it held, as
 // copying a picture in another program does. It returns once the clipboard holds it, and
 // [driver.ErrNoClipboardImage] where the platform cannot put a picture there. It is safe from any goroutine.
@@ -1417,6 +1440,8 @@ type UI struct {
 	fling *touchFling
 	// pinch is two fingers pinching now; see pinch.go.
 	pinch *pinchGesture
+	// fingers is the node holding each finger down; see fingers.go.
+	fingers map[int]*state
 	// compassOn says the window has the device's compass running, for a
 	// node that watches the heading, and headingNodes holds the nodes in
 	// the tree that can watch it, so a frame looks for watchers only
@@ -1975,6 +2000,7 @@ func (u *UI) Remove(n Node) bool {
 		u.capture = nil
 	}
 	u.losePinch(s)
+	u.loseFingers(s)
 	u.left()
 	return true
 }
@@ -2579,6 +2605,7 @@ func (u *UI) forget(s *state) {
 		u.capture = nil
 	}
 	u.losePinch(s)
+	u.loseFingers(s)
 	if s.id != "" && u.ids[s.id] == s {
 		delete(u.ids, s.id)
 	}

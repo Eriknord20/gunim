@@ -64,6 +64,10 @@ type Window struct {
 	stateSeq uint64
 	editsIn  uint64
 
+	// takesFingers is what TakeFingers last said: each finger of a
+	// touch that starts in the window is a finger of its own, and a
+	// second one starts no pinch.
+	takesFingers bool
 	// excluded is the bands KeepEdgeSwipes last kept from the system's
 	// edge gestures, in the window's logical pixels.
 	excluded []geom.Rect
@@ -401,6 +405,22 @@ func (w *Window) OpenLink(url string) error { return openLink(url) }
 // Vibrate implements [driver.Vibrator] with the phone's vibration motor.
 func (w *Window) Vibrate(pattern ...time.Duration) error { return vibrate(pattern) }
 
+// TakeFingers implements [driver.FingerTaker]: each finger of a touch
+// that starts in w is a finger of its own, and a second one starts no
+// pinch. The view holds one setting for the whole app, so the driver
+// hands it w's as each touch starts, and at once when the touch in
+// progress is in w.
+func (w *Window) TakeFingers(on bool) error {
+	w.d.mu.Lock()
+	defer w.d.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.takesFingers = on
+	w.d.takeFingersLocked(w)
+	return nil
+}
+
 // KeepEdgeSwipes implements [driver.EdgeSwipeKeeper] with the view's
 // system gesture exclusion, from Android 10; before it back is a
 // button, and the call changes nothing. The one view takes the bands of
@@ -471,6 +491,7 @@ var (
 	_ driver.Sharer          = (*Window)(nil)
 	_ driver.LinkOpener      = (*Window)(nil)
 	_ driver.Vibrator        = (*Window)(nil)
+	_ driver.FingerTaker     = (*Window)(nil)
 	_ driver.EdgeSwipeKeeper = (*Window)(nil)
 	_ driver.Compass         = (*Window)(nil)
 	_ driver.SafeAreaer      = (*Window)(nil)

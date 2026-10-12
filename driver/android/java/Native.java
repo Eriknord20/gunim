@@ -27,8 +27,9 @@ public final class Native {
 	static native void surfaceChanged(Surface surface, int width, int height);
 	static native void surfaceDestroyed(Surface surface);
 	static native void metrics(float density, float refreshRate);
-	static native void touch(int action, float x, float y, long time);
+	static native boolean touch(int action, int id, float x, float y, long time);
 	static native void pinch(int action, float x0, float y0, float x1, float y1);
+	static native void finger(int action, int id, float x, float y);
 	static native void key(boolean down, int code, int meta, int ch, int repeat);
 	static native void focus(boolean focused);
 	static native void shown(boolean shown);
@@ -223,6 +224,15 @@ public final class Native {
 			return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).getAbsolutePath();
 		}
 		return null;
+	}
+
+	// fingers says each finger is a finger of its own, and a second one
+	// starts no pinch. Go sets it through takeFingers to what the window the
+	// touch started in takes, as each touch starts.
+	static volatile boolean fingers;
+
+	static void takeFingers(boolean on) {
+		fingers = on;
 	}
 
 	static void buzz() {
