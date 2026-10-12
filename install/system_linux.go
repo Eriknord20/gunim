@@ -532,7 +532,10 @@ func freeSpace(dir string) (int64, error) {
 	if err := unix.Statfs(dir, &st); err != nil {
 		return 0, err
 	}
-	return int64(st.Bavail) * st.Bsize, nil
+	// Bsize is int64 on amd64 and arm64 but int32 or uint32 elsewhere,
+	// so the conversion is only unneeded on the machine the linter ran
+	// on.
+	return int64(st.Bavail) * int64(st.Bsize), nil //nolint:unconvert
 }
 
 // watchProcess watches the process pid: alive reports whether it still

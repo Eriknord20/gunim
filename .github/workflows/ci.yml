@@ -45,6 +45,17 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+      # A type that is 64 bits here can be 32 elsewhere, and a linter run
+      # on one machine cannot see that. Linux on 32-bit ARM is a real
+      # place gunim runs.
+      - name: Build for 32-bit Linux
+        if: runner.os == 'Linux'
+        run: |
+          GOARCH=arm go build ./...
+          GOARCH=386 go build ./...
+        env:
+          CGO_ENABLED: 0
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

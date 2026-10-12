@@ -118,7 +118,7 @@ func when2(e calendar.Event) (day, hours string) {
 	case calendar.SameDay(e.Start, e.End) || e.End.Equal(calendar.AddDays(calendar.Day(e.Start), 1)):
 		return e.Start.Format(layout), e.Start.Format("15:04") + " – " + e.End.Format("15:04") + " · " + lasting(e.End.Sub(e.Start))
 	}
-	return e.Start.Format(day+", 15:04") + " –", e.End.Format(day + ", 15:04")
+	return e.Start.Format(layout+", 15:04") + " –", e.End.Format(layout + ", 15:04")
 }
 
 // when says when e is on one line, such as "Tuesday 29 September · 09:15 – 09:30 · 15 min".
