@@ -353,6 +353,25 @@ func (r Run) Paint(p *paint.Painter, topLeft geom.Point, c color.NRGBA) {
 	})
 }
 
+// PaintFaded draws the run as Paint does, cut at room from its start
+// and fading out over the fade before it, as text that does not fit
+// fades where it is cut. A run that fits draws whole.
+func (r Run) PaintFaded(p *paint.Painter, topLeft geom.Point, c color.NRGBA, room, fade float32) {
+	if r.Advance <= room {
+		r.Paint(p, topLeft, c)
+		return
+	}
+	if len(r.Glyphs) == 0 || room <= 0 {
+		return
+	}
+	defer p.Push(paint.Translate(geom.Pt(topLeft.X, topLeft.Y+r.Ascent)))()
+	fade = min(max(fade, 0), room)
+	p.TextFaded(r.Glyphs, r.Size, c, geom.Rect{
+		Min: geom.Pt(0, -r.Ascent),
+		Max: geom.Pt(room, r.Descent),
+	}, room-fade, room)
+}
+
 // Shape lays s out as one line at size logical pixels, with no
 // wrapping. A line break in s is drawn as a space.
 //

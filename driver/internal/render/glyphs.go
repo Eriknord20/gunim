@@ -131,6 +131,14 @@ func (r *Renderer) text(op *paint.TextOp) {
 	shape := paint.Transform{A: t.A, B: t.B, D: t.D, E: t.E}
 	// A colour glyph keeps its own colours, and fades with the text.
 	colorLook := look{kind: kindGlyph, add: add, color0: [4]float32{1, 1, 1, float32(op.Color.A) / 255}, radius: 3}
+	if op.FadeTo > op.FadeFrom {
+		// A glyph has no use for its rectangle, which carries where the
+		// text fades instead, as a share of the target's width, as the
+		// shader finds each point's place across it.
+		x0, x1 := t.Apply(geom.Pt(op.FadeFrom, 0)).X*r.scale, t.Apply(geom.Pt(op.FadeTo, 0)).X*r.scale
+		fade := geom.Rect{Min: geom.Pt(x0/float32(r.fbW), 0), Max: geom.Pt(x1/float32(r.fbW), 0)}
+		l.rect, colorLook.rect = fade, fade
+	}
 
 	var (
 		face   *text.Face

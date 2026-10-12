@@ -252,7 +252,7 @@ func sameOp(a, b Op) bool {
 	case *TextOp:
 		b, ok := b.(*TextOp)
 		return ok && a.Size == b.Size && a.Color == b.Color && a.Transform == b.Transform && a.Blend == b.Blend &&
-			slices.Equal(a.Glyphs, b.Glyphs)
+			a.FadeFrom == b.FadeFrom && a.FadeTo == b.FadeTo && slices.Equal(a.Glyphs, b.Glyphs)
 	case *ImageOp:
 		b, ok := b.(*ImageOp)
 		return ok && *a == *b
@@ -745,6 +745,11 @@ type TextOp struct {
 	// blend in force as the op is recorded; see [Painter.Blend]. Text
 	// added with [BlendAdd] glows over what it crosses.
 	Blend Blend
+	// FadeFrom and FadeTo fade the text out along x, in the op's own
+	// space: whole up to FadeFrom, gone by FadeTo and past it, as text
+	// cut short fades where it is cut. FadeTo no further than FadeFrom
+	// fades nothing.
+	FadeFrom, FadeTo float32
 }
 
 // Glyph is one positioned glyph from a shaped run.
@@ -832,6 +837,18 @@ func (p *Painter) DrawRRect(op RRectOp) {
 func (p *Painter) Text(g []Glyph, size float32, c color.NRGBA, bounds geom.Rect) {
 	op := p.texts.take()
 	*op = TextOp{Glyphs: g, Size: size, Color: c, Transform: p.at(), Blend: p.blendNow()}
+	p.record(op, bounds)
+}
+
+// TextFaded is [Painter.Text] fading out along x, whole up to from and
+// gone by to, in the current space: text cut short at to that fades
+// where it is cut, rather than stopping at an edge or ending in an
+// ellipsis that takes the room of letters. Nothing past to shows, so
+// bounds need reach no further.
+func (p *Painter) TextFaded(g []Glyph, size float32, c color.NRGBA, bounds geom.Rect, from, to float32) {
+	op := p.texts.take()
+	*op = TextOp{Glyphs: g, Size: size, Color: c, Transform: p.at(), Blend: p.blendNow(), FadeFrom: from, FadeTo: to}
+	bounds.Max.X = min(bounds.Max.X, to)
 	p.record(op, bounds)
 }
 
