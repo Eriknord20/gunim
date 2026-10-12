@@ -131,7 +131,7 @@ func isStraight(pts []geom.Point) bool {
 	return len(pts) == 2 && pts[0] == geom.Pt(0, 0) && pts[1] == geom.Pt(1, 1)
 }
 
-// setPoints takes pts, or the straight line, and its samples.
+// replacePoints takes pts, or the straight line, and its samples.
 func (c *ToneCurve) replacePoints(pts []geom.Point) {
 	if len(pts) < 2 {
 		pts = []geom.Point{{X: 0, Y: 0}, {X: 1, Y: 1}}

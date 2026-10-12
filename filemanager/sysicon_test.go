@@ -13,11 +13,9 @@ import (
 // fakeIcons has the window show icons of the system's, each a square of
 // one colour, as Windows' would.
 func fakeIcons(t *testing.T) {
-	reads := 0
 	wasHere, wasOf := iconsHere, systemIconOf
 	iconsHere = true
 	systemIconOf = func(path, ext string, dir bool) (image.Image, image.Image, error) {
-		reads++
 		square := func(n int) image.Image {
 			img := image.NewNRGBA(image.Rect(0, 0, n, n))
 			for i := range img.Pix {

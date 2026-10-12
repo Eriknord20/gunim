@@ -116,7 +116,7 @@ func (i *Icon) Access() access.Info {
 	return access.Info{Role: access.RoleImage, Name: i.Name}
 }
 
-// paintIcon draws ic into r, tinted c, with the theme's stroke width, drawn on as far as progress.
+// drawIcon draws ic into r, tinted c, with the theme's stroke width, drawn on as far as progress.
 func drawIcon(p *paint.Painter, th *theme.Live, ic *icon.Icon, r geom.Rect, c color.NRGBA, progress float32) {
 	if ic == nil || progress <= 0 {
 		return

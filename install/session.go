@@ -730,10 +730,10 @@ func copyFile(ctx context.Context, from, to string, progress func(float32)) erro
 	})
 }
 
-// Replace puts the file at part in place of the one at path. Where a
+// Replace puts the file at part in place of the one at to. Where a
 // running program's file cannot be written over, as on Windows, the old
-// one is moved aside to path.old first, which [CleanOld] takes away
-// later, and moved back if the new one cannot be put in place, so path
+// one is moved aside to to.old first, which [CleanOld] takes away
+// later, and moved back if the new one cannot be put in place, so to
 // is never left missing.
 func Replace(part, to string) error { return replaceKeeping(part, to, false) }
 

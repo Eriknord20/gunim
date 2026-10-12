@@ -503,7 +503,7 @@ func (g *DataGrid) clampTop(row float64) float64 {
 	return max(0, min(row, float64(g.rows)-g.Visible()))
 }
 
-// reveal scrolls just far enough to show row i whole.
+// revealRow scrolls just far enough to show row i whole.
 func (g *DataGrid) revealRow(i int) {
 	vis := g.Visible()
 	switch {
