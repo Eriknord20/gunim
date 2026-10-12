@@ -78,3 +78,8 @@ jobs:
         with:
           version: v2.13.2
           install-mode: goinstall
+
+      # The step above lints for Linux. Windows files build only for
+      # Windows, so they are linted again with the same binary.
+      - name: Lint for Windows
+        run: GOOS=windows "$(go env GOPATH)/bin/golangci-lint" run ./...

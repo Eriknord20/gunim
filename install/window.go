@@ -224,17 +224,6 @@ func openStage(app *gunim.App, a *App, title string, height float32, sc scene) (
 	return mountStage(w, a, img, accent, sc)
 }
 
-// attach registers the installer's views with w, shows s's first page
-// there, and returns the application half, ready to serve.
-func attach(w *gunim.Window, s *Session, img *paint.Image, accent color.NRGBA) (*runner, error) {
-	sc := firstScene(s)
-	c, err := mountStage(w, &s.App, img, accent, sc)
-	if err != nil {
-		return nil, err
-	}
-	return &runner{s: s, c: c, sc: sc, events: make(chan func(), 16)}, nil
-}
-
 // mountStage registers the installer's views with w, in a's look, and
 // shows sc there.
 func mountStage(w *gunim.Window, a *App, img *paint.Image, accent color.NRGBA, sc scene) (gunim.Client, error) {

@@ -9,7 +9,6 @@ import (
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/driver/internal/render"
-	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/glfw"
 	"github.com/marrasen/gunim/internal/icc"
 )
@@ -156,31 +155,6 @@ func (d *Driver) startColor() {
 	// Queued, so the monitors are all known by the time it runs.
 	_, _ = glfw.SetMonitorCallback(func(*glfw.Monitor, glfw.PeripheralEvent) { d.post(d.colorsChanged) })
 	watchColors(d)
-}
-
-// windowMonitor returns the monitor holding the window's centre, or
-// the primary one. It runs on the main thread.
-func (w *Window) windowMonitor() *glfw.Monitor {
-	x, y, err := w.gw.GetPos()
-	if err != nil {
-		return nil
-	}
-	ww, wh, err := w.gw.GetSize()
-	if err != nil {
-		return nil
-	}
-	centre := geom.Pt(float32(x+ww/2), float32(y+wh/2))
-	ms, err := glfw.GetMonitors()
-	if err != nil {
-		return nil
-	}
-	for _, m := range ms {
-		if info, ok := monitorInfo(m); ok && info.Bounds.Contains(centre) {
-			return m
-		}
-	}
-	m, _ := glfw.GetPrimaryMonitor()
-	return m
 }
 
 // colorConvertFailed notes that the render thread cannot convert the
