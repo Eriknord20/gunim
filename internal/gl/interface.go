@@ -69,6 +69,7 @@ type Context interface {
 	Disable(cap uint32)
 	DisableVertexAttribArray(index uint32)
 	DrawElements(mode uint32, count int32, xtype uint32, offset int)
+	DrawElementsInstanced(mode uint32, count int32, xtype uint32, offset int, instances int32) // gunim change
 	Enable(cap uint32)
 	EnableVertexAttribArray(index uint32)
 	Finish()
@@ -110,6 +111,7 @@ type Context interface {
 	UniformMatrix3fv(location int32, value []float32)
 	UniformMatrix4fv(location int32, value []float32)
 	UseProgram(program uint32)
+	VertexAttribDivisor(index, divisor uint32) // gunim change
 	VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int)
 	Viewport(x int32, y int32, width int32, height int32)
 }
