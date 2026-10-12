@@ -1,11 +1,13 @@
-// Package plug is a plugin format for audio effects written in Go: a
-// plugin is a Go package, compiled into the app that uses it, which
-// registers itself as it starts.
+// Package plug is a plugin format for audio effects and instruments
+// written in Go: a plugin is a Go package, compiled into the app that
+// uses it, which registers itself as it starts. An effect changes the
+// sound going in; an instrument plays notes, and its sound comes out of
+// it alone.
 //
 // It follows VST3 where VST3 works well, so an adapter can run a VST3
 // plugin through the same interfaces: parameters declared up front,
-// sound processed in blocks with parameter changes at frames within
-// them, and a latency and a tail. It parts from VST3 in three places.
+// sound processed in blocks with parameter changes and notes at frames
+// within them, and a latency and a tail. It parts from VST3 in three places.
 // The host owns the parameters and the state, so it keeps one undo
 // history and one preset browser for every plugin. A plugin's views are
 // gunim nodes the host places where it likes, in three sizes. And a
@@ -37,8 +39,13 @@ type Descriptor struct {
 	Vendor  string
 	Version string
 	// Kind is what it does, in VST3's categories, so a browser sorts
-	// both kinds alike: "Fx|EQ".
+	// both kinds alike: "Fx|EQ", or "Instrument|Synth". One in the
+	// Instrument category is an instrument, as [Descriptor.Instrument]
+	// reports.
 	Kind string
+	// Notes says the plugin takes notes, in [Block.Events]. An
+	// instrument does.
+	Notes bool
 	// Params are the plugin's parameters, each with an ID of its own.
 	Params []Param
 	// Patches are the patches the plugin comes with, as starting points.
@@ -46,6 +53,15 @@ type Descriptor struct {
 	Patches []Patch
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
+}
+
+// Instrument reports whether d is an instrument: its Kind is in VST3's
+// Instrument category, as "Instrument|Synth". An instrument plays the
+// notes it takes, and its sound comes out of it alone: the host gives
+// it blocks whose In is nil.
+func (d *Descriptor) Instrument() bool {
+	category, _, _ := strings.Cut(d.Kind, "|")
+	return category == "Instrument"
 }
 
 // Param returns the parameter id, and whether d has one.
@@ -250,6 +266,9 @@ func Register(d Descriptor) {
 func check(d *Descriptor) error {
 	if d.ID == "" || d.Name == "" || d.New == nil {
 		return fmt.Errorf("plugin %q needs an ID, a name and New", d.ID)
+	}
+	if d.Instrument() && !d.Notes {
+		return fmt.Errorf("%s is an instrument, of kind %q, so it takes notes: set Notes", d.ID, d.Kind)
 	}
 	seen := map[uint32]bool{}
 	for _, p := range d.Params {
