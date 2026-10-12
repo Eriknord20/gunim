@@ -92,8 +92,15 @@ type Meter struct {
 // Length is a bar of this meter in ticks.
 func (m Meter) Length() Ticks { return Ticks(m.Beats) * m.Beat() }
 
-// Beat is one beat of this meter in ticks.
-func (m Meter) Beat() Ticks { return Ticks(4*PPQ) / Ticks(m.Unit) }
+// Beat is one beat of this meter in ticks. A meter with no unit, as the
+// zero Meter has, counts in quarter notes.
+func (m Meter) Beat() Ticks {
+	unit := m.Unit
+	if unit <= 0 {
+		unit = DefaultUnit
+	}
+	return Ticks(4*PPQ) / Ticks(unit)
+}
 
 // A Pos is a musical position as a musician says it: the bar, the beat
 // within the bar, and how far past that beat, from zero to one.
@@ -123,7 +130,7 @@ const MaxLines = 1 << 20
 // one goroutine at a time while it is being changed; once built it may
 // be read from several, so a player and a drawing both hold the same
 // one.
-type Map struct {
+type Map struct { //nolint:recvcheck // MarshalJSON takes a value, so a Map held by value is written too.
 	// start is where tick 0 falls in the recording, which is the first
 	// downbeat of a track with silence or a count-in before it.
 	start time.Duration
@@ -157,15 +164,13 @@ func (m *Map) SetStart(d time.Duration) { m.start = d }
 // Tempos are the tempo changes the map holds, in order, the first at
 // tick 0. The slice returned is a copy.
 func (m *Map) Tempos() []Tempo {
-	m.prep()
-	return slices.Clone(m.tempos)
+	return slices.Clone(m.ready().tempos)
 }
 
 // Meters are the meter changes the map holds, in order, the first at
 // tick 0. The slice returned is a copy.
 func (m *Map) Meters() []Meter {
-	m.prep()
-	return slices.Clone(m.meters)
+	return slices.Clone(m.ready().meters)
 }
 
 // SetTempos replaces every tempo change at once, which is what reading
@@ -233,17 +238,36 @@ func (m *Map) RemoveMeter(at Ticks) bool {
 
 // Clone returns a copy to change without disturbing a map being read.
 func (m *Map) Clone() *Map {
-	m.prep()
-	return &Map{start: m.start, tempos: slices.Clone(m.tempos), meters: slices.Clone(m.meters),
-		secs: slices.Clone(m.secs), bars: slices.Clone(m.bars)}
+	r := m.ready()
+	return &Map{start: r.start, tempos: slices.Clone(r.tempos), meters: slices.Clone(r.meters),
+		secs: slices.Clone(r.secs), bars: slices.Clone(r.bars)}
+}
+
+// tidied reports whether the map has been tidied since it last changed.
+// Only the zero Map has not: everything that changes a map tidies it.
+func (m *Map) tidied() bool {
+	return len(m.tempos) > 0 && len(m.meters) > 0 && len(m.secs) == len(m.tempos)
 }
 
 // prep fills a map that has never been tidied, so the zero Map reads as
-// the default tempo and meter.
+// the default tempo and meter. It is for the methods that change the
+// map; a reading uses ready, which never writes.
 func (m *Map) prep() {
-	if len(m.tempos) == 0 || len(m.meters) == 0 || len(m.secs) != len(m.tempos) {
+	if !m.tidied() {
 		m.tidy()
 	}
+}
+
+// ready is the map tidied, for a reading. A map that has not been is
+// tidied into a copy, so several goroutines may read a zero Map at once
+// without writing to it.
+func (m *Map) ready() *Map {
+	if m.tidied() {
+		return m
+	}
+	r := &Map{start: m.start, tempos: slices.Clone(m.tempos), meters: slices.Clone(m.meters)}
+	r.tidy()
+	return r
 }
 
 // tidy sorts the changes, brings them within bounds, drops the earlier
@@ -321,15 +345,18 @@ func ceilDiv(a, b Ticks) Ticks {
 func (m *Map) span(i int, to Ticks) float64 {
 	a := m.tempos[i]
 	q := float64(to-a.At) / PPQ
-	if b, ramp := m.ramp(i); ramp {
+	// Before the change, which only the first can be asked about, the
+	// music goes back at its tempo: a ramp starts where it starts.
+	if b, ramp := m.ramp(i); ramp && to > a.At {
 		// The tempo rises evenly in time across the segment, so the
 		// segment lasts its quarter notes over the mean of the two
 		// tempos, and the beats within it come out of a quadratic:
 		//	q = (a.BPM·s + k·s²/2) / 60, k the tempo's rise a second.
+		// Solved for s in the form that stays exact as k nears zero.
 		total := float64(b.At-a.At) / PPQ
 		secs := 120 * total / (a.BPM + b.BPM)
 		k := (b.BPM - a.BPM) / secs
-		return (math.Sqrt(a.BPM*a.BPM+2*k*60*q) - a.BPM) / k
+		return 2 * 60 * q / (math.Sqrt(max(0, a.BPM*a.BPM+2*k*60*q)) + a.BPM)
 	}
 	return 60 * q / a.BPM
 }
@@ -338,7 +365,7 @@ func (m *Map) span(i int, to Ticks) float64 {
 // which must not be more than the segment lasts.
 func (m *Map) ticksAfter(i int, s float64) Ticks {
 	a := m.tempos[i]
-	if b, ramp := m.ramp(i); ramp {
+	if b, ramp := m.ramp(i); ramp && s > 0 {
 		total := float64(b.At-a.At) / PPQ
 		secs := 120 * total / (a.BPM + b.BPM)
 		k := (b.BPM - a.BPM) / secs
@@ -384,63 +411,71 @@ func (m *Map) meterIndex(t Ticks) int {
 // come out negative: the map says where the music is, not where the
 // file begins.
 func (m *Map) Time(t Ticks) time.Duration {
-	m.prep()
-	i := m.tempoIndex(t)
-	return m.start + time.Duration(math.Round((m.secs[i]+m.span(i, t))*float64(time.Second)))
+	r := m.ready()
+	i := r.tempoIndex(t)
+	return r.start + time.Duration(math.Round((r.secs[i]+r.span(i, t))*float64(time.Second)))
 }
 
 // At is the musical position a time in the recording falls on.
 func (m *Map) At(d time.Duration) Ticks {
-	m.prep()
-	s := float64(d-m.start) / float64(time.Second)
-	i, found := slices.BinarySearchFunc(m.secs, s, cmp.Compare[float64])
+	r := m.ready()
+	s := float64(d-r.start) / float64(time.Second)
+	i, found := slices.BinarySearchFunc(r.secs, s, cmp.Compare[float64])
 	if !found {
 		i = max(i-1, 0)
 	}
-	return m.ticksAfter(i, s-m.secs[i])
+	return r.ticksAfter(i, s-r.secs[i])
 }
 
 // Frames is where a musical position falls, in frames at rate, as a
 // player counts them. A position before the start comes out negative.
 func (m *Map) Frames(t Ticks, rate int) int64 {
-	return int64(m.Time(t)) * int64(rate) / int64(time.Second)
+	return framesAt(m.Time(t), int64(rate))
+}
+
+// framesAt is d in frames at rate, in whole seconds and the rest, so a
+// time of days at a high rate does not overflow on the way.
+func framesAt(d time.Duration, rate int64) int64 {
+	whole, rest := int64(d/time.Second), int64(d%time.Second)
+	return whole*rate + rest*rate/int64(time.Second)
 }
 
 // AtFrame is the musical position frame f at rate falls on.
 func (m *Map) AtFrame(f int64, rate int) Ticks {
-	return m.At(time.Duration(f * int64(time.Second) / int64(max(rate, 1))))
+	r := int64(max(rate, 1))
+	return m.At(time.Duration(f/r)*time.Second + time.Duration(f%r*int64(time.Second)/r))
 }
 
 // BPM is the tempo in force at a position, part way up a ramp where it
 // falls inside one.
 func (m *Map) BPM(t Ticks) float64 {
-	m.prep()
-	i := m.tempoIndex(t)
-	a := m.tempos[i]
-	b, ramp := m.ramp(i)
+	r := m.ready()
+	i := r.tempoIndex(t)
+	a := r.tempos[i]
+	b, ramp := r.ramp(i)
 	if !ramp || t <= a.At {
 		return a.BPM
 	}
 	// The tempo rises evenly in time, so read how far along in time the
 	// position is, not how far along in beats.
 	secs := 120 * float64(b.At-a.At) / PPQ / (a.BPM + b.BPM)
-	s := min(m.span(i, t), secs)
+	s := min(r.span(i, t), secs)
 	return a.BPM + (b.BPM-a.BPM)*s/secs
 }
 
 // Meter is the meter in force at a position.
 func (m *Map) Meter(t Ticks) Meter {
-	m.prep()
-	return m.meters[m.meterIndex(t)]
+	r := m.ready()
+	return r.meters[r.meterIndex(t)]
 }
 
 // Pos is the bar and beat a position falls on.
 func (m *Map) Pos(t Ticks) Pos {
-	m.prep()
-	i := m.meterIndex(t)
-	x := m.meters[i]
+	r := m.ready()
+	i := r.meterIndex(t)
+	x := r.meters[i]
 	off := t - x.At
-	bar := m.bars[i] + int(floorDiv(off, x.Length()))
+	bar := r.bars[i] + int(floorDiv(off, x.Length()))
 	in := mod(off, x.Length())
 	beat := int(in / x.Beat())
 	return Pos{Bar: bar, Beat: beat + 1, Frac: float64(in-Ticks(beat)*x.Beat()) / float64(x.Beat())}
@@ -450,17 +485,17 @@ func (m *Map) Pos(t Ticks) Pos {
 // its bar carries into the bars after it, so bar 1 beat 5 of 4/4 is
 // bar 2 beat 1.
 func (m *Map) Ticks(p Pos) Ticks {
-	m.prep()
+	r := m.ready()
 	// The meter in force is the last one starting at or before this
 	// bar.
 	i := 0
-	for j, b := range m.bars {
+	for j, b := range r.bars {
 		if b <= p.Bar {
 			i = j
 		}
 	}
-	x := m.meters[i]
-	return x.At + Ticks(p.Bar-m.bars[i])*x.Length() +
+	x := r.meters[i]
+	return x.At + Ticks(p.Bar-r.bars[i])*x.Length() +
 		Ticks(p.Beat-1)*x.Beat() + Ticks(math.Round(p.Frac*float64(x.Beat())))
 }
 
@@ -468,23 +503,24 @@ func (m *Map) Ticks(p Pos) Ticks {
 // draw, the first at or after from and the last before to. At most
 // [MaxLines] come back.
 func (m *Map) Lines(from, to Ticks) []Line {
-	m.prep()
+	r := m.ready()
 	var out []Line
-	for i := m.meterIndex(from); i < len(m.meters) && len(out) < MaxLines; i++ {
-		x := m.meters[i]
+	for i := r.meterIndex(from); i < len(r.meters) && len(out) < MaxLines; i++ {
+		x := r.meters[i]
 		end := to
-		if i+1 < len(m.meters) {
-			end = min(end, m.meters[i+1].At)
+		if i+1 < len(r.meters) {
+			end = min(end, r.meters[i+1].At)
 		}
 		beat := x.Beat()
 		// Start on the first beat of this meter at or after from, which
-		// is the meter's own start where from is behind it.
+		// is the meter's own start where from is behind it. The first
+		// meter runs back before tick 0 too, for a lead-in.
 		t := x.At
-		if from > t {
-			t += ceilDiv(from-t, beat) * beat
+		if from > t || i == 0 {
+			t -= floorDiv(t-from, beat) * beat
 		}
 		for ; t < end && len(out) < MaxLines; t += beat {
-			out = append(out, Line{At: t, Pos: m.Pos(t)})
+			out = append(out, Line{At: t, Pos: r.Pos(t)})
 		}
 		if end == to {
 			break

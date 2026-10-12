@@ -3,6 +3,8 @@ package tempo
 import (
 	"encoding/json"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -245,5 +247,104 @@ func TestAMapIsWrittenAndReadBack(t *testing.T) {
 	}
 	if empty.BPM(0) != DefaultBPM {
 		t.Errorf("an empty map reads as %v, want %v", empty.BPM(0), DefaultBPM)
+	}
+}
+
+// TestBeforeTheStartIsSteadyAtTheFirstTempo: a lead-in before tick 0
+// runs at the first tempo even where that tempo ramps, and the ruler
+// draws its beats too.
+func TestBeforeTheStartIsSteadyAtTheFirstTempo(t *testing.T) {
+	m := New(120, 4, 4)
+	m.SetTempos([]Tempo{{BPM: 60, Ramp: true}, {At: Quarters(8), BPM: 180}})
+	// Four quarters back at 60 is four seconds back.
+	if got := m.Time(Quarters(-4)); got != -4*time.Second {
+		t.Errorf("four quarters before the start fall at %v, want -4s", got)
+	}
+	if got := m.At(-2 * time.Second); got != Quarters(-2) {
+		t.Errorf("two seconds before the start is %v ticks, want %v", got, Quarters(-2))
+	}
+	lines := m.Lines(Quarters(-4), Quarters(1))
+	if len(lines) != 5 || lines[0].At != Quarters(-4) || lines[0].Pos != (Pos{Bar: 0, Beat: 1}) {
+		t.Errorf("the lead-in's lines are %+v, want five from bar 0 beat 1", lines)
+	}
+}
+
+// TestAGentleRampStaysExact: the closer a ramp's two tempos, the closer
+// it must come to the steady tempo, with no rounding blowing up as the
+// rise nears nothing.
+func TestAGentleRampStaysExact(t *testing.T) {
+	m := New(120, 4, 4)
+	m.SetTempos([]Tempo{{BPM: 120, Ramp: true}, {At: Quarters(1000), BPM: 120.000001}})
+	if got, want := m.Time(Quarters(500)), 250*time.Second; (got - want).Abs() > time.Millisecond {
+		t.Errorf("500 quarters up a ramp of almost nothing fall at %v, want %v", got, want)
+	}
+}
+
+// TestReadingAZeroMapFromManyGoroutines: a reading never writes, so a
+// zero Map shared between goroutines is safe. The race detector finds
+// it if not.
+func TestReadingAZeroMapFromManyGoroutines(t *testing.T) {
+	var m Map
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			_ = m.Time(Quarters(4))
+			_ = m.Pos(Quarters(5))
+			_ = m.Lines(0, Quarters(8))
+		})
+	}
+	wg.Wait()
+}
+
+// TestAMapHeldByValueIsWritten: a struct holding a Map, not a pointer
+// to one, writes it as a map.
+func TestAMapHeldByValueIsWritten(t *testing.T) {
+	held := struct{ Map Map }{Map: *New(128, 3, 4)}
+	data, err := json.Marshal(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"bpm":128`) {
+		t.Errorf("a map held by value was written as %s", data)
+	}
+}
+
+// TestTheStartReadsBackExactly: a start in milliseconds that binary
+// cannot hold exactly still reads back to the nanosecond.
+func TestTheStartReadsBackExactly(t *testing.T) {
+	m := New(120, 4, 4)
+	m.SetStart(1234567 * time.Microsecond)
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Map
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Start() != m.Start() {
+		t.Errorf("the start read back as %v, want %v", back.Start(), m.Start())
+	}
+}
+
+// TestFramesDoNotOverflow: a position days in, at a high rate, is
+// still counted right.
+func TestFramesDoNotOverflow(t *testing.T) {
+	m := New(60, 4, 4)
+	// A quarter a second, so three days is 259200 quarters.
+	q := Quarters(3 * 24 * 60 * 60)
+	if got, want := m.Frames(q, 192000), int64(3*24*60*60)*192000; got != want {
+		t.Errorf("three days at 192 kHz is %d frames, want %d", got, want)
+	}
+	if got := m.AtFrame(int64(3*24*60*60)*192000, 192000); got != q {
+		t.Errorf("three days of frames read back as %d ticks, want %d", got, q)
+	}
+}
+
+// TestTheZeroMeterCountsQuarters: a Meter with no unit does not divide
+// by zero.
+func TestTheZeroMeterCountsQuarters(t *testing.T) {
+	if got := (Meter{}).Beat(); got != PPQ {
+		t.Errorf("the zero meter's beat is %d ticks, want %d", got, PPQ)
 	}
 }

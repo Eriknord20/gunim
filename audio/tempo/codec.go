@@ -2,6 +2,7 @@ package tempo
 
 import (
 	"encoding/json"
+	"math"
 	"time"
 )
 
@@ -15,12 +16,15 @@ type mapJSON struct {
 
 // MarshalJSON writes the map, so an application keeps a recording's
 // musical time in its own file without knowing how a map works.
-func (m *Map) MarshalJSON() ([]byte, error) {
-	m.prep()
+//
+// It takes the map by value, so a Map held in a struct, rather than a
+// pointer to one, is written as a map too.
+func (m Map) MarshalJSON() ([]byte, error) {
+	r := m.ready()
 	return json.Marshal(mapJSON{
-		StartMs: float64(m.start) / float64(time.Millisecond),
-		Tempos:  m.tempos,
-		Meters:  m.meters,
+		StartMs: float64(r.start) / float64(time.Millisecond),
+		Tempos:  r.tempos,
+		Meters:  r.meters,
 	})
 }
 
@@ -32,7 +36,9 @@ func (m *Map) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return err
 	}
-	m.start = time.Duration(j.StartMs * float64(time.Millisecond))
+	// Rounded, since a start written as 1234.567 is not exactly that in
+	// binary, and cutting it off would lose a nanosecond each time.
+	m.start = time.Duration(math.Round(j.StartMs * float64(time.Millisecond)))
 	m.tempos, m.meters = j.Tempos, j.Meters
 	m.tidy()
 	return nil

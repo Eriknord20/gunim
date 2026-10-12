@@ -5,7 +5,12 @@ import "time"
 // FitError is how far [Fit] lets a fitted map fall from a beat before
 // it writes another tempo change: near enough that nobody hears it,
 // loose enough that a track made to a grid fits in a single change.
-const FitError = 5 * time.Millisecond
+//
+// A beat detector places a beat to within a few milliseconds, not
+// exactly. Any tighter than this and a click track found by package
+// audio/beat comes back as several tempo changes, each one following
+// that wobble rather than the music.
+const FitError = 12 * time.Millisecond
 
 // FitRun is the most beats [Fit] holds under one tempo change, so a
 // perfectly steady recording still gains a change now and then and a
