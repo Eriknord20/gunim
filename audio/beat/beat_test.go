@@ -1,11 +1,14 @@
 package beat
 
 import (
+	"errors"
 	"io"
 	"math"
 	"math/rand/v2"
 	"testing"
 	"time"
+
+	"github.com/marrasen/gunim/audio"
 )
 
 // beats is where a click falls, beat by beat, at the tempo bpm gives
@@ -294,17 +297,74 @@ func TestASongLikePatternIsFound(t *testing.T) {
 		t.Errorf("the scan is only %v sure of a plain pattern", got.Confidence)
 	}
 	// The bars have to start on a kick: every beat called a downbeat
-	// falls where one was played.
+	// falls where one was played. The kick plays on one and three, and
+	// the two sound the same, so either will do; see Result.Downbeat.
 	for i := got.Downbeat; i < len(got.Beats); i += got.PerBar {
-		var played int
+		played := -1
 		for j, w := range want {
 			if d := got.Beats[i] - w; d < 20*time.Millisecond && d > -20*time.Millisecond {
 				played = j
 			}
 		}
-		if played%4 != 0 {
+		if played < 0 {
+			t.Fatalf("beat %d at %v is called a downbeat, but nothing was played there", i, got.Beats[i])
+		}
+		if played%2 != 0 {
 			t.Fatalf("beat %d at %v is called a downbeat, but beat %d of the bar was played there",
 				i, got.Beats[i], played%4+1)
 		}
+	}
+}
+
+// TestAClickTrackFitsInOneTempo: a recording made to a grid comes back
+// as a map with a single tempo, at the rates a file is most often
+// recorded at. The beats found wobble by a few milliseconds, and the
+// fit must not follow that wobble.
+func TestAClickTrackFitsInOneTempo(t *testing.T) {
+	for _, rate := range []int{44100, 48000} {
+		want := beats(2*time.Second, 36, func(int) float64 { return 120 })
+		r := scan(rate, render(rate, want, 21*time.Second))
+		if n := len(r.Map(0).Tempos()); n != 1 {
+			t.Errorf("at %d Hz a steady click track fits in %d tempo changes, want 1", rate, n)
+		}
+	}
+}
+
+// stuck is a sound that never ends and never gives anything.
+type stuck struct{}
+
+func (stuck) Read([]float32) (int, error) { return 0, nil }
+
+// TestFindGivesUpOnASoundThatGivesNothing: a sound that answers every
+// read with nothing, and never says it has ended, must not hang Find.
+func TestFindGivesUpOnASoundThatGivesNothing(t *testing.T) {
+	if _, err := Find(stuck{}, 48000); !errors.Is(err, io.ErrNoProgress) {
+		t.Errorf("Find returned %v, want io.ErrNoProgress", err)
+	}
+}
+
+// TestNoBinIsCountedTwice: the bands at the bottom are narrower than a
+// bin, and each bin belongs to one band at most.
+func TestNoBinIsCountedTwice(t *testing.T) {
+	for _, rate := range []int{22050, 44100, 48000, 96000} {
+		s := NewScan(rate)
+		end := 0
+		for b, span := range s.bands {
+			if span[0] < end || span[1] < span[0] {
+				t.Errorf("at %d Hz band %d spans bins %v, overlapping the band below it", rate, b, span)
+			}
+			end = max(end, span[1])
+		}
+	}
+}
+
+// TestAScanAtNoRateStillWorks: a rate of zero is taken as the
+// package's own, rather than dividing by it.
+func TestAScanAtNoRateStillWorks(t *testing.T) {
+	want := beats(time.Second, 28, func(int) float64 { return 100 })
+	s := NewScan(0)
+	s.Write(render(audio.SampleRate, want, 19*time.Second))
+	if r := s.Done(); math.Abs(r.BPM-100) > 0.5 {
+		t.Errorf("a scan at rate 0 found %v BPM, want 100", r.BPM)
 	}
 }

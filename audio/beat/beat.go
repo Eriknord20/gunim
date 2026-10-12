@@ -21,7 +21,7 @@
 //
 // How far apart the beats are is found by how well those rises line up
 // with themselves a given distance later, weighed towards a tempo near
-// 120, which is what keeps a track at 140 from being read as one at 70.
+// 130, which is what keeps a track at 140 from being read as one at 70.
 // Where the beats fall is then chosen all at once, over the whole
 // recording, as the run of beats catching the most onset strength while
 // staying near a beat apart — so a few bars of silence do not throw the
@@ -56,6 +56,9 @@ const (
 	BandHigh = 10000.0
 )
 
+// floor is the quietest a band is counted as, about -90 dB.
+var floor = math.Pow(10, -90.0/20)
+
 // BassTop is the top of the bands counted again on their own, since it
 // is the bass drum that says which beat starts a bar.
 const BassTop = 150.0
@@ -79,6 +82,11 @@ type Result struct {
 	Beats []time.Duration
 	// Downbeat is the beat in Beats that starts a bar, the first one to
 	// do so: with PerBar of 4 it is 0, 1, 2 or 3.
+	//
+	// It is the beat the bass drum lands on most. Where the kick plays
+	// on one and three alike, as in most dance music, the two are heard
+	// the same, and the bar may start on three; [tempo.Map.SetStart]
+	// moves it.
 	Downbeat int
 	// PerBar is the beats in a bar the scan counted in.
 	PerBar int
@@ -105,9 +113,14 @@ func (r Result) Map(maxError time.Duration) *tempo.Map {
 
 // Find reads a sound to its end and finds the beats in it, for an
 // application holding a decoded file rather than reading one.
+//
+// A sound that gives nothing again and again without ending is given
+// up on, with what was read and [io.ErrNoProgress], as package bufio
+// does.
 func Find(src audio.Source, rate int) (Result, error) {
 	s := NewScan(rate)
 	buf := make([]float32, 2*4096)
+	empty := 0
 	for {
 		n, err := src.Read(buf)
 		s.Write(buf[:2*n])
@@ -116,8 +129,13 @@ func Find(src audio.Source, rate int) (Result, error) {
 			return s.Done(), nil
 		case err != nil:
 			return s.Done(), err
-		case n == 0:
-			return s.Done(), nil
+		case n > 0:
+			empty = 0
+		default:
+			empty++
+			if empty >= 100 {
+				return s.Done(), io.ErrNoProgress
+			}
 		}
 	}
 }
@@ -162,8 +180,12 @@ type Scan struct {
 }
 
 // NewScan returns a scan of sound at rate. Its columns fall about every
-// ten milliseconds, each taken over a window four times as long.
+// ten milliseconds, each taken over a window four times as long. A rate
+// of zero or less is taken as [audio.SampleRate].
 func NewScan(rate int) *Scan {
+	if rate <= 0 {
+		rate = audio.SampleRate
+	}
 	hop := 1
 	for hop*100 < rate {
 		hop *= 2
@@ -176,18 +198,27 @@ func NewScan(rate int) *Scan {
 	}
 	bin := func(hz float64) float64 { return hz * float64(size) / float64(rate) }
 	top := min(BandHigh, 0.45*float64(rate))
+	// No bin is counted twice. At the bottom a bin is wider than a band,
+	// and several bands would land on the same one and count its rise
+	// several times over; the first takes it and the rest stay empty.
+	next := 0
 	for b := range Bands {
-		lo := bin(BandLow * math.Pow(top/BandLow, float64(b)/Bands))
-		hi := bin(BandLow * math.Pow(top/BandLow, float64(b+1)/Bands))
-		b0 := int(math.Round(lo))
-		b1 := max(b0+1, int(math.Round(hi)))
-		s.bands[b] = [2]int{min(b0, size/2-1), min(b1, size/2)}
+		lo := int(math.Round(bin(BandLow * math.Pow(top/BandLow, float64(b)/Bands))))
+		hi := int(math.Round(bin(BandLow * math.Pow(top/BandLow, float64(b+1)/Bands))))
+		b0 := min(max(lo, next), size/2)
+		b1 := min(max(hi, lo+1), size/2)
+		if b1 <= b0 {
+			b1 = b0
+		}
+		s.bands[b] = [2]int{b0, b1}
+		next = b1
 		if BandLow*math.Pow(top/BandLow, float64(b+1)/Bands) <= BassTop {
 			s.bass = b + 1
 		}
 	}
-	// Half a window of silence first, so the first column is centred on
-	// the first frame.
+	// Half a window of silence first, so the second column is centred on
+	// the first frame. The first three columns each hear some of that
+	// silence; see edge.
 	s.n = size / 2
 	return s
 }
@@ -224,7 +255,10 @@ func (s *Scan) column() {
 		for k := span[0]; k < span[1]; k++ {
 			sum += cmplx.Abs(s.x[k])
 		}
-		db := 20 * math.Log10(max(sum*norm, 1e-9))
+		// Below about -90 dB is silence. Without a floor, sound rising
+		// out of digital silence would count tens of decibels of rise
+		// that nobody hears.
+		db := 20 * math.Log10(max(sum*norm, floor))
 		// Only a rise counts: a band falling silent is not an onset,
 		// and counting it would make every note's end a beat.
 		up := db - s.last[b]
@@ -287,8 +321,9 @@ func (s *Scan) Done() (r Result) {
 }
 
 // edge is how many columns at each end of a recording hear its start or
-// its end in their window, rather than only what is in it.
-func (s *Scan) edge() int { return s.size / (2 * s.hop) }
+// its end in their window, rather than only what is in it. A window is
+// four columns long, so three columns hear each end.
+func (s *Scan) edge() int { return s.size/s.hop - 1 }
 
 func (s *Scan) perBar() int {
 	if s.PerBar > 0 {
