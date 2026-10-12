@@ -565,18 +565,19 @@ func (t *Table) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim
 // sideways.
 const tableShared = 64
 
-// cellText lays out s for a cell width wide, cut short with an ellipsis
-// when it will not fit, and reports whether it fits: a cell too narrow
-// for even the ellipsis shows nothing.
-func cellText(cache *laidText, face *text.Face, s string, size, width float32) (text.Paragraph, bool) {
-	para := cache.layout(face, s, text.Style{Size: size, MaxLines: 1}, max(width, 1))
-	return para, para.Size.W <= max(width, 0)+0.5
+// cellText shapes s for a cell width wide, as one line, and says how
+// much of it shows there, and whether it fits: text that does not is
+// cut where the cell ends, fading out before it, as [text.Run.PaintFaded]
+// draws it.
+func cellText(cache *shapedText, face *text.Face, s string, size, width float32) (run text.Run, shown float32, fits bool) {
+	run = cache.shape(face, s, size)
+	return run, min(run.Advance, max(width, 0)), run.Advance <= max(width, 0)+0.5
 }
 
 // tableHeader is a table's row of column titles.
 type tableHeader struct {
 	t      *Table
-	titles []laidText
+	titles []shapedText
 	click  Clicker
 }
 
@@ -590,7 +591,7 @@ func (h *tableHeader) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 	t := h.t
 	th := f.Theme
 	if len(h.titles) != len(t.Columns) {
-		h.titles = make([]laidText, len(t.Columns))
+		h.titles = make([]shapedText, len(t.Columns))
 	}
 	size := TextSize.Get(th) * 0.9
 	col := TableHeader.Get(th)
@@ -607,19 +608,20 @@ func (h *tableHeader) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 		if i == t.sorted {
 			arrow = sortArrow + 4
 		}
-		para, fits := cellText(&h.titles[i], faceIn(Font, th), c.Title, size, w-12-arrow)
-		if !fits {
+		room := w - 12 - arrow
+		if room <= 0 {
 			continue
 		}
+		run, shown, _ := cellText(&h.titles[i], faceIn(Font, th), c.Title, size, room)
 		at := x
 		if c.End {
-			at = x + w - 12 - para.Size.W
+			at = x + w - 12 - shown
 		}
-		para.Paint(p, geom.Pt(at, (box.H-para.Size.H)/2), col)
+		run.PaintFaded(p, geom.Pt(at, (box.H-run.Height())/2), col, room, TextFade.Get(th))
 		if i == t.sorted {
 			// A small arrow beside the title, pointing the way the rows
 			// run.
-			ax := at + para.Size.W + 8
+			ax := at + shown + 8
 			if c.End {
 				ax = at - 8
 			}
@@ -689,7 +691,7 @@ type tableRow struct {
 	key   Key
 	lit   *anim.Float
 	on    bool
-	cells []laidText
+	cells []shapedText
 }
 
 func newTableRow(t *Table, k Key) *tableRow {
@@ -734,7 +736,7 @@ func (r *tableRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	}
 	row := t.Row(r.key)
 	if len(r.cells) != len(t.Columns) {
-		r.cells = make([]laidText, len(t.Columns))
+		r.cells = make([]shapedText, len(t.Columns))
 	}
 	ink := Ink.Get(th)
 	switch {
@@ -769,15 +771,16 @@ func (r *tableRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			drawIcon(p, th, row.Icon, geom.Rc(x, (box.H-side)/2, side, side), c, 1)
 			x, w = x+side+6, w-side-6
 		}
-		para, fits := cellText(&r.cells[i], faceIn(t.Columns[i].Face, th), s, size, w-12)
-		if !fits {
+		room := w - 12
+		if room <= 0 {
 			continue
 		}
+		run, shown, _ := cellText(&r.cells[i], faceIn(t.Columns[i].Face, th), s, size, room)
 		at := x
 		if t.Columns[i].End {
-			at = x + w - 12 - para.Size.W
+			at = x + w - 12 - shown
 		}
-		para.Paint(p, geom.Pt(at, (box.H-para.Size.H)/2), ink)
+		run.PaintFaded(p, geom.Pt(at, (box.H-run.Height())/2), ink, room, TextFade.Get(th))
 	}
 }
 

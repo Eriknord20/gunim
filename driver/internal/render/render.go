@@ -383,6 +383,11 @@ uniform sampler2D u_tex;
 // coverage of each channel.
 vec4 glyph(out vec4 cover) {
 	vec4 c = v_color0;
+	// Text cut short fades out from v_rect.x to v_rect.z, shares of the
+	// target's width, as it reaches where it is cut.
+	if (v_rect.z > v_rect.x) {
+		c.a *= clamp((v_rect.z - v_uv.x) / (v_rect.z - v_rect.x), 0.0, 1.0);
+	}
 	vec4 g = v_color1;
 	float k = v_param.y;
 	if (v_param.x > 2.5 && v_param.x < 3.5) {

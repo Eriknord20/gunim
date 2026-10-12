@@ -153,17 +153,39 @@ func TestDraggingTheScrollbarScrolls(t *testing.T) {
 	w.Input(input.PointerUp{Pos: geom.Pt(from.X, 400), Button: input.ButtonPrimary, Time: now})
 }
 
-func TestALongCellEndsInAnEllipsis(t *testing.T) {
-	g := NewDataGrid(GridColumn{Title: "Message", Width: 80})
-	long := "a message far too long to fit in eighty pixels"
-	run := g.cutShort(Font.Default().Shape(long, 12), 60)
-	if run.Advance > 60 {
-		t.Fatalf("cut to 60, the run is %v wide", run.Advance)
+// A cell too narrow for its text keeps every letter and fades out where
+// the cell ends, rather than giving the room of letters to an ellipsis;
+// one that fits fades nothing.
+func TestALongCellFadesOutWhereItIsCut(t *testing.T) {
+	long, short := "a message far too long to fit in eighty pixels", "ok"
+	g := NewDataGrid(GridColumn{Title: "Message", Width: 80}, GridColumn{Title: "State", Width: 80})
+	g.Row = func(int) (GridRow, bool) {
+		return GridRow{Cells: [][]GridSpan{{{Text: long}}, {{Text: short}}}}, true
 	}
-	last := run.Glyphs[len(run.Glyphs)-1]
-	ell := Font.Default().Shape("…", 12).Glyphs[0]
-	if last.ID != ell.ID {
-		t.Fatalf("the cut run ends in glyph %d, want the ellipsis %d", last.ID, ell.ID)
+	g.rows = 1
+	w, _ := stage(t, &frame{child: g, size: geom.Sz(400, 300)})
+	size := GridTextSize.Default()
+	var faded, whole *paint.TextOp
+	for _, op := range w.Offscreen().Ops() {
+		o, ok := op.(*paint.TextOp)
+		switch {
+		case !ok:
+		case len(o.Glyphs) == len(Font.Default().Shape(long, size).Glyphs):
+			faded = o
+		case len(o.Glyphs) == len(Font.Default().Shape(short, size).Glyphs):
+			whole = o
+		}
+	}
+	if faded == nil || whole == nil {
+		t.Fatal("the cells' text is not drawn, the long one with all its letters")
+	}
+	room := 80 - 2*GridCellPadding.Default()
+	if faded.FadeTo != room || faded.FadeTo-faded.FadeFrom != TextFade.Default() {
+		t.Errorf("the long cell fades from %v to %v, want over %v to the cell's end at %v",
+			faded.FadeFrom, faded.FadeTo, TextFade.Default(), room)
+	}
+	if whole.FadeTo > whole.FadeFrom {
+		t.Errorf("the cell that fits fades from %v to %v, want no fade", whole.FadeFrom, whole.FadeTo)
 	}
 }
 

@@ -336,7 +336,7 @@ type treeRow struct {
 	laid      bool
 	click     Clicker
 	box       geom.Size
-	name      laidText
+	name      shapedText
 	detail    shapedText
 	// cut says the text was cut short at the last paint.
 	cut bool
@@ -421,10 +421,10 @@ func (r *treeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		run.Paint(p, geom.Pt(right, (box.H-run.Height())/2), quiet)
 		right -= 10
 	}
-	para, fits := cellText(&r.name, faceIn(it.Face, th), it.Text, size, right-x)
-	r.cut = para.Truncated || !fits
-	if fits {
-		para.Paint(p, geom.Pt(x, (box.H-para.Size.H)/2), ink)
+	run, _, fits := cellText(&r.name, faceIn(it.Face, th), it.Text, size, right-x)
+	r.cut = !fits
+	if right > x {
+		run.PaintFaded(p, geom.Pt(x, (box.H-run.Height())/2), ink, right-x, TextFade.Get(th))
 	}
 }
 

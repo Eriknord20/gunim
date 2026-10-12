@@ -265,6 +265,9 @@ var (
 	// ScrollFade is how far in from its edge what scrolls fades where more of it lies past that edge: a scroll view,
 	// a list, a menu, a row of tabs.
 	ScrollFade = theme.Length("scroll.fade", 24)
+	// TextFade is how far before its end text cut short fades out, where
+	// a table's cell or a tab has less room than its text takes.
+	TextFade = theme.Length("text.fade", 28)
 )
 
 // Surface tokens.

@@ -46,6 +46,10 @@ func shownOps(ops []paint.Op) []spill {
 			x, y := o.Transform.C, o.Transform.F
 			what = "text"
 			r = geom.Rect{Min: geom.Pt(x+o.Glyphs[0].At.X, y), Max: geom.Pt(x+o.Glyphs[len(o.Glyphs)-1].At.X+o.Size/3, y+o.Size)}
+			if o.FadeTo > o.FadeFrom {
+				// Faded out by FadeTo, nothing past it shows.
+				r.Max.X = min(r.Max.X, x+o.FadeTo)
+			}
 		case *paint.MaskOp:
 			what = "mask"
 			r = o.Rect.Add(geom.Pt(o.Transform.C, o.Transform.F))

@@ -285,7 +285,6 @@ type DataGrid struct {
 
 	shapes map[spanKey]*spanShape
 	frame  uint64
-	cut    map[cutKey]text.Run
 }
 
 type gridDrag uint8
@@ -322,11 +321,6 @@ type spanShape struct {
 	seen uint64
 }
 
-type cutKey struct {
-	face *text.Face
-	size float32
-}
-
 // NewDataGrid returns an empty grid of columns.
 func NewDataGrid(columns ...GridColumn) *DataGrid {
 	return &DataGrid{
@@ -337,7 +331,6 @@ func NewDataGrid(columns ...GridColumn) *DataGrid {
 		hoverCol:  -1,
 		shapes:    map[spanKey]*spanShape{},
 		away:      anim.NewFloat(0),
-		cut:       map[cutKey]text.Run{},
 	}
 }
 
@@ -906,7 +899,7 @@ func (g *DataGrid) paintContent(p *paint.Painter, th *theme.Live, key int, row G
 }
 
 // paintCell sets a cell's spans one after another, cutting the last that
-// fits short with an ellipsis.
+// fits short where it fades out.
 func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans []GridSpan, dim bool,
 	x, y, w, size, pad float32) {
 	cutShort := func() { g.cuts = append(g.cuts, gridCut{r: geom.Rc(x, y, w, g.rowH), row: i, col: c}) }
@@ -956,8 +949,11 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 			cutShort()
 			return
 		}
+		// shown is how much of the run shows: all of it, or the room it
+		// fades out in where it is cut.
+		shown := run.Advance
 		if cut {
-			run = g.cutShort(run, room)
+			shown = room
 			cutShort()
 		}
 		ty := y + (g.rowH-run.Height())/2
@@ -984,19 +980,19 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 			pen += iconW
 		}
 		for _, m := range s.Marks {
-			x0, x1 := min(run.CaretX(m[0]), run.Advance), min(run.CaretX(m[1]), run.Advance)
+			x0, x1 := min(run.CaretX(m[0]), shown), min(run.CaretX(m[1]), shown)
 			if x1 > x0 {
 				p.RRect(geom.Rc(pen+x0, ty, x1-x0, run.Height()), 2, paint.Solid(GridMark.Get(th)))
 			}
 		}
-		run.Paint(p, geom.Pt(pen, ty), ink)
+		run.PaintFaded(p, geom.Pt(pen, ty), ink, shown, TextFade.Get(th))
 		if s.OnClick != nil {
-			g.links = append(g.links, gridLink{r: geom.Rc(start, y, pen-start+run.Advance, g.rowH), on: s.OnClick, ctrl: s.OnCtrlClick})
-			if run.Advance > 0 {
-				p.RRect(geom.Rc(pen, ty+run.Ascent+1.5, run.Advance, 1), 0, paint.Solid(ink))
+			g.links = append(g.links, gridLink{r: geom.Rc(start, y, pen-start+shown, g.rowH), on: s.OnClick, ctrl: s.OnCtrlClick})
+			if shown > 0 {
+				p.RRect(geom.Rc(pen, ty+run.Ascent+1.5, shown, 1), 0, paint.Solid(ink))
 			}
 		}
-		pen += run.Advance
+		pen += shown
 		if chip {
 			pen += chipPad
 		}
@@ -1072,18 +1068,6 @@ func (g *DataGrid) shape(k spanKey, face *text.Face, s string, size float32) tex
 	return sh.run
 }
 
-// cutShort returns run cut to the glyphs that fit in room with an ellipsis
-// after them.
-func (g *DataGrid) cutShort(run text.Run, room float32) text.Run {
-	key := cutKey{run.Face, run.Size}
-	ell, ok := g.cut[key]
-	if !ok {
-		ell = run.Face.Shape("…", run.Size)
-		g.cut[key] = ell
-	}
-	return cutRunWith(run, ell, room)
-}
-
 func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pad float32) {
 	h := g.header
 	p.RRect(geom.Rc(0, 0, g.view.W, h), 0, paint.Solid(DialogFill.Get(th)))
@@ -1109,16 +1093,15 @@ func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pa
 		if col.Sort != 0 {
 			right -= sortArrow + 2
 		}
-		if room := right - x - pad; run.Advance > room {
-			run = g.cutShort(run, room)
-		}
+		room := max(right-x-pad, 0)
+		shown := min(run.Advance, room)
 		at := x + pad
 		if col.End {
-			at = right - run.Advance
+			at = right - shown
 		}
-		run.Paint(p, geom.Pt(at, (h-run.Height())/2), ink)
+		run.PaintFaded(p, geom.Pt(at, (h-run.Height())/2), ink, room, TextFade.Get(th))
 		if col.Sort != 0 {
-			paintSort(p, th, geom.Pt(at+run.Advance+sortArrow/2+2, h/2), col.Sort > 0, ink)
+			paintSort(p, th, geom.Pt(at+shown+sortArrow/2+2, h/2), col.Sort > 0, ink)
 		}
 		if closing {
 			paintCross(p, th, geom.Pt(x+w-pad-h/4, h/2), h/4, ink)
