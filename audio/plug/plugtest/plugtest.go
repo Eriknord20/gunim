@@ -59,15 +59,15 @@ func AllocsUnder(t *testing.T, fn string, run func()) int64 {
 
 // Play prepares pr as s says and plays it as an instrument, as a host
 // does, for the given number of frames in blocks of s.MaxBlock, and
-// returns what came out: s.Channels channels of that many frames. The first block
-// carries each of params' Default as a change at frame 0. Each event's
+// returns what came out: s.Channels channels of that many frames. The
+// first block carries each of params' Default as a change at frame 0. Each event's
 // Frame counts from the start, and Play hands it to the block it falls
 // in, in the order of their frames. Play fills Out with NaN before each
 // block, so a frame the instrument leaves unwritten shows.
 func Play(t *testing.T, pr plug.Processor, s plug.Setup, frames int, params []plug.Param, events ...plug.Event) [][]float32 {
 	t.Helper()
-	if s.MaxBlock <= 0 || s.Channels <= 0 {
-		t.Fatalf("plugtest: Play needs MaxBlock and Channels, has %d and %d", s.MaxBlock, s.Channels)
+	if frames <= 0 || s.MaxBlock <= 0 || s.Channels <= 0 {
+		t.Fatalf("plugtest: Play needs frames, MaxBlock and Channels above 0, has %d, %d and %d", frames, s.MaxBlock, s.Channels)
 	}
 	events = slices.Clone(events)
 	slices.SortStableFunc(events, func(a, b plug.Event) int { return a.Frame - b.Frame })

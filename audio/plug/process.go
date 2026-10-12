@@ -35,8 +35,10 @@ type Processor interface {
 	// in stops, as a reverb's ringing.
 	Tail() int
 	// Reset drops the sound held from before, as playing jumps to
-	// another place: an instrument's notes end with it, and the host
-	// starts again those that sound at the new place.
+	// another place. An instrument ends every note, lifts every group's
+	// pedal and returns each expression to its rest; the host then
+	// starts the notes and puts down the pedals that sound at the new
+	// place.
 	Reset()
 }
 
@@ -90,8 +92,8 @@ type Event struct {
 	// Frame is where in the block it happens.
 	Frame int
 	Kind  EventKind
-	// Note is the note's ID. Between its NoteOn and its NoteOff, the
-	// host gives no other note the same one.
+	// Note is the note's ID, the note's alone from its NoteOn to its
+	// NoteOff.
 	Note int32
 	// Group is the lane the note plays in: a Pedal holds only the notes
 	// of its own group.

@@ -103,7 +103,7 @@ func TestPlayingNotesAllocatesNothing(t *testing.T) {
 			plug.Event{Frame: i*300 + 299, Kind: plug.NoteOff, Note: int32(i)})
 	}
 	r := &recorder{}
-	// Only what the playing makes counts, not Play's making of blocks.
+	// AllocsUnder counts what playBlocks makes.
 	made := AllocsUnder(t, "plugtest.playBlocks", func() {
 		Play(t, r, plug.Setup{Rate: 48000, MaxBlock: 128, Channels: 2}, 32*300, nil, events...)
 	})
@@ -112,20 +112,33 @@ func TestPlayingNotesAllocatesNothing(t *testing.T) {
 	}
 }
 
-// half is an instrument that writes only the first half of each block.
-type half struct{ recorder }
+// half is an instrument that writes every frame of its first block, and
+// the first half of each block after.
+type half struct {
+	recorder
+	blocks int
+}
 
 func (h *half) Process(b *plug.Block) {
+	n := b.Frames
+	if h.blocks > 0 {
+		n /= 2
+	}
+	h.blocks++
 	for _, ch := range b.Out {
-		for f := range b.Frames / 2 {
-			ch[f] = 0
+		for f := range n {
+			ch[f] = 1
 		}
 	}
 }
 
 func TestPlayShowsFramesLeftUnwritten(t *testing.T) {
-	out := Play(t, &half{}, plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}, 64, nil)
-	if out[0][0] != 0 || !math.IsNaN(float64(out[0][63])) {
-		t.Errorf("the frames run %v to %v, want 0 written and NaN left", out[0][0], out[0][63])
+	out := Play(t, &half{}, plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}, 192, nil)
+	for f, v := range out[0] {
+		// The second and third blocks leave their last 32 frames.
+		left := f >= 64 && f%64 >= 32
+		if math.IsNaN(float64(v)) != left {
+			t.Errorf("frame %d is %v, want NaN %v", f, v, left)
+		}
 	}
 }
