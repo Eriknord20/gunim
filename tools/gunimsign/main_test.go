@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,9 @@ func TestSignWithANewKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fi, serr := os.Stat(keyFile); serr != nil || fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix permissions to check; there it is enough that
+	// the file is there.
+	if fi, serr := os.Stat(keyFile); serr != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("the private key's file: %v, %v", fi, serr)
 	}
 	if _, again := makeKey(keyFile); again == nil {

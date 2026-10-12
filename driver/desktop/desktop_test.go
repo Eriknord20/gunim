@@ -32,6 +32,14 @@ func TestMain(m *testing.M) {
 	code := make(chan int, 1)
 	_ = d.Run(ctx, func() {
 		go func() {
+			// A machine with a display but no OpenGL, as a CI runner on
+			// Windows is, opens no window at all: its tests skip, as
+			// they do with no display.
+			if w, err := d.NewWindow(driver.Options{Title: "gunim probe", Size: geom.Sz(1, 1)}); err != nil {
+				display = nil
+			} else {
+				_ = w.Close()
+			}
 			code <- m.Run()
 			cancel()
 		}()

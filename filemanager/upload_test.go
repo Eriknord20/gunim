@@ -295,7 +295,12 @@ func TestARemoteFileChangedMeanwhileAsksAndKeepsBoth(t *testing.T) {
 	}
 	u.answer(Confirmed{Token: c.Token, Alt: true})
 	both := filepath.Join(u.dir, "report (2).txt")
-	u.until("the copy goes up beside", func() bool { return contents(t, both) == "mine" })
+	// On Windows a file being written cannot be opened, so a read that
+	// fails is a copy not there yet.
+	u.until("the copy goes up beside", func() bool {
+		b, err := os.ReadFile(both)
+		return err == nil && string(b) == "mine"
+	})
 	u.idle()
 	if got := contents(t, u.remote); got != "theirs, longer" {
 		t.Fatalf("Keep Both replaced the remote file with %q", got)
