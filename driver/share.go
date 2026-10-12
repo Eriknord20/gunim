@@ -3,8 +3,6 @@ package driver
 import (
 	"errors"
 	"time"
-
-	"github.com/marrasen/gunim/geom"
 )
 
 // Share is what an application hands to other applications through the
@@ -46,18 +44,3 @@ type Vibrator interface {
 // ErrNoVibrator is returned where the device has no vibration motor
 // gunim can run.
 var ErrNoVibrator = errors.New("driver: no vibration motor on this device")
-
-// A GestureExcluder is a [Window] on a system that takes swipes in from
-// the screen's edges as its own gestures, as Android's back gesture is.
-// ExcludeSystemGestures keeps such swipes for the program within rects,
-// in the window's units: a game steered by dragging wants them, so a
-// drag begun at the edge steers rather than leaves. Each call replaces
-// the last; none gives every edge back to the system. The system may
-// honour only part of it: Android at most 200 dp of each side's height.
-type GestureExcluder interface {
-	ExcludeSystemGestures(rects []geom.Rect) error
-}
-
-// ErrNoSystemGestures is returned where the system takes no edge
-// swipes a program could keep.
-var ErrNoSystemGestures = errors.New("driver: no system edge gestures on this platform")

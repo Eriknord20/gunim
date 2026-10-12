@@ -28,6 +28,7 @@ public class GunimActivity extends Activity {
 		Native.activity = this;
 		GunimView v = new GunimView(this);
 		Native.view = v;
+		Native.keepGestures(v);
 		setContentView(v);
 		edgeToEdge(v);
 		if (android.os.Build.VERSION.SDK_INT >= 30) {

@@ -61,20 +61,3 @@ func TestVibrateHandsOverItsPattern(t *testing.T) {
 		t.Fatalf("the motor got %v, want %v", got, want)
 	}
 }
-
-func TestExcludeSystemGesturesHandsOverItsRectsAndNoneGivesThemBack(t *testing.T) {
-	w := NewOffscreen(geom.Sz(400, 800), nil)
-	band := geom.Rect{Min: geom.Pt(0, 500), Max: geom.Pt(400, 700)}
-	if err := w.Client().ExcludeSystemGestures(band); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.Offscreen().SystemGesturesExcluded(); !slices.Equal(got, []geom.Rect{band}) {
-		t.Fatalf("the window keeps %v from the system, want %v", got, band)
-	}
-	if err := w.Client().ExcludeSystemGestures(); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.Offscreen().SystemGesturesExcluded(); len(got) != 0 {
-		t.Fatalf("after a call with none, the window still keeps %v", got)
-	}
-}

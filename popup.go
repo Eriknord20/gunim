@@ -156,6 +156,9 @@ type surface struct {
 	// and so never shown.
 	stale   bool
 	closing bool
+	// edgeSwipes is the bands last handed dw to keep from the system's
+	// edge gestures.
+	edgeSwipes []geom.Rect
 	// stop ends the goroutine passing the window's events on.
 	stop chan struct{}
 	// room is the room the screen leaves round roomAt, the anchor it was asked for, on the screen where the parent

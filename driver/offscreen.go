@@ -63,8 +63,9 @@ type OffscreenWindow struct {
 	// SetVibrator.
 	share   func(Share) error
 	vibrate func([]time.Duration) error
-	// excluded is what ExcludeSystemGestures last kept.
-	excluded []geom.Rect
+	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
+	edgeSwipes     []geom.Rect
+	edgeSwipeCalls int
 	// compass answers WatchHeading; see SetCompass.
 	compass func(on bool)
 	// anchor is where a popup was last attached, and origin where the
@@ -843,20 +844,19 @@ func (w *OffscreenWindow) Vibrate(pattern ...time.Duration) error {
 	return fn(pattern)
 }
 
-// ExcludeSystemGestures implements [GestureExcluder] by keeping rects,
-// for a test to read with SystemGesturesExcluded.
-func (w *OffscreenWindow) ExcludeSystemGestures(rects []geom.Rect) error {
+// KeepEdgeSwipes implements [EdgeSwipeKeeper] by keeping bands, for a test to read with EdgeSwipesKept.
+func (w *OffscreenWindow) KeepEdgeSwipes(bands []geom.Rect) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.excluded = append(w.excluded[:0], rects...)
-	return nil
+	w.edgeSwipes = append(w.edgeSwipes[:0], bands...)
+	w.edgeSwipeCalls++
 }
 
-// SystemGesturesExcluded is what ExcludeSystemGestures last kept.
-func (w *OffscreenWindow) SystemGesturesExcluded() []geom.Rect {
+// EdgeSwipesKept returns the bands KeepEdgeSwipes last kept, and how many times it has been called.
+func (w *OffscreenWindow) EdgeSwipesKept() (bands []geom.Rect, calls int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]geom.Rect(nil), w.excluded...)
+	return append([]geom.Rect(nil), w.edgeSwipes...), w.edgeSwipeCalls
 }
 
 // SetCompass gives the window a pretend compass, for a test standing in for a device with one: fn hears each call

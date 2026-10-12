@@ -59,10 +59,15 @@ public final class Native {
 		});
 	}
 
+	// excluded is the rects excludeGestures last set, kept on the UI
+	// thread so a view that replaces the last, as a new activity's does,
+	// keeps them too; see keepGestures.
+	private static java.util.List<android.graphics.Rect> excluded = java.util.Collections.emptyList();
+
 	// excludeGestures keeps the system's edge gestures, as back, out of
 	// the rects in r, four pixel coordinates each, from Android 10.
 	static void excludeGestures(int[] r) {
-		if (android.os.Build.VERSION.SDK_INT < 29) {
+		if (Build.VERSION.SDK_INT < 29) {
 			return;
 		}
 		java.util.ArrayList<android.graphics.Rect> rects = new java.util.ArrayList<>();
@@ -70,10 +75,19 @@ public final class Native {
 			rects.add(new android.graphics.Rect(r[i], r[i + 1], r[i + 2], r[i + 3]));
 		}
 		ui.post(() -> {
+			excluded = rects;
 			if (view != null) {
-				view.setSystemGestureExclusionRects(rects);
+				keepGestures(view);
 			}
 		});
+	}
+
+	// keepGestures gives v the rects excludeGestures last set. It runs on
+	// the UI thread, for each view that becomes the one Go draws in.
+	static void keepGestures(GunimView v) {
+		if (Build.VERSION.SDK_INT >= 29) {
+			v.setSystemGestureExclusionRects(excluded);
+		}
 	}
 
 	static void caret(int x0, int y0, int x1, int y1) {
