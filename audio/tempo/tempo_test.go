@@ -314,8 +314,30 @@ func TestAMapHeldByValueIsWritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"bpm":128`) {
+	if !strings.Contains(string(data), `"BPM":128`) {
 		t.Errorf("a map held by value was written as %s", data)
+	}
+}
+
+// TestAMapWrittenWithLowerCaseKeysReads: a file written before the
+// keys took the fields' names, as "tempos" and "bpm", reads the same.
+func TestAMapWrittenWithLowerCaseKeysReads(t *testing.T) {
+	old := `{"startMs":500,"tempos":[{"at":0,"bpm":90},{"at":13440,"bpm":140,"ramp":true}],"meters":[{"at":0,"beats":3,"unit":4}]}`
+	var m Map
+	if err := json.Unmarshal([]byte(old), &m); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Start(); got != 500*time.Millisecond {
+		t.Errorf("the start read as %v, want 500ms", got)
+	}
+	if got := m.BPM(0); got != 90 {
+		t.Errorf("the first tempo read as %v, want 90", got)
+	}
+	if ts := m.Tempos(); len(ts) != 2 || !ts[1].Ramp || ts[1].BPM != 140 {
+		t.Errorf("the tempos read as %+v", ts)
+	}
+	if got, want := m.Meter(0), (Meter{Beats: 3, Unit: 4}); got != want {
+		t.Errorf("the meter read as %v, want %v", got, want)
 	}
 }
 
