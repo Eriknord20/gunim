@@ -126,7 +126,7 @@ Play for Android.
 [Marras Mastering Studio](https://github.com/marrasen/mastering-studio)
 masters an album, an EP or a single, through chains of VST3 plugins. It
 started here as `example/mastering` and is now a project of its own,
-built on gunim's `audio`, `audio/vst3` and `audioui`.
+built on gunim's `audio`, `audio/plug`, `audio/vst3` and `audioui`.
 
 Bonbon Sudoku, a sudoku of candies made for a phone, started here as
 `example/sudoku`, to see how far the animation goes. It is now an app of
@@ -171,6 +171,17 @@ plugins in the system's folders and loads one. It runs stereo sound
 through an effect in realtime or offline, and saves and restores its
 state. It shows the effect's own editor in a window, on Windows and
 Linux.
+
+Package `audio/plug` is a plugin format for effects written in Go. A
+plugin is a Go package compiled into the program, and it registers
+itself as the program starts. It follows VST3, so the host runs a VST3
+plugin through the same interfaces. The host keeps every plugin's
+parameters and state, for one undo history and one preset browser. A
+plugin's views are gunim nodes, in three sizes. `audio/plug/plugui` has
+the knobs and sections its views are built from. The plugins themselves
+are packages beside it: `dynamics`, `enhancer`, `eq`, `imager`,
+`maximizer`, `trim` and `xover`, a crossover the others split bands
+with.
 
 Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings
@@ -778,6 +789,7 @@ path data.
 | `gunim/audio/speaker` | Plays a mixer through the speakers, with oto |
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
+| `gunim/audio/plug` | A plugin format for effects written in Go, with views drawn in gunim, and the plugins made in it |
 | `gunim/audio/vst3` | Hosts VST3 effects: their sound, state, parameters and editors |
 | `gunim/audioui` | Meters and faders, a spectrum and a spectrogram, a waveform, and loudness readings for audio programs |
 | `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, light that adds, layers that clip and tilt, and 3D scenes |
