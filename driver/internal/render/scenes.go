@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim/geom"
@@ -30,6 +31,7 @@ const (
 	glCullFace         = 0x0B44
 	glFront            = 0x0404
 	glBack             = 0x0405
+	glDynamicDraw      = 0x88E8
 )
 
 const (
@@ -92,7 +94,56 @@ type sceneState struct {
 	// on the stack, where passing them to the GL through its interface
 	// would move them to the heap, an allocation for each one each item.
 	v sceneValues
+	// batch draws a scene's solid items that share a mesh and a gloss
+	// in one instanced call each: its program, built on first use, and
+	// scratch for gathering the items, kept from frame to frame.
+	batch batchState
 }
+
+// batchState is what drawing a scene's solid items in batches keeps.
+type batchState struct {
+	prog   uint32
+	failed bool
+	u      struct{ vp, light, lightColor, ambient, eye, shine int32 }
+	// inst is the instance buffer, of instCap bytes, and data what a
+	// scene puts in it: each instance's model matrix and tint.
+	inst    uint32
+	instCap int
+	data    []byte
+	// of numbers the groups by mesh and gloss; groups are the scene's,
+	// group the group of each solid item, and order the solid items
+	// group by group.
+	of     map[batchKey]int32
+	groups []batchGroup
+	group  []int32
+	order  []int32
+	// off says the renderer draws every item on its own, for a test
+	// comparing the two.
+	off bool
+}
+
+// batchKey is what the items of one batch share.
+type batchKey struct {
+	mesh  *paint.Mesh
+	shine float32
+}
+
+// batchGroup is the solid items of a scene sharing a key: n of them,
+// from start in the order.
+type batchGroup struct {
+	key      batchKey
+	n, start int32
+	// first is the first instance of the group in the instance buffer.
+	first int32
+}
+
+// batchMin is how many items sharing a mesh draw as a batch; fewer
+// draw one by one.
+const batchMin = 2
+
+// instanceFloats is the floats each instance takes in the instance
+// buffer: its model matrix, column by column, then its tint.
+const instanceFloats = 20
 
 // sceneValues is what a scene and each of its items hand the program's
 // uniforms.
@@ -108,8 +159,10 @@ type sceneValues struct {
 // meshBuffers is a mesh uploaded to the GPU.
 type meshBuffers struct {
 	vao, vbo, ibo uint32
-	n             int32
-	used          time.Time
+	// ivao is its vertex array for drawing instances, made on first use.
+	ivao uint32
+	n    int32
+	used time.Time
 	// frame is the last frame that drew it, and bytes what it takes.
 	frame uint64
 	bytes int
@@ -169,6 +222,99 @@ void main() {
 }
 `
 
+// batchVS is sceneVS for an instance of a batch: its model matrix and
+// tint come with the instance, and the matrix for its normals, which
+// sceneVS takes from the CPU, is the model's cofactors, signed by its
+// determinant, as NormalMatrix gives up to a scale the lighting
+// normalises away.
+const batchVS = `
+in vec3 a_pos;
+in vec3 a_normal;
+in vec4 a_color;
+in vec4 a_m0;
+in vec4 a_m1;
+in vec4 a_m2;
+in vec4 a_m3;
+in vec4 a_tint;
+uniform mat4 u_vp;
+out vec3 v_normal;
+out vec3 v_world;
+out vec4 v_color;
+flat out float v_mirror;
+
+void main() {
+	mat4 m = mat4(a_m0, a_m1, a_m2, a_m3);
+	vec3 a = a_m0.xyz, b = a_m1.xyz, c = a_m2.xyz;
+	float det = dot(a, cross(b, c));
+	mat3 cof = mat3(cross(b, c), cross(c, a), cross(a, b));
+	v_normal = det == 0.0 ? a_normal : cof * a_normal * sign(det);
+	v_mirror = det < 0.0 ? -1.0 : 1.0;
+	v_world = (m * vec4(a_pos, 1.0)).xyz;
+	v_color = a_color * a_tint;
+	gl_Position = u_vp * vec4(v_world, 1.0);
+}
+`
+
+// batchFS is sceneFS with the tint and the mirroring from the instance.
+var batchFS = strings.NewReplacer(
+	"uniform vec4 u_tint;\n", "",
+	"uniform float u_mirror;", "flat in float v_mirror;",
+	"u_mirror", "v_mirror",
+	"v_color * u_tint", "v_color",
+).Replace(sceneFS)
+
+// batchReady builds the batch program on first use, and reports whether
+// it built: a batch shader that fails to build draws each item alone.
+func (r *Renderer) batchReady(header string) bool {
+	b := &r.scenes.batch
+	if b.prog != 0 || b.failed {
+		return !b.failed
+	}
+	g := r.GL
+	vs, err := compile(g, gl.VERTEX_SHADER, header+batchVS)
+	if err != nil {
+		b.failed = true
+		log.Printf("gunim: render: scene batch: %v", err)
+		return false
+	}
+	defer g.DeleteShader(vs)
+	fs, err := compile(g, gl.FRAGMENT_SHADER, header+batchFS)
+	if err != nil {
+		b.failed = true
+		log.Printf("gunim: render: scene batch: %v", err)
+		return false
+	}
+	defer g.DeleteShader(fs)
+	p := g.CreateProgram()
+	g.AttachShader(p, vs)
+	g.AttachShader(p, fs)
+	for i, name := range []string{"a_pos", "a_normal", "a_color", "a_m0", "a_m1", "a_m2", "a_m3", "a_tint"} {
+		g.BindAttribLocation(p, uint32(i), name)
+	}
+	g.LinkProgram(p)
+	if g.GetProgrami(p, gl.LINK_STATUS) == gl.FALSE {
+		log.Printf("gunim: render: scene batch: link: %s", g.GetProgramInfoLog(p))
+		g.DeleteProgram(p)
+		b.failed = true
+		return false
+	}
+	b.prog = p
+	loc := func(name string) int32 { return g.GetUniformLocation(p, name) }
+	b.u.vp, b.u.shine = loc("u_vp"), loc("u_shine")
+	b.u.light, b.u.lightColor, b.u.ambient, b.u.eye = loc("u_light"), loc("u_lightColor"), loc("u_ambient"), loc("u_eye")
+	b.inst = g.CreateBuffer()
+	b.of = map[batchKey]int32{}
+	return true
+}
+
+// sceneHeader is the shaders' first lines, for the GL or GLES.
+func (r *Renderer) sceneHeader() string {
+	if r.isES {
+		return "#version 300 es\nprecision highp float;\n"
+	}
+	return "#version 150\n"
+}
+
 // sceneReady builds the scene program on first use, and reports whether it
 // can draw.
 func (r *Renderer) sceneReady() bool {
@@ -176,10 +322,7 @@ func (r *Renderer) sceneReady() bool {
 	if st.prog != 0 || st.failed {
 		return !st.failed
 	}
-	header := "#version 150\n"
-	if r.isES {
-		header = "#version 300 es\nprecision highp float;\n"
-	}
+	header := r.sceneHeader()
 	g := r.GL
 	vs, err := compile(g, gl.VERTEX_SHADER, header+sceneVS)
 	if err != nil {
@@ -271,16 +414,27 @@ func (r *Renderer) scene(op *paint.SceneOp) {
 	// a glass ball shows its far side through its near one.
 	now := time.Now()
 	st.order = st.order[:0]
+	batching := !st.batch.off && r.batchReady(r.sceneHeader())
+	if batching {
+		r.groupItems(op.Scene.Items)
+	}
 	for i, it := range op.Scene.Items {
 		if it.Mesh == nil || len(it.Mesh.Indices()) == 0 {
 			continue
 		}
 		if !it.SeeThrough() {
-			r.drawItem(it, vp, now)
+			// Solid items many share a mesh with draw in batches below.
+			if !batching || st.batch.groups[st.batch.group[i]].n < batchMin {
+				r.drawItem(it, vp, now)
+			}
 			continue
 		}
 		c, _ := it.Mesh.Bounds()
 		st.order = append(st.order, seen{i, it.Matrix().Apply(c).Sub(cam.Eye).Len()})
+	}
+	if batching {
+		r.drawBatches(op.Scene.Items, vp, cam.Eye, dir, lc, amb, now)
+		g.UseProgram(st.prog)
 	}
 	if len(st.order) > 0 {
 		slices.SortStableFunc(st.order, func(a, b seen) int { return cmp.Compare(b.dist, a.dist) })
@@ -327,6 +481,141 @@ func (r *Renderer) scene(op *paint.SceneOp) {
 	})
 	// The next scene draws into the same texture.
 	r.flush()
+}
+
+// groupItems groups a scene's solid items by mesh and gloss, in the
+// batch's scratch: each item's group, and the items group by group.
+func (r *Renderer) groupItems(items []paint.SceneItem) {
+	b := &r.scenes.batch
+	clear(b.of)
+	b.groups = b.groups[:0]
+	b.group = slices.Grow(b.group[:0], len(items))[:len(items)]
+	for i, it := range items {
+		b.group[i] = -1
+		if it.Mesh == nil || len(it.Mesh.Indices()) == 0 || it.SeeThrough() {
+			continue
+		}
+		k := batchKey{it.Mesh, it.Shine}
+		gi, ok := b.of[k]
+		if !ok {
+			gi = int32(len(b.groups))
+			b.of[k] = gi
+			b.groups = append(b.groups, batchGroup{key: k})
+		}
+		b.groups[gi].n++
+		b.group[i] = gi
+	}
+	n := int32(0)
+	for gi := range b.groups {
+		b.groups[gi].start = n
+		n += b.groups[gi].n
+	}
+	b.order = slices.Grow(b.order[:0], int(n))[:n]
+	for gi := range b.groups {
+		b.groups[gi].n = 0
+	}
+	for i, gi := range b.group {
+		if gi < 0 {
+			continue
+		}
+		g := &b.groups[gi]
+		b.order[g.start+g.n] = int32(i)
+		g.n++
+	}
+}
+
+// drawBatches draws each group of a scene's solid items many share a
+// mesh in one instanced call, their matrices and tints in the instance
+// buffer, all uploaded at once.
+func (r *Renderer) drawBatches(items []paint.SceneItem, vp geom.Mat4, eye, dir geom.Vec3, lc, amb color.NRGBA, now time.Time) {
+	st := &r.scenes
+	b := &st.batch
+	b.data = b.data[:0]
+	inst := int32(0)
+	for gi := range b.groups {
+		grp := &b.groups[gi]
+		if grp.n < batchMin {
+			continue
+		}
+		grp.first = inst
+		for _, i := range b.order[grp.start : grp.start+grp.n] {
+			it := items[i]
+			m := it.Matrix()
+			for _, f := range m {
+				b.data = binary.LittleEndian.AppendUint32(b.data, math.Float32bits(f))
+			}
+			for _, f := range rgba(it.Color()) {
+				b.data = binary.LittleEndian.AppendUint32(b.data, math.Float32bits(f))
+			}
+			inst++
+		}
+	}
+	if inst == 0 {
+		return
+	}
+	g := r.GL
+	g.UseProgram(b.prog)
+	v := &st.v
+	v.mvp = vp
+	g.UniformMatrix4fv(b.u.vp, v.mvp[:])
+	r.uniform3(b.u.light, dir.X, dir.Y, dir.Z)
+	r.uniformRGB(b.u.lightColor, lc)
+	r.uniformRGB(b.u.ambient, amb)
+	r.uniform3(b.u.eye, eye.X, eye.Y, eye.Z)
+	g.BindBuffer(gl.ARRAY_BUFFER, b.inst)
+	if len(b.data) > b.instCap {
+		b.instCap = max(len(b.data), 2*b.instCap)
+	}
+	// A fresh store each scene, so a second scene in the frame writes
+	// while the GPU still draws the first, rather than waiting on it as
+	// a tile-based phone GPU would.
+	g.BufferInit(gl.ARRAY_BUFFER, b.instCap, glDynamicDraw)
+	g.BufferSubData(gl.ARRAY_BUFFER, 0, b.data)
+	stride := int32(instanceFloats * 4)
+	for gi := range b.groups {
+		grp := &b.groups[gi]
+		if grp.n < batchMin {
+			continue
+		}
+		mb := r.meshBuffers(grp.key.mesh, now)
+		r.instanceArray(mb)
+		g.BindBuffer(gl.ARRAY_BUFFER, b.inst)
+		off := int(grp.first) * int(stride)
+		for k := range 5 {
+			g.VertexAttribPointer(uint32(3+k), 4, gl.FLOAT, false, stride, off+16*k)
+		}
+		v.shine[0] = grp.key.shine
+		g.Uniform1fv(b.u.shine, v.shine[:])
+		g.DrawElementsInstanced(gl.TRIANGLES, mb.n, gl.UNSIGNED_INT, 0, grp.n)
+	}
+	g.BindVertexArray(0)
+}
+
+// instanceArray binds mb's vertex array for instances, made on first
+// use: the mesh's own attributes, and five more, stepping once an
+// instance, for the instance buffer.
+func (r *Renderer) instanceArray(mb *meshBuffers) {
+	g := r.GL
+	if mb.ivao != 0 {
+		g.BindVertexArray(mb.ivao)
+		return
+	}
+	mb.ivao = g.CreateVertexArray()
+	g.BindVertexArray(mb.ivao)
+	g.BindBuffer(gl.ARRAY_BUFFER, mb.vbo)
+	stride := int32(meshVertexFloats * 4)
+	for i, a := range [3]struct {
+		size int32
+		off  int
+	}{{3, 0}, {3, 12}, {4, 24}} {
+		g.EnableVertexAttribArray(uint32(i))
+		g.VertexAttribPointer(uint32(i), a.size, gl.FLOAT, false, stride, a.off)
+	}
+	g.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, mb.ibo)
+	for k := range 5 {
+		g.EnableVertexAttribArray(uint32(3 + k))
+		g.VertexAttribDivisor(uint32(3+k), 1)
+	}
 }
 
 // seen is a see-through item of a scene, by its index, and how far its
@@ -549,6 +838,9 @@ func (r *Renderer) evictMeshes() {
 func (r *Renderer) dropMesh(m *paint.Mesh, mb *meshBuffers) {
 	g := r.GL
 	g.DeleteVertexArray(mb.vao)
+	if mb.ivao != 0 {
+		g.DeleteVertexArray(mb.ivao)
+	}
 	g.DeleteBuffer(mb.vbo)
 	g.DeleteBuffer(mb.ibo)
 	r.scenes.meshBytes -= mb.bytes
@@ -565,6 +857,10 @@ func (r *Renderer) releaseScenes() {
 	r.freeSceneTarget()
 	if st.prog != 0 {
 		g.DeleteProgram(st.prog)
+	}
+	if st.batch.prog != 0 {
+		g.DeleteProgram(st.batch.prog)
+		g.DeleteBuffer(st.batch.inst)
 	}
 	*st = sceneState{}
 }
