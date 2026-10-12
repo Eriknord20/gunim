@@ -899,8 +899,9 @@ func updatePage(p *page, sc scene) {
 		say(p, "Version "+sc.Version+" opens once "+sc.Name+" has closed.")
 		p.foot = footer(cancel())
 	case pageUpdated:
+		// It opens by itself in a moment: a button to open it sooner
+		// would only race it.
 		heading(p, sc.Name+" is up to date", "Version "+sc.Version)
 		say(p, "It opens in a moment.")
-		p.foot = footer(nil, closeButton("Open Now"))
 	}
 }
