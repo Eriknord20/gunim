@@ -73,3 +73,21 @@ type Auditioner interface {
 	// host that plays nothing now plays nothing.
 	Audition(pitch, velocity float64, length time.Duration, u *gunim.UI)
 }
+
+// Holder is an [Auditioner] that holds a note for as long as a view
+// says, as a key of a keyboard on screen sounds while the pointer holds
+// it. A view asks for it by a type assertion on its [Host].
+type Holder interface {
+	Auditioner
+	// Hold starts a note on the plugin playing, which sounds until
+	// Release names key: key is the view's own name for the note, as
+	// the key pressed. pitch is a MIDI note number and velocity runs
+	// from 0 to 1. A key held already lets its note go first. It runs
+	// on the window's goroutine; a host that plays nothing now plays
+	// nothing.
+	Hold(key int, pitch, velocity float64, u *gunim.UI)
+	// Release lets go of the note Hold started for key. A view lets go
+	// of every key it holds as the press that holds them ends, however
+	// it ends.
+	Release(key int, u *gunim.UI)
+}
