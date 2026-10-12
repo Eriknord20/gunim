@@ -9,7 +9,7 @@ import (
 // kinds writes each token of src as text=kind, for comparing.
 func kinds(src string, toks []Token) string {
 	rs := []rune(src)
-	var out []string
+	out := make([]string, 0, len(toks))
 	for _, t := range toks {
 		out = append(out, fmt.Sprintf("%s=%s", string(rs[t.Start:t.End]), t.Kind))
 	}

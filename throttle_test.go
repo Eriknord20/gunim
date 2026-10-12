@@ -235,8 +235,8 @@ func TestNextVsyncFollowsThePhaseOfTheLastFrame(t *testing.T) {
 func TestATimerWakesTheLoopForTheFrameThatRunsIt(t *testing.T) {
 	const iv = 10 * time.Millisecond
 	shown := time.Unix(100, 0)
-	for _, due := range []time.Duration{1, 3, 9, 10, 11, 20, 47} {
-		at := shown.Add(due * time.Millisecond)
+	for _, due := range []int{1, 3, 9, 10, 11, 20, 47} {
+		at := shown.Add(time.Duration(due) * time.Millisecond)
 		wake := wakeFor(at, shown, iv)
 		// Woken on time, or a little late, the frame is stamped at or after the timer, and a refresh at most after it.
 		for _, late := range []time.Duration{0, time.Millisecond, iv - 1} {

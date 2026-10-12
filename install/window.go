@@ -666,7 +666,7 @@ func updateStage(st *stage, sc scene, u *gunim.UI) {
 		}
 	}
 	if sc.Page == pageWorking {
-		st.progress(sc.Progress, u)
+		st.progress(sc.Progress)
 		// The work's last step says it is done; the page under the ring
 		// keeps the step before until the next page comes.
 		if l, ok := st.page.step.(*widget.Label); ok && sc.Step != "Done" && l.Text != sc.Step+"…" {
@@ -798,6 +798,8 @@ func welcomePage(p *page, sc scene) {
 	case Downgrade:
 		sub = "A newer version, " + sc.Have + ", is installed"
 		act = "Install " + sc.Version
+	default:
+		// A fresh install, or a removal, has nothing to say here.
 	}
 	heading(p, title, sub)
 	if sc.Description != "" {

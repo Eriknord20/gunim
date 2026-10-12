@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -311,5 +312,131 @@ func TestDismissingTheBannerByKeyboardSendsTheKeyboardToTheListing(t *testing.T)
 	h.frames(30)
 	if f := h.focused(); f != h.b.listing.cur.focusNode() {
 		t.Fatalf("with the banner dismissed, the keyboard is on %T, want the listing", f)
+	}
+}
+
+// Shift and Down go on from where the selection started after the folder
+// is read again, as it is every few seconds. The selection sent again
+// made the row the keyboard was on the new start, so a long Shift+Down
+// lost the rows above it.
+func TestShiftDownKeepsItsStartWhenTheFolderIsReadAgain(t *testing.T) {
+	names := make([]string, 0, 100)
+	for i := range 100 {
+		names = append(names, fmt.Sprintf("f%03d.txt", i))
+	}
+	h := newHarness(t, names...)
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 100 })
+	h.do(FocusListing{})
+	h.press(input.KeyDown, 0)
+	h.until("Down selects the first row", func() bool { return h.a.nav.cursor == "f000.txt" })
+	shiftDown := func(n int) {
+		for range n {
+			h.press(input.KeyDown, input.ModShift)
+		}
+	}
+	shiftDown(30)
+	h.until("Shift+Down selects 31 rows", func() bool { return len(h.a.nav.sel) == 31 })
+	gen := h.a.nav.gen
+	h.w.Input(input.KeyPress{Key: input.KeyF5, Time: time.Now()})
+	h.until("F5 reads the folder again", func() bool { return h.a.nav.gen > gen })
+	h.frames(2)
+	shiftDown(5)
+	h.until("Shift+Down goes on to f035", func() bool { return h.a.nav.cursor == "f035.txt" })
+	if len(h.a.nav.sel) != 36 || !h.a.nav.sel["f000.txt"] {
+		t.Fatalf("after the folder was read again, Shift+Down selected %d rows, f000 among them %v; want 36 from f000",
+			len(h.a.nav.sel), h.a.nav.sel["f000.txt"])
+	}
+}
+
+// In a sidebar too tall for its window, Down and Up still move the
+// keyboard from section to section, as in a short one, and the sidebar
+// scrolls to keep it in sight. The scroll took them to scroll instead.
+func TestTheArrowsWalkASidebarTooTallForItsWindow(t *testing.T) {
+	spec := make([]string, 0, 12)
+	for i := range 12 {
+		spec = append(spec, fmt.Sprintf("d%02d/x.txt", i))
+	}
+	h := newHarness(t, spec...)
+	for i := range 12 {
+		h.do(Navigate{Path: filepath.Join(h.dir, fmt.Sprintf("d%02d", i))})
+		h.do(Command{Name: CmdPin})
+		h.do(Command{Name: CmdUp})
+	}
+	h.until("the favourites show", func() bool { return h.b.side.favs.Len() == 12 })
+	h.w.Offscreen().Resize(geom.Sz(1100, 260))
+	h.frames(30)
+	b := h.b
+	if b.side.scroll.Offset() != 0 {
+		t.Fatalf("the sidebar starts scrolled to %v", b.side.scroll.Offset())
+	}
+	for range 40 {
+		if h.focused() == b.side.firstHead() {
+			break
+		}
+		h.press(input.KeyTab, 0)
+	}
+	if h.focused() != b.side.firstHead() {
+		t.Fatal("Tab never reached the sidebar")
+	}
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.byID[b.side.order[0]].list {
+		t.Fatal("Down from the first heading did not go into its places")
+	}
+	h.press(input.KeyEnd, 0)
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.favSec.head {
+		t.Fatalf("Down from the last place went to %T, not on to the favourites' heading", h.focused())
+	}
+	h.press(input.KeyDown, 0)
+	if h.focused() != b.side.favs {
+		t.Fatal("Down from the favourites' heading did not go on into the favourites")
+	}
+	h.press(input.KeyEnd, 0)
+	h.frames(60)
+	if b.side.scroll.Offset() <= 0 {
+		t.Fatal("the last favourite has the keyboard, and the sidebar did not scroll to it")
+	}
+	h.press(input.KeyHome, 0)
+	h.press(input.KeyUp, 0)
+	if h.focused() != b.side.favSec.head {
+		t.Fatal("Up from the first favourite did not go back to the favourites' heading")
+	}
+}
+
+// After the row the keyboard is on is deleted, Down goes to the row that
+// came after it and Up to the one before, in the order the rows are
+// sorted in, not from the top of the list.
+func TestTheArrowsGoOnFromARowDeleted(t *testing.T) {
+	for _, key := range []input.Key{input.KeyDown, input.KeyUp, input.KeyRight} {
+		h := newHarness(t, "a.txt", "b.go", "c.md", "d.png", "e.txt")
+		h.until("the rows arrive", func() bool { return len(h.shown()) == 5 })
+		h.do(Command{Name: CmdSortType})
+		h.until("the rows sort by type", func() bool { return h.a.nav.sort == SortType })
+		h.frames(2)
+		h.do(FocusListing{})
+		// The middle row in the order by type goes.
+		order := h.shown()
+		gone, before, after := order[2], order[1], order[3]
+		h.press(input.KeyDown, 0)
+		for range 2 {
+			h.press(input.KeyDown, 0)
+		}
+		h.until("the keys reach the middle row", func() bool { return h.a.nav.cursor == gone })
+		if key == input.KeyRight {
+			h.do(Command{Name: CmdViewIcons})
+			h.frames(30)
+		}
+		h.w.Input(input.KeyPress{Key: input.KeyDelete, Time: time.Now()})
+		h.until(gone+" goes", func() bool { return !h.exists(gone) && len(h.shown()) == 4 })
+		h.frames(2)
+		want := after
+		if key == input.KeyUp {
+			want = before
+		}
+		h.press(key, 0)
+		h.until(fmt.Sprintf("%v goes to %s, next to %s deleted", key, want, gone), func() bool { return h.a.nav.cursor == want })
+		if len(h.a.nav.sel) != 1 || !h.a.nav.sel[want] {
+			t.Fatalf("%v after the delete selected %v, want %s alone", key, h.a.nav.sel, want)
+		}
 	}
 }

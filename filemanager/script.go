@@ -40,7 +40,7 @@ func (a *app) scriptStep(step string) {
 		clear(a.nav.sel)
 		a.nav.sel[arg] = true
 		a.nav.cursor = arg
-		a.publishSelection()
+		a.showSelection()
 		a.publishStatus()
 		a.showPreview()
 	case "filter":

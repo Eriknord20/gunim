@@ -12,8 +12,6 @@ package vst3
 import (
 	"encoding/binary"
 	"unsafe"
-
-	"github.com/ebitengine/purego"
 )
 
 // uid is a VST3 class or interface ID, as the platform lays it out.
@@ -145,9 +143,16 @@ const (
 //
 //go:uintptrescapes
 func call(obj uintptr, m int, args ...uintptr) uintptr {
-	r, _, _ := purego.SyscallN(method(obj, m), append([]uintptr{obj}, args...)...)
-	return r
+	// The arguments, obj first, in an array of the call's own, as a
+	// slice made for them would be made anew each call.
+	var all [maxCallArgs]uintptr
+	all[0] = obj
+	n := 1 + copy(all[1:], args)
+	return callN(method(obj, m), all[:n])
 }
+
+// maxCallArgs is the most arguments a method takes, obj counted.
+const maxCallArgs = 8
 
 // result is a method's result code.
 func result(r uintptr) int32 { return int32(uint32(r)) }

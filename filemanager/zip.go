@@ -8,6 +8,8 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+
+	"github.com/marrasen/gunim/zipcrypt"
 )
 
 // Making a zip of items: the items of one file system, with all that
@@ -58,20 +60,21 @@ func withZipExt(name string) string {
 // system itself. Nothing may be at the zip's path already. A link goes
 // in as a link where from can read one, and anything else that is not
 // a file or a folder is left out.
-func ZipFiles(ctx context.Context, from FS, paths []string, to FS, into, name string, p *TransferProgress) error {
+func ZipFiles(ctx context.Context, from FS, paths []string, to FS, into, name, password string, p *TransferProgress) error {
 	e := env{fs: from, to: to}
 	if p != nil {
 		e.report = func(pr progress) { p.Report(pr.bytes, pr.bytesTotal, pr.items, pr.itemsTotal, pr.current) }
 	}
 	r := &runner{ctx: ctx, env: e, rec: record{kind: OpZip}}
-	err := r.zipAll(paths, into, name)
+	err := r.zipAll(paths, into, name, password)
 	r.tell(true)
 	return err
 }
 
 // zipAll writes srcs into a new zip file called name in dest, on the
-// file system env.to, or env.fs where that is nil.
-func (r *runner) zipAll(srcs []string, dest, name string) error {
+// file system env.to, or env.fs where that is nil, protected with
+// password, where it is not empty.
+func (r *runner) zipAll(srcs []string, dest, name, password string) error {
 	from, to := r.env.fs, r.env.to
 	if to == nil {
 		to = from
@@ -99,7 +102,8 @@ func (r *runner) zipAll(srcs []string, dest, name string) error {
 	if to.ID() == from.ID() {
 		skip = part
 	}
-	zw := zip.NewWriter(out)
+	// Each item is protected with the password, where it is not empty.
+	zw := zipcrypt.NewWriter(zip.NewWriter(out), password)
 	for _, src := range srcs {
 		if err := r.zipTree(zw, src, skip); err != nil {
 			return errors.Join(err, zw.Close(), out.Close(), to.Remove(part))
@@ -125,7 +129,7 @@ func (r *runner) zipAll(srcs []string, dest, name string) error {
 
 // zipTree writes the item at src, and all it holds, into zw, under its
 // own name, leaving out the file at skip.
-func (r *runner) zipTree(zw *zip.Writer, src, skip string) error {
+func (r *runner) zipTree(zw *zipcrypt.Writer, src, skip string) error {
 	fsys := r.env.fs
 	ps := fsys.Paths()
 	top := ps.Dir(src)
@@ -161,7 +165,7 @@ func (r *runner) zipTree(zw *zip.Writer, src, skip string) error {
 }
 
 // zipItem writes the item at p, found as info, into zw as rel.
-func (r *runner) zipItem(zw *zip.Writer, p, rel string, info fs.FileInfo) error {
+func (r *runner) zipItem(zw *zipcrypt.Writer, p, rel string, info fs.FileInfo) error {
 	fsys := r.env.fs
 	ps := fsys.Paths()
 	h, err := zip.FileInfoHeader(info)
@@ -174,7 +178,7 @@ func (r *runner) zipItem(zw *zip.Writer, p, rel string, info fs.FileInfo) error 
 	case mode.IsDir():
 		h.Name += "/"
 		h.Method = zip.Store
-		_, err = zw.CreateHeader(h)
+		_, err = zw.Create(h)
 		return err
 	case mode&fs.ModeSymlink != 0:
 		l, ok := fsys.(Linker)
@@ -187,7 +191,7 @@ func (r *runner) zipItem(zw *zip.Writer, p, rel string, info fs.FileInfo) error 
 		}
 		h.Method = zip.Store
 		var w io.Writer
-		if w, err = zw.CreateHeader(h); err == nil {
+		if w, err = zw.Create(h); err == nil {
 			_, err = io.WriteString(w, target)
 		}
 		return err
@@ -196,7 +200,7 @@ func (r *runner) zipItem(zw *zip.Writer, p, rel string, info fs.FileInfo) error 
 		return nil
 	}
 	h.Method = zip.Deflate
-	w, err := zw.CreateHeader(h)
+	w, err := zw.Create(h)
 	if err != nil {
 		return err
 	}

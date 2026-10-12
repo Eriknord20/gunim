@@ -88,7 +88,7 @@ func (a *app) transfer(from string, ps PathStyle, paths []string, to, into strin
 		ts[i].Paths = append(ts[i].Paths, p)
 	}
 	for _, t := range ts {
-		a.startTransfer(t, ps)
+		a.startTransfer(t, ps, nil)
 	}
 }
 
@@ -109,8 +109,8 @@ func (a *app) placeLabel(fs, path string) string {
 
 // startTransfer runs t through the program in the background, as an
 // operation of the window, with paths of the file system it comes from
-// written as ps.
-func (a *app) startTransfer(t Transfer, ps PathStyle) {
+// written as ps. worked, when set, is told once it went well.
+func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
 	what, where := whatIn(ps, t.Paths), a.placeLabel(t.ToFS, t.Into)
 	title, done, kind := "Copying "+what+" to "+where, "Copied "+what+" to "+where, OpCopy
 	switch {
@@ -125,7 +125,12 @@ func (a *app) startTransfer(t Transfer, ps PathStyle) {
 	a.ops.wg.Go(func() {
 		err := do(ctx, w, t, p)
 		stopped := ctx.Err() != nil
-		a.post(func() { a.transferred(id, t, ps, done, err, stopped) })
+		a.post(func() {
+			if err == nil && worked != nil {
+				worked()
+			}
+			a.transferred(id, t, ps, done, err, stopped)
+		})
 	})
 }
 

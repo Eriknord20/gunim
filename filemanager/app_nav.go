@@ -54,6 +54,11 @@ type navState struct {
 	sel    map[string]bool
 	cursor string
 	pick   []string
+	// gap says the row the keyboard was on went, as one deleted does, and
+	// after names the row that came after it, "" for the end: the keys go
+	// on from there, not from the top.
+	gap   bool
+	after string
 	// space is the free space of the folder's volume, or spaceErr why it
 	// is unknown.
 	space    space
@@ -363,7 +368,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 	n.all, n.rows, n.err = nil, nil, nil
 	n.filter, n.pick = "", nil
 	clear(n.sel)
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	a.enteredFolder()
 	a.list()
 	a.readSpace()
@@ -553,7 +558,8 @@ func (a *app) refilter() {
 		a.patch(RowsLeft{Gen: n.gen, Rows: left})
 	}
 	a.publishBands()
-	if len(n.pick) > 0 {
+	picked := len(n.pick) > 0
+	if picked {
 		clear(n.sel)
 		for _, name := range n.pick {
 			n.sel[name] = true
@@ -564,10 +570,43 @@ func (a *app) refilter() {
 			n.cursor = n.rows[i].Name
 		}
 		n.pick = nil
+		n.gap = false
+	} else if n.cursor != "" && !slices.ContainsFunc(n.rows, func(e entry) bool { return e.Name == n.cursor }) {
+		a.leaveGap(was)
 	}
-	a.publishSelection()
+	if picked {
+		a.showSelection()
+	} else {
+		a.publishSelection()
+	}
 	a.publishStatus()
 	a.showPreview()
+}
+
+// leaveGap notes where the keyboard's row was, in the rows was showed
+// before, now that it is gone: the row after it that is still there, and
+// the end where none is. The names selected that went go with it.
+func (a *app) leaveGap(was []entry) {
+	n := &a.nav
+	here := make(map[string]bool, len(n.rows))
+	for _, e := range n.rows {
+		here[e.Name] = true
+	}
+	n.gap, n.after = true, ""
+	if i := slices.IndexFunc(was, func(e entry) bool { return e.Name == n.cursor }); i >= 0 {
+		for _, e := range was[i+1:] {
+			if here[e.Name] {
+				n.after = e.Name
+				break
+			}
+		}
+	}
+	n.cursor = ""
+	for name := range n.sel {
+		if !here[name] {
+			delete(n.sel, name)
+		}
+	}
 }
 
 // sortBy sorts the rows by column; toggle turns the order round when they
@@ -752,7 +791,7 @@ func (a *app) selected(v Selected) {
 	if !ordered {
 		sel = a.selectedEntries()
 	}
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	if v.Cursor >= 0 && v.Cursor < len(n.rows) {
 		n.cursor = n.rows[v.Cursor].Name
 	}
@@ -761,14 +800,19 @@ func (a *app) selected(v Selected) {
 }
 
 // publishSelection sends the rows holding the names selected, for the
-// grid to select.
-func (a *app) publishSelection() { a.sendSelection(false) }
+// grid to select, leaving the view where it is.
+func (a *app) publishSelection() { a.sendSelection(false, false) }
+
+// showSelection sends the selection as publishSelection does, for one
+// the program moved: the view goes to the cursor.
+func (a *app) showSelection() { a.sendSelection(false, true) }
 
 // sendSelection sends the rows holding the names selected, sliding the
-// selection there with slide.
-func (a *app) sendSelection(slide bool) {
+// selection there with slide, and bringing the cursor into view with
+// show.
+func (a *app) sendSelection(slide, show bool) {
 	n := &a.nav
-	s := Selection{Gen: n.gen, Cursor: -1, Slide: slide}
+	s := Selection{Gen: n.gen, Cursor: -1, Gap: -1, Slide: slide, Show: show}
 	for i, e := range n.rows {
 		if n.sel[e.Name] {
 			if k := len(s.Runs); k > 0 && s.Runs[k-1][1] == i {
@@ -780,6 +824,12 @@ func (a *app) sendSelection(slide bool) {
 		if e.Name == n.cursor {
 			s.Cursor = i
 		}
+		if n.gap && e.Name == n.after {
+			s.Gap = i
+		}
+	}
+	if n.gap && n.cursor == "" && n.after == "" {
+		s.Gap = len(n.rows)
 	}
 	a.patch(s)
 }
@@ -802,7 +852,7 @@ func (a *app) typed(v Typed) {
 	clear(n.sel)
 	n.sel[n.rows[i].Name] = true
 	n.cursor = n.rows[i].Name
-	a.sendSelection(true)
+	a.sendSelection(true, true)
 	a.publishStatus()
 	a.showPreview()
 }

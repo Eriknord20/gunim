@@ -378,7 +378,7 @@ func (s *stage) spin(on bool, u *gunim.UI) {
 }
 
 // progress moves the ring on to done, from 0 to 1.
-func (s *stage) progress(done float32, u *gunim.UI) {
+func (s *stage) progress(done float32) {
 	s.ring.Animate(max(done, s.ring.Target()), anim.Spring{Response: 0.5, Damping: 1})
 }
 

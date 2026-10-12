@@ -57,7 +57,7 @@ func (h *Histogram) SetCounts(counts [3][256]uint32, u *gunim.UI) {
 	var next [3][256]float32
 	if top > 0 {
 		for c := range counts {
-			for i, n := range counts[c] {
+			for i, n := range &counts[c] {
 				next[c][i] = min(1, float32(math.Sqrt(float64(n)/float64(top))))
 			}
 		}

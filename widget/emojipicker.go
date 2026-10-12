@@ -493,7 +493,7 @@ func (t *emojiTabs) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			ink = Ink.Get(th)
 		}
 		c := cellBox.Center()
-		paintIcon(p, th, g.icon, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
+		drawIcon(p, th, g.icon, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
 	}
 	// A rule under the row, and the accent's bar on it under the group shown.
 	p.RRect(geom.Rc(0, box.H-1, box.W, 1), 0, paint.Solid(MenuBorder.Get(th)))

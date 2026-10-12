@@ -20,6 +20,9 @@ type page struct {
 	travel  int
 	in      *anim.Float
 	leaving bool
+	// swapped says the page goes at once, for one that takes its place
+	// showing the same thing as it was.
+	swapped bool
 }
 
 func newPage(child gunim.Node, travel int) *page {
@@ -38,6 +41,10 @@ func (p *page) Transition(pr gunim.Presence, f gunim.Frame) bool {
 		p.in.Animate(1, Page.Get(f.Theme))
 	case gunim.Exiting:
 		p.leaving = true
+		if p.swapped {
+			p.in.Jump(0)
+			return true
+		}
 		p.in.Animate(0, widget.Settle.Get(f.Theme))
 	case gunim.Present:
 	}
@@ -91,6 +98,20 @@ func (d *deck) show(child gunim.Node, travel int, u *gunim.UI) {
 		u.Remove(d.top)
 	}
 	d.top = newPage(child, travel)
+	u.Insert(d, d.top)
+}
+
+// swap puts child on the deck in place of the page on top, where it is,
+// with no page coming or going: for the same thing shown again, changed.
+func (d *deck) swap(child gunim.Node, u *gunim.UI) {
+	if d.top == nil || d.top.leaving {
+		d.show(child, 0, u)
+		return
+	}
+	d.top.swapped = true
+	u.Remove(d.top)
+	d.top = newPage(child, 0)
+	d.top.in.Jump(1)
 	u.Insert(d, d.top)
 }
 

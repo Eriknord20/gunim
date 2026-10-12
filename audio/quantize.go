@@ -17,14 +17,19 @@ type Quantizer struct {
 	rng    *rand.Rand
 }
 
+// Ready makes what Process needs, so it makes nothing as it rounds.
+func (q *Quantizer) Ready() {
+	if q.rng == nil {
+		q.rng = rand.New(rand.NewPCG(0x7175, 0x616e))
+	}
+}
+
 // Process rounds frames in place.
 func (q *Quantizer) Process(frames []float32) {
 	if q.Bits != 16 && q.Bits != 24 {
 		return
 	}
-	if q.rng == nil {
-		q.rng = rand.New(rand.NewPCG(0x7175, 0x616e))
-	}
+	q.Ready()
 	scale := float64(int64(1) << (q.Bits - 1))
 	for i, s := range frames {
 		v, _ := quantize(s, scale, q.Dither, q.rng)

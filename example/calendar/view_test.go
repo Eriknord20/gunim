@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/calendar"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -172,5 +173,29 @@ func TestTheKeysGoOnFromTheEventWhoseCardClosed(t *testing.T) {
 	h.frames(20)
 	if got := chosen(); got != was {
 		t.Fatalf("after Escape closed the card, %q is chosen, want %q still", got, was)
+	}
+}
+
+// TestACardSaysWhenAnEventIs, for each of the four shapes an event
+// comes in: a whole day, several whole days, hours in one day, and
+// hours that run over midnight.
+func TestACardSaysWhenAnEventIs(t *testing.T) {
+	day := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, time.Local) }
+	for _, c := range []struct {
+		name      string
+		e         calendar.Event
+		day, hour string
+	}{
+		{"a whole day", calendar.Event{Start: day(12, 0, 0), End: day(13, 0, 0), AllDay: true},
+			"Monday 12 October", "All day"},
+		{"several whole days", calendar.Event{Start: day(12, 0, 0), End: day(15, 0, 0), AllDay: true},
+			"Monday 12 October – Wednesday 14 October", "All day"},
+		{"over midnight", calendar.Event{Start: day(12, 22, 0), End: day(14, 2, 0)},
+			"Monday 12 October, 22:00 –", "Wednesday 14 October, 02:00"},
+	} {
+		d, h := when2(c.e)
+		if d != c.day || h != c.hour {
+			t.Errorf("%s reads %q, %q; want %q, %q", c.name, d, h, c.day, c.hour)
+		}
 	}
 }

@@ -704,7 +704,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	if item.Icon != nil {
 		s := IconSize.Get(th)
-		paintIcon(p, th, item.Icon, geom.Rc(pad, (box.H-s)/2, s, s), ink, 1)
+		drawIcon(p, th, item.Icon, geom.Rc(pad, (box.H-s)/2, s, s), ink, 1)
 	}
 	run.Paint(p, geom.Pt(lead, top), ink)
 	if item.Hint != "" {
@@ -712,7 +712,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	if item.Checked {
 		s := IconSize.Get(th)
-		paintIcon(p, th, icon.Check, geom.Rc(end+pad, (box.H-s)/2, s, s), ink, 1)
+		drawIcon(p, th, icon.Check, geom.Rc(end+pad, (box.H-s)/2, s, s), ink, 1)
 	}
 	if x := lead + run.Advance + size*0.8; item.Detail != "" && end-x > size {
 		detail := r.detail.shape(face, item.Detail, size*0.85)

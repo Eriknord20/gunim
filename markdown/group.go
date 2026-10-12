@@ -86,7 +86,7 @@ func (g *Group) selection(v *View) (start, end int) {
 	n := len(v.plain)
 	first, last := g.ends()
 	switch {
-	case v.Key == first.key && v.Key == last.key:
+	case v.Key == first.key && first.key == last.key:
 		return min(first.at, n), min(last.at, n)
 	case v.Key == first.key:
 		return min(first.at, n), n

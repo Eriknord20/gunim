@@ -723,6 +723,20 @@ func (g *CellGrid) paintCursor(p *paint.Painter, ink, background color.NRGBA) {
 	}
 }
 
+// onPixels is the scroll offset v rounded to whole device pixels at
+// scale device pixels to a logical one, for placing what scrolls. Moved
+// by a whole number of pixels, everything scrolled moves alike: text,
+// which the renderer puts on whole pixels, and icons and pictures, which
+// it puts where they are. Moved by fractions, the text stepped on
+// different frames from the pictures beside it, and the gap between
+// them wavered by a pixel as the view slid.
+func onPixels(v, scale float32) float32 {
+	if scale <= 0 {
+		return v
+	}
+	return float32(math.Round(float64(v*scale))) / scale
+}
+
 // pixelSnap is how far to move the grid for its corner to sit on a
 // device pixel, under transform t at scale device pixels to a logical
 // one. Every cell is a whole number of device pixels, so with the corner

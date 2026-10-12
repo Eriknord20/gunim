@@ -1,8 +1,9 @@
 package gunim
 
 import (
-	"github.com/marrasen/gunim/theme"
 	"slices"
+
+	"github.com/marrasen/gunim/theme"
 
 	"errors"
 	"fmt"
