@@ -47,6 +47,14 @@ type GridColumn struct {
 	// Width is the column's width in logical pixels. Zero takes what the
 	// other columns leave, and at least GridMinFill.
 	Width float32
+	// Fit sizes the column to its text: as wide as its title and the
+	// widest of its cells the grid has shown, and never narrower while
+	// the grid lasts, so it keeps still as rows scroll past. Width, when
+	// set, is where it starts, until it has rows to measure, and it
+	// glides from there: a grid that takes another's place, as the
+	// next folder's, takes its widths without a jump. Its edge does not
+	// drag.
+	Fit bool
 	// End lines the column's text up at its right edge, as numbers are.
 	End bool
 	// Face is the face the column is set in, and the theme's [Font] when
@@ -285,6 +293,11 @@ type DataGrid struct {
 
 	shapes map[spanKey]*spanShape
 	frame  uint64
+
+	// fitted is the widest each Fit column has measured, 0 before its
+	// first rows, and fitAt the width it shows on its way there.
+	fitted []float32
+	fitAt  []*anim.Float
 }
 
 type gridDrag uint8
@@ -566,6 +579,11 @@ func (g *DataGrid) Step(dt time.Duration) bool {
 		}
 		moving = true
 	}
+	for _, f := range g.fitAt {
+		if f != nil && f.Step(dt) {
+			moving = true
+		}
+	}
 	if g.away != nil && g.away.Step(dt) {
 		moving = true
 	}
@@ -707,20 +725,27 @@ func (g *DataGrid) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) 
 		g.header = GridHeaderHeight.Get(th)
 	}
 	viewW := g.bodyWidth(th)
+	g.fit(th)
 	fixed, fills := float32(0), 0
-	for _, col := range g.Columns {
-		if col.Width > 0 {
+	for c, col := range g.Columns {
+		switch {
+		case col.Fit:
+			fixed += g.fitWidth(c)
+		case col.Width > 0:
 			fixed += col.Width
-		} else {
+		default:
 			fills++
 		}
 	}
 	fill := max(GridMinFill, (viewW-fixed)/float32(max(fills, 1)))
 	g.xs = g.xs[:0]
 	x := float32(0)
-	for _, col := range g.Columns {
+	for c, col := range g.Columns {
 		w := col.Width
-		if w <= 0 {
+		switch {
+		case col.Fit:
+			w = g.fitWidth(c)
+		case w <= 0:
 			w = fill
 		}
 		g.xs = append(g.xs, [2]float32{x, w})
@@ -747,6 +772,99 @@ func (g *DataGrid) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) 
 }
 
 func (g *DataGrid) dragging() bool { return g.drag != dragNone }
+
+// fit measures the Fit columns' titles and the cells of the rows in
+// view, and widens a column whose text has grown past it.
+func (g *DataGrid) fit(th *theme.Live) {
+	if len(g.fitted) != len(g.Columns) {
+		g.fitted, g.fitAt = make([]float32, len(g.Columns)), make([]*anim.Float, len(g.Columns))
+	}
+	size, pad := GridTextSize.Get(th), GridCellPadding.Get(th)
+	type inView struct {
+		i   int
+		row GridRow
+	}
+	var rows []inView
+	if g.Row != nil && g.rowH > 0 {
+		first := max(int(math.Floor(g.top)), 0)
+		for i := first; i < min(first+int(math.Ceil(g.Visible()))+1, g.rows); i++ {
+			if row, ok := g.Row(i); ok {
+				rows = append(rows, inView{i, row})
+			}
+		}
+	}
+	for c, col := range g.Columns {
+		if !col.Fit {
+			continue
+		}
+		// The title leaves room for the arrow it shows when the rows are
+		// sorted by it, so sorting moves nothing.
+		w := g.shape(spanKey{row: -1, col: int32(c)}, faceIn(Font, th), col.Title, size).Advance + sortArrow + 2
+		measured := false
+		for _, r := range rows {
+			if c >= len(r.row.Cells) {
+				continue
+			}
+			measured = true
+			w = max(w, g.cellWidth(r.i, c, r.row.Cells[c], size, th))
+		}
+		w += 2 * pad
+		switch {
+		case g.fitted[c] == 0 && !measured && col.Width > 0:
+			// No rows yet: where it starts, as it was asked to.
+		case g.fitAt[c] == nil:
+			from := col.Width
+			if from <= 0 || !measured {
+				from = w
+			}
+			g.fitAt[c] = anim.NewFloat(from)
+			fallthrough
+		case w > g.fitted[c]:
+			if measured || g.fitted[c] == 0 {
+				g.fitted[c] = max(g.fitted[c], w)
+				g.fitAt[c].Animate(g.fitted[c], Settle.Get(th))
+			}
+		}
+	}
+}
+
+// ColumnWidth is how wide column c showed at the last layout, and its
+// Width before the first: a Fit column's measure, or the share of a
+// column with no width.
+func (g *DataGrid) ColumnWidth(c int) float32 {
+	if c < len(g.xs) {
+		return g.xs[c][1]
+	}
+	return g.Columns[c].Width
+}
+
+// fitWidth is the width Fit column c shows.
+func (g *DataGrid) fitWidth(c int) float32 {
+	if c < len(g.fitAt) && g.fitAt[c] != nil {
+		return g.fitAt[c].Value()
+	}
+	if w := g.Columns[c].Width; w > 0 {
+		return w
+	}
+	return GridMinFill / 2
+}
+
+// cellWidth is how wide row i's spans in column c set out, padding
+// aside, as paintCell sets them, from the shapes it keeps.
+func (g *DataGrid) cellWidth(i, c int, spans []GridSpan, size float32, th *theme.Live) float32 {
+	total := float32(0)
+	for k, s := range spans {
+		face := faceIn(g.Columns[c].Face, th)
+		if s.Face.Key() != "" {
+			face = faceIn(s.Face, th)
+		}
+		total += g.shape(spanKey{row: i, col: int32(c), span: int32(k)}, face, s.Text, size).Advance + spanIconWidth(s, size, th)
+		if s.Fill.Key() != "" {
+			total += 2 * 4
+		}
+	}
+	return total
+}
 
 // bodyWidth is the width the columns show in, less the scrollbar.
 func (g *DataGrid) bodyWidth(th *theme.Live) float32 {
@@ -1162,7 +1280,7 @@ func (g *DataGrid) edgeAt(pt geom.Point) int {
 		return -1
 	}
 	for c, x := range g.xs {
-		if g.Columns[c].Width <= 0 {
+		if g.Columns[c].Width <= 0 || g.Columns[c].Fit {
 			continue
 		}
 		edge := x[0] + x[1] - g.left

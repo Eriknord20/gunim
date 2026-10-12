@@ -541,3 +541,40 @@ func TestADataGridScrollsByWholeDevicePixels(t *testing.T) {
 		}
 	}
 }
+
+// A Fit column is as wide as its widest cell in view, from the width it
+// starts at; it widens when a wider one comes into view, never narrows
+// as narrower ones do, and its edge does not drag.
+func TestAFitColumnFitsItsText(t *testing.T) {
+	sizes := []string{"12 KB", "4 KB"}
+	g := NewDataGrid(GridColumn{Title: "Name"}, GridColumn{Title: "Size", Width: 200, End: true, Fit: true})
+	g.Row = func(i int) (GridRow, bool) {
+		return GridRow{Cells: [][]GridSpan{{{Text: "a file"}}, {{Text: sizes[i]}}}}, true
+	}
+	g.rows = len(sizes)
+	_, run := stage(t, &frame{child: g, size: geom.Sz(400, 300)})
+	run(120)
+	size, pad := GridTextSize.Default(), GridCellPadding.Default()
+	fits := func(s string) float32 {
+		title := Font.Default().Shape("Size", size).Advance + sortArrow + 2
+		return max(title, Font.Default().Shape(s, size).Advance) + 2*pad
+	}
+	if got, want := g.ColumnWidth(1), fits("12 KB"); math.Abs(float64(got-want)) > 0.5 {
+		t.Fatalf("the column is %v wide, want %v, its widest text's", got, want)
+	}
+	sizes = []string{"1 023.9 MB", "4 KB"}
+	run(120)
+	wide := fits("1 023.9 MB")
+	if got := g.ColumnWidth(1); math.Abs(float64(got-wide)) > 0.5 {
+		t.Fatalf("with a wider size in view the column is %v wide, want %v", got, wide)
+	}
+	sizes = []string{"1 KB", "2 KB"}
+	run(120)
+	if got := g.ColumnWidth(1); math.Abs(float64(got-wide)) > 0.5 {
+		t.Fatalf("with narrower sizes in view the column is %v wide, want it kept at %v", got, wide)
+	}
+	edge := geom.Pt(g.ColumnWidth(0)+g.ColumnWidth(1), g.header/2)
+	if c := g.edgeAt(edge); c == 1 {
+		t.Fatal("the fitted column's edge drags")
+	}
+}
