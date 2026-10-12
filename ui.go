@@ -869,11 +869,19 @@ func (c Client) Vibrate(pattern ...time.Duration) error {
 
 // TakeFingers says whether the window takes more than one finger at
 // once on a touch screen, as a game steered with one thumb while the
-// other taps does. On, a second finger is no pinch: the first finger
-// goes on as the pointer, untouched, and each further one arrives as
-// [input.Finger] at the node it came down on. Off, as a window starts, a
-// second finger pinches. It returns [driver.ErrNoFingers] where the
-// window has no touch screen gunim reads more than one finger of.
+// other taps does. On, every finger of a touch that starts in the window
+// arrives as [input.Finger] at the node it came down on, and a second
+// finger makes a finger of its own in place of a pinch. The first finger
+// drives the pointer as well, so a button still takes a tap. A node that
+// takes a FingerDown holds that finger until its FingerUp, and the
+// pointer's events stop at it meanwhile: a node inside it, as a button
+// on a game's board, still takes the pointer, and the node and those
+// around it hear the finger only as Fingers, so a game reads every thumb
+// alike. Off, as a window starts, a second finger pinches. Each window
+// keeps its own setting, which a touch follows from the window it
+// started in. It returns
+// [driver.ErrNoFingers] where the window has no touch screen gunim reads
+// more than one finger of. It is safe from any goroutine.
 func (c Client) TakeFingers(on bool) error {
 	f, ok := c.w.dw.(driver.FingerTaker)
 	if !ok {
@@ -1431,7 +1439,7 @@ type UI struct {
 	fling *touchFling
 	// pinch is two fingers pinching now; see pinch.go.
 	pinch *pinchGesture
-	// fingers is where each finger beyond the first goes; see fingers.go.
+	// fingers is the node holding each finger down; see fingers.go.
 	fingers map[int]*state
 	// compassOn says the window has the device's compass running, for a
 	// node that watches the heading, and headingNodes holds the nodes in

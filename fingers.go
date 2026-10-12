@@ -5,12 +5,18 @@ import (
 	"github.com/marrasen/gunim/input"
 )
 
-// fingerEvent takes a finger beyond the first from the driver, in a
-// window that takes them: its FingerDown goes to the node under it, or
+// fingerEvent takes a finger from the driver, in a window that takes
+// them: its FingerDown goes to the node under it, or
 // the nearest around it that takes it, and the rest of that finger to
 // the same node, wherever it goes meanwhile, as a pointer's press does.
 func (u *UI) fingerEvent(root *state, e input.Finger) {
 	if e.Phase == input.FingerDown {
+		// A driver gives an id out again once its finger lifts, so a
+		// finger still held under it had its lift lost: it lifts first.
+		if old := u.fingers[e.ID]; old != nil {
+			delete(u.fingers, e.ID)
+			u.deliver(old, input.Finger{ID: e.ID, Pos: input.Away, Phase: input.FingerUp, Time: e.Time})
+		}
 		took := u.dispatchAt(root, e.Pos, func(local geom.Point) input.Event {
 			return input.Finger{ID: e.ID, Pos: local, Phase: e.Phase, Time: e.Time}
 		})
@@ -31,9 +37,19 @@ func (u *UI) fingerEvent(root *state, e input.Finger) {
 	}
 	pos := e.Pos
 	if pos != input.Away {
-		pos = u.local(s, pos)
+		pos = u.localHeld(s, pos)
 	}
 	u.deliver(s, input.Finger{ID: e.ID, Pos: pos, Phase: e.Phase, Time: e.Time})
+}
+
+// holdsFinger reports whether s took a finger that is still down.
+func (u *UI) holdsFinger(s *state) bool {
+	for _, to := range u.fingers {
+		if to == s {
+			return true
+		}
+	}
+	return false
 }
 
 // loseFingers lets the fingers that went to s, or a node inside it,

@@ -310,8 +310,8 @@ JNIEXPORT void JNICALL Java_gunim_android_Native_metrics(JNIEnv *env, jclass c, 
 	goMetrics(density, rate);
 }
 
-JNIEXPORT void JNICALL Java_gunim_android_Native_touch(JNIEnv *env, jclass c, jint action, jfloat x, jfloat y, jlong ms) {
-	goTouch(action, x, y, ms);
+JNIEXPORT jboolean JNICALL Java_gunim_android_Native_touch(JNIEnv *env, jclass c, jint action, jint id, jfloat x, jfloat y, jlong ms) {
+	return goTouch(action, id, x, y, ms) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_gunim_android_Native_finger(JNIEnv *env, jclass c, jint action, jint id, jfloat x, jfloat y) {

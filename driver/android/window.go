@@ -63,6 +63,11 @@ type Window struct {
 	stateSeq uint64
 	editsIn  uint64
 
+	// takesFingers is what TakeFingers last said: each finger of a
+	// touch that starts in the window is a finger of its own, and a
+	// second one starts no pinch.
+	takesFingers bool
+
 	// The fields below belong to the render thread.
 
 	r          *render.Renderer
@@ -394,10 +399,18 @@ func (w *Window) OpenLink(url string) error { return openLink(url) }
 // Vibrate implements [driver.Vibrator] with the phone's vibration motor.
 func (w *Window) Vibrate(pattern ...time.Duration) error { return vibrate(pattern) }
 
-// TakeFingers implements [driver.FingerTaker]: the view sends a finger
-// beyond the first as a finger of its own rather than a pinch.
+// TakeFingers implements [driver.FingerTaker]: each finger of a touch
+// that starts in w is a finger of its own, and a second one starts no
+// pinch. The view holds one setting for the whole app, so the driver
+// hands it w's as each touch starts, and at once when the touch in
+// progress is in w.
 func (w *Window) TakeFingers(on bool) error {
-	takeFingers(on)
+	w.d.mu.Lock()
+	defer w.d.mu.Unlock()
+	w.takesFingers = on
+	if w.d.touched == w {
+		w.d.takeFingersLocked(on)
+	}
 	return nil
 }
 

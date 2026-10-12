@@ -123,13 +123,15 @@ type Pinch struct {
 	Time  time.Time
 }
 
-// Finger carries a finger on a touch screen beyond the first, in a
-// window that takes more than one: see gunim's Client.TakeFingers. The
-// first finger goes on as the pointer, pressing, moving and letting go
-// whatever the others do; each further finger comes down, moves and
-// lifts as Fingers with an ID of its own, the same from its FingerDown
-// to its FingerUp. Pos is in the node's own space. A touch called off
-// lifts every such finger with a FingerUp at [Away].
+// Finger carries a finger on a touch screen, in a window that takes
+// more than one: see gunim's Client.TakeFingers. Every finger, the first
+// as well, comes down, moves and lifts as Fingers with an ID of its own,
+// the same from its FingerDown to its FingerUp, at the node that took
+// its FingerDown, wherever it goes after. The first finger drives the
+// pointer too, for nodes that take the pointer; the pointer's events
+// stop at a node holding a finger, so that node hears its fingers as
+// Fingers alone. Pos is in the node's own space. A touch called off
+// lifts every finger with a FingerUp at [Away].
 type Finger struct {
 	ID    int
 	Pos   geom.Point

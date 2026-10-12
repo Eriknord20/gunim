@@ -405,6 +405,12 @@ the phone's storage or a card as a path.
 share sheet, and `Client.CanShare` says where there is one to show.
 `Client.Vibrate` runs the phone's vibration motor in a pattern of on
 and off times, as the web's `navigator.vibrate` does.
+`Client.TakeFingers(true)` lets a window take more than one finger at
+once, as a game steered with one thumb while the other taps: every
+finger reaches the node it came down on as `input.Finger`, a second one
+in place of a pinch. The first finger drives the pointer too, so
+buttons still take taps, and the pointer stops at a node that holds a
+finger.
 
 A node that implements `gunim.HeadingWatcher` hears which way the phone
 faces, as `input.Heading`: degrees clockwise from magnetic north, where
