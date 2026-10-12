@@ -233,7 +233,7 @@ func (w *Window) ChooseFiles(o driver.ChooseOptions) ([]string, error) {
 // IFileSaveDialog.
 func (w *Window) SaveFile(o driver.SaveOptions) (string, error) {
 	d := dialog{clsid: &clsidFileSaveDialog, iid: &iidFileSaveDialog, title: o.Title, name: o.Name,
-		filters: o.Filters, options: fosForceFileSystem | fosPathMustExist | fosOverwritePrompt}
+		folder: o.Folder, filters: o.Filters, options: fosForceFileSystem | fosPathMustExist | fosOverwritePrompt}
 	var path string
 	err := w.showDialog(d, func(dlg unsafe.Pointer) error {
 		var item unsafe.Pointer
