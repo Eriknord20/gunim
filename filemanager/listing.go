@@ -32,8 +32,10 @@ func registerListing(w *gunim.Window) {
 func columns() []widget.GridColumn {
 	return []widget.GridColumn{
 		{Title: "Name"},
-		{Title: "Size", Width: 96, End: true},
-		{Title: "Modified", Width: 150},
+		// Size and Modified fit their text, from these widths until the
+		// first rows arrive.
+		{Title: "Size", Width: 80, End: true, Fit: true},
+		{Title: "Modified", Width: 130, Fit: true},
 		{Title: "Type", Width: 150},
 	}
 }
@@ -250,6 +252,10 @@ func (pg *listingPage) widths() []float32 {
 	out := make([]float32, len(pg.grid.Columns))
 	for i, c := range pg.grid.Columns {
 		out[i] = c.Width
+		if c.Fit {
+			// The next folder's page starts at the width this one shows.
+			out[i] = pg.grid.ColumnWidth(i)
+		}
 	}
 	return out
 }

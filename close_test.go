@@ -9,6 +9,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 )
 
 // quitAsked is what the application hears when the user asks to close
@@ -101,5 +102,62 @@ func TestInputHandedToTheWindowReachesTheFocus(t *testing.T) {
 		case <-deadline:
 			t.Fatal("the key never reached the focus")
 		}
+	}
+}
+
+func TestAnOffscreenWindowWithAskToCloseAsksAndStaysOpen(t *testing.T) {
+	w := NewOffscreenWith(WindowOptions{Title: "Song", Size: geom.Sz(320, 200), AskToClose: quitAsked{}})
+	if got := w.Offscreen().Title(); got != "Song" {
+		t.Fatalf("the window is titled %q, want %q", got, "Song")
+	}
+	w.Frame(time.Second / 60)
+	w.Input(driver.CloseAsked{})
+	w.Frame(time.Second / 60)
+	select {
+	case env := <-w.Client().Intents():
+		if env.Intent != (quitAsked{}) {
+			t.Fatalf("asked to close, the application heard %#v", env.Intent)
+		}
+	default:
+		t.Fatal("asked to close, the application heard nothing")
+	}
+	select {
+	case <-w.done:
+		t.Fatal("asked to close, the window closed before the application said so")
+	default:
+	}
+	w.Client().Close()
+}
+
+func TestAnOffscreenWindowWithNoAskToCloseCloses(t *testing.T) {
+	w := NewOffscreenWith(WindowOptions{})
+	if got := w.Offscreen().Size(); got != geom.Sz(800, 600) {
+		t.Fatalf("a window of no size is %v, want 800 by 600", got)
+	}
+	w.Frame(time.Second / 60)
+	w.Input(driver.CloseAsked{})
+	select {
+	case <-w.done:
+	default:
+		t.Fatal("asked to close, the window stayed open")
+	}
+}
+
+func TestAnOffscreenWindowTakesItsThemeTitleAndZoom(t *testing.T) {
+	th := theme.Make("offscreen-test")
+	w := NewOffscreenWith(WindowOptions{Title: "Song", Theme: th, Zoom: 1.5, ZoomKeys: true})
+	if got := w.ui.theme.Active().Name; got != "offscreen-test" {
+		t.Fatalf("the window's theme is %q, want %q", got, "offscreen-test")
+	}
+	if w.title != "Song" {
+		t.Fatalf("the window's own title bar would read %q, want %q", w.title, "Song")
+	}
+	if got := w.ui.Zoom(); got != 1.5 {
+		t.Fatalf("the window zooms %v, want 1.5", got)
+	}
+	w.Frame(time.Second / 60)
+	w.Input(input.KeyPress{Key: input.Key0, Mods: input.ModControl})
+	if got := w.ui.Zoom(); got != 1 {
+		t.Fatalf("Ctrl+0 with ZoomKeys left the zoom at %v, want 1", got)
 	}
 }

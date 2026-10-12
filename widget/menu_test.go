@@ -386,3 +386,32 @@ func TestLabelsMakesPlainItems(t *testing.T) {
 		t.Fatalf("Labels gave %v", got)
 	}
 }
+
+func TestATooltipHiddenStaysDownUntilThePointerComesBack(t *testing.T) {
+	b := NewButton("Open")
+	tip := NewTooltip(b, "Hello")
+	w, run := stage(t, &frame{child: tip, size: geom.Sz(200, 36)})
+	w.Input(input.PointerMove{Pos: geom.Pt(20, 18), Time: time.Now()})
+	run(60)
+	if tip.tip.popup == nil {
+		t.Fatal("the tooltip did not show after its delay")
+	}
+	b.OnClick = func(u *gunim.UI) gunim.Intent { tip.Hide(u); return nil }
+	w.Input(input.PointerDown{Pos: geom.Pt(20, 18), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: geom.Pt(20, 18), Button: input.ButtonPrimary})
+	run(1)
+	if tip.tip.popup != nil {
+		t.Fatal("hidden, the tooltip stayed up")
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(24, 18), Time: time.Now()})
+	run(60)
+	if tip.tip.popup != nil {
+		t.Fatal("hidden, the tooltip came back before the pointer left")
+	}
+	w.Input(input.PointerLeave{Time: time.Now()})
+	w.Input(input.PointerMove{Pos: geom.Pt(20, 18), Time: time.Now()})
+	run(60)
+	if tip.tip.popup == nil {
+		t.Fatal("the pointer back, the tooltip stayed down")
+	}
+}
