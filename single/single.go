@@ -12,6 +12,7 @@ package single
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -81,7 +82,8 @@ func Hand(dir string, h Handover) (bool, error) {
 		return false, nil
 	}
 	letToFront(r.PID)
-	conn, err := net.DialTimeout("tcp", r.Addr, handTime)
+	d := net.Dialer{Timeout: handTime}
+	conn, err := d.DialContext(context.Background(), "tcp", r.Addr)
 	if err != nil {
 		// Gone without taking the file with it.
 		return false, nil
@@ -111,7 +113,8 @@ func Listen(ctx context.Context, dir string) (handovers <-chan Handover, stop fu
 	if _, err := rand.Read(token); err != nil {
 		return nil, nil, err
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -144,7 +147,7 @@ func Listen(ctx context.Context, dir string) (handovers <-chan Handover, stop fu
 		once.Do(func() {
 			cancel()
 			_ = l.Close()
-			if now, err := os.ReadFile(path); err == nil && string(now) == string(raw) {
+			if now, err := os.ReadFile(path); err == nil && bytes.Equal(now, raw) {
 				_ = os.Remove(path)
 			}
 		})
