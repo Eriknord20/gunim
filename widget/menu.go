@@ -1594,6 +1594,14 @@ func (t *Tooltip) Handle(e input.Event, u *gunim.UI) bool {
 	return false
 }
 
+// Hide hides the tooltip, waiting or shown, until the pointer leaves
+// and comes back, as a press does: for a child that opens something in
+// the tooltip's place, such as a menu, from a press it takes itself.
+func (t *Tooltip) Hide(u *gunim.UI) {
+	t.tip.quiet = true
+	t.tip.hide(u)
+}
+
 // PartTip shows a tooltip about the part of a node under the pointer, such as an event in a calendar, once the
 // pointer rests on it. The node passes each pointer event to Handle with the text for the part under the pointer,
 // or an empty text where there is none. Moving to another part hides the tooltip and waits again.
