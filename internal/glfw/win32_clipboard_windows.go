@@ -9,6 +9,7 @@ package glfw
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image/png"
 	"time"
@@ -57,7 +58,7 @@ func closeClipboard() {
 func platformSetClipboardString(str string) error {
 	text, err := windows.UTF16FromString(str)
 	if err != nil {
-		return fmt.Errorf("glfw: clipboard string contains a NUL: %w", err)
+		return errors.New("glfw: the text holds a NUL character, which the clipboard cannot hold")
 	}
 	size := uintptr(len(text)) * unsafe.Sizeof(text[0])
 

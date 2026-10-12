@@ -54,3 +54,26 @@ func TestAClipboardThatTakesNoPictureSaysSo(t *testing.T) {
 		t.Fatalf("got %v, want ErrNoClipboardImage", err)
 	}
 }
+
+// Text the clipboard will not take is said to the application, rather
+// than dropped: the copy did nothing, and the user is to be told.
+func TestAClipboardThatTakesNoTextSaysSo(t *testing.T) {
+	w := newTestWindow()
+	c := w.Client()
+	for len(c.Intents()) > 0 {
+		<-c.Intents()
+	}
+	w.Offscreen().SetClipboardError(errors.New("no display"))
+	w.ui.SetClipboard("copied")
+	if f, ok := As[ClipboardFailed](take(t, c)); !ok || f.Reason != "no display" {
+		t.Fatalf("a copy that failed sent %#v", f)
+	}
+	w.Offscreen().SetClipboardError(nil)
+	w.ui.SetClipboard("copied")
+	if s := w.ui.Clipboard(); s != "copied" {
+		t.Fatalf("the clipboard reads %q", s)
+	}
+	if n := len(c.Intents()); n != 0 {
+		t.Fatalf("a copy that worked sent %d intents", n)
+	}
+}

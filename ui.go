@@ -1833,8 +1833,21 @@ func (u *UI) Clipboard() string {
 // an application can tell an empty clipboard from one that failed.
 func (u *UI) ReadClipboard() (string, error) { return u.w.dw.Clipboard() }
 
-// SetClipboard puts s on the system clipboard.
-func (u *UI) SetClipboard(s string) { _ = u.w.dw.SetClipboard(s) }
+// SetClipboard puts s on the system clipboard. Where it cannot, as on
+// Windows with text that holds a NUL, the application is sent a
+// [ClipboardFailed], so a copy that did nothing can be said, wherever in
+// the window it was made.
+func (u *UI) SetClipboard(s string) {
+	if err := u.w.dw.SetClipboard(s); err != nil {
+		u.report(ClipboardFailed{Reason: err.Error()})
+	}
+}
+
+// ClipboardFailed travels to the application when [UI.SetClipboard]
+// could not put text on the clipboard, with the error in Reason.
+type ClipboardFailed struct{ Reason string }
+
+func init() { RegisterType[ClipboardFailed]("gunim.clipboard-failed") }
 
 // ClipboardImage returns the picture on the clipboard as PNG, or nil when it holds none or the platform cannot read
 // pictures from it.

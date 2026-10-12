@@ -530,9 +530,9 @@ func (w *OffscreenWindow) Clipboard() (string, error) {
 	return w.clip, nil
 }
 
-// SetClipboardError makes reading the clipboard fail with err, as a
-// test's stand-in for a clipboard that cannot be read; nil reads it
-// again.
+// SetClipboardError makes reading and writing the clipboard fail with
+// err, as a test's stand-in for a clipboard that cannot be reached; nil
+// reaches it again.
 func (w *OffscreenWindow) SetClipboardError(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -543,6 +543,9 @@ func (w *OffscreenWindow) SetClipboardError(err error) {
 func (w *OffscreenWindow) SetClipboard(s string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.clipErr != nil {
+		return w.clipErr
+	}
 	w.clip = s
 	return nil
 }

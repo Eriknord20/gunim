@@ -374,6 +374,9 @@ func (a *app) handle(handlers []handler, in gunim.Intent) {
 	switch v := in.(type) {
 	case gunim.CommandFailed:
 		log.Printf("command %s failed on %q%q: %s", v.Command, v.ID, v.Key, v.Reason)
+	case gunim.ClipboardFailed:
+		log.Printf("copying to the clipboard: %s", v.Reason)
+		a.fail("Couldn't copy to the clipboard: " + strings.TrimPrefix(v.Reason, "glfw: "))
 	case gunim.Zoomed:
 		if a.pane == nil {
 			a.savePrefs(func(p *prefs) { p.Zoom = v.Zoom })
