@@ -67,7 +67,7 @@ func startRun(ctx, done context.Context, id, lesson int, source string, events c
 		send(runEvent{Status: "Cannot build", Failed: true, Output: err.Error() + "\n"})
 		return
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	bin, out, err := build(ctx, dir, tmp, lessons[lesson].File, source)
 	switch {
@@ -90,7 +90,7 @@ func startRun(ctx, done context.Context, id, lesson int, source string, events c
 	waited := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
-		pw.Close()
+		_ = pw.Close()
 		waited <- err
 	}()
 	lines := bufio.NewScanner(pr)
@@ -113,7 +113,7 @@ func startRun(ctx, done context.Context, id, lesson int, source string, events c
 func packageDir(ctx context.Context) (string, error) {
 	out, err := exec.CommandContext(ctx, "go", "list", "-f", "{{.Dir}}", tutorialPackage).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Run builds with the Go toolchain, from inside the gunim repository.\n"+
+		return "", fmt.Errorf("building needs the Go toolchain, and the gunim repository to run from.\n"+
 			"Start the tutorial there with go run ./example/tutorial.\n\n%s", strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil

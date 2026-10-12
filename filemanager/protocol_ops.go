@@ -74,10 +74,14 @@ type UndoOp struct {
 // ClashAsk is the state of the dialog that asks what to do about an item
 // going where one of its name is.
 type ClashAsk struct {
-	Op        int
-	Name      string
-	Where     string
+	Op    int
+	Name  string
+	Where string
+	// New and Old say what the item coming and the one there are, as
+	// ItemFacts writes them, and OldFolder that the one there is a
+	// folder.
 	New, Old  string
+	OldFolder bool
 	SameKind  bool
 	CanForAll bool
 }

@@ -92,7 +92,7 @@ func TestPlainGlyphsAreNotColour(t *testing.T) {
 
 func TestAnEmojiInTextComesFromTheColourFont(t *testing.T) {
 	emojiFace(t)
-	run := GoSans(false, false).Shape("Merged \U0001F44D\U0001F3FD and \U0001F469‍\U0001F4BB", 14)
+	run := GoSans(false, false).Shape("Merged \U0001F44D\U0001F3FD and \U0001F469\u200d\U0001F4BB", 14)
 	var colour, plain int
 	for _, g := range run.Glyphs {
 		f, ok := Lookup(g.Face)

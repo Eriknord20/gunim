@@ -50,9 +50,11 @@ func (u *UI) handleRaw(root *state, ev any) {
 		}
 	}
 	if root == u.root {
-		switch e := ev.(type) {
+		switch ev.(type) {
 		case input.PointerMove, input.PointerDown, input.Scroll, input.KeyPress:
-			u.overhear(e.(input.Event))
+			if e, ok := ev.(input.Event); ok {
+				u.overhear(e)
+			}
 		}
 	}
 	switch e := ev.(type) {

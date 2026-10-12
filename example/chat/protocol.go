@@ -200,7 +200,7 @@ func (it Item) heading() bool { return it.Day != "" || it.New }
 
 // same reports whether two rows show the same.
 func same(a, b Item) bool {
-	return a.Key == b.Key && a.Day == b.Day && a.New == b.New && a.Message.equal(b.Message) && slices.Equal(a.Pictures, b.Pictures) &&
+	return a.Key == b.Key && a.Day == b.Day && a.New == b.New && a.equal(b.Message) && slices.Equal(a.Pictures, b.Pictures) &&
 		slices.Equal(a.Reactions, b.Reactions) && a.Poll.Question == b.Poll.Question && a.Poll.Voters == b.Poll.Voters &&
 		slices.Equal(a.Poll.Options, b.Poll.Options)
 }

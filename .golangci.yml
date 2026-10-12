@@ -9,17 +9,35 @@ linters:
     paths:
       # Copied from Ebitengine; see internal/README.md.
       - internal/(glfw|gl|cocoa|exeicon|microsoftgdk|winver|windowsystem)/
+    rules:
+      # A type assertion that fails in a test fails the test, loudly and
+      # on the line that made it, which is what a test wants. In the
+      # library it would take a window down, which is why the check
+      # stays on everywhere else.
+      - path: _test\.go
+        linters:
+          - forcetypeassert
+      # A test helper takes the arguments its tests need, and gives back
+      # what they read. One that happens to be called the same way twice
+      # is not a signature to tighten.
+      - path: _test\.go
+        linters:
+          - unparam
   settings:
     govet:
       enable-all: true
       disable:
         - fieldalignment   # readability of a struct beats its padding here
+        - shadow           # "if err := f(); err != nil" is Go, not a mistake
     errorlint:
       errorf: true
       asserts: true
       comparison: true
     exhaustive:
       default-signifies-exhaustive: true
+      # input.Key is the whole keyboard. A control switching on three of
+      # its keys is the ordinary shape, not a case left out.
+      ignore-enum-types: "input\\.Key"
     revive:
       rules:
         - name: exported
@@ -46,6 +64,9 @@ linters:
         - whyNoLint
         - hugeParam        # geom.Size and Frame are meant to travel by value
         - rangeValCopy
+        # A type belongs where its story is told, which in a long file is
+        # among the methods that tell it rather than at the top.
+        - typeDefFirst
   enable:
     # Correctness
     - errcheck

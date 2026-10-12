@@ -114,6 +114,8 @@ func delimiter(tok token.Token) bool {
 	case token.LPAREN, token.RPAREN, token.LBRACK, token.RBRACK, token.LBRACE, token.RBRACE,
 		token.COMMA, token.SEMICOLON, token.PERIOD, token.COLON:
 		return true
+	default:
+		// Every other token is plain text.
 	}
 	return false
 }

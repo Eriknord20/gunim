@@ -73,7 +73,7 @@ func TestWindowInstallsAndRemoves(t *testing.T) {
 	t.Cleanup(func() { leastWork = 1600 * time.Millisecond })
 	_, program := testHome(t)
 	a := testApp()
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestWindowInstallsAndRemoves(t *testing.T) {
 		t.Error("Open did not leave the installed program to start")
 	}
 
-	gone, err := newSession(a, program, true)
+	gone, err := sessionFor(a, program, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestWindowFailsAndGoesBack(t *testing.T) {
 	_, program := testHome(t)
 	a := testApp()
 	a.Installed = func(context.Context, Installation) error { return os.ErrPermission }
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,14 +146,14 @@ func TestWire(t *testing.T) {
 func installedOnce(t *testing.T, a App) *Session {
 	t.Helper()
 	_, program := testHome(t)
-	first, err := newSession(a, program, false)
+	first, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := first.Install(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestCloseStopsTheSetUp(t *testing.T) {
 		close(stopped)
 		return ctx.Err()
 	}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,14 +285,14 @@ func TestCloseStopsTheUninstall(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	first, err := newSession(a, program, false)
+	first, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = first.Install(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	s, err := newSession(a, program, true)
+	s, err := sessionFor(a, program, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestASecondCloseLeavesAtOnce(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	a.Installed = func(context.Context, Installation) error { <-release; return nil }
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestASecondCloseLeavesAtOnce(t *testing.T) {
 func TestCloseAfterTheWorkEndedShowsWhatWasDone(t *testing.T) {
 	fastWatch(t)
 	_, program := testHome(t)
-	s, err := newSession(testApp(), program, false)
+	s, err := sessionFor(testApp(), program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestAnInterruptWaitsForTheWork(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		return ctx.Err()
 	}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}

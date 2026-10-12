@@ -112,9 +112,12 @@ type Speaker struct {
 	smu            sync.Mutex
 	stopped, faded bool
 	asked          int
-	// qmu guards q, which rounds the sound as it leaves.
-	qmu sync.Mutex
-	q   audio.Quantizer
+	// q rounds the sound as it leaves, as bits and dither say: q is
+	// the goroutine's that pulls, and the settings anyone's, so neither
+	// waits.
+	bits   atomic.Int64
+	dither atomic.Bool
+	q      audio.Quantizer
 	// reset asks the watch to open the output again, as an ASIO driver
 	// asks; changed tells of an output opened again.
 	reset   chan struct{}
@@ -166,7 +169,9 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	}
 	s := &Speaker{m: m, o: o, reset: make(chan struct{}, 1), changed: make(chan struct{}, 1),
 		quit: make(chan struct{}), done: make(chan struct{}), debug: os.Getenv("GUNIM_DEBUG_AUDIO") != ""}
-	s.q = audio.Quantizer{Bits: o.Bits, Dither: o.Dither}
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
+	s.q.Ready()
 	s.fixed.Store(o.Fixed)
 	s.ahead.Store(int64(o.latency()))
 	out, err := s.open()
@@ -210,9 +215,8 @@ func (s *Speaker) open() (output, error) {
 // pull fills frames with what plays next, rounded as Bits says.
 func (s *Speaker) pull(frames []float32) {
 	s.m.Mix(frames)
-	s.qmu.Lock()
+	s.q.Bits, s.q.Dither = int(s.bits.Load()), s.dither.Load()
 	s.q.Process(frames)
-	s.qmu.Unlock()
 }
 
 // ranDry counts a read that found the buffer empty.
@@ -275,6 +279,13 @@ func (s *Speaker) watch() {
 			if dry > 0 {
 				s.logf("ran dry %d times in %v", dry, every)
 			}
+			if out := s.out.Load(); out != nil {
+				if r, ok := out.output.(*ringOutput); ok {
+					if since, now := r.stoppedTaking(2 * time.Second); now {
+						s.logf("the driver has asked for no sound in %v", since.Round(time.Millisecond))
+					}
+				}
+			}
 			// Once might be a hiccup; more is the buffer too small. It
 			// grows from how far ahead the output works, which may be
 			// further than asked, as a driver's buffer is long.
@@ -318,9 +329,8 @@ func (s *Speaker) Set(o Options) error {
 	defer s.mu.Unlock()
 	prev := s.o
 	s.o = o
-	s.qmu.Lock()
-	s.q.Bits, s.q.Dither = o.Bits, o.Dither
-	s.qmu.Unlock()
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
@@ -337,8 +347,13 @@ func (s *Speaker) reopenLocked() error {
 	if cur := s.out.Load(); cur != nil {
 		s.out.Store(nil)
 		if err := cur.close(); err != nil {
-			s.out.Store(cur)
-			return err
+			if !errors.Is(err, asio.ErrNotAnswering) {
+				s.out.Store(cur)
+				return err
+			}
+			// Let go as it stopped answering: the output asked for
+			// opens all the same.
+			s.logf("%v; opening the output again all the same", err)
 		}
 	}
 	out, err := s.open()

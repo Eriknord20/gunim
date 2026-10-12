@@ -244,7 +244,7 @@ func (t *Table) JumpTo(key Key, u *gunim.UI) {
 	} else {
 		y -= (page - h) / 2
 	}
-	t.list.jumpTo(y)
+	t.list.jumpToY(y)
 	u.Invalidate()
 }
 
@@ -263,7 +263,7 @@ func (t *Table) ShowAt(key Key, offset float32, u *gunim.UI) {
 	if page > 0 {
 		offset = min(max(offset, y+h-page), y)
 	}
-	t.list.jumpTo(max(0, offset))
+	t.list.jumpToY(max(0, offset))
 	// Put back as it was, the rows come at once, rather than growing
 	// in as a folder new to the list does.
 	t.list.still = true
@@ -766,7 +766,7 @@ func (r *tableRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 				c = row.IconInk.Get(th)
 				c.A = min(c.A, ink.A)
 			}
-			paintIcon(p, th, row.Icon, geom.Rc(x, (box.H-side)/2, side, side), c, 1)
+			drawIcon(p, th, row.Icon, geom.Rc(x, (box.H-side)/2, side, side), c, 1)
 			x, w = x+side+6, w-side-6
 		}
 		para, fits := cellText(&r.cells[i], faceIn(t.Columns[i].Face, th), s, size, w-12)

@@ -242,3 +242,30 @@ func TestDecodeRefusesWhatItCannotRead(t *testing.T) {
 		t.Errorf("Decode of nothing: %v", err)
 	}
 }
+
+// TestReadingAWAVMakesNothing reads a WAV in reads of every size,
+// counting every allocation, as reading may run where sound is made.
+func TestReadingAWAVMakesNothing(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	frames := make([][]float64, 30000)
+	for i := range frames {
+		frames[i] = []float64{0.1, -0.1}
+	}
+	s, _, err := DecodeNative(bytes.NewReader(wavFile(SampleRate, 2, 24, false, frames)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]float32, 2*8192)
+	n := allocsUnder(t, "audio.(*wav).read", func() {
+		for _, n := range []int{100, 1024, 4096, 8192, 7} {
+			if _, err := s.Read(dst[:2*n]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if n != 0 {
+		t.Fatalf("reading made %d things", n)
+	}
+}

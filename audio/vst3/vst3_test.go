@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -147,5 +148,147 @@ func TestABundleListsTheEffectsItsModuleMakes(t *testing.T) {
 	}
 	if b := Scan(filepath.Dir(m.Path)); len(b) != 1 || b[0].Name != "lsp-plugins" {
 		t.Fatalf("the scan found %v", b)
+	}
+}
+
+// testPlugin loads the plugin the tests of the processor run: LSP's
+// equalizer, and its output gain, unless VST3_TEST names a bundle, with
+// VST3_TEST_CLASS its effect and VST3_TEST_PARAM a parameter, as for a
+// plugin built for another system.
+func testPlugin(t *testing.T) (*Plugin, Param) {
+	t.Helper()
+	var m *Module
+	name, title := "Parametric Equalizer x16 Stereo", "Output gain"
+	if path := os.Getenv("VST3_TEST"); path != "" {
+		var err error
+		if m, err = Open(path); err != nil {
+			t.Fatal(err)
+		}
+		name, title = os.Getenv("VST3_TEST_CLASS"), os.Getenv("VST3_TEST_PARAM")
+	} else {
+		m = lsp(t)
+	}
+	p, err := m.New(class(t, m, name), Config{Rate: 44100, Block: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	return p, param(t, p, title)
+}
+
+// TestProcessingTakesNoLockAndMakesNothing sets a plugin's parameter
+// from another goroutine as it processes, for the race detector, then
+// counts every allocation in Process as sets come between blocks.
+func TestProcessingTakesNoLockAndMakesNothing(t *testing.T) {
+	p, gain := testPlugin(t)
+	frames := sine(1500, 0.5)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 300 {
+			p.edits.put(gain.ID, float64(i%10)/10)
+		}
+	}()
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+			p.Process(frames)
+		}
+	}
+	if raceOn {
+		return
+	}
+	if runtime.GOOS != "windows" {
+		// Go's own callbacks, on Windows, neither lock nor allocate;
+		// purego's, elsewhere, lock a mutex and call by reflection on
+		// every call a plugin makes into the host.
+		t.Skip("purego's callbacks lock and allocate on every call into Go")
+	}
+	// Only what processing makes counts: the plugins' thread makes what
+	// it makes meanwhile, on a goroutine of its own.
+	made := allocsUnder(t, "(*Plugin).Process", func() {
+		for i := range 100 {
+			p.edits.put(gain.ID, float64(i%10)/10)
+			p.Process(frames)
+		}
+	})
+	if made != 0 {
+		t.Fatalf("processing made %d things over 100 blocks", made)
+	}
+}
+
+// allocsUnder runs run, and returns how many things were made in it
+// with fn among their callers: the allocations of one call, as other
+// goroutines allocate as they like meanwhile.
+func allocsUnder(t *testing.T, fn string, run func()) int64 {
+	t.Helper()
+	was := runtime.MemProfileRate
+	runtime.MemProfileRate = 1
+	defer func() { runtime.MemProfileRate = was }()
+	count := func() int64 {
+		// The profile is as of the last collection, finished.
+		runtime.GC()
+		runtime.GC()
+		var recs []runtime.MemProfileRecord
+		n, _ := runtime.MemProfile(nil, true)
+		for {
+			recs = make([]runtime.MemProfileRecord, n+50)
+			var ok bool
+			if n, ok = runtime.MemProfile(recs, true); ok {
+				recs = recs[:n]
+				break
+			}
+		}
+		var total int64
+		for _, r := range recs {
+			frames := runtime.CallersFrames(r.Stack())
+			for {
+				f, more := frames.Next()
+				if strings.Contains(f.Function, fn) {
+					total += r.AllocObjects
+					break
+				}
+				if !more {
+					break
+				}
+			}
+		}
+		return total
+	}
+	before := count()
+	run()
+	return count() - before
+}
+
+// TestASetWaitsForTheProcessorAsItsLastValue sets a parameter many
+// times while the plugin processes nothing: the processor takes the
+// last, once.
+func TestASetWaitsForTheProcessorAsItsLastValue(t *testing.T) {
+	p, gain := testPlugin(t)
+	for i := range 5000 {
+		p.edits.put(gain.ID, float64(i%7)/10)
+	}
+	if !p.edits.waits() {
+		t.Fatal("no set waits")
+	}
+	p.inChanges.clear()
+	taken := 0
+	if p.edits.look() {
+		for i := range p.edits.slots {
+			if id, v, ok := p.edits.take(i); ok {
+				taken++
+				if id != gain.ID || v != float64(4999%7)/10 {
+					t.Fatalf("took %d at %v, want %d at %v", id, v, gain.ID, float64(4999%7)/10)
+				}
+			}
+		}
+	}
+	if taken != 1 || p.edits.waits() {
+		t.Fatalf("took %d values, and some still wait: %v", taken, p.edits.waits())
+	}
+	if p.edits.put(0xfffffff0, 1) {
+		t.Fatal("a parameter the plugin does not list was put")
 	}
 }

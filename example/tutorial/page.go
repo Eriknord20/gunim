@@ -177,6 +177,8 @@ func (p *page) Transition(pr gunim.Presence, f gunim.Frame) bool {
 		p.in.Animate(1, widget.Settle.Get(f.Theme))
 	case gunim.Exiting:
 		p.in.Animate(0, widget.Quick.Get(f.Theme))
+	default:
+		// A page that is simply there, or simply gone, animates nothing.
 	}
 	return !p.in.Active()
 }

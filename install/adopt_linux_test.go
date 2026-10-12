@@ -32,7 +32,7 @@ func TestMoveInFromWhereAnOlderVersionPutIt(t *testing.T) {
 	}
 	a := App{Name: "kakel", Version: "v0.6.0", Autostart: &Autostart{Args: []string{"-tray"}}, Formerly: []string{old}}
 
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestCurrentChoices(t *testing.T) {
 	_, program := testHome(t)
 	a := App{Name: "kakel", Version: "v0.6.0",
 		Choices: []Choice{{Key: "auto", Label: "Update automatically", On: true, Current: true}}}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestCurrentChoices(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Choices[0].On = false
-	again, _ := newSession(a, program, false)
+	again, _ := sessionFor(a, program, false)
 	for _, o := range again.Offers {
 		if o.Key == "auto" && o.On {
 			t.Error("a current choice started from the last install's answer, not from how it stands")
@@ -129,7 +129,7 @@ func TestUpdateModes(t *testing.T) {
 	src := GitHub{Repo: "marrasen/kakel"}
 	install := func(a App, picks map[string]bool) Installation {
 		t.Helper()
-		s, err := newSession(a, program, false)
+		s, err := sessionFor(a, program, false)
 		if err != nil {
 			t.Fatal(err)
 		}

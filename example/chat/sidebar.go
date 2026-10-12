@@ -207,8 +207,7 @@ func (r *convRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 
 // areaIcon returns the icon of a row that opens an area of the project, or nil for a conversation.
 func areaIcon(area string) *icon.Icon {
-	switch area {
-	case "files":
+	if area == "files" {
 		return icon.Folder
 	}
 	return nil

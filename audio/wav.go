@@ -24,6 +24,9 @@ type wav struct {
 	buf    []byte
 }
 
+// wavChunk is the most frames a read of a WAV file takes at once.
+const wavChunk = 4096
+
 const (
 	wavPCM        = 1
 	wavFloat      = 3
@@ -78,6 +81,9 @@ func newWAV(r io.ReadSeeker) (*wav, error) {
 			}
 			w.data = pos
 			w.frames = size / int64(w.channels*w.bits/8)
+			// Room for the most a read takes, made now so reading
+			// makes nothing.
+			w.buf = make([]byte, wavChunk*w.channels*w.bits/8)
 			return w, nil
 		default:
 			if _, err := r.Seek(size, io.SeekCurrent); err != nil {
@@ -101,10 +107,7 @@ func (w *wav) read(dst []float32) (int, error) {
 	}
 	bytesPer := w.bits / 8
 	frameBytes := bytesPer * w.channels
-	n := min(int64(len(dst)/2), w.frames-w.at, 4096)
-	if cap(w.buf) < int(n)*frameBytes {
-		w.buf = make([]byte, int(n)*frameBytes)
-	}
+	n := min(int64(len(dst)/2), w.frames-w.at, wavChunk)
 	b := w.buf[:int(n)*frameBytes]
 	got, err := io.ReadFull(w.r, b)
 	frames := got / frameBytes

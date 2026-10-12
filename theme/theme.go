@@ -171,7 +171,7 @@ func (t Token[T]) Get(l *Live) T {
 	}
 	s, ok := l.slots[t.key]
 	if !ok {
-		if l.parent != nil && !l.active.has(t.key) {
+		if l.parent != nil && !l.active.hasKey(t.key) {
 			// Remember the token, so a later switch to a theme that sets
 			// it starts from the value it shows now.
 			l.reads[t.key] = func() stepper { return t.slotAt(t.Get(l.parent)) }
@@ -218,9 +218,9 @@ type Theme struct {
 }
 
 // Has reports whether th gives the token named key a value.
-func (th Theme) Has(key string) bool { return th.has(key) }
+func (th Theme) Has(key string) bool { return th.hasKey(key) }
 
-func (th Theme) has(key string) bool {
+func (th Theme) hasKey(key string) bool {
 	_, ok := th.values[key]
 	return ok
 }
@@ -365,7 +365,7 @@ func (l *Live) Active() Theme { return l.active }
 // for a token that falls back to another where none does.
 func (l *Live) Sets(key string) bool {
 	for ; l != nil; l = l.parent {
-		if l.active.has(key) {
+		if l.active.hasKey(key) {
 			return true
 		}
 	}
@@ -389,7 +389,7 @@ func (l *Live) Use(th Theme) {
 		s.retarget(th, l.parent, m)
 	}
 	for key, mk := range l.reads {
-		if _, ok := l.slots[key]; !ok && th.has(key) {
+		if _, ok := l.slots[key]; !ok && th.hasKey(key) {
 			s := mk()
 			s.retarget(th, l.parent, m)
 			l.slots[key] = s
@@ -406,7 +406,7 @@ func (l *Live) Step(dt time.Duration) bool {
 	moving := false
 	m := l.motion(l.active)
 	for key, s := range l.slots {
-		inherited := l.parent != nil && !l.active.has(key)
+		inherited := l.parent != nil && !l.active.hasKey(key)
 		if inherited {
 			s.follow(l.active, l.parent, m)
 		}

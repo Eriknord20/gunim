@@ -456,7 +456,7 @@ func (t *TextField) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	lead, trail := t.room(th)
 	s := IconSize.Get(th)
 	if t.Icon != nil {
-		paintIcon(p, th, t.Icon, geom.Rc(pad, (box.H-s)/2, s, s), Placeholder.Get(th), 1)
+		drawIcon(p, th, t.Icon, geom.Rc(pad, (box.H-s)/2, s, s), Placeholder.Get(th), 1)
 	}
 	t.paintClear(p, th, box)
 	inner := geom.Rect{Min: geom.Pt(lead-pad/2, 0), Max: geom.Pt(box.W-trail+pad/2, box.H)}
@@ -505,7 +505,7 @@ func (t *TextField) paintClear(p *paint.Painter, th *theme.Live, box geom.Size) 
 	ink := anim.Mix(anim.ColorCodec, Placeholder.Get(th), Ink.Get(th), min(max(t.clearHot.Value(), 0), 1))
 	ink.A = uint8(float32(ink.A) * min(on, 1))
 	defer p.Push(paint.Scale(0.5+0.5*on, r.Center()))()
-	paintIcon(p, th, icon.X, r, ink, 1)
+	drawIcon(p, th, icon.X, r, ink, 1)
 }
 
 // alignShift returns how far align moves text that leaves room spare

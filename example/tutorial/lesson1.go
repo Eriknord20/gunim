@@ -2,7 +2,7 @@ package main
 
 import (
 	_ "embed"
-	"fmt"
+	"strconv"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/theme"
@@ -61,7 +61,7 @@ func buildLesson1(struct{}) *page {
 func swatches() *widget.Flex {
 	row := widget.Row()
 	for i, c := range hueColors {
-		label := widget.NewLabel(fmt.Sprint(i + 1))
+		label := widget.NewLabel(strconv.Itoa(i + 1))
 		label.Color = widget.ButtonStrongInk
 		card := widget.NewThemed(widget.NewCard(label), theme.Make("swatch", theme.Set(widget.CardFill, c)))
 		row = widget.Row(append(row.Children(), card)...)

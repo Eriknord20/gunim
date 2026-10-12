@@ -142,7 +142,7 @@ const (
 func (e *editor) remember(kind editKind, start, end int, with []rune) {
 	joins := kind != otherEdit && kind == e.last && time.Since(e.lastAt) < undoPause &&
 		(kind == deleting && (end == e.lastEnd || start == e.lastEnd) ||
-			kind == typing && start == e.lastEnd && !(e.lastSpace && !unicode.IsSpace(with[0])))
+			kind == typing && start == e.lastEnd && (!e.lastSpace || unicode.IsSpace(with[0])))
 	if !joins || len(e.undo) == 0 {
 		e.undo = append(e.undo, step{caret: e.caret, anchor: e.anchor})
 		if len(e.undo) > maxUndo {

@@ -24,3 +24,10 @@ func callFloat(obj uintptr, m int, a uintptr, v float64) uintptr {
 	g, _ := f.(func(obj, a uintptr, v float64) uintptr)
 	return g(obj, a, v)
 }
+
+// callN calls fn with args, through purego, which copies them where
+// the call takes them, so they stay where the caller made them.
+func callN(fn uintptr, args []uintptr) uintptr {
+	r, _, _ := purego.SyscallN(fn, args...)
+	return r
+}

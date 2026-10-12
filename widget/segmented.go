@@ -49,8 +49,10 @@ type Segmented struct {
 	selected int
 	// pill is the pill's place, in options from the first.
 	pill *anim.Float
-	// hot is the option under the pointer, or -1.
+	// hot is the option under the pointer, or -1, and glow how far each
+	// option's label has lit, fading in under the pointer and out after.
 	hot    int
+	glow   []*anim.Float
 	click  Clicker
 	shaped []shapedText
 	ell    shapedText
@@ -122,16 +124,16 @@ func (s *Segmented) Handle(e input.Event, u *gunim.UI) bool {
 	s.showTip(e, u, s)
 	th := u.Theme()
 	if s.Disabled {
-		s.hot = -1
+		s.setHot(-1, th)
 		return s.handleDisabled(e, u, nil)
 	}
 	switch e := e.(type) {
 	case input.PointerEnter:
-		s.hot = s.at(e.Pos.X)
+		s.setHot(s.at(e.Pos.X), th)
 	case input.PointerMove:
-		s.hot = s.at(e.Pos.X)
+		s.setHot(s.at(e.Pos.X), th)
 	case input.PointerLeave:
-		s.hot = -1
+		s.setHot(-1, th)
 	case input.PointerDown:
 		if e.Button != input.ButtonPrimary {
 			return false
@@ -165,6 +167,22 @@ func (s *Segmented) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	u.Invalidate()
 	return true
+}
+
+// setHot lights option i, under the pointer, or none for -1: its label
+// fades in quickly, and the one left fades out more slowly.
+func (s *Segmented) setHot(i int, th *theme.Live) {
+	if i == s.hot {
+		return
+	}
+	s.hot = i
+	for j, g := range s.glow {
+		if j == i {
+			g.Animate(1, Quick.Get(th))
+		} else {
+			g.Animate(0, Settle.Get(th))
+		}
+	}
 }
 
 // icon returns option i's icon, or nil.
@@ -212,6 +230,11 @@ func (s *Segmented) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children)
 	n := s.Len()
 	if len(s.shaped) != n {
 		s.shaped = make([]shapedText, n)
+	}
+	for len(s.glow) < n {
+		g := anim.NewFloat(0)
+		s.glow = append(s.glow, g)
+		s.Add(g)
 	}
 	widest := float32(0)
 	for i := range n {
@@ -307,8 +330,8 @@ func (s *Segmented) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		// The option the pill is on reads on the pill; the one under the pointer lights up.
 		near := 1 - min(max(at-float32(i), float32(i)-at), 1)
 		ink := faint
-		if i == s.hot {
-			ink = Ink.Get(th)
+		if i < len(s.glow) {
+			ink = anim.Mix(anim.ColorCodec, faint, Ink.Get(th), s.glow[i].Value())
 		}
 		ink = anim.Mix(anim.ColorCodec, ink, strong, near)
 		left, width := s.span(float32(i))
@@ -320,7 +343,7 @@ func (s *Segmented) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			if size > room {
 				continue
 			}
-			paintIcon(p, th, ic, geom.Rc(x, (h-size)/2, size, size), ink, 1)
+			drawIcon(p, th, ic, geom.Rc(x, (h-size)/2, size, size), ink, 1)
 			x += size + IconGap.Get(th)
 			room -= size + IconGap.Get(th)
 		}

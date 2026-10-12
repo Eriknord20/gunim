@@ -1241,6 +1241,11 @@ func processEvent(event *_XEvent) error {
 		return nil
 	}
 
+	// gunim change: a screen's colour profile changed.
+	if iccChanged(event) {
+		return nil
+	}
+
 	// gunim change: a key grabbed for every program, pressed.
 	if event.xany().Window == _glfw.platformWindow.root {
 		switch {
