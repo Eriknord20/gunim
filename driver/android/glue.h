@@ -18,6 +18,7 @@ void gunim_finish(void);
 void gunim_buzz(void);
 int gunim_share(const uint16_t *text, int nt, const uint16_t *subject, int ns, const uint16_t *paths, int np);
 int gunim_vibrate(const long long *ms, int n);
+void gunim_exclude_gestures(const int *xy, int n);
 int gunim_has_compass(void);
 void gunim_watch_heading(int on);
 int gunim_open_link(const uint16_t *url, int n);

@@ -112,9 +112,10 @@ func (u *UI) handleRaw(root *state, ev any) {
 		if e.Shown {
 			u.w.resumed, u.invalid = true, true
 		} else {
-			// Out of sight, the compass rests; the first frame shown runs
-			// it again.
+			// Out of sight, the compass rests and the edges go back to
+			// the system; the first frame shown takes both up again.
 			u.watchHeading()
+			u.keepEdgeSwipes()
 		}
 		var ev input.Event = input.WindowShown{Time: time.Now()}
 		if !e.Shown {

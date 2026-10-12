@@ -575,6 +575,7 @@ func newWindow(dw driver.Window, root Node) *Window {
 		zoom:   1,
 	}
 	w.ui.noteHeadingNode(rootState)
+	w.ui.noteEdgeSwipeNode(rootState)
 	return w
 }
 
@@ -1422,6 +1423,12 @@ type UI struct {
 	// while there are some; see heading.go.
 	compassOn    bool
 	headingNodes map[*state]struct{}
+	// edgeSwipeNodes holds the nodes in the tree that can keep edge
+	// swipes, so a frame looks for them only while there are some, and
+	// edgeSwipes is the bands last handed the window's driver; see
+	// edgeswipe.go.
+	edgeSwipeNodes map[*state]struct{}
+	edgeSwipes     []geom.Rect
 	// caretAt is the text caret last told to the driver, and boxAt the
 	// bounds of the node it is in.
 	caretAt, boxAt geom.Rect
@@ -1868,6 +1875,7 @@ func (u *UI) InsertAt(parent Node, i int, child Node) {
 	ps.kids = insertKid(ps.kids, i, cs)
 	u.index[child] = cs
 	u.noteHeadingNode(cs)
+	u.noteEdgeSwipeNode(cs)
 	u.invalid = true
 	if m, ok := child.(Modal); ok && m.Modal() {
 		u.Cue(CueOpen, nil)
@@ -2367,6 +2375,7 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 	u.hoverAgain(now)
 	u.framePopups(f)
 	u.watchHeading()
+	u.keepEdgeSwipes()
 	u.publishAccess(u.w.dw, u.root, u.w.title)
 	u.focusMoved = false
 	for _, s := range u.popups {
@@ -2575,6 +2584,7 @@ func (u *UI) forget(s *state) {
 	}
 	u.unsubscribe(s)
 	delete(u.headingNodes, s)
+	delete(u.edgeSwipeNodes, s)
 	delete(u.index, s.node)
 	for _, a := range s.aliases {
 		if u.index[a] == s {

@@ -213,6 +213,16 @@ func goMedia(action C.int, ms C.longlong) {
 // buzz gives the short buzz a long press gives.
 func buzz() { C.gunim_buzz() }
 
+// excludeGestures keeps the system's edge gestures out of rects, four
+// pixel coordinates each: left, top, right, bottom.
+func excludeGestures(xy []int32) {
+	var p *C.int
+	if len(xy) > 0 {
+		p = (*C.int)(unsafe.Pointer(&xy[0]))
+	}
+	C.gunim_exclude_gestures(p, C.int(len(xy)))
+}
+
 // share hands s to the share sheet: the paths go to Java as one
 // string, each ended by a NUL, which no path holds.
 func share(s driver.Share) error {

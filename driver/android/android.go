@@ -143,6 +143,10 @@ type Driver struct {
 	compass     bool
 	compassOnce sync.Once
 
+	// excludedSent is the rects, four device pixel coordinates each,
+	// last handed to Java to keep from the system's edge gestures.
+	excludedSent []int32
+
 	// wake nudges the render thread, and surfaces carries surface
 	// changes to it.
 	wake     chan struct{}
@@ -690,6 +694,7 @@ func (d *Driver) closed(w *Window) {
 	}
 	delete(d.headingTo, w)
 	d.runCompassLocked()
+	d.excludeGesturesLocked()
 	last := true
 	for _, x := range d.windows {
 		if x.fills {
