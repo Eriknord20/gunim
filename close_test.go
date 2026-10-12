@@ -103,3 +103,41 @@ func TestInputHandedToTheWindowReachesTheFocus(t *testing.T) {
 		}
 	}
 }
+
+func TestAnOffscreenWindowWithAskToCloseAsksAndStaysOpen(t *testing.T) {
+	w := NewOffscreenWith(WindowOptions{Title: "Song", Size: geom.Sz(320, 200), AskToClose: quitAsked{}})
+	if got := w.Offscreen().Title(); got != "Song" {
+		t.Fatalf("the window is titled %q, want %q", got, "Song")
+	}
+	w.Frame(time.Second / 60)
+	w.Input(driver.CloseAsked{})
+	w.Frame(time.Second / 60)
+	select {
+	case env := <-w.Client().Intents():
+		if env.Intent != (quitAsked{}) {
+			t.Fatalf("asked to close, the application heard %#v", env.Intent)
+		}
+	default:
+		t.Fatal("asked to close, the application heard nothing")
+	}
+	select {
+	case <-w.done:
+		t.Fatal("asked to close, the window closed before the application said so")
+	default:
+	}
+	w.Client().Close()
+}
+
+func TestAnOffscreenWindowWithNoAskToCloseCloses(t *testing.T) {
+	w := NewOffscreenWith(WindowOptions{})
+	if got := w.Offscreen().Size(); got != geom.Sz(800, 600) {
+		t.Fatalf("a window of no size is %v, want 800 by 600", got)
+	}
+	w.Frame(time.Second / 60)
+	w.Input(driver.CloseAsked{})
+	select {
+	case <-w.done:
+	default:
+		t.Fatal("asked to close, the window stayed open")
+	}
+}

@@ -945,6 +945,34 @@ func NewOffscreen(size geom.Size, root Node) *Window {
 	return w
 }
 
+// NewOffscreenWith returns an offscreen window, as [NewOffscreen]
+// does, set up by o as [App.NewWindow] sets up a window on a display:
+// its Size, Root, Title, Theme, AskToClose, ZoomKeys and Zoom. The rest
+// of o needs a display. A zero Size is 800 by 600.
+//
+// It is how a test steps an application's own window: a click on the
+// close button, as [driver.CloseAsked], sends AskToClose to the
+// application as it does on a display.
+func NewOffscreenWith(o WindowOptions) *Window {
+	if o.Size == (geom.Size{}) {
+		o.Size = geom.Sz(800, 600)
+	}
+	w := NewOffscreen(o.Size, o.Root)
+	if o.Theme.Name != "" {
+		w.ui.theme = theme.NewLive(o.Theme)
+	}
+	w.title = o.Title
+	if o.Title != "" {
+		w.Offscreen().SetTitle(o.Title)
+	}
+	w.askToClose = o.AskToClose
+	w.ui.zoomKeys = o.ZoomKeys
+	if o.Zoom > 0 {
+		w.ui.SetZoom(o.Zoom)
+	}
+	return w
+}
+
 // offscreenMade is told of each offscreen window made, for the engine's
 // own tests to check them all.
 var offscreenMade func(*Window)
@@ -992,7 +1020,8 @@ func (w *Window) Frame(delta time.Duration) {
 }
 
 // Input hands the window a platform event, as a driver would: a pointer
-// move, a click, a key. It is for a window driven with [Window.Frame],
+// move, a click, a key, the close button as [driver.CloseAsked]. It is
+// for a window driven with [Window.Frame],
 // such as one from [NewOffscreen], and must be called from the goroutine
 // calling Frame. Positions are in window space, and the pointer is
 // routed through where the last frame drew each node.
@@ -1004,6 +1033,11 @@ func (w *Window) Input(ev any) { w.platform(ev) }
 // screen off, would act on the state from before the window went out of
 // sight. So such a window applies the queue first.
 func (w *Window) platform(ev any) {
+	if _, asked := ev.(driver.CloseAsked); asked {
+		// The close button, as the loop takes it.
+		w.ui.AskToClose()
+		return
+	}
 	if !w.draws() {
 		w.applyPending()
 	}

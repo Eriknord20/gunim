@@ -41,6 +41,10 @@ type SaveOptions struct {
 	Title string
 	// Name is the file name the dialog starts with.
 	Name string
+	// Folder is the folder the dialog opens in, as the folder of the
+	// file being saved again under another name. Empty, or a folder
+	// that is not there, leaves that to the system.
+	Folder string
 	// Filters offer kinds of file to save as, the first chosen to begin
 	// with. None offers every file.
 	Filters []FileFilter

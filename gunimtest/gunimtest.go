@@ -25,6 +25,16 @@ func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 	return w
 }
 
+// NewWith returns an offscreen window set up by o, as
+// [gunim.NewOffscreenWith] does, which fails t at the end of the test
+// for each stray it kept.
+func NewWith(t testing.TB, o gunim.WindowOptions) *gunim.Window {
+	t.Helper()
+	w := gunim.NewOffscreenWith(o)
+	t.Cleanup(func() { Check(t, w) })
+	return w
+}
+
 // Check fails t for each stray w has kept since it was last asked. A
 // test that expects a stray takes it with [gunim.Window.Strays] before
 // the test ends.

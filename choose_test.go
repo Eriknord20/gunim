@@ -40,8 +40,8 @@ func TestSaveFileAsksTheWindowsDialog(t *testing.T) {
 		asked = o
 		return "out/screenshot.png", nil
 	})
-	got, err := w.Client().SaveFile(context.Background(), driver.SaveOptions{Title: "Save a copy", Name: "screenshot.png"})
-	if err != nil || got != "out/screenshot.png" || asked.Name != "screenshot.png" {
+	got, err := w.Client().SaveFile(context.Background(), driver.SaveOptions{Title: "Save a copy", Name: "screenshot.png", Folder: "out"})
+	if err != nil || got != "out/screenshot.png" || asked.Name != "screenshot.png" || asked.Folder != "out" {
 		t.Fatalf("saved to %q, %v, asked with %+v", got, err, asked)
 	}
 }

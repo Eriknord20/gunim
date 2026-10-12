@@ -54,6 +54,9 @@ func (w *Window) SaveFile(o driver.SaveOptions) (string, error) {
 	if o.Name != "" {
 		opts["current_name"] = dbus.MakeVariant(o.Name)
 	}
+	if o.Folder != "" {
+		opts["current_folder"] = dbus.MakeVariant(append([]byte(o.Folder), 0))
+	}
 	addFilters(opts, o.Filters)
 	results, err := w.portal("SaveFile", o.Title, opts)
 	if err != nil || results == nil {
