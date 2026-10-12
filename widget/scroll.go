@@ -63,11 +63,11 @@ func (s *Scroll) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		// the layout with the room it is given, which follows. Fitted
 		// to the whole of what it holds, it would scroll back to the
 		// top every frame.
-		kid.Place(geom.Pt(0, -s.offset.Value()))
+		kid.Place(geom.Pt(0, -onPixels(s.offset.Value(), f.Scale)))
 		return geom.Sz(own.W, max(size.H, c.Min.H))
 	}
 	s.fit(size.H, own, f.Theme)
-	kid.Place(geom.Pt(0, -s.offset.Value()))
+	kid.Place(geom.Pt(0, -onPixels(s.offset.Value(), f.Scale)))
 	return own
 }
 

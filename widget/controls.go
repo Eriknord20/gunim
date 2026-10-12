@@ -971,7 +971,7 @@ func (b *tabBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		x := t.spans[i][0] + pad
 		if ic := t.icon(i); ic != nil {
 			s := IconSize.Get(th)
-			paintIcon(p, th, ic, geom.Rc(x, (t.head-s)/2, s, s), ink, 1)
+			drawIcon(p, th, ic, geom.Rc(x, (t.head-s)/2, s, s), ink, 1)
 		}
 		run.Paint(p, geom.Pt(x+t.iconRoom(i, th), (t.head-run.Height())/2), ink)
 	}

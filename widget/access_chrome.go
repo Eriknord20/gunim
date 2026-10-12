@@ -64,6 +64,8 @@ func (c *WindowControls) Access() access.Info {
 			}
 		case closeButton:
 			name = "Close"
+		default:
+			// No button has no name to read out.
 		}
 		info.Parts = append(info.Parts, access.Info{Role: access.RoleButton, Name: name,
 			Actions: []string{access.ActionPress}, Bounds: geom.Rc(float32(i)*bw, 0, bw, c.size.H)})

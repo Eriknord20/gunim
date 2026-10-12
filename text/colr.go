@@ -90,7 +90,7 @@ func (f *Face) rasterizeBitmap(id uint32, b font.GlyphBitmap, sizePx float32) Ma
 // affine maps x, y to A*x + C*y + E, B*x + D*y + F.
 type affine struct{ a, b, c, d, e, f float64 }
 
-func (m affine) apply(x, y float64) (float64, float64) {
+func (m affine) apply(x, y float64) (atX, atY float64) {
 	return m.a*x + m.c*y + m.e, m.b*x + m.d*y + m.f
 }
 
@@ -210,7 +210,7 @@ func (c *colr) paint(p tables.PaintTable, m affine, dst layer) {
 			c.paint(q, m, dst)
 		}
 	case tables.PaintColrGlyph:
-		if q, ok := c.face.COLR.Search(tables.GlyphID(p.GlyphID)); ok {
+		if q, ok := c.face.COLR.Search(p.GlyphID); ok {
 			c.paint(q, m, dst)
 		}
 	case tables.PaintGlyph:
@@ -408,6 +408,8 @@ func (c *colr) ramp(s []colorStop, extend tables.Extend, t float64) [4]float32 {
 				u = 2*span - u
 			}
 			t = first + u
+		default:
+			// Padding is the default the gradient is built with.
 		}
 	}
 	if t <= first {

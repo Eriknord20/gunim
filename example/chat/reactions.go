@@ -60,7 +60,9 @@ func (b *reactionBar) set(id string, rs []Reaction, u *gunim.UI) {
 		keep[r.Emoji] = true
 		if tip, ok := b.chips[r.Emoji]; ok {
 			tip.Text = r.Who
-			tip.Children()[0].(*reactChip).set(r, u)
+			if chip, is := tip.Children()[0].(*reactChip); is {
+				chip.set(r, u)
+			}
 			continue
 		}
 		at := len(b.order)

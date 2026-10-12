@@ -52,6 +52,11 @@ type Config struct {
 	// or latency changes, as in its control panel. Close the device and
 	// open it again to play on.
 	Reset func()
+	// Log, where set, hears what the driver tells and what is done with
+	// it: its messages, its asks to be opened again, and a driver let go
+	// as it stopped answering. It is called on any goroutine, but never
+	// as the driver takes a buffer.
+	Log func(format string, args ...any)
 }
 
 // ErrUnsupported is returned by [Open] on a system without ASIO.
@@ -59,6 +64,13 @@ var ErrUnsupported = errors.New("asio: ASIO plays on 64-bit Windows")
 
 // ErrOpen is returned by [Open] while another driver is open.
 var ErrOpen = errors.New("asio: a driver is open already")
+
+// ErrNotAnswering is returned by [Open] and [Device.Close] for a driver
+// that did not return in time from starting or stopping. It is let go
+// as it is: the thread that called it waits on in the driver, and the
+// process may not end until the driver lets it go, as when the
+// computer restarts.
+var ErrNotAnswering = errors.New("asio: the driver stopped answering")
 
 // Error is an error an ASIO driver returned.
 type Error struct {

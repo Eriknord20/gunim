@@ -78,8 +78,8 @@ func fetchPage(ctx context.Context, client *http.Client, link string) (page, err
 }
 
 // get reads at most limit bytes from link, and returns them with their content type.
-func get(ctx context.Context, client *http.Client, link string, limit int64) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+func get(ctx context.Context, client *http.Client, link string, limit int64) (body []byte, kind string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, http.NoBody)
 	if err != nil {
 		return nil, "", err
 	}
@@ -88,11 +88,11 @@ func get(ctx context.Context, client *http.Client, link string, limit int64) ([]
 	if err != nil {
 		return nil, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("%s answered %s", link, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, "", err
 	}
@@ -175,6 +175,8 @@ func readHead(doc string) (p page, pictureURL string) {
 					desc = content
 				}
 			}
+		default:
+			// A comment or a doctype says nothing about the page.
 		}
 	}
 }

@@ -13,14 +13,14 @@ import (
 )
 
 // stage shows v in an offscreen window, 400 wide, and returns the window and a way to draw frames.
-func stage(t *testing.T, v *View) (*gunim.Window, func(int)) {
+func stage(t *testing.T, v *View) (w *gunim.Window, run func(int)) {
 	t.Helper()
-	w := gunimtest.New(t, geom.Sz(400, 600), nil)
+	w = gunimtest.New(t, geom.Sz(400, 600), nil)
 	gunim.RegisterView(w, "md", func(struct{}) gunim.Node { return v }, nil)
 	if err := w.Client().Mount(gunim.Root, "md", "md", nil); err != nil {
 		t.Fatal(err)
 	}
-	run := func(n int) {
+	run = func(n int) {
 		for range n {
 			w.Frame(time.Second / 60)
 		}

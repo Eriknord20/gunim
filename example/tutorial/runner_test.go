@@ -46,14 +46,13 @@ func pageCode(t *testing.T, w *gunim.Window, run func(int), view string) *page {
 // and Format and Reset put new code in the editor as a step of undo.
 func TestEditsSurviveAndFormatAndResetReplaceThem(t *testing.T) {
 	w, c, a, run := stage(t)
-	p := pageCode(t, w, run, "lesson1")
 	edited := strings.Replace(lesson1Source, "Hello from gunim", "Hello, reader", 1)
 	a.handle(c, Edited{Lesson: 0, Source: edited})
 	a.handle(c, Chose{Lesson: 1})
 	run(30)
 	a.handle(c, Chose{Lesson: 0})
 	run(30)
-	p = pageCode(t, w, run, "lesson1")
+	p := pageCode(t, w, run, "lesson1")
 	if got := p.code.Text(); got != edited {
 		t.Fatal("the edit was lost on the way back to lesson 1")
 	}
@@ -116,7 +115,11 @@ func TestABrokenLessonFailsToBuildWithAMark(t *testing.T) {
 		t.Skip("no go command")
 	}
 	broken := strings.Replace(lesson2Source, "a.clicks++", "a.clicks += undefinedThing", 1)
-	line := strings.Count(broken[:strings.Index(broken, "undefinedThing")], "\n") + 1
+	at := strings.Index(broken, "undefinedThing")
+	if at < 0 {
+		t.Fatal("the broken lesson is not broken")
+	}
+	line := strings.Count(broken[:at], "\n") + 1
 	events := make(chan runEvent, 16)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

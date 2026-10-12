@@ -14,6 +14,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/shape"
 	"github.com/marrasen/gunim/syntax"
 	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
@@ -78,16 +79,31 @@ func syntaxInk(k syntax.Kind) theme.Token[color.NRGBA] {
 		return SyntaxOperator
 	case syntax.Variable:
 		return SyntaxVariable
+	default:
+		// Plain text takes the editor's own ink.
 	}
 	return Ink
 }
 
 // A CodeMark points at a place in the code with a message, such as a
 // compiler's error. Line and Col count from 1, as compilers write them.
+// End, past Col, is the column just after the last one the mark is
+// about, and the editor underlines Col to End with a wave; zero
+// underlines nothing.
 type CodeMark struct {
-	Line, Col int
-	Message   string
+	Line, Col, End int
+	Message        string
 }
+
+// codeWave is one wave of the line under a mark's columns, two units
+// tall and four long, drawn again along them.
+var codeWave = func() shape.Stroke {
+	p, err := shape.NewPath("M0 2Q1 0 2 2T4 2")
+	if err != nil {
+		panic(err)
+	}
+	return p.Stroke(1)
+}()
 
 // CodeEditor edits source code: a monospaced face, tab stops, line
 // numbers, and each token in its kind's colour, from Highlight.
@@ -143,7 +159,7 @@ type CodeEditor struct {
 	laidColours uintptr
 	lines       []codeLine
 	shapes      shapeCache
-	numbers     map[int]text.Run
+	numberRuns  map[int]text.Run
 	lineH       float32
 	glyphH      float32
 	tabW        float32
@@ -203,14 +219,14 @@ type codeSeg struct {
 // NewCodeEditor returns an empty code editor that highlights Go.
 func NewCodeEditor() *CodeEditor {
 	c := &CodeEditor{
-		Highlight: syntax.Go,
-		focus:     anim.NewFloat(0),
-		caretAt:   anim.NewPoint(geom.Point{}),
-		band:      anim.NewFloat(0),
-		rows:      anim.NewFloat(0),
-		scrollX:   anim.NewFloat(0),
-		scrollY:   anim.NewFloat(0),
-		numbers:   map[int]text.Run{},
+		Highlight:  syntax.Go,
+		focus:      anim.NewFloat(0),
+		caretAt:    anim.NewPoint(geom.Point{}),
+		band:       anim.NewFloat(0),
+		rows:       anim.NewFloat(0),
+		scrollX:    anim.NewFloat(0),
+		scrollY:    anim.NewFloat(0),
+		numberRuns: map[int]text.Run{},
 	}
 	c.multiline, c.tabs, c.Numbers = true, true, true
 	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY, c.rows)
@@ -325,7 +341,7 @@ func (c *CodeEditor) lineCol(i int) (line, col int) {
 // within the code and within the line.
 func (c *CodeEditor) offset(line, col int) int {
 	start := 0
-	for l := 0; l < line; l++ {
+	for range line {
 		n := slices.Index(c.text[start:], '\n')
 		if n < 0 {
 			return len(c.text)
@@ -660,7 +676,7 @@ type codeNav struct{ c *CodeEditor }
 
 func (n codeNav) caretX(i int) float32 { return n.c.xOf(i) }
 
-func (n codeNav) beside(i int, x float32, right bool) (int, float32) {
+func (n codeNav) beside(i int, x float32, right bool) (at int, atX float32) {
 	switch {
 	case right && i < len(n.c.text):
 		i++
@@ -728,7 +744,7 @@ func (c *CodeEditor) relayout(th *theme.Live) {
 	if !c.laid || c.laidFace != face || c.laidSize != size || c.laidTab != tab || c.laidColours != colours {
 		if c.laidFace != face || c.laidSize != size || c.laidTab != tab {
 			c.shapes.clear()
-			clear(c.numbers)
+			clear(c.numberRuns)
 			space := face.Shape(" ", size)
 			c.glyphH = space.Height()
 			c.tabW = space.Advance * max(tab, 1)
@@ -980,6 +996,17 @@ func (c *CodeEditor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		}
 	}
 
+	// A wave under each mark's columns.
+	for _, m := range c.marks {
+		if m.Line < 1 || m.Line > len(c.lines) || m.Line-1 < first || m.Line-1 >= last || m.End <= m.Col || m.Col < 1 {
+			continue
+		}
+		l := c.lines[m.Line-1]
+		x0 := o.X + c.xOf(min(l.start+m.Col-1, l.end))
+		x1 := o.X + c.xOf(min(l.start+m.End-1, l.end))
+		c.paintWave(p, x0, x1, o.Y+float32(m.Line)*c.lineH-lift+1, fadedBy(problem, m.shown.Value()))
+	}
+
 	// Each mark's message, after its line's code, sliding in as it
 	// fades in.
 	for _, m := range c.marks {
@@ -1031,10 +1058,10 @@ func (c *CodeEditor) paintGutter(p *paint.Painter, th *theme.Live, box geom.Size
 	gutterInk := CodeGutterInk.Get(th)
 	ink := Ink.Get(th)
 	for li := first; li < last; li++ {
-		run, ok := c.numbers[li+1]
+		run, ok := c.numberRuns[li+1]
 		if !ok {
 			run = c.laidFace.Shape(strconv.Itoa(li+1), c.laidSize)
-			c.numbers[li+1] = run
+			c.numberRuns[li+1] = run
 		}
 		col := gutterInk
 		if li == caretLine {
@@ -1047,6 +1074,22 @@ func (c *CodeEditor) paintGutter(p *paint.Painter, th *theme.Live, box geom.Size
 		}
 		x := c.gutterW - c.pad - run.Advance
 		run.Paint(p, geom.Pt(x, o.Y+float32(li)*c.lineH+lift), col)
+	}
+}
+
+// paintWave draws a wavy line from x0 to x1 with its top at y, as an
+// editor underlines a mistake: a wave of codeWave every four pixels,
+// the last cut to x1.
+func (c *CodeEditor) paintWave(p *paint.Painter, x0, x1, y float32, col color.NRGBA) {
+	if x1 <= x0 || col.A == 0 {
+		return
+	}
+	box := geom.Rc(0, 0, 4, 2)
+	cut := geom.Rc(x0, y-2, x1-x0, 6)
+	defer p.Layer(paint.LayerOpts{Bounds: cut, Opacity: 1, Clip: true})()
+	for x := x0; x < x1; x += 4 {
+		r := geom.Rc(x, y, 4, 2)
+		p.Mask(codeWave, codeWave.In(box, r), col)
 	}
 }
 

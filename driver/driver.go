@@ -183,6 +183,10 @@ type Options struct {
 	// change of monitor scale, goes on as ever. A maximized Place opens
 	// at its bounds instead.
 	Fixed bool
+	// NoColorManagement draws the window's sRGB colours to the display
+	// as they are, unconverted, whatever the display's profile; see
+	// [ColorInfo]. A window with a Parent takes the parent's.
+	NoColorManagement bool
 }
 
 // Kind is what sort of window to open. Each one maps onto a real window

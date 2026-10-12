@@ -42,7 +42,7 @@ func TestShots(t *testing.T) {
 	if os.Getenv("GUNIM_INSTALL_NOICON") != "" {
 		a.Icon = nil
 	}
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}

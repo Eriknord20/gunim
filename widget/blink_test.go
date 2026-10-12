@@ -104,7 +104,7 @@ func TestTheCaretFadesInAFewStepsAtAnyRefreshRate(t *testing.T) {
 		t.Fatalf("the caret took %d levels, want it to fade through some between lit and dark", len(levels))
 	}
 	// Three seconds hold at most six fades, of fadeSteps changes each.
-	if max := 3 * 2 * fadeSteps; changes > max {
-		t.Fatalf("the caret changed %d times in three seconds, want at most %d, however fast the frames", changes, max)
+	if most := 3 * 2 * fadeSteps; changes > most {
+		t.Fatalf("the caret changed %d times in three seconds, want at most %d, however fast the frames", changes, most)
 	}
 }

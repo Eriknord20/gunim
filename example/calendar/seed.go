@@ -48,11 +48,10 @@ func (a *app) seed(now time.Time) {
 	at := func(day time.Time, h, m int) time.Time {
 		return day.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute)
 	}
-	add := func(s *series) *series {
+	add := func(s *series) {
 		a.nextID++
 		s.id = "s" + strconv.Itoa(a.nextID)
 		a.series = append(a.series, s)
-		return s
 	}
 
 	add(&series{title: "Stand-up", cal: "team", start: at(start, 9, 15), length: 15 * time.Minute, repeat: Weekdays,
