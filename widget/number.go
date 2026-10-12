@@ -30,11 +30,11 @@ import (
 // dragged, as in a design tool: press it and move the pointer up or
 // right to raise the value, down or left to lower it, Shift held for a
 // tenth of the speed and Ctrl for ten times. The value keeps to Min
-// and Max and to steps of Increment, OnChange hears it as it goes, and
-// OnCommit when the button is let go. Escape puts the value from
-// before the drag back. A click that does not move puts the caret in
-// to type, and from then on presses select text, until the field is
-// left. Over the field the pointer is an up and down arrow while a
+// and Max and to steps of Increment, OnChange hears it as it goes,
+// OnCommit when the button is let go, and OnDragEnd as any drag ends.
+// Escape puts the value from before the drag back. A click that does
+// not move puts the caret in to type, and from then on presses select
+// text, until the field is left. Over the field the pointer is an up and down arrow while a
 // drag would change the value.
 type NumberField struct {
 	*TextField
@@ -63,6 +63,13 @@ type NumberField struct {
 	// string. A non-nil result is sent to the application as the
 	// field's intent.
 	OnCommit func(v float64, u *gunim.UI) gunim.Intent
+	// OnDragEnd runs on the UI goroutine each time a drag ends, with the
+	// value it ends on: let go, called off by Escape, or cut short as the
+	// keyboard leaves the field. It runs whether or not the value
+	// changed, after OnCommit, so a caller that shows the value live
+	// while the drag runs always hears that it is over. A non-nil result
+	// is sent to the application as the field's intent.
+	OnDragEnd func(v float64, u *gunim.UI) gunim.Intent
 	// NoDrag keeps the field to typing, the arrows and the wheel, for a
 	// number such as a port that has no sense of near and far.
 	NoDrag bool
@@ -384,6 +391,7 @@ func (n *NumberField) handleDrag(e input.Event, u *gunim.UI) bool {
 			if n.value != was && n.OnCommit != nil {
 				send(u, n, n.OnCommit(n.value, u))
 			}
+			n.dragEnded(u)
 			return true
 		}
 		// A click: the caret goes in where it landed, to type.
@@ -400,6 +408,9 @@ func (n *NumberField) handleDrag(e input.Event, u *gunim.UI) bool {
 			if moved && n.value != was && n.OnCommit != nil {
 				send(u, n, n.OnCommit(n.value, u))
 			}
+			if moved {
+				n.dragEnded(u)
+			}
 		}
 	}
 	return false
@@ -415,7 +426,15 @@ func (n *NumberField) callOff(u *gunim.UI) {
 	n.drag.called = true
 	n.drag.moving = false
 	n.pressed.Animate(0, Settle.Get(u.Theme()))
+	n.dragEnded(u)
 	u.Invalidate()
+}
+
+// dragEnded tells OnDragEnd a drag is over.
+func (n *NumberField) dragEnded(u *gunim.UI) {
+	if n.OnDragEnd != nil {
+		send(u, n, n.OnDragEnd(n.value, u))
+	}
 }
 
 // letGo ends a press: the pressed look fades and the caret comes back.

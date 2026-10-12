@@ -454,3 +454,46 @@ func TestANumberFieldSitsAtTheRight(t *testing.T) {
 		t.Fatalf("aligned to the start the number begins at %v", r.Min.X)
 	}
 }
+
+type numberDragEnded struct{ V float64 }
+
+func TestEveryEndOfANumberDragIsHeard(t *testing.T) {
+	n := NewNumberField(0, 1e6)
+	n.SetValue(100, nil)
+	n.OnCommit = func(v float64, u *gunim.UI) gunim.Intent { return numberCommitted{v} }
+	n.OnDragEnd = func(v float64, u *gunim.UI) gunim.Intent { return numberDragEnded{v} }
+	w, run := stage(t, &frame{child: n, size: geom.Sz(200, 32)})
+	// Up and back to where it started: the value is as it was, and the
+	// end is heard all the same, once.
+	dragNumber(w, run, 0, geom.Pt(100, 16), geom.Pt(100, -24), geom.Pt(100, 16))
+	if got := sent(w); len(got) != 1 || got[0] != (numberDragEnded{100}) {
+		t.Fatalf("a drag back to its start sent %v, want numberDragEnded{100}", got)
+	}
+	// A drag that changes the value is committed, then ends.
+	dragNumber(w, run, 0, geom.Pt(100, 16), geom.Pt(100, -24))
+	if got := sent(w); len(got) != 2 || got[0] != (numberCommitted{110}) || got[1] != (numberDragEnded{110}) {
+		t.Fatalf("a drag up sent %v, want the commit and then the end", got)
+	}
+	// Escape calls one off: the end is heard as it is called off, and
+	// the release after it sends nothing more.
+	w.Input(input.PointerDown{Pos: geom.Pt(100, 16), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerMove{Pos: geom.Pt(100, -24), Time: time.Now()})
+	run(1)
+	w.Input(input.KeyPress{Key: input.KeyEscape})
+	run(1)
+	if got := sent(w); len(got) != 1 || got[0] != (numberDragEnded{110}) {
+		t.Fatalf("Escape sent %v, want numberDragEnded{110}", got)
+	}
+	w.Input(input.PointerUp{Pos: geom.Pt(100, -24), Button: input.ButtonPrimary, Time: time.Now()})
+	run(1)
+	if got := sent(w); len(got) != 0 {
+		t.Fatalf("the release after Escape sent %v", got)
+	}
+	// A click that never moved is no drag, and ends none.
+	w.Input(input.PointerDown{Pos: geom.Pt(100, 16), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: geom.Pt(100, 16), Button: input.ButtonPrimary, Time: time.Now()})
+	run(1)
+	if got := sent(w); len(got) != 0 {
+		t.Fatalf("a click sent %v", got)
+	}
+}
