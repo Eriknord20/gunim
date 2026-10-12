@@ -695,6 +695,20 @@ func watchProcess(pid int) (alive func() bool, done func()) {
 
 // running lists the processes running the program at exe.
 func running(exe string) ([]int, error) {
+	procs, err := runningParents(exe)
+	if err != nil {
+		return nil, err
+	}
+	pids := make([]int, 0, len(procs))
+	for pid := range procs {
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
+
+// runningParents lists the processes running the program at exe, each
+// with the process that started it.
+func runningParents(exe string) (map[int]int, error) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil, err
@@ -702,7 +716,7 @@ func running(exe string) ([]int, error) {
 	defer func() { _ = windows.CloseHandle(snap) }()
 	var e windows.ProcessEntry32
 	e.Size = uint32(unsafe.Sizeof(e))
-	var pids []int
+	procs := map[int]int{}
 	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
 		if !strings.EqualFold(windows.UTF16ToString(e.ExeFile[:]), filepath.Base(exe)) {
 			continue
@@ -716,10 +730,10 @@ func running(exe string) ([]int, error) {
 		err = windows.QueryFullProcessImageName(h, 0, &buf[0], &n)
 		_ = windows.CloseHandle(h)
 		if err == nil && samePath(windows.UTF16ToString(buf[:n]), exe) {
-			pids = append(pids, int(e.ProcessID))
+			procs[int(e.ProcessID)] = int(e.ParentProcessID)
 		}
 	}
-	return pids, nil
+	return procs, nil
 }
 
 // launch starts the program at exe with args, on its own, with env

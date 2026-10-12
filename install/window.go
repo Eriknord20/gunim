@@ -91,6 +91,9 @@ type scene struct {
 	// Ready says an update is in place already, and Restart that the
 	// window can restart the program into it.
 	Ready, Restart bool
+	// Others is how many other copies of the program the update found
+	// running, which would go on running the release before it.
+	Others int
 	// Status says how a check for updates went, Checking that one runs,
 	// and Trouble that Status tells of a failure.
 	Status            string
