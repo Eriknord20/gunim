@@ -15,8 +15,9 @@ import (
 
 // Fader is a gain in decibels, set by a fader up and down: a drag sets
 // it, finer with Shift; the wheel steps it half a decibel; a
-// double-click sets it to 0 dB. Its 0 dB is marked half way up. The cap
-// lights under the pointer.
+// double-click sets it to 0 dB. Its 0 dB is marked. The cap lights
+// under the pointer. A second button pressed mid-drag ends the drag
+// where it got to.
 //
 // It takes the keyboard by Tab, and a ring fades in round its cap. Up and
 // Down, or Right and Left, step it half a decibel, a tenth of one with
@@ -33,6 +34,20 @@ type Fader struct {
 	// Range is how far the fader goes either way, in decibels: 24 when
 	// zero.
 	Range float32
+	// Low and High are the fader's ends in decibels where they are set,
+	// as a mixer's channel fader runs from -60 to 6; where both are
+	// zero, the fader runs from -Range to Range.
+	Low, High float32
+	// Curve bends the travel. Above 1, the gains near the top get more
+	// of it, as on a mixer, where 0 dB stands most of the way up; 0 and
+	// 1 run it straight.
+	Curve float32
+	// OnBegin runs as a drag on the fader starts, and OnEnd as it ends,
+	// so the gains set between are one gesture to undo. A drag ends as
+	// the button is let go, as a second button is pressed, or by
+	// EndDrag. A non-nil result is sent to the application as the
+	// fader's intent.
+	OnBegin, OnEnd func(u *gunim.UI) gunim.Intent
 	// Label names the fader for a screen reader, as the label beside it
 	// does on screen.
 	Label string
@@ -42,6 +57,8 @@ type Fader struct {
 	nudge *anim.Float
 	held  bool
 	from  geom.Point
+	// start is where along its travel, from 0 to 1, the cap stood as
+	// the drag started.
 	start float32
 	size  geom.Size
 }
@@ -61,8 +78,73 @@ func (f *Fader) span() float32 {
 	return f.Range
 }
 
+// ends are the gains at the fader's bottom and top.
+func (f *Fader) ends() (lo, hi float32) {
+	if f.Low == 0 && f.High == 0 || f.High <= f.Low {
+		return -f.span(), f.span()
+	}
+	return f.Low, f.High
+}
+
+// curve is the power the travel is bent by.
+func (f *Fader) curve() float64 {
+	if f.Curve <= 0 {
+		return 1
+	}
+	return float64(f.Curve)
+}
+
+// travel is where gain v stands along the fader, from 0 at the bottom
+// to 1 at the top.
+func (f *Fader) travel(v float32) float32 {
+	lo, hi := f.ends()
+	t := (max(lo, min(v, hi)) - lo) / (hi - lo)
+	return float32(math.Pow(float64(t), f.curve()))
+}
+
+// gainAt is the gain at t along the fader, from 0 at the bottom to 1
+// at the top.
+func (f *Fader) gainAt(t float32) float32 {
+	lo, hi := f.ends()
+	t = max(0, min(t, 1))
+	return lo + (hi-lo)*float32(math.Pow(float64(t), 1/f.curve()))
+}
+
+// Dragging reports whether a drag on the fader is under way.
+func (f *Fader) Dragging() bool { return f.held }
+
+// EndDrag ends a drag under way where it got to, as letting go does,
+// for a window that ends a press on its own keys, as Escape.
+func (f *Fader) EndDrag(u *gunim.UI) {
+	if !f.held {
+		return
+	}
+	f.held = false
+	f.hover.Animate(0, anim.Gentle)
+	f.ended(u)
+	u.Invalidate()
+}
+
+// ended runs OnEnd, sending its intent.
+func (f *Fader) ended(u *gunim.UI) {
+	if f.OnEnd != nil {
+		if in := f.OnEnd(u); in != nil {
+			u.Send(f, in)
+		}
+	}
+}
+
+// Overhear implements [gunim.Overhearer]: a second button pressed
+// while a drag runs ends it, as the press goes elsewhere.
+func (f *Fader) Overhear(e input.Event, u *gunim.UI) {
+	if _, ok := e.(input.PointerDown); ok && f.held {
+		f.EndDrag(u)
+	}
+}
+
 func (f *Fader) set(v float32, u *gunim.UI) {
-	v = max(-f.span(), min(v, f.span()))
+	lo, hi := f.ends()
+	v = max(lo, min(v, hi))
 	v = float32(math.Round(float64(v)*10) / 10)
 	if v != f.Value() && f.OnChange != nil {
 		if in := f.OnChange(v, u); in != nil {
@@ -90,13 +172,13 @@ func (f *Fader) key(k input.KeyPress, u *gunim.UI) bool {
 	case input.KeyDown, input.KeyLeft:
 		v -= step
 	case input.KeyPageUp:
-		v += f.span() / 5
+		v = f.gainAt(f.travel(v) + 0.1)
 	case input.KeyPageDown:
-		v -= f.span() / 5
+		v = f.gainAt(f.travel(v) - 0.1)
 	case input.KeyHome:
-		v = -f.span()
+		v, _ = f.ends()
 	case input.KeyEnd:
-		v = f.span()
+		_, v = f.ends()
 	default:
 		return false
 	}
@@ -130,18 +212,26 @@ func (f *Fader) Handle(e input.Event, u *gunim.UI) bool {
 			f.set(0, u)
 			break
 		}
-		f.held, f.from, f.start = true, e.Pos, f.Value()
+		f.held, f.from, f.start = true, e.Pos, f.travel(f.Value())
+		if f.OnBegin != nil {
+			if in := f.OnBegin(u); in != nil {
+				u.Send(f, in)
+			}
+		}
 	case input.PointerMove:
 		if !f.held {
 			return false
 		}
-		per := 2 * f.span() / max(f.size.H-24, 1)
+		per := 1 / max(f.size.H-24, 1)
 		if e.Mods.Has(input.ModShift) {
 			per /= 10
 		}
-		f.set(f.start-(e.Pos.Y-f.from.Y)*per, u)
+		f.set(f.gainAt(f.start-(e.Pos.Y-f.from.Y)*per), u)
 	case input.PointerUp:
-		f.held = false
+		if f.held {
+			f.held = false
+			f.ended(u)
+		}
 	case input.Scroll:
 		n := e.Notches.Y
 		if n == 0 {
@@ -170,8 +260,9 @@ func (f *Fader) Handle(e input.Event, u *gunim.UI) bool {
 // Access implements [gunim.Accessible]: a slider of the gain, in decibels.
 func (f *Fader) Access() access.Info {
 	v := f.Value()
+	lo, hi := f.ends()
 	return access.Info{Role: access.RoleSlider, Name: f.Label, Value: strconv.FormatFloat(float64(v), 'f', 1, 32) + " dB",
-		Range: &access.Range{Min: float64(-f.span()), Max: float64(f.span()), Value: float64(v), Step: 0.1}}
+		Range: &access.Range{Min: float64(lo), Max: float64(hi), Value: float64(v), Step: 0.1}}
 }
 
 // AccessAct implements [gunim.AccessActor]: a new value sets the gain.
@@ -200,10 +291,11 @@ func (f *Fader) Paint(p *paint.Painter, fr gunim.Frame, box geom.Size, _ gunim.C
 	edge := min(12, box.H/2)
 	top, bottom := edge, box.H-edge
 	p.RRect(geom.Rc(mid-2, top, 4, bottom-top), 2, paint.Solid(Faded(ground, 0.9)))
-	zero := top + (bottom-top)/2
-	p.RRect(geom.Rc(mid-7, zero, 14, 1), 0, paint.Solid(Faded(ink, 0.3)))
-	gain := max(-f.span(), min(f.Value()+f.nudge.Value(), f.span()))
-	y := zero - (bottom-top)/2*gain/f.span()
+	if lo, hi := f.ends(); lo < 0 && hi > 0 {
+		zero := bottom - (bottom-top)*f.travel(0)
+		p.RRect(geom.Rc(mid-7, zero, 14, 1), 0, paint.Solid(Faded(ink, 0.3)))
+	}
+	y := bottom - (bottom-top)*f.travel(f.Value()+f.nudge.Value())
 	lit := f.hover.Value()
 	if f.held {
 		lit = 1
