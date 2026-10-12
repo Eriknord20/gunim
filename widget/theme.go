@@ -25,13 +25,6 @@ var (
 	ItalicFont     = theme.Choice("text.font.italic", text.GoSans(false, true))
 	BoldItalicFont = theme.Choice("text.font.bold.italic", text.GoSans(true, true))
 	MonoFont       = theme.Choice("text.font.mono", text.GoMono(false, false))
-	// The edit menu's words, as a text field's long press or right
-	// click opens it: English unless a theme says them in its own
-	// language, as an app for children in Swedish does.
-	EditCut       = theme.Choice("edit.cut", "Cut")
-	EditCopy      = theme.Choice("edit.copy", "Copy")
-	EditPaste     = theme.Choice("edit.paste", "Paste")
-	EditSelectAll = theme.Choice("edit.selectall", "Select all")
 	// CodeFill is the fill behind code in text, and QuoteBar the bar beside a quote.
 	CodeFill = theme.Color("text.code.fill", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x12})
 	QuoteBar = theme.Color("text.quote.bar", color.NRGBA{R: 0x4a, G: 0x50, B: 0x60, A: 0xff})
@@ -306,6 +299,16 @@ var (
 	// Caret is the motion the caret and the selection glide with.
 	// Make it very stiff for a caret that jumps.
 	Caret = theme.Spring("motion.caret", anim.Spring{Response: 0.09, Damping: 1})
+	// FieldMenuCut and the three after it are the words of the edit
+	// menu a text field's long press or right click opens: English
+	// unless a theme says them in its own language. An app that
+	// switches window themes sets them in a [NewThemed] scope around
+	// its content, since a switch of the window's theme to, say,
+	// [Light], brings the English words back.
+	FieldMenuCut       = theme.Choice("field.menu.cut", "Cut")
+	FieldMenuCopy      = theme.Choice("field.menu.copy", "Copy")
+	FieldMenuPaste     = theme.Choice("field.menu.paste", "Paste")
+	FieldMenuSelectAll = theme.Choice("field.menu.select.all", "Select all")
 )
 
 // Text area tokens. The frame, colours and padding are the text

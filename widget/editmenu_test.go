@@ -178,7 +178,7 @@ func (ty *typer) menuLabels() []string {
 	if m == nil {
 		ty.t.Fatal("no edit menu is open")
 	}
-	var out []string
+	out := make([]string, 0, len(m.list.items))
 	for _, it := range m.list.items {
 		out = append(out, it.Label)
 	}
@@ -196,10 +196,10 @@ func TestTheEditMenuSaysCutCopyPasteAndSelectAll(t *testing.T) {
 
 func TestTheEditMenuSaysWhatItsThemeSays(t *testing.T) {
 	sv := theme.Make("sv",
-		theme.Set(EditCut, "Klipp ut"),
-		theme.Set(EditCopy, "Kopiera"),
-		theme.Set(EditPaste, "Klistra in"),
-		theme.Set(EditSelectAll, "Markera allt"),
+		theme.Set(FieldMenuCut, "Klipp ut"),
+		theme.Set(FieldMenuCopy, "Kopiera"),
+		theme.Set(FieldMenuPaste, "Klistra in"),
+		theme.Set(FieldMenuSelectAll, "Markera allt"),
 	)
 	field := NewTextField()
 	fr := &frame{child: NewThemed(field, sv), size: geom.Sz(300, 36)}

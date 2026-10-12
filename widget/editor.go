@@ -663,7 +663,7 @@ func (e *editor) endWords(host textHost, at geom.Point, u *gunim.UI) bool {
 
 // openMenu opens the edit menu at at, in owner's space: Cut, Copy,
 // Paste and Select all, in the words of the theme it is drawn with
-// (EditCut and the rest), with only Copy and Select all for text that
+// (FieldMenuCut and the rest), with only Copy and Select all for text that
 // stays as it is. Cut and Copy are dimmed with nothing selected, or for
 // a secret.
 func (e *editor) openMenu(owner gunim.Node, at geom.Point, u *gunim.UI) {
@@ -672,10 +672,10 @@ func (e *editor) openMenu(owner gunim.Node, at geom.Point, u *gunim.UI) {
 	none := start == end || e.secret
 	th := u.Theme()
 	m := NewMenu([]MenuItem{
-		{Label: EditCut.Get(th), Disabled: none || e.readOnly},
-		{Label: EditCopy.Get(th), Disabled: none},
-		{Label: EditPaste.Get(th), Disabled: e.readOnly},
-		{Label: EditSelectAll.Get(th)},
+		{Label: FieldMenuCut.Get(th), Disabled: none || e.readOnly},
+		{Label: FieldMenuCopy.Get(th), Disabled: none},
+		{Label: FieldMenuPaste.Get(th), Disabled: e.readOnly},
+		{Label: FieldMenuSelectAll.Get(th)},
 	})
 	m.OnPick = func(i int, u *gunim.UI) gunim.Intent {
 		e.closeMenu()
