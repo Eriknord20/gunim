@@ -456,3 +456,37 @@ func TestAPopupLeavesTheFramesItsWindowHoldsAsTheyWere(t *testing.T) {
 		t.Fatalf("the popup recorded %d frames, want one each run", content.n)
 	}
 }
+
+func TestAnInjectedClickOnAPopupReachesThePopup(t *testing.T) {
+	w, _, m, pop := openMenu(t, func(*UI) { t.Error("a click on the popup dismissed it") })
+	pw := popupWindow(t, w)
+	main := w.dw.(*driver.OffscreenWindow)
+	// Where the popup's (30, 20) lies in the window's space, as a script
+	// would aim at it.
+	at := main.FromScreen(pw.ToScreen(geom.Pt(30, 20)))
+	w.inject(input.PointerDown{Pos: at, Time: time.Now()})
+	if got := pressedAt(t, &m.recorder); !near(got, geom.Pt(30, 20)) {
+		t.Fatalf("the menu saw the press at %v in its space, want (30, 20)", got)
+	}
+	// The button comes up off the popup: the popup still hears it, as it
+	// holds the pointer.
+	w.inject(input.PointerUp{Pos: geom.Pt(900, 900), Time: time.Now()})
+	if !m.got(input.PointerUp{}) {
+		t.Fatal("the menu missed the release of its press")
+	}
+	if !pop.Open() {
+		t.Fatal("the popup closed")
+	}
+}
+
+func TestAnInjectedClickOffAPopupGoesToTheWindow(t *testing.T) {
+	dismissed := 0
+	w, _, m, _ := openMenu(t, func(*UI) { dismissed++ })
+	w.inject(input.PointerDown{Pos: geom.Pt(500, 500), Time: time.Now()})
+	if m.got(input.PointerDown{}) {
+		t.Fatal("a press off the popup reached it")
+	}
+	if dismissed != 1 {
+		t.Fatalf("a press off the popup dismissed it %d times, want once", dismissed)
+	}
+}

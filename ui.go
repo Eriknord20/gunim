@@ -747,8 +747,10 @@ const (
 
 // Input hands the window an input event, as its driver would: a key, a
 // click, text. It is for a tool that drives a window through a script,
-// such as a screenshot taker. Positions are in window space. It waits
-// for the window to take the event, or for ctx to end.
+// such as a screenshot taker. Positions are in window space. A pointer
+// event that lands on an open popup, such as a menu, goes to the popup,
+// as the user's would: a script can click a menu's items. It waits for
+// the window to take the event, or for ctx to end.
 func (c Client) Input(ctx context.Context, ev input.Event) error {
 	select {
 	case c.w.injected <- ev:
@@ -1149,7 +1151,7 @@ func (w *Window) wait() bool {
 	case out := <-w.fade:
 		w.ui.setFade(out)
 	case ev := <-w.injected:
-		w.platform(ev)
+		w.inject(ev)
 		w.ui.focusNow()
 	case f, ok := <-w.dw.Presented():
 		if !ok {
@@ -1326,6 +1328,10 @@ type windowStats struct {
 // that call.
 // Use it and let it go.
 type UI struct {
+	// injectHeld is the popup an injected press landed in, which takes
+	// the pointer's injected events until the button comes up; see
+	// Window.inject.
+	injectHeld *surface
 	// wakeIn is the soonest a resting [Waker] wants a frame again, as
 	// this frame's nodes say, and wakeAt and wakeStop the timer that will
 	// draw it.

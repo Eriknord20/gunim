@@ -8,6 +8,7 @@ import (
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 )
 
@@ -805,4 +806,101 @@ func (w *Window) forward(s *surface) {
 			}
 		}
 	}
+}
+
+// inject hands an event given to [Client.Input] to the window, or, for a
+// pointer event that lands on an open popup, to the popup, in its own
+// space: a popup has a window of its own, which a real click lands in. A
+// press in a popup keeps the pointer's events going to it until the
+// button comes up, as the system gives a window the pointer it pressed
+// in.
+func (w *Window) inject(ev input.Event) {
+	u := w.ui
+	s, local, ok := u.injectedPopup(ev)
+	switch ev.(type) {
+	case input.PointerDown:
+		u.injectHeld = nil
+		if ok {
+			u.injectHeld = s
+		}
+	case input.PointerUp:
+		defer func() { u.injectHeld = nil }()
+	}
+	if ok {
+		u.popupEvent(popupEvent{s: s, ev: local})
+		return
+	}
+	w.platform(ev)
+}
+
+// injectedPopup finds the popup an injected pointer event, in the
+// window's space, goes to, topmost first, or the one holding the pointer,
+// and the event in that popup's space.
+func (u *UI) injectedPopup(ev input.Event) (*surface, input.Event, bool) {
+	pos, ok := pointerPos(ev)
+	if !ok || len(u.popups) == 0 {
+		return nil, nil, false
+	}
+	ws, ok := u.w.dw.(driver.Screener)
+	if !ok {
+		return nil, nil, false
+	}
+	at := ws.ToScreen(pos)
+	local := func(s *surface) (geom.Point, bool) {
+		ps, ok := s.dw.(driver.Screener)
+		if !ok {
+			return geom.Point{}, false
+		}
+		return ps.FromScreen(at), true
+	}
+	if s := u.injectHeld; s != nil && slices.Contains(u.popups, s) && s.dw != nil {
+		if q, ok := local(s); ok {
+			return s, withPos(ev, q), true
+		}
+	}
+	for i := len(u.popups) - 1; i >= 0; i-- {
+		s := u.popups[i]
+		if s.closing || s.dw == nil {
+			continue
+		}
+		q, ok := local(s)
+		if ok && q.X >= 0 && q.Y >= 0 && q.X < s.size.W && q.Y < s.size.H {
+			return s, withPos(ev, q), true
+		}
+	}
+	return nil, nil, false
+}
+
+// pointerPos is where a pointer event happened.
+func pointerPos(ev input.Event) (geom.Point, bool) {
+	switch e := ev.(type) {
+	case input.PointerDown:
+		return e.Pos, true
+	case input.PointerUp:
+		return e.Pos, true
+	case input.PointerMove:
+		return e.Pos, true
+	case input.Scroll:
+		return e.Pos, true
+	}
+	return geom.Point{}, false
+}
+
+// withPos is the pointer event ev moved to p.
+func withPos(ev input.Event, p geom.Point) input.Event {
+	switch e := ev.(type) {
+	case input.PointerDown:
+		e.Pos = p
+		return e
+	case input.PointerUp:
+		e.Pos = p
+		return e
+	case input.PointerMove:
+		e.Pos = p
+		return e
+	case input.Scroll:
+		e.Pos = p
+		return e
+	}
+	return ev
 }
