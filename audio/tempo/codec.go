@@ -9,9 +9,9 @@ import (
 // mapJSON is a map as it is written: the start in milliseconds, which
 // reads as a number of seconds should, and the changes as they are.
 type mapJSON struct {
-	StartMs float64 `json:"startMs,omitempty"`
-	Tempos  []Tempo `json:"tempos"`
-	Meters  []Meter `json:"meters"`
+	StartMs float64 `json:",omitempty"`
+	Tempos  []Tempo
+	Meters  []Meter
 }
 
 // MarshalJSON writes the map, so an application keeps a recording's

@@ -71,9 +71,9 @@ func Quarters(q float64) Ticks { return Ticks(math.Round(q * PPQ)) }
 // reaching it as that change falls. A ramp with no change after it, or
 // one reaching the same tempo, is steady.
 type Tempo struct {
-	At   Ticks   `json:"at"`
-	BPM  float64 `json:"bpm"`
-	Ramp bool    `json:"ramp,omitempty"`
+	At   Ticks
+	BPM  float64
+	Ramp bool `json:",omitempty"`
 }
 
 // A Meter is a meter change: from At onward a bar holds Beats beats,
@@ -84,9 +84,9 @@ type Tempo struct {
 // lands in, since that is the only reading that keeps bar lines and
 // beat lines agreeing.
 type Meter struct {
-	At    Ticks `json:"at"`
-	Beats int   `json:"beats"`
-	Unit  int   `json:"unit"`
+	At    Ticks
+	Beats int
+	Unit  int
 }
 
 // Length is a bar of this meter in ticks.
