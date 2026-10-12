@@ -3,6 +3,7 @@
 package install
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -525,7 +526,7 @@ func shortcut(lnk, exe, about string) error {
 // added to its environment, in a folder that is not the program's, so
 // it holds nothing there open.
 func powershell(script string, env ...string) *exec.Cmd {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.CommandContext(context.Background(), "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Dir = os.TempDir()
@@ -546,11 +547,12 @@ func setAutostart(a *App, exe string, args []string, on bool) error {
 		}
 		return nil
 	}
-	line := `"` + exe + `"`
+	var line strings.Builder
+	line.WriteString(`"` + exe + `"`)
 	for _, arg := range args {
-		line += " " + windows.EscapeArg(arg)
+		line.WriteString(" " + windows.EscapeArg(arg))
 	}
-	return k.SetStringValue(a.id(), line)
+	return k.SetStringValue(a.id(), line.String())
 }
 
 // detect reads what an install that kept no record of itself has on
@@ -744,7 +746,7 @@ func runningParents(exe string) (map[int]int, error) {
 // ignore Ctrl+C, and every program it starts would too, as a terminal's
 // shells.
 func launch(exe string, args []string, env ...string) error {
-	cmd := exec.Command(exe, args...)
+	cmd := exec.CommandContext(context.Background(), exe, args...)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

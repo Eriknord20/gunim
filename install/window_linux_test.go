@@ -5,6 +5,7 @@ package install
 import (
 	"context"
 	"errors"
+	"image/color"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
+	"github.com/marrasen/gunim/paint"
 )
 
 // offscreen runs the installer's window on s offscreen, its work's
@@ -450,4 +452,15 @@ func TestAnInterruptWaitsForTheWork(t *testing.T) {
 	default:
 		t.Error("serve returned with the work still running")
 	}
+}
+
+// attach registers the installer's views with w, shows s's first page
+// there, and returns the application half, ready to serve.
+func attach(w *gunim.Window, s *Session, img *paint.Image, accent color.NRGBA) (*runner, error) {
+	sc := firstScene(s)
+	c, err := mountStage(w, &s.App, img, accent, sc)
+	if err != nil {
+		return nil, err
+	}
+	return &runner{s: s, c: c, sc: sc, events: make(chan func(), 16)}, nil
 }

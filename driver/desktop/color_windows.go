@@ -3,6 +3,7 @@
 package desktop
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"unsafe"
@@ -53,7 +54,7 @@ func displayKey(w *Window) any {
 func displayProfile(w *Window) displayColor {
 	m, _ := displayKey(w).(uintptr)
 	if m == 0 {
-		return displayColor{err: fmt.Errorf("desktop: no monitor for the window")}
+		return displayColor{err: errors.New("desktop: no monitor for the window")}
 	}
 	mi := monitorInfoEx{cbSize: uint32(unsafe.Sizeof(monitorInfoEx{}))}
 	if ok, _, err := procGetMonitorInfoW.Call(m, uintptr(unsafe.Pointer(&mi))); ok == 0 {

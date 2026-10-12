@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -113,7 +114,7 @@ func revealInExplorer(path string) error {
 		return err
 	}
 	exe := filepath.Join(dir, "explorer.exe")
-	cmd := exec.Command(exe)
+	cmd := exec.CommandContext(context.Background(), exe)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `"` + exe + `" /select,"` + path + `"`}
 	if err := cmd.Start(); err != nil {
 		return err
