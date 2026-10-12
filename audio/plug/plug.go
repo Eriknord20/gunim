@@ -1,0 +1,305 @@
+// Package plug is a plugin format for audio effects written in Go: a
+// plugin is a Go package, compiled into the app that uses it, which
+// registers itself as it starts.
+//
+// It follows VST3 where VST3 works well, so an adapter can run a VST3
+// plugin through the same interfaces: parameters declared up front,
+// sound processed in blocks with parameter changes at frames within
+// them, and a latency and a tail. It parts from VST3 in three places.
+// The host owns the parameters and the state, so it keeps one undo
+// history and one preset browser for every plugin. A plugin's views are
+// gunim nodes the host places where it likes, in three sizes. And a
+// plugin may read whole tracks, as ARA 2 lets one, through
+// [TrackPlugin].
+//
+// The package is young: its shape still moves as the programs that
+// host it grow.
+package plug
+
+import (
+	"fmt"
+	"math"
+	"slices"
+	"strings"
+	"sync"
+
+	"github.com/marrasen/gunim"
+)
+
+// Descriptor is what a plugin is, as the host lists it before making
+// one.
+type Descriptor struct {
+	// ID tells the plugin from every other, for good: projects and
+	// presets name it by its ID. Write it as a reversed domain:
+	// "marrasen.trim".
+	ID      string
+	Name    string
+	Vendor  string
+	Version string
+	// Kind is what it does, in VST3's categories, so a browser sorts
+	// both kinds alike: "Fx|EQ".
+	Kind string
+	// Params are the plugin's parameters, each with an ID of its own.
+	Params []Param
+	// Patches are the patches the plugin comes with, as starting points.
+	// The host keeps those a user saves beside them.
+	Patches []Patch
+	// New makes one of the plugin, working for h.
+	New func(h Host) Plugin
+}
+
+// Param returns the parameter id, and whether d has one.
+func (d *Descriptor) Param(id uint32) (Param, bool) {
+	for _, p := range d.Params {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return Param{}, false
+}
+
+// Param is one of a plugin's parameters: a value the host keeps, shows,
+// automates and undoes.
+type Param struct {
+	// ID tells the parameter from the plugin's others, for good: a
+	// parameter gone keeps its ID unused.
+	ID   uint32
+	Name string
+	// Unit is what the value counts, as "dB" or "Hz".
+	Unit string
+	// Min and Max bound the value, and Default is where it starts.
+	Min, Max, Default float64
+	// Steps is how many steps the value takes from Min to Max: one is
+	// a switch, and zero is a smooth value.
+	Steps int
+	// Log runs the value by ratios rather than steps, as a time or a
+	// frequency: halfway from Min to Max, in Normal, is the geometric
+	// mean of the two. Min must be above zero.
+	Log   bool
+	Flags ParamFlags
+	// Format writes a value to show. Nil writes it with Unit.
+	Format func(v float64) string
+}
+
+// ParamFlags say how the host treats a parameter.
+type ParamFlags uint8
+
+// The flags.
+const (
+	// Automatable lets the host change the value over time.
+	Automatable ParamFlags = 1 << iota
+	// Bypass marks the parameter that passes the sound by the plugin.
+	// The host's own bypass sets it, and the plugin fades as it likes.
+	Bypass
+	// Hidden keeps the parameter off the host's generic views.
+	Hidden
+	// ReadOnly marks a value the plugin reports, as a meter's, which
+	// the host shows but never sets: its processor reports it, as a
+	// [Reporter], and a view reads it with [Host.Param] as often as it
+	// draws.
+	ReadOnly
+)
+
+// Clamp returns v within the parameter's range, on a step where it has
+// steps.
+func (p Param) Clamp(v float64) float64 {
+	v = min(max(v, p.Min), p.Max)
+	if p.Steps > 0 {
+		return p.Plain(p.Normal(v))
+	}
+	return v
+}
+
+// Normal returns v as VST3 carries a value: from 0 at Min to 1 at Max,
+// on a step where the parameter has steps.
+func (p Param) Normal(v float64) float64 {
+	if p.Max <= p.Min {
+		return 0
+	}
+	n := min(max((v-p.Min)/(p.Max-p.Min), 0), 1)
+	if p.Log && p.Min > 0 {
+		n = min(max(math.Log(max(v, p.Min)/p.Min)/math.Log(p.Max/p.Min), 0), 1)
+	}
+	if p.Steps > 0 {
+		n = math.Round(n*float64(p.Steps)) / float64(p.Steps)
+	}
+	return n
+}
+
+// Plain returns the value at n from 0 to 1, as [Param.Normal] writes it.
+func (p Param) Plain(n float64) float64 {
+	n = min(max(n, 0), 1)
+	if p.Steps > 0 {
+		n = math.Round(n*float64(p.Steps)) / float64(p.Steps)
+	}
+	if p.Log && p.Min > 0 {
+		return p.Min * math.Pow(p.Max/p.Min, n)
+	}
+	return p.Min + n*(p.Max-p.Min)
+}
+
+// Text returns v written to show.
+func (p Param) Text(v float64) string {
+	if p.Format != nil {
+		return p.Format(v)
+	}
+	if p.Unit == "" {
+		return fmt.Sprintf("%.2f", v)
+	}
+	return fmt.Sprintf("%.2f %s", v, p.Unit)
+}
+
+// Patch is a plugin's settings, kept by name to load again: its
+// parameters' values and its state.
+type Patch struct {
+	Name     string
+	Category string
+	Tags     []string
+	// Params holds each parameter's value, by ID; one left out is at
+	// its default.
+	Params map[uint32]float64
+	// State is what the plugin's [Plugin.State] gave.
+	State []byte
+}
+
+// Plugin is one of a plugin, made by its [Descriptor]'s New. Its
+// methods run one at a time, on one goroutine: the app's, for one made
+// for its sound, or the window's, for one made for its views. Only its
+// [Processor]'s Process runs elsewhere.
+type Plugin interface {
+	// Processor returns the part that runs on the audio thread. It is
+	// the same one each time.
+	Processor() Processor
+	// State returns what the plugin keeps beyond its parameters, as
+	// an EQ's bands, for the host to save and to undo. A plugin with
+	// nothing more returns nil.
+	State() []byte
+	// SetState sets what State returned, as a project opens, a preset
+	// loads, or an edit is undone. It may run while the processor runs:
+	// the plugin hands the change to it safely.
+	SetState(b []byte) error
+	// Close lets the plugin go. Nothing calls it after.
+	Close()
+}
+
+// Host is what a plugin's views ask of the app that runs it. Its
+// methods run on the window's goroutine, from the views' own: those
+// that change something take the [gunim.UI] of the call they are made
+// in, to tell the app with.
+type Host interface {
+	// Param returns a parameter's value now: of a ReadOnly one, what
+	// the plugin playing reports, or its default where none plays.
+	Param(id uint32) float64
+	// Begin, Set and End are one gesture on a parameter, as a knob
+	// dragged: Set moves it, and the host passes each move to the
+	// processor. The gesture is one step in the host's undo history.
+	Begin(id uint32, u *gunim.UI)
+	Set(id uint32, v float64, u *gunim.UI)
+	End(id uint32, u *gunim.UI)
+	// BeginEdit, Changed and EndEdit are one gesture on the plugin's
+	// [Plugin.State], as a band dragged: named for the host's history,
+	// as "Move band 3", where it is one step. Changed tells the host the
+	// state changed, for it to pass on to the sound.
+	BeginEdit(name string, u *gunim.UI)
+	Changed(u *gunim.UI)
+	EndEdit(u *gunim.UI)
+	// Sound returns the plugin's sound as it is heard, for views that
+	// draw it, as a meter or a spectrum: what is fed into the plugin,
+	// and what comes out. Either is nil where the host keeps none.
+	Sound() (in, out Sound)
+	// Traced returns the value the processor playing keeps for frame f,
+	// as a [Tracer], of the ReadOnly parameter id, and whether there is
+	// one: for a view to draw along the sound it hears.
+	Traced(id uint32, f int64) (v float32, ok bool)
+}
+
+// Sound is a plugin's sound, as the host keeps it while it plays.
+type Sound interface {
+	// Heard fills dst, stereo frames interleaved, with the last frames
+	// heard, the last of them last, and returns how many it filled, the
+	// count of frames heard by then, and their rate. The count moves on
+	// as the sound plays and stands still while it does not, so a view
+	// that reads as many frames as it moved on reads each frame once.
+	// Heard fills none, and returns nothing, where none have been
+	// heard. It runs on the window's goroutine, and takes no lock the
+	// sound takes.
+	Heard(dst []float32) (frames int, at int64, rate int)
+}
+
+var (
+	registryMu sync.RWMutex
+	registry   = map[string]Descriptor{}
+)
+
+// Register makes a plugin known, as its package's init does. It panics
+// where d is not whole or its ID is already taken, as a mistake in the
+// program.
+func Register(d Descriptor) {
+	if err := check(&d); err != nil {
+		panic("plug: " + err.Error())
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, ok := registry[d.ID]; ok {
+		panic("plug: Register called twice for " + d.ID)
+	}
+	registry[d.ID] = d
+}
+
+// check returns what is wrong with d, if anything.
+func check(d *Descriptor) error {
+	if d.ID == "" || d.Name == "" || d.New == nil {
+		return fmt.Errorf("plugin %q needs an ID, a name and New", d.ID)
+	}
+	seen := map[uint32]bool{}
+	for _, p := range d.Params {
+		if seen[p.ID] {
+			return fmt.Errorf("%s has two parameters of ID %d", d.ID, p.ID)
+		}
+		seen[p.ID] = true
+		if p.Max <= p.Min || p.Default < p.Min || p.Default > p.Max {
+			return fmt.Errorf("%s: parameter %q runs from %g to %g, from %g", d.ID, p.Name, p.Min, p.Max, p.Default)
+		}
+		if p.Log && p.Min <= 0 {
+			return fmt.Errorf("%s: parameter %q runs by ratios from %g, not above zero", d.ID, p.Name, p.Min)
+		}
+	}
+	names := map[string]bool{}
+	for _, pt := range d.Patches {
+		if pt.Name == "" || names[pt.Name] {
+			return fmt.Errorf("%s has a patch named %q twice, or unnamed", d.ID, pt.Name)
+		}
+		names[pt.Name] = true
+		for id := range pt.Params {
+			if p, ok := d.Param(id); !ok || p.Flags&ReadOnly != 0 {
+				return fmt.Errorf("%s: patch %q sets %d, which is no parameter it may set", d.ID, pt.Name, id)
+			}
+		}
+	}
+	return nil
+}
+
+// Lookup returns the plugin registered as id, and whether there is one.
+func Lookup(id string) (Descriptor, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	d, ok := registry[id]
+	return d, ok
+}
+
+// All returns every plugin registered, by vendor, then name.
+func All() []Descriptor {
+	registryMu.RLock()
+	out := make([]Descriptor, 0, len(registry))
+	for _, d := range registry {
+		out = append(out, d)
+	}
+	registryMu.RUnlock()
+	slices.SortFunc(out, func(a, b Descriptor) int {
+		if c := strings.Compare(strings.ToLower(a.Vendor), strings.ToLower(b.Vendor)); c != 0 {
+			return c
+		}
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return out
+}
