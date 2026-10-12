@@ -799,7 +799,7 @@ func (b *Menubar) paintCompact(p *paint.Painter, f gunim.Frame, box geom.Size) {
 	s := b.span(0)
 	const side = 16
 	c := geom.Pt((s[0]+s[1])/2, box.H/2)
-	paintIcon(p, th, icon.Menu, geom.Rc(c.X-side/2, c.Y-side/2, side, side), ink, 1)
+	drawIcon(p, th, icon.Menu, geom.Rc(c.X-side/2, c.Y-side/2, side, side), ink, 1)
 	if !f.Chromeless() {
 		return
 	}

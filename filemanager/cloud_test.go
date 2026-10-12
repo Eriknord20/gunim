@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,7 +66,10 @@ func TestTheCloudMarksGoBeforeTheName(t *testing.T) {
 	if got["Docs"] != CloudFolder || got["local.txt"] != CloudLocal || got["online.txt"] != CloudOnline || got["pinned.txt"] != CloudPinned {
 		t.Fatalf("the states are %v", got)
 	}
-	pg := &listingPage{b: &browser{icons: map[string]SystemIcon{}}, blocks: map[int][]Row{0: {rowOf(es[0]), {Name: "plain.txt"}}}}
+	// The folder's row, wherever the directory listed it: the order
+	// is the file system's, which differs from one machine to another.
+	docs := slices.IndexFunc(es, func(e entry) bool { return e.Name == "Docs" })
+	pg := &listingPage{b: &browser{icons: map[string]SystemIcon{}}, blocks: map[int][]Row{0: {rowOf(es[docs]), {Name: "plain.txt"}}}}
 	for i, want := range []int{5, 3} {
 		r, _ := pg.row(i)
 		name := r.Cells[0]

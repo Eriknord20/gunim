@@ -264,7 +264,6 @@ func (d *Driver) Monitors() []driver.Monitor {
 	return out
 }
 
-// Covered implements [driver.Coverer].
 // PointerOnScreen implements [driver.Pointer].
 func (d *Driver) PointerOnScreen() (p geom.Point, ok bool) {
 	_ = d.call(func() error {
@@ -275,6 +274,7 @@ func (d *Driver) PointerOnScreen() (p geom.Point, ok bool) {
 	return p, ok
 }
 
+// Covered implements [driver.Coverer].
 func (d *Driver) Covered(ws []driver.Window, p geom.Point) (covered, ok bool) {
 	gws := make([]*glfw.Window, len(ws))
 	for i, w := range ws {

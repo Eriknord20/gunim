@@ -506,6 +506,8 @@ func (v *View) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 			p.RRect(m.r, 6, paint.Solid(widget.CodeFill.Get(th)))
 		case tableHead:
 			p.RRect(m.r, 0, paint.Solid(widget.CodeFill.Get(th)))
+		default:
+			// Every other mark is drawn with the text itself.
 		}
 	}
 	start, end := v.Selection()
@@ -761,8 +763,8 @@ func (v *View) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		switch e.Key {
 		case input.KeyC:
-			if text := v.SelectedText(); text != "" {
-				u.SetClipboard(text)
+			if picked := v.SelectedText(); picked != "" {
+				u.SetClipboard(picked)
 			}
 		case input.KeyA:
 			v.anchor, v.caret = 0, len(v.plain)

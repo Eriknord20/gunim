@@ -105,7 +105,7 @@ func (g GitHub) releases(ctx context.Context) ([]ghRelease, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, apiPatience)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api+"/repos/"+g.Repo+"/releases?per_page=30", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, api+"/repos/"+g.Repo+"/releases?per_page=30", http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +525,7 @@ const reportEvery = 100 * time.Millisecond
 // getting is [get], telling report, when set, how many bytes have come,
 // and of how many, or 0 when the server does not say.
 func getting(ctx context.Context, addr string, limit int64, report func(done, total int64)) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -594,14 +594,16 @@ func unpack(archive []byte, name, program string) ([]byte, error) {
 			return nil, err
 		}
 		for _, f := range zr.File {
-			if path.Base(f.Name) == program && f.Mode().IsRegular() {
-				rc, err := f.Open()
-				if err != nil {
-					return nil, err
-				}
-				defer func() { _ = rc.Close() }()
-				return readProgram(rc)
+			if path.Base(f.Name) != program || !f.Mode().IsRegular() {
+				continue
 			}
+			rc, err := f.Open()
+			if err != nil {
+				return nil, err
+			}
+			out, err := readProgram(rc)
+			_ = rc.Close()
+			return out, err
 		}
 		return nil, fmt.Errorf("%s holds no %s", name, program)
 	}

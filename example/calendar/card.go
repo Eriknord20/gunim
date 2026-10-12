@@ -107,18 +107,18 @@ func newEventCard(e calendar.Event, d Details, left bool, done func(*gunim.UI)) 
 }
 
 // when2 says when e is: its day or days, and its hours, or "All day" for an event of whole days.
-func when2(e calendar.Event) (string, string) {
-	day := "Monday 2 January"
+func when2(e calendar.Event) (day, hours string) {
+	const layout = "Monday 2 January"
 	last := calendar.Day(e.End.Add(-time.Nanosecond))
 	switch {
 	case e.AllDay && calendar.SameDay(e.Start, last):
-		return e.Start.Format(day), "All day"
+		return e.Start.Format(layout), "All day"
 	case e.AllDay:
-		return e.Start.Format(day) + " – " + last.Format(day), "All day"
+		return e.Start.Format(layout) + " – " + last.Format(layout), "All day"
 	case calendar.SameDay(e.Start, e.End) || e.End.Equal(calendar.AddDays(calendar.Day(e.Start), 1)):
-		return e.Start.Format(day), e.Start.Format("15:04") + " – " + e.End.Format("15:04") + " · " + lasting(e.End.Sub(e.Start))
+		return e.Start.Format(layout), e.Start.Format("15:04") + " – " + e.End.Format("15:04") + " · " + lasting(e.End.Sub(e.Start))
 	}
-	return e.Start.Format(day+", 15:04") + " –", e.End.Format(day + ", 15:04")
+	return e.Start.Format(layout+", 15:04") + " –", e.End.Format(layout + ", 15:04")
 }
 
 // when says when e is on one line, such as "Tuesday 29 September · 09:15 – 09:30 · 15 min".

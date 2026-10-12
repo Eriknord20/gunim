@@ -66,10 +66,9 @@ func newPage(name string, width float32) *page {
 }
 
 // add puts n under the items, gap below the one before.
-func (p *page) add(gap float32, n gunim.Node) *page {
+func (p *page) add(gap float32, n gunim.Node) {
 	p.items = append(p.items, n)
 	p.gaps = append(p.gaps, gap)
-	return p
 }
 
 // Children implements [gunim.Composite].
@@ -88,6 +87,8 @@ func (p *page) Transition(pr gunim.Presence, f gunim.Frame) bool {
 		p.in.Animate(1, widget.Settle.Get(f.Theme))
 	case gunim.Exiting:
 		p.in.Animate(0, anim.Tween{Duration: 220 * time.Millisecond, Ease: anim.EaseOut})
+	default:
+		// A page that is simply there, or simply gone, animates nothing.
 	}
 	return !p.in.Active()
 }

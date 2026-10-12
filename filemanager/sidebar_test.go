@@ -168,8 +168,9 @@ func TestTurningToAnotherFileSystemKeepsTheSidebarRows(t *testing.T) {
 		node gunim.Node
 	}
 	rows := func() []row {
-		var out []row
-		for _, k := range slices.Concat(h.b.side.placeKeys(), h.b.side.favs.Keys()) {
+		keys := slices.Concat(h.b.side.placeKeys(), h.b.side.favs.Keys())
+		out := make([]row, 0, len(keys))
+		for _, k := range keys {
 			out = append(out, row{k, h.b.side.placeRow(k)})
 		}
 		return out

@@ -62,7 +62,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	a := testApp()
 	var hooked Installation
 	a.Installed = func(_ context.Context, in Installation) error { hooked = in; return nil }
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	}
 
 	// The next session finds it, its picks kept.
-	again, err := newSession(a, program, false)
+	again, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestInstallAndUninstall(t *testing.T) {
 	if err := os.WriteFile(list, []byte("[Default Applications]\napplication/x-studio-deluxe-album=studio-deluxe.desktop;\naudio/x-wav=other.desktop;studio-deluxe.desktop;\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gone, err := newSession(a, program, true)
+	gone, err := sessionFor(a, program, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestUpgradeDropsWhatIsGone(t *testing.T) {
 	home, program := testHome(t)
 	a := testApp()
 	a.Version = "v1.1.0"
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestUpgradeDropsWhatIsGone(t *testing.T) {
 	}
 	a.Version = "v1.2.0"
 	a.Files = fstest.MapFS{"lib/engine.so": {Data: []byte("engine 2")}}
-	up, err := newSession(a, program, false)
+	up, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,12 +217,12 @@ func TestUpgradeDropsWhatIsGone(t *testing.T) {
 func TestOlderCopyIsADowngrade(t *testing.T) {
 	_, program := testHome(t)
 	a := testApp()
-	s, _ := newSession(a, program, false)
+	s, _ := sessionFor(a, program, false)
 	if _, err := s.Install(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	a.Version = "v1.0.0"
-	down, err := newSession(a, program, false)
+	down, err := sessionFor(a, program, false)
 	if err != nil || down.Mode != Downgrade {
 		t.Fatalf("mode %v, %v; want a downgrade", down.Mode, err)
 	}
@@ -233,7 +233,7 @@ func TestNoRoom(t *testing.T) {
 	_, program := testHome(t)
 	a := testApp()
 	a.Space = 1 << 62
-	s, err := newSession(a, program, false)
+	s, err := sessionFor(a, program, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +255,11 @@ func TestUninstallData(t *testing.T) {
 	}
 	a := testApp()
 	a.Data = []string{data}
-	s, _ := newSession(a, program, false)
+	s, _ := sessionFor(a, program, false)
 	if _, err := s.Install(context.Background(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	gone, _ := newSession(a, program, true)
+	gone, _ := sessionFor(a, program, true)
 	if err := gone.Uninstall(context.Background(), true, nil); err != nil {
 		t.Fatal(err)
 	}

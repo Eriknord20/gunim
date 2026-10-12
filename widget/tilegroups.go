@@ -127,7 +127,7 @@ func (l tileLayout) rowH(r int) float32 {
 }
 
 // rowCol returns tile i's row and column.
-func (l tileLayout) rowCol(i int) (int, int) {
+func (l tileLayout) rowCol(i int) (row, col int) {
 	if j := l.just; j != nil {
 		r := sort.Search(len(j.first)-1, func(r int) bool { return j.first[r+1] > i })
 		return r, i - j.first[min(r, len(j.first)-1)]
@@ -222,7 +222,6 @@ type headerCell struct {
 	child gunim.Node
 	y     *anim.Float
 	fade  *anim.Float
-	w     float32
 }
 
 func newHeaderCell(child gunim.Node, y float32) *headerCell {

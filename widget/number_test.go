@@ -13,9 +13,9 @@ import (
 
 type numbered struct{ V float64 }
 
-func numberStage(t *testing.T, n *NumberField) (*gunim.Window, func(int)) {
+func numberStage(t *testing.T, n *NumberField) (w *gunim.Window, run func(int)) {
 	t.Helper()
-	w, run := stage(t, &frame{child: n, size: geom.Sz(200, 32)})
+	w, run = stage(t, &frame{child: n, size: geom.Sz(200, 32)})
 	// The number sits at the right, so a click there puts the caret
 	// after it.
 	click(w, 195, 16)

@@ -36,9 +36,9 @@ func Write(p *Profile) []byte {
 	out := make([]byte, 132+12*len(tags))
 	for _, t := range tags {
 		for len(out)%4 != 0 {
-			out = append(out, 0)
+			out = append(out, 0) //nolint:makezero // the header and tag table come first, filled in below
 		}
-		out = append(out, t.data...)
+		out = append(out, t.data...) //nolint:makezero // as above
 	}
 	// The tag table, filled in now the offsets are known.
 	off := 132 + 12*len(tags)

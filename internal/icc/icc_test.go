@@ -99,7 +99,7 @@ func TestCurves(t *testing.T) {
 			p.TRC = [3]Curve{c, c, c}
 			got := roundTrip(t, p)
 			inv := got.TRC[0].inverse()
-			for i := 0; i <= 100; i++ {
+			for i := range 101 {
 				x := float64(i) / 100
 				if math.Abs(got.TRC[0].Eval(x)-c.Eval(x)) > 2e-4 {
 					t.Fatalf("%s v%d: curve at %v = %v, want %v", name, v, x, got.TRC[0].Eval(x), c.Eval(x))

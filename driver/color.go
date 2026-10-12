@@ -59,6 +59,7 @@ func (s ColorState) String() string {
 		return "turned off"
 	case ColorUnmanaged:
 		return "not managed on this platform"
+	case ColorUnknown:
 	}
 	return "unknown"
 }

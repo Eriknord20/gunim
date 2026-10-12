@@ -357,7 +357,7 @@ func (d *Days) choose(id string, u *gunim.UI) {
 
 // EventAt returns the ID of the event at pt, in the grid's space, and false where there is none.
 func (d *Days) EventAt(pt geom.Point) (string, bool) {
-	e, _, _, ok := d.eventAt(pt)
+	e, _, _, ok := d.eventUnder(pt)
 	return e.ID, ok
 }
 
@@ -400,7 +400,7 @@ func (d *Days) ScrollToHour(h float32, u *gunim.UI) {
 	d.scroll.Animate(d.clampScroll(h*d.hour()), widget.Quick.Get(u.Theme()))
 }
 
-func (d *Days) step() time.Duration {
+func (d *Days) gridStep() time.Duration {
 	if d.Snap <= 0 {
 		return 15 * time.Minute
 	}
@@ -825,7 +825,7 @@ func (d *Days) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 			p.RRect(geom.Rect{Min: geom.Pt(gutterW, y1), Max: geom.Pt(box.W, body.Max.Y)}, 0, paint.Solid(off))
 		}
 		small := widget.Font.Get(th)
-		for h := 0; h <= 24; h++ {
+		for h := range 25 {
 			y := d.timeY(time.Duration(h) * time.Hour)
 			if y < body.Min.Y-hourH || y > box.H+hourH {
 				continue
@@ -1115,7 +1115,7 @@ func (d *Days) timeAt(i int, y float32) time.Time {
 	hours := (y - d.bodyTop() + d.scrollY()) / d.hour()
 	off := time.Duration(float64(hours) * float64(time.Hour))
 	off = min(max(off, 0), 24*time.Hour)
-	return d.day(i).Add(off.Truncate(d.step()))
+	return d.day(i).Add(off.Truncate(d.gridStep()))
 }
 
 // resizable reports whether the event's length can be pulled by its edges: a timed one, tall enough to hold a click
@@ -1133,8 +1133,8 @@ const (
 	bottomEdge
 )
 
-// eventAt returns the event under pt, its box on screen, and the edge pt is on.
-func (d *Days) eventAt(pt geom.Point) (Event, geom.Rect, edge, bool) {
+// eventUnder returns the event under pt, its box on screen, and the edge pt is on.
+func (d *Days) eventUnder(pt geom.Point) (Event, geom.Rect, edge, bool) {
 	inHours := pt.Y >= d.bodyTop()
 	for k := len(d.order) - 1; k >= 0; k-- {
 		s := d.sprites[d.order[k]]
@@ -1164,7 +1164,7 @@ func (d *Days) tipText(pt geom.Point, th *theme.Live) string {
 	if d.drag != nil || d.th == nil {
 		return ""
 	}
-	ev, r, _, ok := d.eventAt(pt)
+	ev, r, _, ok := d.eventUnder(pt)
 	if !ok {
 		return ""
 	}
@@ -1276,7 +1276,7 @@ func (d *Days) Handle(e input.Event, u *gunim.UI) bool {
 // hoverAt lifts the event under pt.
 func (d *Days) hoverAt(pt geom.Point, th *theme.Live) {
 	id := ""
-	if ev, _, _, ok := d.eventAt(pt); ok {
+	if ev, _, _, ok := d.eventUnder(pt); ok {
 		id = ev.ID
 	}
 	if id != d.hover {
@@ -1308,7 +1308,7 @@ func (d *Days) press(e input.PointerDown, th *theme.Live, u *gunim.UI) {
 		}
 		return
 	}
-	if ev, b, on, ok := d.eventAt(pt); ok {
+	if ev, b, on, ok := d.eventUnder(pt); ok {
 		if e.Clicks > 1 {
 			if d.OnEdit != nil && !ev.Fixed {
 				send(u, d, d.OnEdit(ev.ID, u))
@@ -1321,6 +1321,8 @@ func (d *Days) press(e input.PointerDown, th *theme.Live, u *gunim.UI) {
 			kind = dragResize
 		case topEdge:
 			kind = dragResizeTop
+		default:
+			// A pointer on neither edge drags the event itself, set above.
 		}
 		d.drag = &dayDrag{kind: kind, id: ev.ID, fixed: ev.Fixed, from: pt, start: ev.Start, end: ev.End, box: b,
 			allDay: ev.long(), grab: d.timeAt(d.dayAt(pt.X), pt.Y).Sub(ev.Start)}
@@ -1335,7 +1337,7 @@ func (d *Days) press(e input.PointerDown, th *theme.Live, u *gunim.UI) {
 		d.drag = &dayDrag{kind: dragCreate, from: pt, anchor: day, start: day, end: AddDays(day, 1), allDay: true}
 	} else {
 		t := d.timeAt(i, pt.Y)
-		d.drag = &dayDrag{kind: dragCreate, from: pt, anchor: t, start: t, end: t.Add(d.step())}
+		d.drag = &dayDrag{kind: dragCreate, from: pt, anchor: t, start: t, end: t.Add(d.gridStep())}
 	}
 	d.ghost.Jump(d.ghostBoxOf(d.drag))
 	d.ghostIn.Animate(1, widget.Quick.Get(th))
@@ -1362,9 +1364,9 @@ func (d *Days) dragTo(pt geom.Point, th *theme.Live) {
 			// Drawn out on the day it began, whichever way the pointer goes.
 			t := d.timeAt(d.dayAt(g.from.X), pt.Y)
 			if t.Before(g.anchor) {
-				g.start, g.end = t, g.anchor.Add(d.step())
+				g.start, g.end = t, g.anchor.Add(d.gridStep())
 			} else {
-				g.start, g.end = g.anchor, t.Add(d.step())
+				g.start, g.end = g.anchor, t.Add(d.gridStep())
 			}
 			g.end = minTime(g.end, AddDays(Day(g.anchor), 1))
 		}
@@ -1387,7 +1389,7 @@ func (d *Days) dragTo(pt geom.Point, th *theme.Live) {
 			g.end = g.start.Add(length)
 			return
 		}
-		t := d.timeAt(i, pt.Y).Add(-g.grab.Truncate(d.step()))
+		t := d.timeAt(i, pt.Y).Add(-g.grab.Truncate(d.gridStep()))
 		g.start, g.end = t, t.Add(length)
 	case dragResize:
 		if g.fixed {
@@ -1397,8 +1399,8 @@ func (d *Days) dragTo(pt geom.Point, th *theme.Live) {
 		if !ok {
 			return
 		}
-		t := d.timeAt(d.dayAt(g.from.X), pt.Y).Add(d.step())
-		g.start, g.end = ev.Start, maxTime(t, ev.Start.Add(d.step()))
+		t := d.timeAt(d.dayAt(g.from.X), pt.Y).Add(d.gridStep())
+		g.start, g.end = ev.Start, maxTime(t, ev.Start.Add(d.gridStep()))
 	case dragResizeTop:
 		if g.fixed {
 			return
@@ -1408,7 +1410,7 @@ func (d *Days) dragTo(pt geom.Point, th *theme.Live) {
 			return
 		}
 		t := d.timeAt(d.dayAt(g.from.X), pt.Y)
-		g.start, g.end = minTime(t, ev.End.Add(-d.step())), ev.End
+		g.start, g.end = minTime(t, ev.End.Add(-d.gridStep())), ev.End
 	}
 }
 
@@ -1503,6 +1505,8 @@ func (d *Days) Cursor(pt geom.Point) input.Cursor {
 			if d.drag.moved && !d.drag.fixed {
 				return input.CursorMove
 			}
+		default:
+			// A drag that is only being made has the pointer it started with.
 		}
 		return input.CursorArrow
 	}
@@ -1518,7 +1522,7 @@ func (d *Days) Cursor(pt geom.Point) input.Cursor {
 	if pt.Y < headerH {
 		return input.CursorHand
 	}
-	if _, _, on, ok := d.eventAt(pt); ok {
+	if _, _, on, ok := d.eventUnder(pt); ok {
 		if on != noEdge {
 			return input.CursorResizeV
 		}

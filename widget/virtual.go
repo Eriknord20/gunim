@@ -312,7 +312,7 @@ func (l *VirtualList) stickTo(content, viewport float32) float32 {
 	end := max(0, content-viewport)
 	switch {
 	case !l.laidOut:
-		l.jumpTo(end)
+		l.jumpToY(end)
 	case end != l.target:
 		l.shift(end - l.target)
 	}
@@ -458,7 +458,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 
 	if !l.laidOut && l.openAt != "" {
 		if i := slices.Index(l.order, l.openAt); i >= 0 {
-			l.jumpTo(float32(l.tops.sum(i)))
+			l.jumpToY(float32(l.tops.sum(i)))
 		}
 	}
 	if l.stuck {

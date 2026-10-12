@@ -16,7 +16,7 @@ import (
 // shown draws the frame twice, as drawn does, and returns the window's
 // framebuffer, its rows from the bottom, and the draw calls the second
 // frame took.
-func shown(r *Renderer, paint1 func(p *paint.Painter)) ([]byte, int) {
+func shown(r *Renderer, paint1 func(p *paint.Painter)) (pixels []byte, calls int) {
 	var p paint.Painter
 	p.RRect(geom.Rect{Max: benchSize.Point()}, 0, paint.Solid(black))
 	paint1(&p)

@@ -183,7 +183,7 @@ func TestALongMenusRowsAreFoundPastItsLinesAndCaptions(t *testing.T) {
 	m := NewMenu(items)
 	m.Layout(gunim.Loose(geom.Sz(600, 480)), gunim.Frame{Scale: 1}, gunim.Children{})
 	for _, i := range []int{0, 1, 4, 5, 6, 699, 700, 701, 1500, 2998, 2999} {
-		m.scroll.jumpTo(m.scroll.clamp(m.rowTop(i) - m.rowTop(0) - 100))
+		m.scroll.jumpToY(m.scroll.clamp(m.rowTop(i) - m.rowTop(0) - 100))
 		r := m.RowRect(i)
 		if got := m.rowAt(geom.Pt(r.Min.X+20, r.Center().Y)); got != i {
 			t.Fatalf("the middle of row %d's rectangle %v finds row %d", i, r, got)

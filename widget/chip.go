@@ -88,7 +88,7 @@ func (c *Chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	x := box.H / 2
 	if c.Icon != nil {
 		if s := IconSize.Get(th); x+s <= end {
-			paintIcon(p, th, c.Icon, geom.Rc(x, (box.H-s)/2, s, s), Ink.Get(th), 1)
+			drawIcon(p, th, c.Icon, geom.Rc(x, (box.H-s)/2, s, s), Ink.Get(th), 1)
 			x += s + IconGap.Get(th)
 		}
 	}

@@ -22,7 +22,7 @@ func pngOf(t *testing.T, w, h int) []byte {
 
 // pasteImage puts a w by h picture on the clipboard and presses Ctrl+V in the message box.
 func (h *harness) pasteImage(w, ht int) {
-	h.w.Offscreen().SetClipboardImage(pngOf(h.t, w, ht))
+	_ = h.w.Offscreen().SetClipboardImage(pngOf(h.t, w, ht))
 	h.w.Input(input.KeyPress{Key: input.KeyV, Mods: input.ModControl})
 	h.frames(3)
 }

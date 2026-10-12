@@ -79,6 +79,8 @@ func syntaxInk(k syntax.Kind) theme.Token[color.NRGBA] {
 		return SyntaxOperator
 	case syntax.Variable:
 		return SyntaxVariable
+	default:
+		// Plain text takes the editor's own ink.
 	}
 	return Ink
 }
@@ -157,7 +159,7 @@ type CodeEditor struct {
 	laidColours uintptr
 	lines       []codeLine
 	shapes      shapeCache
-	numbers     map[int]text.Run
+	numberRuns  map[int]text.Run
 	lineH       float32
 	glyphH      float32
 	tabW        float32
@@ -217,14 +219,14 @@ type codeSeg struct {
 // NewCodeEditor returns an empty code editor that highlights Go.
 func NewCodeEditor() *CodeEditor {
 	c := &CodeEditor{
-		Highlight: syntax.Go,
-		focus:     anim.NewFloat(0),
-		caretAt:   anim.NewPoint(geom.Point{}),
-		band:      anim.NewFloat(0),
-		rows:      anim.NewFloat(0),
-		scrollX:   anim.NewFloat(0),
-		scrollY:   anim.NewFloat(0),
-		numbers:   map[int]text.Run{},
+		Highlight:  syntax.Go,
+		focus:      anim.NewFloat(0),
+		caretAt:    anim.NewPoint(geom.Point{}),
+		band:       anim.NewFloat(0),
+		rows:       anim.NewFloat(0),
+		scrollX:    anim.NewFloat(0),
+		scrollY:    anim.NewFloat(0),
+		numberRuns: map[int]text.Run{},
 	}
 	c.multiline, c.tabs, c.Numbers = true, true, true
 	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY, c.rows)
@@ -339,7 +341,7 @@ func (c *CodeEditor) lineCol(i int) (line, col int) {
 // within the code and within the line.
 func (c *CodeEditor) offset(line, col int) int {
 	start := 0
-	for l := 0; l < line; l++ {
+	for range line {
 		n := slices.Index(c.text[start:], '\n')
 		if n < 0 {
 			return len(c.text)
@@ -674,7 +676,7 @@ type codeNav struct{ c *CodeEditor }
 
 func (n codeNav) caretX(i int) float32 { return n.c.xOf(i) }
 
-func (n codeNav) beside(i int, x float32, right bool) (int, float32) {
+func (n codeNav) beside(i int, x float32, right bool) (at int, atX float32) {
 	switch {
 	case right && i < len(n.c.text):
 		i++
@@ -742,7 +744,7 @@ func (c *CodeEditor) relayout(th *theme.Live) {
 	if !c.laid || c.laidFace != face || c.laidSize != size || c.laidTab != tab || c.laidColours != colours {
 		if c.laidFace != face || c.laidSize != size || c.laidTab != tab {
 			c.shapes.clear()
-			clear(c.numbers)
+			clear(c.numberRuns)
 			space := face.Shape(" ", size)
 			c.glyphH = space.Height()
 			c.tabW = space.Advance * max(tab, 1)
@@ -1056,10 +1058,10 @@ func (c *CodeEditor) paintGutter(p *paint.Painter, th *theme.Live, box geom.Size
 	gutterInk := CodeGutterInk.Get(th)
 	ink := Ink.Get(th)
 	for li := first; li < last; li++ {
-		run, ok := c.numbers[li+1]
+		run, ok := c.numberRuns[li+1]
 		if !ok {
 			run = c.laidFace.Shape(strconv.Itoa(li+1), c.laidSize)
-			c.numbers[li+1] = run
+			c.numberRuns[li+1] = run
 		}
 		col := gutterInk
 		if li == caretLine {

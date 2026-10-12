@@ -97,10 +97,10 @@ func fakeGitHub(t *testing.T, rels ...release) *httptest.Server {
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	var list []map[string]any
+	list := make([]map[string]any, 0, len(rels))
 	for _, r := range rels {
 		var sums strings.Builder
-		var assets []map[string]string
+		assets := make([]map[string]string, 0, len(r.files)+2)
 		for name, body := range r.files {
 			sum := sha256.Sum256(body)
 			fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), name)
@@ -138,7 +138,7 @@ func TestGitHubLatest(t *testing.T) {
 		release{tag: "v1.3.0-beta.1", prerelease: true, files: map[string][]byte{asset("1.3.0-beta.1"): []byte("beta")}},
 		release{tag: "v1.2.0", files: map[string][]byte{asset("1.2.0"): []byte("one two")}},
 		release{tag: "v1.4.0", files: map[string][]byte{"studio_1.4.0_plan9_mips" + exeSuffix: []byte("elsewhere")}},
-		release{tag: "v1.1.0", files: map[string][]byte{asset("1.1.0"): []byte("one one")}},
+		release{tag: "v1.1.0", files: map[string][]byte{asset("1.1.0"): []byte("the older one")}},
 	)
 	g := GitHub{Repo: "marrasen/studio", API: srv.URL}
 	r, err := g.Latest(context.Background())

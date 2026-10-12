@@ -578,7 +578,7 @@ func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 // dual-source blending, and dual says so. clip is the draw program that
 // cuts what it draws to an ellipse; the plain one leaves that work out
 // of every other pixel.
-func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) {
+func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
 	header, dualHeader := "#version 150\n", "#version 330\n#define DUAL\n"
 	if isES {
 		header = "#version 300 es\nprecision highp float;\n"
@@ -814,7 +814,7 @@ func (r *Renderer) Draw(ops []paint.Op, damage geom.Rect, fbW, fbH int, scale fl
 		g.BindFramebuffer(gl.FRAMEBUFFER, r.WindowFBO)
 		// The background is in the window's colours, as the canvas is
 		// once copied.
-		bg := r.toDisplay(bg)
+		bg := r.backgroundToDisplay(bg)
 		if r.Corner > 0 {
 			// Transparent outside the rounded corners, the background inside them
 			g.Clear(glColorBufferBit)

@@ -46,7 +46,7 @@ type SliderRow struct {
 	// decimals as the slider's Snap has, or two.
 	Format func(v float32) string
 
-	label, value *Label
+	labelText, value *Label
 	// off shows the reset mark, and hot turns it under the pointer.
 	off, hot *anim.Float
 	reset    geom.Rect
@@ -61,8 +61,8 @@ type SliderRow struct {
 
 // NewSliderRow returns a row of s, labelled label.
 func NewSliderRow(label string, s *Slider) *SliderRow {
-	r := &SliderRow{Label: label, Slider: s, label: NewLabel(label), value: NewLabel(""), off: anim.NewFloat(0), hot: anim.NewFloat(0), active: anim.NewFloat(0)}
-	r.label.Size, r.label.NoWrap, r.label.MaxLines = SliderRowSize, true, 1
+	r := &SliderRow{Label: label, Slider: s, labelText: NewLabel(label), value: NewLabel(""), off: anim.NewFloat(0), hot: anim.NewFloat(0), active: anim.NewFloat(0)}
+	r.labelText.Size, r.labelText.NoWrap, r.labelText.MaxLines = SliderRowSize, true, 1
 	r.value.Size, r.value.Color, r.value.NoWrap, r.value.Align = SliderRowSize, SliderRowInk, true, text.AlignEnd
 	r.Add(r.off, r.hot, r.active)
 	return r
@@ -117,13 +117,13 @@ func (r *SliderRow) format(v float32) string {
 }
 
 // Children implements [gunim.Composite].
-func (r *SliderRow) Children() []gunim.Node { return []gunim.Node{r.label, r.Slider, r.value} }
+func (r *SliderRow) Children() []gunim.Node { return []gunim.Node{r.labelText, r.Slider, r.value} }
 
 // Layout implements [gunim.Node]: the label, the slider filling what is
 // left, the readout, and room for the reset mark.
 func (r *SliderRow) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	th := f.Theme
-	r.label.Text = r.Label
+	r.labelText.Text = r.Label
 	r.Slider.row = r.Label
 	w := c.Max.W
 	if w <= 0 {

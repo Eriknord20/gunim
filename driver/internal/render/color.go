@@ -138,9 +138,9 @@ func (r *Renderer) ToDisplay(c [3]float32) [3]float32 {
 	return r.color.lut.Apply(c)
 }
 
-// toDisplay converts a frame's background colour as the window's
-// pixels are converted.
-func (r *Renderer) toDisplay(bg [4]float32) [4]float32 {
+// backgroundToDisplay converts a frame's background colour as the
+// window's pixels are converted.
+func (r *Renderer) backgroundToDisplay(bg [4]float32) [4]float32 {
 	if r.color.lut == nil {
 		return bg
 	}

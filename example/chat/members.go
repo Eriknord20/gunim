@@ -23,7 +23,8 @@ const activeFor = 10 * time.Minute
 // each part by name.
 func (a *app) membersOf(c *conv, now time.Time) []Member {
 	seen := c.lastWrote
-	out := []Member{{Name: me, Active: a.link == Online, Status: "You", You: true}}
+	out := make([]Member, 0, len(c.people)+1)
+	out = append(out, Member{Name: me, Active: a.link == Online, Status: "You", You: true})
 	var active, away []Member
 	for _, p := range c.people {
 		m := Member{Name: p, Status: "Away"}
@@ -64,12 +65,12 @@ type membersPanel struct {
 	list  *widget.List
 }
 
-func newMembersPanel(close func(*gunim.UI)) *membersPanel {
+func newMembersPanel(shut func(*gunim.UI)) *membersPanel {
 	m := &membersPanel{title: widget.NewLabel("Members"), list: widget.NewList()}
 	m.title.Face = widget.BoldFont
 	closer := widget.NewIconButton(icon.X, "Close")
 	closer.OnClick = func(u *gunim.UI) gunim.Intent {
-		close(u)
+		shut(u)
 		return nil
 	}
 	spacer := widget.NewSpacer()
