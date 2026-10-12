@@ -1,6 +1,10 @@
 package plug
 
-import "github.com/marrasen/gunim"
+import (
+	"time"
+
+	"github.com/marrasen/gunim"
+)
 
 // Size is how big a view the host has room for.
 type Size int
@@ -56,4 +60,16 @@ type StateFollower interface {
 type DocumentFollower interface {
 	gunim.Node
 	FollowDocument(u *gunim.UI)
+}
+
+// Auditioner is a host that lets a view play a note on the plugin as it
+// sounds, as a sound browser plays one to let the user hear the sound
+// picked. A view asks for it by a type assertion on its [Host].
+type Auditioner interface {
+	Host
+	// Audition plays a note on the plugin playing: pitch is a MIDI note
+	// number, as 60 for middle C, velocity runs from 0 to 1, and the
+	// note is let go after length. It runs on the window's goroutine; a
+	// host that plays nothing now plays nothing.
+	Audition(pitch, velocity float64, length time.Duration, u *gunim.UI)
 }
