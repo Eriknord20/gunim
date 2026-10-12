@@ -189,7 +189,7 @@ func TestEditingThePathGoesThere(t *testing.T) {
 	}
 	h.w.Input(input.KeyPress{Key: input.KeyEnd})
 	h.w.Input(input.TextInput{Text: string(filepath.Separator) + "sub"})
-	h.w.Input(input.KeyPress{Key: input.KeyEnter})
+	h.press(input.KeyEnter, 0)
 	h.until("the typed folder opens", func() bool { return slices.Equal(h.shown(), []string{"x.txt"}) })
 	if h.b.path.addr.Editing() {
 		t.Fatal("the path bar is still editing after Enter")
@@ -246,6 +246,44 @@ func TestGoingIntoAFolderAndBack(t *testing.T) {
 	h.do(Command{Name: CmdUp})
 	h.until("up comes out, with the folder left selected", func() bool {
 		return len(h.shown()) == 2 && h.a.nav.sel["inner"]
+	})
+}
+
+func TestBackspaceComesBackToTheFolderLeftSelected(t *testing.T) {
+	h := newHarness(t, "one/two/deep.txt", "one/zz.txt", "three/t.txt", "z.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 3 })
+	// Down from nothing selected goes to the first row: a folder each time.
+	h.press(input.KeyDown, 0)
+	h.press(input.KeyEnter, 0)
+	h.until("Enter opens the folder", func() bool { return slices.Equal(h.shown(), []string{"two", "zz.txt"}) })
+	h.press(input.KeyDown, 0)
+	h.press(input.KeyEnter, 0)
+	h.until("Enter opens the folder in it", func() bool { return slices.Equal(h.shown(), []string{"deep.txt"}) })
+	h.press(input.KeyBackspace, 0)
+	h.until("Backspace comes back with the folder left selected", func() bool {
+		return slices.Contains(h.shown(), "two") && slices.Equal(h.selected(), []string{"two"}) && h.a.nav.cursor == "two"
+	})
+	h.press(input.KeyBackspace, 0)
+	h.until("Backspace again comes back to the first folder left selected", func() bool {
+		return slices.Contains(h.shown(), "one") && slices.Equal(h.selected(), []string{"one"}) && h.a.nav.cursor == "one"
+	})
+	h.press(input.KeyDown, 0)
+	h.press(input.KeyEnter, 0)
+	h.until("Down and Enter open the next folder", func() bool { return slices.Equal(h.shown(), []string{"t.txt"}) })
+	h.do(Command{Name: CmdBack})
+	h.until("back selects it in turn", func() bool { return h.a.nav.cursor == "three" })
+	h.do(Command{Name: CmdForward})
+	h.until("forward goes in again", func() bool { return slices.Equal(h.shown(), []string{"t.txt"}) })
+}
+
+func TestBackSelectsTheFolderThatLedWhereTheUserWas(t *testing.T) {
+	h := newHarness(t, "one/two/deep.txt", "z.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	h.do(Navigate{Path: filepath.Join(h.dir, "one", "two")})
+	h.until("the folder opens", func() bool { return slices.Equal(h.shown(), []string{"deep.txt"}) })
+	h.do(Command{Name: CmdBack})
+	h.until("back selects the folder on the way", func() bool {
+		return slices.Equal(h.selected(), []string{"one"}) && h.a.nav.cursor == "one"
 	})
 }
 

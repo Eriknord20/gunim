@@ -5,6 +5,7 @@ package glfw
 
 import (
 	"encoding/binary"
+	"image"
 	"image/color"
 	"testing"
 )
@@ -65,5 +66,51 @@ func TestDecodeDIBRefusesWhatItCannotRead(t *testing.T) {
 	}
 	if _, err := decodeDIB(b[:20]); err == nil {
 		t.Fatal("a short bitmap decoded, want an error")
+	}
+}
+
+func TestEncodeDIBV5ReadsBackWithAlpha(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 3, 2))
+	for y := range 2 {
+		for x := range 3 {
+			img.SetNRGBA(x, y, color.NRGBA{uint8(x * 40), uint8(y * 90), 0xaa, uint8(0x40 + x*0x30 + y)})
+		}
+	}
+	b := encodeDIBV5(img)
+	if len(b) != 124+3*2*4 {
+		t.Fatalf("%d bytes", len(b))
+	}
+	got, err := decodeDIB(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for y := range 2 {
+		for x := range 3 {
+			if g, w := got.NRGBAAt(x, y), img.NRGBAAt(x, y); g != w {
+				t.Fatalf("(%d, %d) reads back %v, want %v", x, y, g, w)
+			}
+		}
+	}
+}
+
+func TestEncodeDIBV5UnpremultipliesAndConverts(t *testing.T) {
+	rgba := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	rgba.SetRGBA(0, 0, color.RGBA{0x40, 0x20, 0, 0x80})
+	gray := image.NewGray(image.Rect(0, 0, 1, 1))
+	gray.SetGray(0, 0, color.Gray{0x33})
+	for _, c := range []struct {
+		img  image.Image
+		want color.NRGBA
+	}{
+		{rgba, color.NRGBA{0x80, 0x40, 0, 0x80}},
+		{gray, color.NRGBA{0x33, 0x33, 0x33, 0xff}},
+	} {
+		got, err := decodeDIB(encodeDIBV5(c.img))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := got.NRGBAAt(0, 0); g != c.want {
+			t.Errorf("%T reads back %v, want %v", c.img, g, c.want)
+		}
 	}
 }

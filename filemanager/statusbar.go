@@ -12,25 +12,34 @@ func registerStatus(w *gunim.Window) {
 }
 
 // statusBar is the line along the bottom: how many items there are and
-// how many are selected, and the free space of the volume.
+// how many are selected, the program's note, and the free space of the
+// volume.
 type statusBar struct {
-	left, right *widget.Label
-	row         *widget.Flex
-	views       *viewBar
+	left, note, right *widget.Label
+	// apart keeps the note off the free space, while there is a note.
+	apart *widget.Spacer
+	row   *widget.Flex
+	views *viewBar
 }
 
 func newStatusBar() *statusBar {
-	s := &statusBar{left: widget.NewLabel(""), right: widget.NewLabel(""), views: newViewBar()}
-	for _, l := range []*widget.Label{s.left, s.right} {
+	s := &statusBar{left: widget.NewLabel(""), note: widget.NewLabel(""), right: widget.NewLabel(""),
+		apart: widget.NewSpacer(), views: newViewBar()}
+	for _, l := range []*widget.Label{s.left, s.note, s.right} {
 		l.Size, l.Color, l.MaxLines = SmallText, Faint, 1
 	}
-	s.row = widget.Row(s.left, s.right, s.views).Grow(s.left, 1)
+	s.row = widget.Row(s.left, s.note, s.apart, s.right, s.views).Grow(s.left, 1)
 	s.row.Cross = widget.CrossCenter
 	return s
 }
 
 func (s *statusBar) set(st Status, u *gunim.UI) {
 	s.left.Text = st.Left
+	s.note.Text = st.Note
+	s.apart.Size.W = 0
+	if st.Note != "" {
+		s.apart.Size.W = 12
+	}
 	s.right.Text = st.Right
 	u.Invalidate()
 }

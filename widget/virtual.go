@@ -312,7 +312,7 @@ func (l *VirtualList) stickTo(content, viewport float32) float32 {
 	end := max(0, content-viewport)
 	switch {
 	case !l.laidOut:
-		l.jumpTo(end)
+		l.jumpToY(end)
 	case end != l.target:
 		l.shift(end - l.target)
 	}
@@ -458,7 +458,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 
 	if !l.laidOut && l.openAt != "" {
 		if i := slices.Index(l.order, l.openAt); i >= 0 {
-			l.jumpTo(float32(l.tops.sum(i)))
+			l.jumpToY(float32(l.tops.sum(i)))
 		}
 	}
 	if l.stuck {
@@ -525,7 +525,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 			}
 		}
 		r.y.Animate(y, move)
-		kid.Place(geom.Pt(0, r.y.Value()-offset))
+		kid.Place(geom.Pt(0, r.y.Value()-onPixels(offset, f.Scale)))
 		y += l.entry[i]
 	}
 	// Rows that have scrolled away go at once.
@@ -554,7 +554,7 @@ func (l *VirtualList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Chil
 		if at := l.stickTo(content, own.H); at != offset {
 			for k := range keep {
 				r := l.live[k]
-				children[r].Place(geom.Pt(0, r.y.Value()-at))
+				children[r].Place(geom.Pt(0, r.y.Value()-onPixels(at, f.Scale)))
 			}
 			l.again = true
 		}

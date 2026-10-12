@@ -66,12 +66,55 @@ func (r *Renderer) texture(img *paint.Image) uint32 {
 	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 	g.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, img.Pix())
-	g.GenerateMipmap(gl.TEXTURE_2D)
 	g.ActiveTexture(gl.TEXTURE0)
-	// The batch may hold a quad reading whatever was on unit 1; flush
-	// binds it again.
+	r.mipmaps(t.tex, w, h)
 	r.images[img] = t
 	return t.tex
+}
+
+// mipmaps fills in the mipmap levels of tex, a w by h texture holding
+// level 0, each the one above averaged two by two by the blur shader.
+// glGenerateMipmap would do the same, but it can stop Intel's Windows
+// driver for good: see blurFactors.
+//
+// Each pass reads only the level above, through the texture's base
+// and top levels, so it never reads the level it draws into.
+func (r *Renderer) mipmaps(tex uint32, w, h int) {
+	g := r.GL
+	r.flush()
+	fbo := g.CreateFramebuffer()
+	g.BindFramebuffer(gl.FRAMEBUFFER, fbo)
+	g.UseProgram(r.blurProg.id)
+	g.Disable(gl.BLEND)
+	g.Disable(gl.SCISSOR_TEST)
+	level := int32(0)
+	for w > 1 || h > 1 {
+		above := [4]float32{1 / float32(w), 1 / float32(h), 0, 2}
+		w, h = max(w/2, 1), max(h/2, 1)
+		level++
+		g.ActiveTexture(glTexture1)
+		g.BindTexture(gl.TEXTURE_2D, tex)
+		g.TexImage2D(gl.TEXTURE_2D, level, gl.RGBA, int32(w), int32(h), gl.RGBA, gl.UNSIGNED_BYTE, nil)
+		g.TexParameteri(gl.TEXTURE_2D, glTextureBaseLevel, level-1)
+		g.TexParameteri(gl.TEXTURE_2D, glTextureMaxLevel, level-1)
+		g.ActiveTexture(gl.TEXTURE0)
+		g.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, level)
+		g.Viewport(0, 0, int32(w), int32(h))
+		r.uses(tex)
+		r.quad(corners(r.window(), geom.Rect{}), paint.Identity, r.scale, &look{extra: above})
+		r.flush()
+	}
+	g.ActiveTexture(glTexture1)
+	g.BindTexture(gl.TEXTURE_2D, tex)
+	g.TexParameteri(gl.TEXTURE_2D, glTextureBaseLevel, 0)
+	g.TexParameteri(gl.TEXTURE_2D, glTextureMaxLevel, level)
+	g.ActiveTexture(gl.TEXTURE0)
+	g.BindFramebuffer(gl.FRAMEBUFFER, r.fbo(r.depth))
+	g.DeleteFramebuffer(fbo)
+	g.Viewport(0, 0, int32(r.fbW), int32(r.fbH))
+	r.applyClip()
+	g.Enable(gl.BLEND)
+	r.useDraw()
 }
 
 // evictImages lets go of textures the window has stopped drawing, and

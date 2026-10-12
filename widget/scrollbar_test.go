@@ -36,25 +36,25 @@ func (r *pressRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 // newPressList mounts a 300 by 400 list of 200 rows of 40 that take
 // presses and moves, 9194 tall in all, and returns a count of the
 // presses they got.
-func newPressList(t *testing.T) (*gunim.Window, *VirtualList, func(int), *int) {
+func newPressList(t *testing.T) (w *gunim.Window, list *VirtualList, run func(int), presses *int) {
 	t.Helper()
-	presses := new(int)
-	l := NewVirtualList(func(k Key) gunim.Node {
+	presses = new(int)
+	list = NewVirtualList(func(k Key) gunim.Node {
 		return &pressRow{block: block{key: k, h: 40}, presses: presses}
 	})
-	w := gunimtest.New(t, geom.Sz(300, 400), nil)
-	gunim.RegisterView(w, "v", func(shownKeys) gunim.Node { return l },
-		func(_ gunim.Node, s shownKeys, u *gunim.UI) { l.SetKeys(s.Keys, u) })
+	w = gunimtest.New(t, geom.Sz(300, 400), nil)
+	gunim.RegisterView(w, "v", func(shownKeys) gunim.Node { return list },
+		func(_ gunim.Node, s shownKeys, u *gunim.UI) { list.SetKeys(s.Keys, u) })
 	if err := w.Client().Mount(gunim.Root, "v", "v", shownKeys{keys(200)}); err != nil {
 		t.Fatal(err)
 	}
-	run := func(n int) {
+	run = func(n int) {
 		for range n {
 			w.Frame(time.Second / 60)
 		}
 	}
 	run(2)
-	return w, l, run, presses
+	return w, list, run, presses
 }
 
 func TestTheBarShowsWhileThePointerIsOverTheList(t *testing.T) {

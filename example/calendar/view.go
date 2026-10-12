@@ -230,7 +230,7 @@ func (v *calView) set(s Cal, u *gunim.UI) {
 }
 
 // shown returns the first day the view shows, and the day after the last.
-func shown(s Cal) (time.Time, time.Time) {
+func shown(s Cal) (from, to time.Time) {
 	switch s.View {
 	case DayView:
 		return s.Day, calendar.AddDays(s.Day, 1)
@@ -240,6 +240,8 @@ func shown(s Cal) (time.Time, time.Time) {
 			return f, calendar.AddDays(f, 5)
 		}
 		return f, calendar.AddDays(f, 7)
+	default:
+		// The month view draws its own, below.
 	}
 	return calendar.MonthStart(s.Day), calendar.MonthStart(s.Day).AddDate(0, 1, 0)
 }
@@ -433,11 +435,11 @@ func (v *calView) eventMenu(view gunim.Node, at func(geom.Point) (string, bool))
 }
 
 // dismiss wraps what closes a popup on a press outside it, so the rest of that press begins nothing.
-func (v *calView) dismiss(close func(*gunim.UI)) func(*gunim.UI) {
+func (v *calView) dismiss(shut func(*gunim.UI)) func(*gunim.UI) {
 	return func(u *gunim.UI) {
 		v.swallow = true
 		u.After(0, func(*gunim.UI) { v.swallow = false })
-		close(u)
+		shut(u)
 	}
 }
 

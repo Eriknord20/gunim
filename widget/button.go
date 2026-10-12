@@ -285,7 +285,7 @@ func (b *Button) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		if b.Label == "" {
 			x = max((box.W-s)/2, 0)
 		}
-		paintIcon(p, th, b.Icon, geom.Rc(x, (box.H-s)/2, s, s), inked, 1)
+		drawIcon(p, th, b.Icon, geom.Rc(x, (box.H-s)/2, s, s), inked, 1)
 		x += s + IconGap.Get(th)
 	}
 	if b.Label != "" && x < end {

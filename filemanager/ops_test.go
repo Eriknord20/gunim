@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marrasen/gunim/widget"
 )
 
 // tree makes the files and folders in spec under root: a name ending in
@@ -605,5 +607,63 @@ func TestNumberedPutsTheNumberBeforeTheExtension(t *testing.T) {
 		if got := numbered(in, 2); got != want {
 			t.Fatalf("numbered(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// An item is said as the replace dialog compares two: its size, or that
+// it is a folder, and when it was changed.
+func TestItemFactsSayASizeOrAFolderAndWhen(t *testing.T) {
+	at := time.Date(2026, 10, 10, 15, 15, 0, 0, time.UTC)
+	for _, c := range []struct {
+		size int64
+		dir  bool
+		mod  time.Time
+		want string
+	}{
+		{219, false, at, "219 bytes · 10 Oct 2026 15:15"},
+		{1, false, time.Time{}, "1 byte"},
+		{0, true, at, "Folder · 10 Oct 2026 15:15"},
+	} {
+		if got := ItemFacts(c.size, c.dir, c.mod); got != c.want {
+			t.Errorf("ItemFacts(%d, %v) = %q, want %q", c.size, c.dir, got, c.want)
+		}
+	}
+}
+
+// The replace dialog asks as file managers do: Replace "name"?, where it
+// is and what it is, the existing one and the new one, Apply to all,
+// and Skip, Keep Both, Stop and Replace, in that order.
+func TestTheReplaceDialogAsksAsFileManagersDo(t *testing.T) {
+	d := newClashDialog(ClashAsk{Name: "run.cmd", Where: "windows", Old: "219 bytes · 11 Oct 2026 17:29", New: "219 bytes · 10 Oct 2026 15:15",
+		SameKind: true, CanForAll: true})
+	if d.Title != "Replace “run.cmd”?" {
+		t.Fatalf("the dialog is titled %q", d.Title)
+	}
+	body, ok := d.Body.(*clashBody)
+	if !ok {
+		t.Fatalf("the dialog's body is a %T", d.Body)
+	}
+	var said []string
+	for _, n := range body.Children() {
+		switch v := n.(type) {
+		case *widget.Label:
+			said = append(said, v.Text)
+		case *widget.Checkbox:
+			said = append(said, v.Label)
+		}
+	}
+	want := []string{"windows already has a file named “run.cmd”.", "Existing: 219 bytes · 11 Oct 2026 17:29",
+		"New: 219 bytes · 10 Oct 2026 15:15", "Apply to all"}
+	if !slices.Equal(said, want) {
+		t.Fatalf("the dialog says %q, want %q", said, want)
+	}
+	var buttons []string
+	for _, b := range d.Buttons() {
+		if btn, ok := b.(*widget.Button); ok {
+			buttons = append(buttons, btn.Label)
+		}
+	}
+	if want := []string{"Skip", "Keep Both", "Stop", "Replace"}; !slices.Equal(buttons, want) {
+		t.Fatalf("the buttons are %q, want %q", buttons, want)
 	}
 }

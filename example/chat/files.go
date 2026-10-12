@@ -69,7 +69,7 @@ func (p *project) folderAt(path string) (*folder, bool) {
 
 // entriesOf returns what f holds, its folders first, each part in order of name.
 func entriesOf(f *folder) []FileEntry {
-	var out []FileEntry
+	out := make([]FileEntry, 0, len(f.folders)+len(f.files))
 	for _, g := range f.folders {
 		out = append(out, FileEntry{Name: g.name, Folder: true, Items: len(g.folders) + len(g.files), At: newest(g)})
 	}

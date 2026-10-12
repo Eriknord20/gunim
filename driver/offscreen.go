@@ -527,12 +527,19 @@ func (w *OffscreenWindow) ClipboardImage() ([]byte, error) {
 	return w.clipImage, nil
 }
 
-// SetClipboardImage puts a picture, as PNG, on the window's clipboard, as a test's stand-in for copying one; nil
-// takes it off.
-func (w *OffscreenWindow) SetClipboardImage(png []byte) {
+// SetClipboardImage implements [ImageClipboard]: it puts a picture, as PNG, on the window's clipboard, where
+// [OffscreenWindow.ClipboardImage] reads it back. A test calls it too, as its stand-in for copying one in another
+// program, so it takes png as it is without checking it is a PNG, and nil takes the picture off but leaves the
+// text. The window keeps a copy, so the caller may reuse png.
+func (w *OffscreenWindow) SetClipboardImage(png []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.clipImage = png
+	if png == nil {
+		w.clipImage = nil
+		return nil
+	}
+	w.clipImage = append([]byte{}, png...)
+	return nil
 }
 
 // Close implements [Window].

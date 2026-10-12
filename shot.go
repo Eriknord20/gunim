@@ -94,8 +94,12 @@ func (u *UI) shotParts() ([]shotPart, error) {
 			}
 			p.at = at
 		}
+		shooter, ok := dw.(driver.Shooter)
+		if !ok {
+			return shotPart{}, errors.New("gunim: shot: this window cannot be photographed")
+		}
 		u.shotsOwed.Add(1)
-		dw.(driver.Shooter).Shoot(func(img *image.RGBA) {
+		shooter.Shoot(func(img *image.RGBA) {
 			u.shotsOwed.Add(-1)
 			p.frame <- img
 		})

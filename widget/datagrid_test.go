@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -155,7 +156,7 @@ func TestDraggingTheScrollbarScrolls(t *testing.T) {
 func TestALongCellEndsInAnEllipsis(t *testing.T) {
 	g := NewDataGrid(GridColumn{Title: "Message", Width: 80})
 	long := "a message far too long to fit in eighty pixels"
-	run := g.cutRun(Font.Default().Shape(long, 12), 60)
+	run := g.cutShort(Font.Default().Shape(long, 12), 60)
 	if run.Advance > 60 {
 		t.Fatalf("cut to 60, the run is %v wide", run.Advance)
 	}
@@ -490,6 +491,31 @@ func TestADataGridLightsTheTitleUnderThePointerAfterASidewaysWheel(t *testing.T)
 		run(1)
 		if want := g.columnAt(at.X); g.hoverCol != want || want <= 0 {
 			t.Fatalf("scrolled sideways to %v, title %d is lit, want %d, now under the pointer", g.left, g.hoverCol, want)
+		}
+	}
+}
+
+// Scrolled by a fraction of a pixel, the rows move by whole device
+// pixels, every part of a row alike. The renderer puts text on whole
+// pixels and pictures where they are, so rows moved by fractions had a
+// row's text step on other frames than its icon, and the two wavered a
+// pixel apart as the list slid.
+func TestADataGridScrollsByWholeDevicePixels(t *testing.T) {
+	g := NewDataGrid(GridColumn{Title: "Name"})
+	g.Row = func(i int) (GridRow, bool) { return GridRow{Cells: [][]GridSpan{{{Text: "row"}}}}, true }
+	g.rows = 1000
+	w, run := stage(t, &frame{child: g, size: geom.Sz(400, 300)})
+	w.Offscreen().SetZoom(1.25)
+	run(2)
+	scale := float64(w.Offscreen().Scale())
+	for _, top := range []float64{0.1, 3.37, 10.5, 41.013} {
+		g.top, g.goal = top, top
+		run(1)
+		for _, i := range []int{int(top), int(top) + 3} {
+			moved := float64(g.rowY(i)-g.header) - float64(i)*float64(g.rowH)
+			if px := moved * scale; math.Abs(px-math.Round(px)) > 1e-3 {
+				t.Fatalf("scrolled to row %v, row %d moved %v device pixels, want a whole number", top, i, px)
+			}
 		}
 	}
 }

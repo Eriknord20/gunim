@@ -880,3 +880,26 @@ func TestWithoutOnSaveThereIsNoSave(t *testing.T) {
 		t.Fatal("an editor without OnSave has a draft")
 	}
 }
+
+// The preview's window is called Notes over the editor's own widgets,
+// has no name over the program's own preview, and the name the program
+// gives over either.
+func TestThePreviewsWindowTakesTheProgramsName(t *testing.T) {
+	for _, c := range []struct {
+		what  string
+		o     Options
+		title string
+	}{
+		{"the editor's widgets", Options{Base: widget.Dark()}, "Notes"},
+		{"the program's own preview", Options{Base: widget.Dark(), Preview: widget.NewLabel("Mine")}, ""},
+		{"the program's own preview, named", Options{Base: widget.Dark(), Preview: widget.NewLabel("Mine"),
+			PreviewTitle: "Studio"}, "Studio"},
+		{"the editor's widgets, named", Options{Base: widget.Dark(), PreviewTitle: "Studio"}, "Studio"},
+	} {
+		e, _, _, _, _ := edStage(t, c.o)
+		s := e.preview.scene
+		if s.name != c.title || (s.title.Advance > 0) != (c.title != "") {
+			t.Errorf("over %s, the window is called %q, %v wide, want %q", c.what, s.name, s.title.Advance, c.title)
+		}
+	}
+}

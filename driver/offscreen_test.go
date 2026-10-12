@@ -77,3 +77,28 @@ func TestAnOffscreenWindowKeepsAFrameAsItWasPresented(t *testing.T) {
 		}
 	}
 }
+
+func TestAnOffscreenWindowKeepsAPictureOnItsClipboard(t *testing.T) {
+	w := Offscreen(geom.Sz(10, 10))
+	var ic ImageClipboard = w
+	png := []byte("\x89PNG one")
+	if err := ic.SetClipboardImage(png); err != nil {
+		t.Fatal(err)
+	}
+	png[1] = 'X' // the window keeps its own copy
+	if b, err := ic.ClipboardImage(); err != nil || string(b) != "\x89PNG one" {
+		t.Fatalf("the clipboard reads %q, %v", b, err)
+	}
+	if err := w.SetClipboard("words"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ic.SetClipboardImage(nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := ic.ClipboardImage(); b != nil {
+		t.Fatalf("taken off, the clipboard reads %q", b)
+	}
+	if s, _ := w.Clipboard(); s != "words" {
+		t.Fatalf("the text reads %q", s)
+	}
+}

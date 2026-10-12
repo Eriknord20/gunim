@@ -16,9 +16,14 @@ import (
 // window's for the widest, as a sheet of frosted glass over a phone's
 // screen, where it costs a sixty-fourth as much and looks the same,
 // since it removes the detail the lower resolution drops. The source is
-// first averaged down to that resolution, through its mipmaps, so
-// detail finer than the coarser grid blends in rather than flickering
-// as it moves.
+// first averaged down to that resolution, so detail finer than the
+// coarser grid blends in rather than flickering as it moves.
+//
+// The average is a pass of its own rather than the source's mipmaps.
+// Intel's Windows driver takes two locks of its own in one order in
+// glGenerateMipmap and in the other in most other calls, such as
+// glTexImage2D and making a context: two windows doing those at once
+// stop for good, and the main thread with them.
 var blurFactors = [...]int{1, 2, 4, 8}
 
 // maxTaps is the most samples the blur shader takes on each side of a
@@ -29,6 +34,11 @@ const maxTaps = 64
 // blurShader reads its source on unit 1. v_extra.xy is one texel of
 // the target along the pass's direction, and v_extra.z the standard
 // deviation in the target's pixels.
+//
+// With v_extra.w set to k, an even factor, it averages instead the k
+// by k block of source pixels under each pixel of a target k times
+// coarser, v_extra.xy being one source pixel: each sample falls where
+// four source pixels meet, and so averages them.
 const blurShader = `
 in vec2 v_uv;
 in vec4 v_extra;
@@ -37,6 +47,18 @@ out vec4 fragColor;
 
 void main() {
 	vec2 uv = v_uv;
+	if (v_extra.w > 0.0) {
+		int m = int(v_extra.w) / 2;
+		vec4 sum = vec4(0.0);
+		for (int y = 0; y < m; y++) {
+			for (int x = 0; x < m; x++) {
+				vec2 at = vec2(float(2 * x - m + 1), float(2 * y - m + 1));
+				sum += texture(u_tex, uv + v_extra.xy * at);
+			}
+		}
+		fragColor = sum / float(m * m);
+		return;
+	}
 	vec2 texel = v_extra.xy;
 	float s = max(v_extra.z, 0.0001);
 	int n = min(int(ceil(3.0 * s)), 64);
@@ -73,15 +95,6 @@ func (r *Renderer) blur(src uint32, region geom.Rect, sigma float32) uint32 {
 
 	g := r.GL
 	r.flush()
-	if k > 1 {
-		// The first pass reads the source averaged to its own grid: the
-		// mipmap level the GPU picks for a pass k times coarser.
-		g.ActiveTexture(glTexture1)
-		g.BindTexture(gl.TEXTURE_2D, src)
-		g.GenerateMipmap(gl.TEXTURE_2D)
-		g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glLinearMipmapLinear)
-		g.ActiveTexture(gl.TEXTURE0)
-	}
 	g.UseProgram(r.blurProg.id)
 	g.Viewport(0, 0, int32(w), int32(h))
 	g.Disable(gl.BLEND)
@@ -90,32 +103,31 @@ func (r *Renderer) blur(src uint32, region geom.Rect, sigma float32) uint32 {
 	// The vertical pass reads the horizontal pass up to reach beyond
 	// the region, so the horizontal pass covers twice as far.
 	scaled := geom.Rect{Min: region.Min.Mul(1 / float32(k)), Max: region.Max.Mul(1 / float32(k))}
-	passes := [2]struct {
+	type pass struct {
 		src, dst uint32
-		dir      [2]float32
+		extra    [4]float32
 		grow     float32
-	}{
-		{src, pair[0].fbo, [2]float32{1, 0}, 2 * reach},
-		{pair[0].tex, pair[1].fbo, [2]float32{0, 1}, reach},
 	}
-	for _, pass := range passes {
-		sx, sy, sw, sh := scissor(grow4(scaled, pass.grow), w, h)
+	passes := []pass{
+		{src, pair[0].fbo, [4]float32{1 / float32(w), 0, s, 0}, 2 * reach},
+		{pair[0].tex, pair[1].fbo, [4]float32{0, 1 / float32(h), s, 0}, reach},
+	}
+	if k > 1 {
+		// The first pass reads the source averaged to its own grid, in
+		// the second pass's target, as far again as that pass reads.
+		passes[0].src = pair[1].tex
+		down := pass{src, pair[1].fbo, [4]float32{1 / float32(r.fbW), 1 / float32(r.fbH), 0, float32(k)}, 3 * reach}
+		passes = append([]pass{down}, passes...)
+	}
+	for _, p := range passes {
+		sx, sy, sw, sh := scissor(grow4(scaled, p.grow), w, h)
 		g.Scissor(sx, sy, sw, sh)
-		g.BindFramebuffer(gl.FRAMEBUFFER, pass.dst)
-		r.uses(pass.src)
-		r.quad(corners(r.window(), geom.Rect{}), paint.Identity, r.scale, &look{
-			extra: [4]float32{pass.dir[0] / float32(w), pass.dir[1] / float32(h), s, 0},
-		})
+		g.BindFramebuffer(gl.FRAMEBUFFER, p.dst)
+		r.uses(p.src)
+		r.quad(corners(r.window(), geom.Rect{}), paint.Identity, r.scale, &look{extra: p.extra})
 		r.flush()
 	}
 
-	if k > 1 {
-		// The source is read at its full size again elsewhere.
-		g.ActiveTexture(glTexture1)
-		g.BindTexture(gl.TEXTURE_2D, src)
-		g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glLinear)
-		g.ActiveTexture(gl.TEXTURE0)
-	}
 	r.applyClip()
 	g.Enable(gl.BLEND)
 	g.Viewport(0, 0, int32(r.fbW), int32(r.fbH))

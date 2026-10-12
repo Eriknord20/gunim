@@ -170,6 +170,16 @@ type Selection struct {
 	Gen    int
 	Runs   [][2]int
 	Cursor int
+	// Slide has the selection slide there, as it does for a key that
+	// moves it, for a row found by the name typed.
+	Slide bool
+	// Gap, with no cursor, is the row the keyboard waits above, where the
+	// row it was on went; -1 for none. See [widget.DataGrid.SetGap].
+	Gap int
+	// Show brings the cursor into view, for a row the program moved the
+	// keyboard to. The selection sent again as the folder is read leaves
+	// the view where the user paged or scrolled it.
+	Show bool
 }
 
 // Band is what the overview strip shows for a stretch of rows: the
@@ -185,9 +195,10 @@ type Bands struct {
 	Bands []Band
 }
 
-// Status is the status bar.
+// Status is the status bar. Note is the program's, as [Window.SetNote]
+// gives it, between the two.
 type Status struct {
-	Left, Right string
+	Left, Note, Right string
 }
 
 // Banner is a line under the path bar, for an error that stopped

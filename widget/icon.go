@@ -105,7 +105,7 @@ func (i *Icon) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	if i.Color.Key() != "" {
 		c = i.Color.Get(f.Theme)
 	}
-	paintIcon(p, f.Theme, i.Icon, r, c, i.drawn.Value())
+	drawIcon(p, f.Theme, i.Icon, r, c, i.drawn.Value())
 }
 
 // Access implements [gunim.Accessible]. An icon without a name says nothing of its own.
@@ -116,8 +116,8 @@ func (i *Icon) Access() access.Info {
 	return access.Info{Role: access.RoleImage, Name: i.Name}
 }
 
-// paintIcon draws ic into r, tinted c, with the theme's stroke width, drawn on as far as progress.
-func paintIcon(p *paint.Painter, th *theme.Live, ic *icon.Icon, r geom.Rect, c color.NRGBA, progress float32) {
+// drawIcon draws ic into r, tinted c, with the theme's stroke width, drawn on as far as progress.
+func drawIcon(p *paint.Painter, th *theme.Live, ic *icon.Icon, r geom.Rect, c color.NRGBA, progress float32) {
 	if ic == nil || progress <= 0 {
 		return
 	}
@@ -136,5 +136,5 @@ func paintSmallIcon(p *paint.Painter, th *theme.Live, ic *icon.Icon, r geom.Rect
 
 // PaintIcon draws ic in r, in c, as widgets draw their icons, for a node of an application's own.
 func PaintIcon(p *paint.Painter, th *theme.Live, ic *icon.Icon, r geom.Rect, c color.NRGBA) {
-	paintIcon(p, th, ic, r, c, 1)
+	drawIcon(p, th, ic, r, c, 1)
 }

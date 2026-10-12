@@ -55,7 +55,9 @@ func main() {
 	if *cpuProfile != "" {
 		stop, err := profile(*cpuProfile)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("chat: %v", err)
+			exit = 2
+			return
 		}
 		defer stop()
 	}

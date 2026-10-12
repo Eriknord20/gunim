@@ -414,7 +414,7 @@ func (c *emojiCard) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gun
 		x += c.hotRun.Advance + 8
 	}
 	if room := foot.Max.X - x; c.name.Advance > room {
-		c.name = cutRun(c.name, faceIn(Font, th).Shape("…", c.name.Size), room)
+		c.name = cutRunWith(c.name, faceIn(Font, th).Shape("…", c.name.Size), room)
 	}
 	c.name.Paint(p, geom.Pt(x, mid-c.name.Height()/2), Ink.Get(th))
 }
@@ -493,7 +493,7 @@ func (t *emojiTabs) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			ink = Ink.Get(th)
 		}
 		c := cellBox.Center()
-		paintIcon(p, th, g.icon, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
+		drawIcon(p, th, g.icon, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
 	}
 	// A rule under the row, and the accent's bar on it under the group shown.
 	p.RRect(geom.Rc(0, box.H-1, box.W, 1), 0, paint.Solid(MenuBorder.Get(th)))

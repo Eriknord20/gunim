@@ -70,8 +70,10 @@ func TestDaysCountByTheCalendarAcrossAClockChange(t *testing.T) {
 func TestParseClockReadsTheWaysPeopleWriteATime(t *testing.T) {
 	ok := map[string]time.Duration{
 		"9": 9 * time.Hour, "09": 9 * time.Hour, "930": 9*time.Hour + 30*time.Minute, "0930": 9*time.Hour + 30*time.Minute,
-		"9:30": 9*time.Hour + 30*time.Minute, "9.30": 9*time.Hour + 30*time.Minute, " 23:59 ": 23*time.Hour + 59*time.Minute,
-		"0:00": 0,
+		"9:30": 9*time.Hour + 30*time.Minute, "9.30": 9*time.Hour + 30*time.Minute,
+		// Spaces either side: what a user types is trimmed on the way in.
+		" 23:59 ": 23*time.Hour + 59*time.Minute, //nolint:gocritic // the spaces are the test
+		"0:00":    0,
 	}
 	for s, want := range ok {
 		if got, good := ParseClock(s); !good || got != want {

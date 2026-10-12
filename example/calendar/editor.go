@@ -183,7 +183,7 @@ func newEditor(d Draft) *widget.Dialog {
 // times reads the start and end the fields hold, and reports false when a time is not one.
 func times(startDay *calendar.DateField, startTime *calendar.TimeField, endDay *calendar.DateField,
 	endTime *calendar.TimeField,
-) (time.Time, time.Time, bool) {
+) (start, end time.Time, ok bool) {
 	st, ok1 := startTime.Value()
 	et, ok2 := endTime.Value()
 	return startDay.Value().Add(st), endDay.Value().Add(et), ok1 && ok2

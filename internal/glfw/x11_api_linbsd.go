@@ -101,6 +101,7 @@ var (
 	xInternAtom                func(display uintptr, atomName string, onlyIfExists bool) _Atom
 	xLookupString              func(eventStruct *_XKeyEvent, bufferReturn []byte, bytesBuffer int32, keysymReturn *_KeySym, statusInOut uintptr) int32
 	xMapRaised                 func(display uintptr, w _XID) int32
+	xMaxRequestSize            func(display uintptr) _Clong
 	xMapWindow                 func(display uintptr, w _XID) int32
 	xMoveResizeWindow          func(display uintptr, w _XID, x, y int32, width, height uint32) int32
 	xMoveWindow                func(display uintptr, w _XID, x, y int32) int32
@@ -273,6 +274,7 @@ func initLibX11() error {
 	purego.RegisterLibFunc(&xInitThreads, lib, "XInitThreads")
 	purego.RegisterLibFunc(&xInternAtom, lib, "XInternAtom")
 	purego.RegisterLibFunc(&xLookupString, lib, "XLookupString")
+	purego.RegisterLibFunc(&xMaxRequestSize, lib, "XMaxRequestSize")
 	purego.RegisterLibFunc(&xMapRaised, lib, "XMapRaised")
 	purego.RegisterLibFunc(&xMapWindow, lib, "XMapWindow")
 	purego.RegisterLibFunc(&xMoveResizeWindow, lib, "XMoveResizeWindow")

@@ -168,8 +168,9 @@ func TestTurningToAnotherFileSystemKeepsTheSidebarRows(t *testing.T) {
 		node gunim.Node
 	}
 	rows := func() []row {
-		var out []row
-		for _, k := range slices.Concat(h.b.side.placeKeys(), h.b.side.favs.Keys()) {
+		keys := slices.Concat(h.b.side.placeKeys(), h.b.side.favs.Keys())
+		out := make([]row, 0, len(keys))
+		for _, k := range keys {
 			out = append(out, row{k, h.b.side.placeRow(k)})
 		}
 		return out
@@ -350,5 +351,34 @@ func TestALitPlaceIsMarkedGreen(t *testing.T) {
 	server.Lit = true
 	if got := placeMark(server).Get(th); got != PlaceLit.Get(th) {
 		t.Fatalf("a machine connected is marked %v", got)
+	}
+}
+
+func TestALongFavouriteNameIsCutShortAndWholeInItsTip(t *testing.T) {
+	long := "Master of Ceremonies – Unnamed Episodes of the Year 2026"
+	h := newHarness(t, long+"/x.txt", "short/y.txt")
+	for _, name := range []string{long, "short"} {
+		h.do(Navigate{Path: filepath.Join(h.dir, name)})
+		h.do(Command{Name: CmdPin})
+	}
+	h.until("both favourites show", func() bool { return h.b.side.favs.Len() == 2 })
+	h.frames(30)
+	row := func(name string) *placeRow {
+		n, _ := h.b.side.favs.Row(widget.Key(filepath.Join(h.dir, name)))
+		r, ok := n.(*placeRow)
+		if !ok {
+			t.Fatalf("the favourite %s is not a row", name)
+		}
+		return r
+	}
+	r, box := row(long), h.bounds(func(b *browser) gunim.Node { n, _ := b.side.favs.Row(widget.Key(filepath.Join(h.dir, long))); return n })
+	if r.cutName.Advance > box.Size().W-textLeft || len(r.cutName.Glyphs) >= len(r.name.Glyphs) {
+		t.Fatalf("the name is %v wide in a row %v wide", r.cutName.Advance, box.Size().W)
+	}
+	if r.tipText() != long {
+		t.Fatalf("the tip of the name cut short says %q", r.tipText())
+	}
+	if tip := row("short").tipText(); tip != "" {
+		t.Fatalf("a name that fits has the tip %q", tip)
 	}
 }

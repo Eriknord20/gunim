@@ -59,7 +59,9 @@ func TestARowHeldAtTheBottomScrollsTheList(t *testing.T) {
 			t.Fatalf("frame %d: the view scrolled back, from %v to %v", i, last, at)
 		}
 		last = at
-		if onScreen := l.rows["1"].y.Value() - at; math.Abs(float64(onScreen-170)) > 0.01 {
+		// The list is placed on whole device pixels, as onPixels says:
+		// the row may be off the pointer by up to half of one.
+		if onScreen := l.rows["1"].y.Value() - at; math.Abs(float64(onScreen-170)) > halfPixel(w) {
 			t.Fatalf("frame %d: the carried row's top is at %v on screen, want 170, under the pointer", i, onScreen)
 		}
 	}
@@ -173,7 +175,7 @@ func TestARowHeldAtTheTopScrollsBackUp(t *testing.T) {
 			t.Fatalf("frame %d: the view scrolled back down, from %v to %v", i, last, at)
 		}
 		last = at
-		if onScreen := l.rows["8"].y.Value() - at; math.Abs(float64(onScreen+15)) > 0.01 {
+		if onScreen := l.rows["8"].y.Value() - at; math.Abs(float64(onScreen+15)) > halfPixel(w) {
 			t.Fatalf("frame %d: the carried row's top is at %v on screen, want -15, under the pointer", i, onScreen)
 		}
 	}
@@ -236,3 +238,7 @@ func TestADragHeldPastTheBottomOfAListOfTargetsScrollsIt(t *testing.T) {
 	w.Input(input.PointerUp{Pos: geom.Pt(100, 220), Time: time.Now()})
 	run(30)
 }
+
+// halfPixel is half a device pixel of w, in logical pixels, and a little
+// over: how far what scrolls may be from where the pointer holds it.
+func halfPixel(w *gunim.Window) float64 { return 0.5/float64(w.Offscreen().Scale()) + 0.01 }

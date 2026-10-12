@@ -23,6 +23,7 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/internal/glfw"
+	"github.com/marrasen/gunim/internal/icc"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
 )
@@ -142,6 +143,12 @@ type Window struct {
 	// shot, when set, receives the next frame's pixels once, the right
 	// way up.
 	shot func(*image.RGBA)
+	// colorInfo is how the window's colours reach its display, and
+	// colorLUT the table its frames are converted by, or nil; colorFail
+	// is the render thread's failure to convert. See color.go.
+	colorInfo driver.ColorInfo
+	colorLUT  *icc.LUT
+	colorFail error
 
 	// textInput is whether the application is taking text, which the
 	// input method asks from the main thread.
@@ -170,11 +177,18 @@ type Window struct {
 	// transparent is whether the window blends with what is behind it,
 	// read once as it opens.
 	transparent bool
+	// noColor leaves the window's colours unconverted, set once as it
+	// opens; see [driver.Options.NoColorManagement].
+	noColor bool
 	// textRendering is how the window draws text, settled as it opens.
 	textRendering text.Rendering
 
 	// The fields below belong to the main thread.
 	//
+	// colorKey names the display the window's colours were last read
+	// for, once colorRead; see updateColor.
+	colorKey  any
+	colorRead bool
 	// anchor is where a popup was last attached, and popups are the
 	// open popups that belong to this window, which follow it as it
 	// moves.
@@ -199,6 +213,11 @@ type Window struct {
 	// in screen coordinates as x, y, width, height. The latest is where
 	// the window goes back to; see noteNormal.
 	normals [][4]int
+	// gone says the window has been destroyed, and final where it was
+	// as it was, kept says whether it could say. They are held by mu, for
+	// Placement asks of them from any goroutine.
+	gone, kept bool
+	final      driver.Placement
 }
 
 func newWindow(d *Driver, gw *glfw.Window) *Window {
@@ -394,6 +413,17 @@ func (w *Window) ClipboardImage() ([]byte, error) {
 	return b, err
 }
 
+// SetClipboardImage implements [driver.ImageClipboard]. It decodes png and readies it for the platform on the
+// caller's goroutine, so a large picture does not hold up the main thread, and puts it on the clipboard on the main
+// thread, where GLFW has to.
+func (w *Window) SetClipboardImage(png []byte) error {
+	img, err := glfw.PrepareClipboardImage(png)
+	if err != nil {
+		return err
+	}
+	return w.d.call(func() error { return glfw.SetClipboardImage(img) })
+}
+
 var _ driver.ImageClipboard = (*Window)(nil)
 
 // SetClipboard implements [driver.Window].
@@ -431,6 +461,11 @@ func (w *Window) shutdown() {
 	if w.closed {
 		return
 	}
+	// Where the window was as it closed, for Placement to say after.
+	p, ok := w.placementNow()
+	w.mu.Lock()
+	w.gone, w.final, w.kept = true, p, ok
+	w.mu.Unlock()
 	w.closed = true
 	w.debugf("closed")
 	w.accessClose()
@@ -479,9 +514,6 @@ func (w *Window) awaitFrameAtSize() {
 		}
 	}
 }
-
-// RaiseThread implements [driver.Raiser].
-func (*Window) RaiseThread() { raiseThread() }
 
 // stopRender tells the render thread and the input feed to stop.
 func (w *Window) stopRender() { w.quitOnce.Do(func() { close(w.quit) }) }
@@ -853,10 +885,13 @@ func (w *Window) install() {
 	_, _ = gw.SetContentScaleCallback(func(_ *glfw.Window, x, _ float32) {
 		w.debugf("content scale %v", x)
 		remeasure()
+		w.updateColor(false)
 	})
 	_, _ = gw.SetPosCallback(func(_ *glfw.Window, x, y int) {
 		w.debugf("moved to %d,%d", x, y)
 		remeasure()
+		// Onto another monitor, which may have colours of its own.
+		w.updateColor(false)
 		w.noteNormal()
 		for _, c := range w.popups {
 			_ = c.attach(c.anchor)
@@ -1049,12 +1084,9 @@ type frame struct {
 // render is the window's render thread. It owns the GL context: it
 // replays each frame the engine presents, swaps, and reports the frame
 // shown once the swap returns.
-//
-// The goroutine keeps its thread until it exits, so the raised thread
-// and the GL context end together with it.
 func (w *Window) render() {
 	runtime.LockOSThread()
-	raiseThread()
+	defer runtime.UnlockOSThread()
 	defer close(w.done)
 
 	r, err := w.startGL()
@@ -1084,6 +1116,10 @@ func (w *Window) render() {
 	var ft frameTimes
 	// shownEdge is the edge the last frame presented left for the border
 	shownEdge := float32(-1)
+	// shownLUT is the colour table handed to the renderer last, and
+	// shownColor the colour state GUNIM_DEBUG_FRAMES logged last.
+	var shownLUT *icc.LUT
+	var shownColor driver.ColorInfo
 	// When a frame draws a big mask stretched, sharpen fires once the mask can be sharp, to draw the frame again,
 	// as again. A frame drawn before then takes its place. The engine keeps a frame's ops until it presents the
 	// frame after, so they hold.
@@ -1105,11 +1141,22 @@ func (w *Window) render() {
 			w.mu.Lock()
 			fbW, fbH, scale, rate := w.fbW, w.fbH, w.scale, w.rate
 			r.Under = w.under
+			lut, colorInfo := w.colorLUT, w.colorInfo
 			readback, shot := w.readback, w.shot
 			w.shot = nil
 			w.mu.Unlock()
 			if shot != nil {
 				readback = shotBack(readback, shot)
+			}
+			if lut != shownLUT {
+				shownLUT = lut
+				if err := r.SetColor(lut); err != nil {
+					w.colorConvertFailed(err)
+				}
+			}
+			if framesDebug && colorInfo != shownColor {
+				shownColor = colorInfo
+				log.Printf("gunim frames %p colour: %v", w, colorInfo)
 			}
 			t0 := time.Now()
 			if w.pres != nil {
@@ -1139,6 +1186,10 @@ func (w *Window) render() {
 				}
 				pix := make([]byte, fbW*fbH*4)
 				r.GL.ReadPixels(pix, 0, 0, int32(fbW), int32(fbH), gl.RGBA, gl.UNSIGNED_BYTE)
+				if w.pres != nil && r.Converting() {
+					// The canvas is in sRGB; the window shows it converted.
+					convertPixels(r, pix)
+				}
 				readback(pix, fbW, fbH)
 			}
 			t1 := time.Now()
@@ -1152,7 +1203,7 @@ func (w *Window) render() {
 				w.fail(fmt.Errorf("desktop: swap buffers: %w", err))
 			}
 			if framesDebug {
-				ft.add(w, t1.Sub(t0), t2.Sub(t1), time.Since(t2), gpu, &r.Stats, rate, fbW, fbH)
+				ft.add(w, t1.Sub(t0), t2.Sub(t1), time.Since(t2), gpu, &r.Stats, rate, fbW, fbH, r.Converting())
 			}
 			w.uncover()
 			if r.Edge != shownEdge {
@@ -1189,7 +1240,8 @@ func (w *Window) render() {
 // framesDebug is set by GUNIM_DEBUG_FRAMES=1, which logs to standard
 // error, each second, how long each window took over its frames: to
 // draw one, to wait for the monitor's vertical blank, and to hand it
-// to the screen.
+// to the screen; and whether its colours are converted to the display's
+// profile, with the profile and why not each time that changes.
 var framesDebug = os.Getenv("GUNIM_DEBUG_FRAMES") != ""
 
 // framesFinish is set by GUNIM_DEBUG_FRAMES=gpu, which also waits for
@@ -1211,7 +1263,7 @@ type frameTimes struct {
 // add counts a frame that took draw, wait and present, and logs the
 // second's sums once one has passed. A frame is late where the three
 // together took longer than a refresh at rate.
-func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int) {
+func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int, converting bool) {
 	ft.gpu += gpu
 	ft.gpuMax = max(ft.gpuMax, gpu)
 	ft.sent.Flushes += sent.Flushes
@@ -1241,9 +1293,13 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	n := time.Duration(ft.n)
 	log.Printf("gunim frames %p %dx%d at %.0f Hz: %d frames, %d late; draw %.1f ms (max %.1f), vblank wait %.1f (max %.1f), present %.1f (max %.1f)",
 		w, fbW, fbH, rate, ft.n, ft.late, ms(ft.draw/n), ms(ft.drawMax), ms(ft.wait/n), ms(ft.waitMax), ms(ft.present/n), ms(ft.presentMax))
-	log.Printf("gunim frames %p sent each frame: %d quads, %.1f MB in %d draws, %d layers; handing them over took %.1f ms; gpu %.1f ms (max %.1f)",
+	colour := "sRGB as it is"
+	if converting {
+		colour = "converted to the display's profile"
+	}
+	log.Printf("gunim frames %p sent each frame: %d quads, %.1f MB in %d draws, %d layers; handing them over took %.1f ms; gpu %.1f ms (max %.1f); colour %s",
 		w, ft.sent.Quads/ft.n, float64(ft.sent.Bytes)/float64(ft.n)/1e6, ft.sent.Flushes/ft.n, ft.sent.Layers/ft.n,
-		ms(ft.sent.FlushTime/n), ms(ft.gpu/n), ms(ft.gpuMax))
+		ms(ft.sent.FlushTime/n), ms(ft.gpu/n), ms(ft.gpuMax), colour)
 	*ft = frameTimes{from: now}
 }
 

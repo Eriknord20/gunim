@@ -192,7 +192,7 @@ func (n *NumberField) nudge(delta float64, u *gunim.UI) {
 // settle holds the value to the bounds and rewrites the text, which is
 // what leaving the field or pressing Enter does.
 func (n *NumberField) settle(u *gunim.UI) {
-	v, ok := parseNumber(n.TextField.Text())
+	v, ok := parseNumber(n.Text())
 	if !ok {
 		v = n.value
 	}

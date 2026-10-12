@@ -176,3 +176,78 @@ func clipboardBytes(format uintptr) ([]byte, bool, error) {
 	copy(out, unsafe.Slice((*byte)(unsafe.Pointer(buffer)), size))
 	return out, true, nil
 }
+
+// platformSetClipboardImage puts img on the clipboard twice over: as CF_DIBV5, which every program that pastes a
+// picture reads, and Windows turns into CF_DIB and CF_BITMAP for older ones, and as the registered "PNG" format,
+// which browsers and Office prefer and which keeps alpha as it is. An img with no picture empties the clipboard.
+func platformSetClipboardImage(img *ClipboardImage) error {
+	var pngFormat uintptr
+	if img.png != nil {
+		name, err := windows.UTF16PtrFromString("PNG")
+		if err != nil {
+			return err
+		}
+		// Without a "PNG" format, which is never expected, the bitmap alone carries the picture.
+		pngFormat, _, _ = procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(name)))
+	}
+	type item struct {
+		format uintptr
+		data   []byte
+		object uintptr
+	}
+	var items []item
+	for _, it := range []item{{format: _CF_DIBV5, data: img.dib}, {format: pngFormat, data: img.png}} {
+		if it.format != 0 && it.data != nil {
+			items = append(items, it)
+		}
+	}
+	free := func(items []item) {
+		for _, it := range items {
+			if it.object != 0 {
+				_, _, _ = procGlobalFree.Call(it.object)
+			}
+		}
+	}
+	for i := range items {
+		o, err := globalCopy(items[i].data)
+		if err != nil {
+			free(items)
+			return err
+		}
+		items[i].object = o
+	}
+
+	if err := openClipboard(); err != nil {
+		free(items)
+		return err
+	}
+	defer closeClipboard()
+	if r, _, e := procEmptyClipboard.Call(); r == 0 {
+		free(items)
+		return fmt.Errorf("glfw: failed to empty clipboard: %w", e)
+	}
+	for i, it := range items {
+		// The clipboard owns the memory once this succeeds.
+		if r, _, e := procSetClipboardData.Call(it.format, it.object); r == 0 {
+			free(items[i:])
+			return fmt.Errorf("glfw: failed to set clipboard data: %w", e)
+		}
+	}
+	return nil
+}
+
+// globalCopy returns a movable global memory object holding a copy of data, for the clipboard to own.
+func globalCopy(data []byte) (uintptr, error) {
+	object, _, e := procGlobalAlloc.Call(_GMEM_MOVEABLE, uintptr(len(data)))
+	if object == 0 {
+		return 0, fmt.Errorf("glfw: failed to allocate global handle for clipboard: %w", e)
+	}
+	buffer, _, e := procGlobalLock.Call(object)
+	if buffer == 0 {
+		_, _, _ = procGlobalFree.Call(object)
+		return 0, fmt.Errorf("glfw: failed to lock global handle: %w", e)
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buffer)), len(data)), data)
+	_, _, _ = procGlobalUnlock.Call(object)
+	return object, nil
+}

@@ -850,7 +850,7 @@ func (m *Menu) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom
 	if m.hot >= 0 && !m.glide {
 		m.hotY.Jump(m.rowTop(m.hot))
 		// The menu opens with the highlighted row in its middle.
-		m.scroll.jumpTo(m.scroll.clamp(m.top(m.hot) - (m.scroll.viewport-m.row)/2))
+		m.scroll.jumpToY(m.scroll.clamp(m.top(m.hot) - (m.scroll.viewport-m.row)/2))
 	}
 	m.glide = true
 	m.followPointer()
@@ -869,7 +869,7 @@ func (m *Menu) newRows() {
 	if !m.glide {
 		return
 	}
-	m.scroll.jumpTo(m.scroll.clamp(m.scroll.target))
+	m.scroll.jumpToY(m.scroll.clamp(m.scroll.target))
 	if m.hot >= 0 {
 		m.hotY.Jump(m.rowTop(m.hot))
 	}
@@ -970,7 +970,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 			small := size * 0.85
 			caption := r.label.shape(face, m.label(i), small)
 			if fits := room + m.gut + m.iconSpace; caption.Advance > fits {
-				caption = cutRun(caption, m.smallEll.shape(face, "…", small), fits)
+				caption = cutRunWith(caption, m.smallEll.shape(face, "…", small), fits)
 			}
 			caption.Paint(p, geom.Pt(card.Min.X+pad, m.rowY(i)+(m.row-caption.Height())/2), hint)
 			continue
@@ -978,12 +978,12 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		it := &m.list.items[i]
 		if it.Checked {
 			s := IconSize.Get(th)
-			paintIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+m.gut/2-1-s/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
+			drawIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+m.gut/2-1-s/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
 		}
 		x := card.Min.X + pad + m.gut
 		if it.Icon != nil {
 			s := IconSize.Get(th)
-			paintIcon(p, th, it.Icon, geom.Rc(x, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
+			drawIcon(p, th, it.Icon, geom.Rc(x, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
 		} else if it.Swatch.A > 0 {
 			paintSwatch(p, th, it.Swatch, geom.Pt(x, m.rowY(i)+m.row/2))
 		}
@@ -994,7 +994,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 				c = dimHint
 			}
 			s := IconSize.Get(th)
-			paintIcon(p, th, icon.ChevronRight, geom.Rc(card.Max.X-pad-bar-s+4, m.rowY(i)+(m.row-s)/2, s, s), c, 1)
+			drawIcon(p, th, icon.ChevronRight, geom.Rc(card.Max.X-pad-bar-s+4, m.rowY(i)+(m.row-s)/2, s, s), c, 1)
 			fits -= menuSubRoom
 		} else if it.Hint != "" {
 			h := r.hint.shape(face, it.Hint, size*0.9)
@@ -1008,7 +1008,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		full := r.label.shape(face, m.label(i), size)
 		run := full
 		if run.Advance > fits {
-			run = cutRun(full, m.ell.shape(face, "…", size), fits)
+			run = cutRunWith(full, m.ell.shape(face, "…", size), fits)
 		}
 		y := m.rowY(i) + (m.row-run.Height())/2
 		run.Paint(p, geom.Pt(x+m.iconSpace, y), col)
@@ -1377,14 +1377,14 @@ func (d *Dropdown) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		case d.iconSpace == 0:
 		case it.Icon != nil:
 			s := IconSize.Get(th)
-			paintIcon(p, th, it.Icon, geom.Rc(x, (box.H-s)/2, s, s), Ink.Get(th), 1)
+			drawIcon(p, th, it.Icon, geom.Rc(x, (box.H-s)/2, s, s), Ink.Get(th), 1)
 		case it.Swatch.A > 0:
 			paintSwatch(p, th, it.Swatch, geom.Pt(x, box.H/2))
 		}
 		x += d.iconSpace
 		run := d.shown.shape(faceIn(Font, th), it.Label, TextSize.Get(th))
 		if room := box.W - x - pad - chevron - pad; run.Advance > room {
-			run = cutRun(run, d.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
+			run = cutRunWith(run, d.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
 		}
 		run.Paint(p, geom.Pt(x, (box.H-run.Height())/2), Ink.Get(th))
 	}
@@ -1398,7 +1398,7 @@ func (d *Dropdown) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 // paintChevron draws icon.ChevronDown centred on c.
 func paintChevron(p *paint.Painter, th *theme.Live, c geom.Point, ink color.NRGBA) {
 	s := IconSize.Get(th)
-	paintIcon(p, th, icon.ChevronDown, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
+	drawIcon(p, th, icon.ChevronDown, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
 }
 
 // ContextMenu opens a menu at the pointer when its child is clicked
@@ -1601,24 +1601,24 @@ type PartTip struct {
 	tip tipper
 }
 
-// Handle follows the pointer event e over owner, with text the tooltip of the part under it.
-func (p *PartTip) Handle(e input.Event, u *gunim.UI, owner gunim.Node, text string) {
-	if text != p.tip.text {
+// Handle follows the pointer event e over owner, with words the tooltip of the part under it.
+func (p *PartTip) Handle(e input.Event, u *gunim.UI, owner gunim.Node, words string) {
+	if words != p.tip.text {
 		p.tip.hide(u)
-		p.tip.text = text
+		p.tip.text = words
 	}
-	if text == "" {
+	if words == "" {
 		if _, left := e.(input.PointerLeave); left {
 			p.tip.quiet = false
 		}
 		return
 	}
-	if _, moved := e.(input.PointerMove); moved && p.tip.popup == nil && p.tip.stop == nil && !p.tip.quiet {
-		p.tip.owner, p.tip.delay, p.tip.at = owner, tipDelay, e.(input.PointerMove).Pos
+	if move, moved := e.(input.PointerMove); moved && p.tip.popup == nil && p.tip.stop == nil && !p.tip.quiet {
+		p.tip.owner, p.tip.delay, p.tip.at = owner, tipDelay, move.Pos
 		p.tip.wait(u)
 		return
 	}
-	p.tip.handle(e, u, owner, text, tipDelay)
+	p.tip.handle(e, u, owner, words, tipDelay)
 }
 
 // Hide hides the tooltip, such as while the part under the pointer is dragged.
@@ -1639,19 +1639,19 @@ type tipper struct {
 	card *tip
 }
 
-// retext turns the words of the tooltip showing over to text, where they differ.
-func (t *tipper) retext(text string) {
-	t.text = text
-	if t.card != nil && t.card.text != text && text != "" {
-		t.card.turnTo(text)
+// retext turns the words of the tooltip showing over to words, where they differ.
+func (t *tipper) retext(words string) {
+	t.text = words
+	if t.card != nil && t.card.text != words && words != "" {
+		t.card.turnTo(words)
 	}
 }
 
-// handle shows the tooltip text for owner once the pointer rests on it for delay, and hides it when the pointer
+// handle shows the tooltip words for owner once the pointer rests on it for delay, and hides it when the pointer
 // leaves, presses or scrolls. After a press or a scroll it stays down until the pointer leaves and comes back.
-func (t *tipper) handle(e input.Event, u *gunim.UI, owner gunim.Node, text string, delay time.Duration) {
+func (t *tipper) handle(e input.Event, u *gunim.UI, owner gunim.Node, words string, delay time.Duration) {
 	t.owner, t.delay = owner, delay
-	t.retext(text)
+	t.retext(words)
 	switch e := e.(type) {
 	case input.PointerEnter:
 		t.at, t.quiet = e.Pos, false
@@ -1744,8 +1744,8 @@ func (t *tip) FitPopup(r driver.Room) {
 	}
 }
 
-func newTip(text string) *tip {
-	return &tip{text: text, in: anim.NewFloat(0), turn: anim.NewFloat(1)}
+func newTip(words string) *tip {
+	return &tip{text: words, in: anim.NewFloat(0), turn: anim.NewFloat(1)}
 }
 
 // turnTo turns the words over to s.

@@ -555,7 +555,7 @@ func (m *Month) shown(from, to time.Time) []Event {
 }
 
 // moved returns where e goes when g drags it from its day to the day under the pointer.
-func (m *Month) moved(e Event, g *monthDrag) (time.Time, time.Time) {
+func (m *Month) moved(e Event, g *monthDrag) (start, end time.Time) {
 	days := g.to - g.start
 	s := AddDays(Day(e.Start), days).Add(dayOffset(e.Start))
 	return s, s.Add(e.End.Sub(e.Start))
@@ -724,14 +724,14 @@ func (m *Month) chipAt(pt geom.Point) (chip, bool) {
 func (m *Month) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerMove:
-		text := ""
+		tip := ""
 		if ch, ok := m.chipAt(e.Pos); ok && ch.more == 0 && m.drag == nil {
 			line := clock(ch.e.Start.Hour(), ch.e.Start.Minute()) + " " + ch.e.Title
 			if widget.Font.Get(u.Theme()).Shape(line, EventText.Get(u.Theme())).Advance > ch.box.Size().W-20 {
-				text = eventTip(ch.e)
+				tip = eventTip(ch.e)
 			}
 		}
-		m.tip.Handle(e, u, m, text)
+		m.tip.Handle(e, u, m, tip)
 	case input.PointerLeave, input.PointerDown:
 		m.tip.Handle(e, u, m, "")
 	case input.Scroll:

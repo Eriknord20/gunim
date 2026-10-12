@@ -2,7 +2,6 @@ package widget
 
 import (
 	"image/color"
-	"math"
 	"slices"
 	"time"
 
@@ -30,7 +29,7 @@ var (
 
 // TileGrid shows a long run of items as tiles of one size in rows, such as pictures in a folder, and scrolls
 // through them. It builds only the tiles in view and a row beyond, so a hundred thousand items cost what the few
-// dozen on screen do.
+// dozen on screen do. With Aspect set it lays the tiles out in justified rows instead, each tile its own shape.
 //
 // It selects as a [DataGrid] with Multi does: a click, Ctrl and Shift with a click, the arrow keys in two
 // directions, Page Up and Page Down, Home and End, and Ctrl+A. A drag from empty space draws a band that selects
@@ -61,8 +60,33 @@ type TileGrid struct {
 	OnDragEnd func(e input.DragEnd, u *gunim.UI) gunim.Intent
 
 	n int
-	// Size is the size of each tile. Change it and the tiles spring to their new places and sizes.
+	// Size is the size of each tile. Change it and the tiles spring to their new places and sizes. In justified
+	// rows, with Aspect set, it is a tile's size at the rows' target height.
 	Size geom.Size
+	// Aspect, when set, lays the tiles out in justified rows, as a photo library does: each tile i as wide as Aspect(i)
+	// times its picture's height, in rows of one height that each fill the grid's width exactly, between the
+	// padding. Aspect gives a picture's width over its height; nought, less or NaN gives a tile Size's picture
+	// shape, Size.W over Size.H less Caption. Aspects are kept between 1/20 and 20.
+	//
+	// A row gathers tiles at the target height, Size.H, until the next would pass the right edge, then shrinks to
+	// take that tile too or grows to fill the width without it, whichever changes it less; a row of several tiles
+	// stays between 0.6 and 1.5 times the target, and one that would grow further stops short of the right edge. A
+	// tile too wide for a row alone takes a row alone, shrunk to fit. A group's last row is not stretched: it keeps
+	// the target height, from the left. Each group, from SetGroups, starts a new row.
+	//
+	// The rows are laid out again only when what they depend on changes: the width, Size, Caption, the gap, the
+	// padding, SetLen, SetGroups, Reorder, Rebuild or Reshape. Call Reshape when Aspect gives new answers, and the
+	// tiles glide to their new places. Nil, the default, lays the tiles out in columns of Size, as before; setting
+	// or clearing Aspect has the tiles spring from one layout to the other.
+	//
+	// In justified rows Up and Down go to the tile in the row above or below whose middle is nearest the tile's,
+	// Left and Right to the tile before or after, and Page Up and Page Down by about a page of rows.
+	Aspect func(i int) float32
+	// Caption, in justified rows, is the height of a band under each tile's picture, such as for its name, that
+	// is part of Size.H but not scaled with the row: a tile is as tall as its row's picture height plus Caption,
+	// and as wide as Aspect times the picture height alone. Tile lays out its picture in the top of the tile and
+	// its caption in the Caption tall band at the bottom. It does nothing to tiles of one size.
+	Caption float32
 	// Header builds the header of group k, from SetGroups, laid out across the grid HeaderHeight tall above the
 	// group's first row. Zero HeaderHeight is 40.
 	Header       func(group int) gunim.Node
@@ -97,7 +121,10 @@ type TileGrid struct {
 	jumpRow    int
 	// rebuild drops the tiles built at the next layout.
 	rebuild bool
-	lift    tileLift
+	// gap, less one, is the tile the keyboard waits at with no tile
+	// selected, as SetGap puts it; 0 for none.
+	gap  int
+	lift tileLift
 	// reorder is where each tile was, for the next layout to carry the tiles from there, as Reorder sets it; leaving
 	// holds the tiles of items gone, fading out, and of items that moved out of view, gliding there.
 	reorder []int
@@ -108,6 +135,8 @@ type TileGrid struct {
 	groups   []int
 	regroup  bool
 	headers  map[int]*headerCell
+	// shapes counts the times the tiles may have changed their aspects, so that justified rows are laid out again.
+	shapes int
 }
 
 // tileLift is a press on a tile that may become a drag of the tiles selected.
@@ -132,6 +161,7 @@ func (g *TileGrid) Len() int { return g.n }
 // SetLen makes the grid hold n tiles, keeping the selection that is still inside.
 func (g *TileGrid) SetLen(n int, u *gunim.UI) {
 	g.n = max(0, n)
+	g.shapes++
 	g.runs = clipRuns(g.runs, g.n)
 	if g.cursor >= g.n {
 		g.cursor = -1
@@ -147,6 +177,7 @@ func (g *TileGrid) SetLen(n int, u *gunim.UI) {
 // come in, and with Depart before it for the old ones to leave first.
 func (g *TileGrid) Rebuild(u *gunim.UI) {
 	g.rebuild = true
+	g.shapes++
 	u.Invalidate()
 }
 
@@ -157,11 +188,25 @@ func (g *TileGrid) Rebuild(u *gunim.UI) {
 // selection go. Tile builds the new items' tiles; the tiles that stay are kept, so the application must know them
 // by their new places.
 func (g *TileGrid) Reorder(from []int, u *gunim.UI) {
-	g.reorder, g.was = slices.Clone(from), g.lay
+	if g.reorder != nil {
+		// A reorder not laid out yet: from is over its order, so each item
+		// is carried back to where it was at the last layout.
+		composed := make([]int, len(from))
+		for j, i := range from {
+			composed[j] = -1
+			if i >= 0 && i < len(g.reorder) {
+				composed[j] = g.reorder[i]
+			}
+		}
+		g.reorder = composed
+	} else {
+		g.reorder, g.was = slices.Clone(from), g.lay
+	}
 	if g.reorder == nil {
 		g.reorder = []int{}
 	}
 	g.n = len(from)
+	g.shapes++
 	g.runs, g.cursor, g.anchor, g.hover = nil, -1, -1, -1
 	g.built = [2]int{}
 	u.Invalidate()
@@ -176,7 +221,8 @@ func (g *TileGrid) JumpToTile(i int, u *gunim.UI) {
 // Built returns how many tiles are built right now.
 func (g *TileGrid) Built() int { return len(g.live) }
 
-// Columns returns how many tiles each row held at the last layout.
+// Columns returns how many tiles each row held at the last layout, or 0 in justified rows, with Aspect set, where
+// each row holds as many as fit.
 func (g *TileGrid) Columns() int { return g.cols }
 
 // Selected returns the runs of tiles selected and the tile the keyboard is on, or -1.
@@ -193,8 +239,23 @@ func (g *TileGrid) SetSelected(runs [][2]int, cursor int, u *gunim.UI) {
 	if cursor >= g.n {
 		g.cursor = -1
 	}
-	g.anchor = g.cursor
+	// As in [DataGrid.SetSelectedRows], the selection sent again keeps
+	// the tile Shift extends from.
+	if !anchorsRuns(g.anchor, g.cursor, g.runs) {
+		g.anchor = g.cursor
+	}
 	u.Invalidate()
+}
+
+// SetGap puts the keyboard, while no tile is selected, at tile i, which
+// has taken the place of a tile taken away: Right goes to tile i, and the
+// other arrows from its place, as they would have from the tile gone. -1
+// takes it away, and so does any tile selected.
+func (g *TileGrid) SetGap(i int) {
+	g.gap = 0
+	if i >= 0 {
+		g.gap = i + 1
+	}
 }
 
 // ShowTile scrolls tile i into view, at the next layout.
@@ -294,42 +355,22 @@ func (g *TileGrid) at(p geom.Point) int {
 // placeAt returns the tile whose place is at p, in the grid's space, or -1.
 func (g *TileGrid) placeAt(p geom.Point) int {
 	l := g.lay
-	if g.cols == 0 || l.step.W <= 0 || l.step.H <= 0 {
-		return -1
-	}
-	x := p.X - l.left
-	if x < 0 {
-		return -1
-	}
-	c := int(x / l.step.W)
-	if c >= l.cols || x-float32(c)*l.step.W > l.size.W {
+	if !l.laid() || l.just == nil && (l.step.W <= 0 || l.step.H <= 0) {
 		return -1
 	}
 	r, in := l.rowAt(p.Y + g.offset.Value())
 	if !in {
 		return -1
 	}
-	return l.at(r, c)
+	return l.atX(r, p.X)
 }
 
 // inBand returns the runs of tiles band touches, in the content's space.
 func (g *TileGrid) inBand(band geom.Rect) [][2]int {
-	if g.cols == 0 || g.n == 0 {
+	l := g.lay
+	if !l.laid() || g.n == 0 {
 		return nil
 	}
-	col := func(x float32, end bool) int {
-		c := (x - g.left) / g.step.W
-		if end {
-			return min(g.cols-1, int(math.Floor(float64(c))))
-		}
-		// Past a tile's right edge, into the gap, the band has not reached the next.
-		k := int(math.Floor(float64(c)))
-		if x-g.left-float32(k)*g.step.W > g.Size.W {
-			k++
-		}
-		return max(0, k)
-	}
-	l := g.lay
 	row := func(y float32, end bool) int {
 		r, _ := l.rowAt(y)
 		top := l.rowY(r)
@@ -341,20 +382,17 @@ func (g *TileGrid) inBand(band geom.Rect) [][2]int {
 			return r
 		}
 		// Past a row's tiles, into the gap, the band has not reached the next.
-		if y > top+l.size.H {
+		if y > top+l.rowH(r) {
 			r++
 		}
 		return max(0, r)
 	}
-	c0, c1 := col(band.Min.X, false), col(band.Max.X, true)
 	r0, r1 := row(band.Min.Y, false), min(row(band.Max.Y, true), l.rows()-1)
 	var runs [][2]int
-	for r := r0; r <= r1 && c0 <= c1; r++ {
-		a := l.at(r, c0)
-		if a < 0 {
-			continue
+	for r := r0; r <= r1; r++ {
+		if a, b := l.touched(r, band.Min.X, band.Max.X); a < b {
+			runs = addRun(runs, a, b)
 		}
-		runs = addRun(runs, a, min(l.rowLast(r), l.rowFirst(r)+c1)+1)
 	}
 	return runs
 }
@@ -529,17 +567,19 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 		return false
 	}
 	l := g.lay
-	pageRows := max(1, int(g.viewport/max(l.step.H, 1)))
+	pageRows := max(1, int(g.viewport/max(l.rowStep(), 1)))
 	at := g.cursor
-	// rowsBy is the tile rows away from the keyboard's, in its column, or the row's last where it is shorter, and
-	// no further than the first or last row.
+	gap := at < 0 && g.gap > 0 && g.gap-1 <= g.n
+	if gap {
+		at = min(g.gap-1, g.n-1)
+		g.anchor = -1
+	}
+	// rowsBy is the tile rows away from the keyboard's, no further than the first or last row.
 	rowsBy := func(d int) int {
 		if at < 0 || l.rows() == 0 {
 			return 0
 		}
-		r, c := l.rowCol(at)
-		r = min(max(r+d, 0), l.rows()-1)
-		return min(l.rowFirst(r)+c, l.rowLast(r))
+		return l.rowsAway(at, d)
 	}
 	var to int
 	switch e.Key {
@@ -547,6 +587,9 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 		to = at - 1
 	case input.KeyRight:
 		to = at + 1
+		if gap {
+			to = g.gap - 1
+		}
 	case input.KeyUp:
 		to = rowsBy(-1)
 	case input.KeyDown:
@@ -584,7 +627,9 @@ func (g *TileGrid) key(e input.KeyPress, u *gunim.UI) bool {
 	to = min(max(to, 0), g.n-1)
 	g.setCursor(to, u)
 	if e.Mods.Has(input.ModShift) {
-		if g.anchor < 0 {
+		if g.anchor < 0 && gap {
+			g.anchor = to
+		} else if g.anchor < 0 {
 			g.anchor = max(at, 0)
 		}
 		g.setRuns([][2]int{{min(g.anchor, to), max(g.anchor, to) + 1}}, u)
@@ -627,6 +672,9 @@ func (g *TileGrid) pick(i int, mods input.Mods, u *gunim.UI) {
 
 // setCursor puts the keyboard on tile i; the setRuns that follows tells OnSelect.
 func (g *TileGrid) setCursor(i int, _ *gunim.UI) {
+	if i >= 0 {
+		g.gap = 0
+	}
 	if i != g.cursor {
 		g.cursor, g.moved = i, true
 	}
@@ -655,16 +703,26 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	old := g.lay
 	g.pad = pad
 	g.step = geom.Sz(g.Size.W+gap, g.Size.H+gap)
-	g.cols = max(1, int((own.W-2*pad+gap)/g.step.W))
-	g.left = max(pad, (own.W-float32(g.cols)*g.step.W+gap)/2)
 	head := g.HeaderHeight
 	if head <= 0 {
 		head = 40
 	}
 	regrouped := g.regroup
-	g.lay = newTileLayout(g.n, g.cols, g.left, g.pad, g.step, g.Size, g.groups, head)
+	if g.Aspect != nil {
+		g.cols, g.left = 0, pad
+		key := rowsKey{n: g.n, shapes: g.shapes, width: own.W - 2*pad, pad: pad, gap: gap, head: head,
+			caption: g.Caption, size: g.Size, starts: g.groups}
+		if old.just == nil || !old.just.key.same(key) {
+			key.starts = slices.Clone(key.starts)
+			g.lay = newJustifiedLayout(key, g.Aspect)
+		}
+	} else {
+		g.cols = max(1, int((own.W-2*pad+gap)/g.step.W))
+		g.left = max(pad, (own.W-float32(g.cols)*g.step.W+gap)/2)
+		g.lay = newTileLayout(g.n, g.cols, g.left, g.pad, gap, g.step, g.Size, g.groups, head)
+	}
 	content := g.lay.content(gap)
-	relaid := old.cols != 0 && (old.step != g.step || old.cols != g.cols || old.pad != g.pad || regrouped)
+	relaid := old.laid() && (!old.same(g.lay) || regrouped)
 	if relaid && g.reorder == nil {
 		g.hold(old)
 	}
@@ -674,7 +732,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 			// The first row of a group shows its header too.
 			y -= g.lay.head
 		}
-		g.jumpTo(max(0, y))
+		g.jumpToY(max(0, y))
 	}
 	g.jumpRow = -1
 	g.fit(max(content, 0), own, th)
@@ -724,13 +782,16 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 		first = g.lay.rowFirst(max(0, r0-1))
 		last = g.lay.rowLast(min(g.lay.rows()-1, r1+2))
 	}
-	g.placeHeaders(first, last, offset, float32(g.cols)*g.step.W-gap, kids, motion, Settle.Get(th))
+	// What scrolls is placed by whole device pixels; which rows are in
+	// view goes by the offset itself.
+	placed := onPixels(offset, f.Scale)
+	g.placeHeaders(first, last, placed, kids, motion, Settle.Get(th))
 	from := g.reorder
 	g.reorder = nil
 	if from != nil {
 		g.reordered(from, first, last, th)
 	}
-	g.placeLeaving(children, offset, kids)
+	g.placeLeaving(children, placed, kids)
 	if !g.departing {
 		for i, tc := range g.live {
 			if i < first || i > last {
@@ -771,7 +832,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 		tc.cursor = g.cue.on && i == g.cursor
 		r := tc.rect()
 		kid.Layout(gunim.Tight(geom.Sz(max(r.Size().W, 0), max(r.Size().H, 0))))
-		kid.Place(geom.Pt(r.Min.X, r.Min.Y-offset))
+		kid.Place(geom.Pt(r.Min.X, r.Min.Y-placed))
 		order++
 	}
 	if g.departing {
@@ -792,7 +853,7 @@ func (g *TileGrid) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 				tc = newTileCell(g.Tile(i))
 				tc.jump(g.target(i))
 				switch {
-				case from != nil && i < len(from) && from[i] >= 0:
+				case from != nil && i < len(from) && from[i] >= 0 && from[i] < g.was.n:
 					// It comes from where it was, out of view.
 					tc.jump(g.was.target(from[i]))
 				case from != nil:
@@ -906,7 +967,7 @@ func (g *TileGrid) hold(old tileLayout) {
 	}
 	i := g.cursor
 	oldY := func(i int) float32 { return old.target(i).Min.Y }
-	if i < 0 || i >= old.n || oldY(i)+old.step.H < offset || oldY(i) > offset+g.viewport {
+	if i < 0 || i >= old.n || old.target(i).Max.Y+old.gap < offset || oldY(i) > offset+g.viewport {
 		r, _ := old.rowAt(offset)
 		i = max(0, old.rowFirst(r))
 	}

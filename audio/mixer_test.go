@@ -42,9 +42,7 @@ func TestASoundEndsAndItsVoiceIsDone(t *testing.T) {
 	if out[2*299] != 0.5 || out[2*300] != 0 {
 		t.Errorf("frames 299 and 300 are %v and %v, want the sound's last and then silence", out[2*299], out[2*300])
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("the voice is not done once its sound ended")
 	}
 	if m.Playing() != 0 {
@@ -109,9 +107,7 @@ func TestStopFadesOutAndEnds(t *testing.T) {
 	if end := out[len(out)-2]; end != 0 {
 		t.Errorf("after a stop the sound is at %v, want silence", end)
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("a stopped voice is not done")
 	}
 }
@@ -124,7 +120,7 @@ func TestPauseHoldsTheSoundWhereItIs(t *testing.T) {
 	}
 	v := m.Play(NewClip(ramp).Source(), Options{})
 	mix(m, 4800)
-	v.Pause()
+	v.Pause(0)
 	mix(m, 4800)
 	if !v.Paused() {
 		t.Fatal("not paused")
@@ -134,7 +130,7 @@ func TestPauseHoldsTheSoundWhereItIs(t *testing.T) {
 		t.Fatalf("a paused voice plays %v", quiet[0])
 	}
 	held := v.Position()
-	v.Resume()
+	v.Resume(0)
 	out := mix(m, 4800)
 	// It plays on from about where it paused: the pause's own fade
 	// took a few milliseconds more.
@@ -330,9 +326,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 			t.Fatalf("frame %d is %v, want %v: the second source ran on from the first's last frame", i, out[2*i], want)
 		}
 	}
-	select {
-	case <-v.Turned():
-	default:
+	if !soon(v.Turned()) {
 		t.Fatal("the turn went unheard")
 	}
 	if p := v.Position(); p != Duration(500) {
@@ -342,9 +336,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 		t.Fatalf("the voice's length is %v, want the second source's, %v", l, Duration(1000))
 	}
 	m.Mix(out)
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Fatal("the voice played on after its last source ended")
 	}
 }
@@ -362,6 +354,29 @@ func TestAVoiceIsHeardAtTheTurnOnlyOnceTheSpeakersReachIt(t *testing.T) {
 	m.Mix(make([]float32, 2*400))
 	if p := v.Position(); p != Duration(200) {
 		t.Fatalf("200 frames of the second heard, the voice says %v", p)
+	}
+}
+
+func TestAVoicesPositionNeverGoesBackAsTheSpeakersTakeABlock(t *testing.T) {
+	m := NewMixer()
+	held := int64(300)
+	m.SetLatency(func() int64 { return held })
+	v := m.Play(&level{v: 0.5, n: 1 << 20}, Options{})
+	m.Mix(make([]float32, 2*2000))
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("2000 mixed, 300 held, the voice says %v", p)
+	}
+	// The speakers took a block of 1000 the mixer has yet to count as
+	// mixed, as happens between the two reads: the frames heard do not
+	// go back.
+	held = 1300
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("with a block taken before it is counted, the voice says %v, back from 1700", p)
+	}
+	m.Mix(make([]float32, 2*1000))
+	held = 1200
+	if p := v.Position(); p != Duration(1800) {
+		t.Fatalf("counted, the voice says %v, want 1800", p)
 	}
 }
 
@@ -421,5 +436,81 @@ func TestAMixerAtAnotherRate(t *testing.T) {
 	}
 	if got := m.Duration(44100); got != time.Second {
 		t.Errorf("44100 frames last %v", got)
+	}
+}
+
+// soon says ch receives, or is closed, within a second: the mixer
+// tells of an end or a turn a moment after it mixes it.
+func soon(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
+func TestPauseAndResumeFadeOverTheirFade(t *testing.T) {
+	m := NewMixer()
+	v := m.Play(constant(SampleRate, 1, 1).Source(), Options{})
+	mix(m, 480)
+	fade := 100 * time.Millisecond
+	v.Pause(fade)
+	half := mix(m, int(Frames(fade/2)))
+	if got := half[len(half)-2]; !near(float64(got), 0.5, 0.02) {
+		t.Errorf("half way through the pause's fade the sound is at %v, want 0.5", got)
+	}
+	// A block more: each block's time rounds down.
+	mix(m, int(Frames(fade/2))+block)
+	if !v.Paused() || mix(m, 128)[0] != 0 {
+		t.Fatal("after its fade the voice is not paused")
+	}
+	v.Resume(fade)
+	half = mix(m, int(Frames(fade/2)))
+	if got := half[len(half)-2]; !near(float64(got), 0.5, 0.02) {
+		t.Errorf("half way through the resume's fade the sound is at %v, want 0.5", got)
+	}
+}
+
+func TestFadeOutSilencesTheWholeMixUntilFadeIn(t *testing.T) {
+	m := NewMixer()
+	m.Play(constant(SampleRate, 0.5, 0.5).Source(), Options{})
+	m.Play(constant(SampleRate, 0.25, 0.25).Source(), Options{})
+	fade := 100 * time.Millisecond
+	m.FadeOut(fade)
+	half := mix(m, int(Frames(fade/2)))
+	if got := half[len(half)-2]; !near(float64(got), 0.375, 0.02) {
+		t.Errorf("half way through the fade the mix is at %v, want 0.375", got)
+	}
+	mix(m, int(Frames(fade/2))+block)
+	if quiet := mix(m, 480); quiet[0] != 0 || quiet[len(quiet)-2] != 0 {
+		t.Fatalf("after the fade the mix plays %v", quiet[0])
+	}
+	if m.Playing() != 2 {
+		t.Errorf("%d voices play under the fade, want 2", m.Playing())
+	}
+	m.FadeIn(fade)
+	mix(m, int(Frames(fade)))
+	if got := mix(m, 128)[0]; !near(float64(got), 0.75, 1e-6) {
+		t.Errorf("after FadeIn the mix is at %v, want 0.75", got)
+	}
+}
+
+func TestSoundingIsAVoiceNotPaused(t *testing.T) {
+	m := NewMixer()
+	if m.Sounding() {
+		t.Error("a mixer playing nothing sounds")
+	}
+	v := m.Play(constant(SampleRate, 1, 1).Source(), Options{})
+	if !m.Sounding() {
+		t.Error("a mixer playing a voice is silent")
+	}
+	v.Pause(10 * time.Millisecond)
+	if !m.Sounding() {
+		t.Error("a voice fading as it pauses is silent")
+	}
+	mix(m, 4800)
+	if m.Sounding() {
+		t.Error("a mixer of paused voices sounds")
 	}
 }

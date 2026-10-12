@@ -99,8 +99,8 @@ type Dialog struct {
 	cancel    *Button
 	extra     []*Button
 	titleText laidText
-	// width is the panel's width at the last layout.
-	width float32
+	// laidWidth is the panel's width at the last layout.
+	laidWidth float32
 	// height is the panel's height, from the last layout, and focused
 	// is set once the keyboard has gone to the body's first field.
 	height  float32
@@ -207,7 +207,7 @@ func (d *Dialog) focusables() []gunim.Node {
 		out = append(out, b.Focusables()...)
 	}
 	if d.DefaultFirst {
-		buttons := d.buttons()
+		buttons := d.okCancel()
 		for i := len(buttons) - 1; i >= 0; i-- {
 			out = append(out, buttons[i])
 		}
@@ -219,11 +219,11 @@ func (d *Dialog) focusables() []gunim.Node {
 	for _, b := range d.extra {
 		out = append(out, b)
 	}
-	return append(out, d.buttons()...)
+	return append(out, d.okCancel()...)
 }
 
-// buttons are Cancel, when it has a label, and OK.
-func (d *Dialog) buttons() []gunim.Node {
+// okCancel is Cancel, when it has a label, and OK.
+func (d *Dialog) okCancel() []gunim.Node {
 	if d.cancel.Label == "" {
 		return []gunim.Node{d.ok}
 	}
@@ -243,7 +243,7 @@ func (d *Dialog) Children() []gunim.Node {
 	for _, b := range d.extra {
 		out = append(out, b)
 	}
-	return append(out, d.buttons()...)
+	return append(out, d.okCancel()...)
 }
 
 // held is the body as the dialog holds it: in a scroll, so a body too
@@ -310,7 +310,7 @@ func (d *Dialog) Handle(e input.Event, u *gunim.UI) bool {
 			// Cancel has the keyboard, and Enter presses it rather than
 			// the action the dialog stands out with: its ring says so,
 			// however the dialog was opened.
-			u.Focus(d.buttons()[0])
+			u.Focus(d.okCancel()[0])
 			u.ShowFocusRing()
 			return true
 		}
@@ -350,7 +350,7 @@ func (d *Dialog) row() []gunim.Node {
 	for _, b := range d.extra {
 		out = append(out, b)
 	}
-	return append(out, d.buttons()...)
+	return append(out, d.okCancel()...)
 }
 
 // step moves focus from the button that has it to the next along the
@@ -423,7 +423,7 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		want = d.Width
 	}
 	width := min(max(want, row+2*pad), size.W)
-	d.width = width
+	d.laidWidth = width
 	// The panel grows to fit the title bar, the body and the buttons.
 	bar := d.barHeight(th)
 	var body, problem gunim.Child
@@ -438,10 +438,11 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		if d.problem.Text != "" {
 			around += pad/2 + ps.H
 		}
-		// A body taller than the window is measured again with the
-		// room that is left, so a form that scrolls fills it instead of
-		// running off both ends of the screen.
-		if room := size.H - DialogMargin.Get(th) - around; around+bs.H > size.H && room > 0 {
+		// A body too tall to leave the dialog its margin is measured
+		// again with the room that is left, so a form that scrolls
+		// fills it instead of running off both ends of the screen, or
+		// up to the window's very edge, under a title bar drawn there.
+		if room := size.H - DialogMargin.Get(th) - around; around+bs.H > size.H-DialogMargin.Get(th) && room > 0 {
 			bs = body.Layout(gunim.Tight(geom.Sz(width-2*pad, room)))
 		}
 	}
@@ -469,7 +470,7 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 
 // panel returns the dialog's own rectangle, centred in size.
 func (d *Dialog) panel(size geom.Size, f gunim.Frame) geom.Rect {
-	w, h := d.width, d.height
+	w, h := d.laidWidth, d.height
 	if w <= 0 {
 		w = DialogWidth.Get(f.Theme)
 	}
@@ -620,7 +621,7 @@ func (d *Dialog) paintBar(p *paint.Painter, th *theme.Live, panel geom.Rect, rad
 	y := float32(math.Round(float64(strip.Min.Y + (h-title.Size.H)/2)))
 	if ic, ink := d.mark(); ic != nil {
 		s := IconSize.Get(th)
-		paintIcon(p, th, ic, geom.Rc(x, strip.Min.Y+(h-s)/2, s, s), ink.Get(th), 1)
+		drawIcon(p, th, ic, geom.Rc(x, strip.Min.Y+(h-s)/2, s, s), ink.Get(th), 1)
 	}
 	title.Paint(p, geom.Pt(x+room, y), Ink.Get(th))
 }

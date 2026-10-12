@@ -101,6 +101,8 @@ func (r *transferRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 		p.RRect(geom.Rc(track.Min.X, track.Min.Y, w, 2), 1, paint.Solid(widget.Accent.Get(th)))
 	case TransferFailed:
 		widget.PaintIcon(p, th, icon.X, r.cross().Inset(geom.Uniform(4)), Faint.Get(th))
+	default:
+		// A transfer still waiting draws no bar of its own.
 	}
 }
 

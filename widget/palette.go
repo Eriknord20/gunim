@@ -587,7 +587,7 @@ func (c *paletteCard) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids g
 		run := c.status.shape(face, c.p.Status, TextSize.Get(th)*0.85)
 		room := c.card.Size().W - 2*c.pad - MenuRowPadding.Get(th)
 		if run.Advance > room {
-			run = cutRun(run, face.Shape("…", run.Size), room)
+			run = cutRunWith(run, face.Shape("…", run.Size), room)
 		}
 		y := c.card.Min.Y + c.pad + c.fieldH + (paletteStatus(th)-run.Height())/2
 		run.Paint(p, geom.Pt(c.card.Min.X+c.pad+MenuRowPadding.Get(th), y), PaletteHint.Get(th))
@@ -681,7 +681,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		end -= IconSize.Get(th) + pad
 	}
 	if run.Advance > end-lead {
-		run = cutRun(run, face.Shape("…", size), end-lead)
+		run = cutRunWith(run, face.Shape("…", size), end-lead)
 	}
 	// The matched letters sit on marks, joined where they run on.
 	mark := PaletteMark.Get(th)
@@ -704,7 +704,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	if item.Icon != nil {
 		s := IconSize.Get(th)
-		paintIcon(p, th, item.Icon, geom.Rc(pad, (box.H-s)/2, s, s), ink, 1)
+		drawIcon(p, th, item.Icon, geom.Rc(pad, (box.H-s)/2, s, s), ink, 1)
 	}
 	run.Paint(p, geom.Pt(lead, top), ink)
 	if item.Hint != "" {
@@ -712,12 +712,12 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	if item.Checked {
 		s := IconSize.Get(th)
-		paintIcon(p, th, icon.Check, geom.Rc(end+pad, (box.H-s)/2, s, s), ink, 1)
+		drawIcon(p, th, icon.Check, geom.Rc(end+pad, (box.H-s)/2, s, s), ink, 1)
 	}
 	if x := lead + run.Advance + size*0.8; item.Detail != "" && end-x > size {
 		detail := r.detail.shape(face, item.Detail, size*0.85)
 		if detail.Advance > end-x {
-			detail = cutRun(detail, face.Shape("…", detail.Size), end-x)
+			detail = cutRunWith(detail, face.Shape("…", detail.Size), end-x)
 		}
 		detail.Paint(p, geom.Pt(x, (box.H-detail.Height())/2), PaletteHint.Get(th))
 	}

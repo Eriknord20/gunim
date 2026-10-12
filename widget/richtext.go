@@ -128,7 +128,7 @@ func (r *RichText) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			}
 			if isIcon {
 				size := pc.Run.Size
-				paintIcon(p, th, s.Icon, geom.Rc(pc.At.X, pc.At.Y+(pc.Run.Height()-size)/2, size, size), ink, 1)
+				drawIcon(p, th, s.Icon, geom.Rc(pc.At.X, pc.At.Y+(pc.Run.Height()-size)/2, size, size), ink, 1)
 				continue
 			}
 			pc.Run.Paint(p, pc.At, ink)

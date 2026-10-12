@@ -250,7 +250,7 @@ func (m *msg) toggle(emoji, who string) {
 
 // reactionsOf returns m's reactions as the timeline shows them.
 func reactionsOf(m *msg) []Reaction {
-	var out []Reaction
+	out := make([]Reaction, 0, len(m.reactions))
 	for _, r := range m.reactions {
 		names := make([]string, len(r.who))
 		for i, w := range r.who {

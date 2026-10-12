@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -49,6 +50,15 @@ const (
 	msgLatenciesChanged  = 6
 	msgSupportsTimeInfo  = 7
 )
+
+// messageNames names the messages a driver sends of a change, for the
+// log; the rest are questions of what the host can do.
+var messageNames = map[int32]string{
+	msgResetRequest:     "open me again",
+	msgBufferSizeChange: "my buffer size changed",
+	msgResyncRequest:    "resync",
+	msgLatenciesChanged: "my latencies changed",
+}
 
 // bufferInfo asks the driver for one channel's two buffers, and holds
 // them once it has made them.
@@ -135,6 +145,7 @@ type Device struct {
 	typ   sampleType
 	fill  func([]float32)
 	reset func()
+	log   func(string, ...any)
 	// outs is how many channels play: two, or one for a driver of one
 	// output. buf is the frames Fill fills.
 	outs int
@@ -168,9 +179,20 @@ func Open(c Config) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Device{t: t, fill: c.Fill, reset: c.Reset}
+	d := &Device{t: t, fill: c.Fill, reset: c.Reset, log: c.Log}
 	cbOnce.Do(makeCallbacks)
-	t.run(func() { err = d.open(clsid, c) })
+	done := t.start(func() { err = d.open(clsid, c) })
+	if !waitFor(done, openWait) {
+		d.logf("asio: %s did not start within %v; let go", c.Name, openWait)
+		d.live.Store(false)
+		playing.CompareAndSwap(d, nil)
+		go func() {
+			<-done
+			t.run(d.release)
+			t.stop()
+		}()
+		return nil, ErrNotAnswering
+	}
 	if err != nil {
 		t.run(d.release)
 		t.stop()
@@ -399,15 +421,56 @@ func (d *Device) ControlPanel() error {
 	return nil
 }
 
-// Close stops the driver and lets it go.
+// Close stops the driver and lets it go. A driver that does not stop
+// in time is let go as it is, and Close returns [ErrNotAnswering].
 func (d *Device) Close() error {
+	var err error
 	d.closeOnce.Do(func() {
 		openMu.Lock()
 		defer openMu.Unlock()
-		d.t.run(d.release)
+		done := d.t.start(d.release)
+		if done == nil {
+			return
+		}
+		if !waitFor(done, closeWait) {
+			d.logf("asio: %s did not stop within %v; let go", d.info.Driver, closeWait)
+			d.live.Store(false)
+			playing.CompareAndSwap(d, nil)
+			go func() {
+				<-done
+				d.t.stop()
+			}()
+			err = ErrNotAnswering
+			return
+		}
 		d.t.stop()
 	})
-	return nil
+	return err
+}
+
+// How long a driver has to start, and to stop, before it is let go.
+const (
+	openWait  = 10 * time.Second
+	closeWait = 3 * time.Second
+)
+
+// waitFor waits up to wait for done, and reports whether it came.
+func waitFor(done <-chan struct{}, wait time.Duration) bool {
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+// logf tells the device's Log, where it has one.
+func (d *Device) logf(format string, args ...any) {
+	if d.log != nil {
+		d.log(format, args...)
+	}
 }
 
 // switchTo fills the buffers of half, 0 or 1, with what plays next.
@@ -437,9 +500,11 @@ func (d *Device) switchTo(half int32) {
 // let be.
 func (d *Device) askReset() {
 	if !d.live.Load() {
+		d.logf("asio: an ask to be opened again, as the driver starts: let be")
 		return
 	}
 	d.resetOnce.Do(func() {
+		d.logf("asio: the driver asks to be opened again")
 		if d.reset != nil {
 			go d.reset()
 		}
@@ -480,11 +545,17 @@ func makeCallbacks() {
 		// Go's reads none of: the driver is asked for it.
 		sampleRateDidChange: syscall.NewCallback(func(uintptr) uintptr {
 			if d := playing.Load(); d != nil && d.live.Load() {
+				d.logf("asio: the driver's rate changed")
 				go d.resetIfMoved()
 			}
 			return 0
 		}),
 		asioMessage: syscall.NewCallback(func(selector, value, _, _ uintptr) uintptr {
+			if d := playing.Load(); d != nil {
+				if name := messageNames[int32(uint32(selector))]; name != "" {
+					d.logf("asio: the driver says: %s", name)
+				}
+			}
 			switch int32(uint32(selector)) {
 			case msgSelectorSupported:
 				switch int32(uint32(value)) {
@@ -602,11 +673,22 @@ func (s *sta) loop() {
 // run calls f on the thread and waits for it. It reports false, f
 // uncalled, once the thread has stopped.
 func (s *sta) run(f func()) bool {
+	done := s.start(f)
+	if done == nil {
+		return false
+	}
+	<-done
+	return true
+}
+
+// start has the thread call f, and returns a channel closed once f
+// returns, or nil, f uncalled, once the thread has stopped.
+func (s *sta) start(f func()) <-chan struct{} {
 	done := make(chan struct{})
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
-		return false
+		return nil
 	}
 	s.calls <- func() {
 		defer close(done)
@@ -614,8 +696,7 @@ func (s *sta) run(f func()) bool {
 	}
 	s.mu.Unlock()
 	_ = windows.SetEvent(s.wake)
-	<-done
-	return true
+	return done
 }
 
 // stop ends the thread.

@@ -96,7 +96,7 @@ func Run(a App) {
 	case "install":
 		os.Exit(installQuietly(a, self))
 	case "uninstall":
-		s, err := newSession(a, self, true)
+		s, err := sessionFor(a, self, true)
 		if err != nil {
 			fail(err)
 		}
@@ -132,7 +132,7 @@ func Run(a App) {
 	if !IsRelease(a.Version) && env != "show" {
 		return
 	}
-	s, err := newSession(a, self, false)
+	s, err := sessionFor(a, self, false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "install:", err)
 		return
@@ -150,7 +150,7 @@ func fail(err error) {
 // installQuietly installs the program at self with no window, and
 // returns the exit status.
 func installQuietly(a App, self string) int {
-	s, err := newSession(a, self, false)
+	s, err := sessionFor(a, self, false)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -227,11 +227,11 @@ func adopt(a App, self string) error {
 
 // adoptReporting is [adopt], telling progress how it goes.
 func adoptReporting(ctx context.Context, a App, self string, progress func(Progress)) error {
-	s, err := newSession(a, self, false)
+	s, err := sessionFor(a, self, false)
 	if err != nil {
 		return err
 	}
-	_, err = s.install(ctx, nil, progress, false)
+	_, err = s.installTo(ctx, nil, progress, false)
 	return err
 }
 
@@ -241,7 +241,7 @@ func adoptReporting(ctx context.Context, a App, self string, progress func(Progr
 // copy to hand over to, as when a shortcut an older installer made
 // still starts the old place. It returns "" when this copy runs on.
 func moveIn(a App, self string) (newer string) {
-	s, err := newSession(a, self, false)
+	s, err := sessionFor(a, self, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install: moving %s from %s: %v\n", a.Name, self, err)
 		return ""
@@ -250,7 +250,7 @@ func moveIn(a App, self string) (newer string) {
 		removeOld(self)
 		return s.Exe
 	}
-	if _, err := s.install(context.Background(), nil, nil, false); err != nil {
+	if _, err := s.installTo(context.Background(), nil, nil, false); err != nil {
 		fmt.Fprintf(os.Stderr, "install: moving %s from %s: %v\n", a.Name, self, err)
 		return ""
 	}
@@ -273,9 +273,10 @@ func removeOld(self string) {
 type next int
 
 const (
+	// nextEnd is the installer having nothing more to do. nextOpen
+	// starts the installed program, and nextHere runs this copy as it
+	// is.
 	nextEnd next = iota
-	// nextOpen starts the installed program, and nextHere runs this copy
-	// as it is.
 	nextOpen
 	nextHere
 )
@@ -327,6 +328,8 @@ func show(a App, s *Session) int {
 		}
 	case nextHere:
 		return again(s.self, s.args)
+	default:
+		// The end of the list is not a step.
 	}
 	return 0
 }
@@ -336,7 +339,9 @@ func show(a App, s *Session) int {
 // one: the window system closed with the installer's window, and some
 // do not open twice.
 func again(self string, args []string) int {
-	cmd := exec.Command(self, args...)
+	// No context: this is the installed copy taking over, and it runs
+	// for as long as the user keeps it open.
+	cmd := exec.Command(self, args...) //nolint:noctx
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(), Env+"=skip")
 	if err := cmd.Run(); err != nil {

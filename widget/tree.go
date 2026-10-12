@@ -414,7 +414,7 @@ func (r *treeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		face := faceIn(Font, th)
 		run := r.detail.shape(face, it.Detail, size*0.88)
 		if room := (right - x) / 2; run.Advance > room {
-			run = cutRun(run, face.Shape("…", run.Size), room)
+			run = cutRunWith(run, face.Shape("…", run.Size), room)
 		}
 		right -= run.Advance
 		quiet := Placeholder.Get(th)

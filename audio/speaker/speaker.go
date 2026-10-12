@@ -105,9 +105,19 @@ type Speaker struct {
 	dry, reads, dropouts atomic.Int64
 	// suspended stops the watch growing the buffer while nothing plays.
 	suspended atomic.Bool
-	// qmu guards q, which rounds the sound as it leaves.
-	qmu sync.Mutex
-	q   audio.Quantizer
+	// smu guards stopped, faded and asked: the device is stopped; the
+	// mix was faded out as it suspended, to fade in as it resumes; and
+	// asked counts Suspend's and Resume's calls, so a stop Suspend
+	// waits to make lapses where Resume came first.
+	smu            sync.Mutex
+	stopped, faded bool
+	asked          int
+	// q rounds the sound as it leaves, as bits and dither say: q is
+	// the goroutine's that pulls, and the settings anyone's, so neither
+	// waits.
+	bits   atomic.Int64
+	dither atomic.Bool
+	q      audio.Quantizer
 	// reset asks the watch to open the output again, as an ASIO driver
 	// asks; changed tells of an output opened again.
 	reset   chan struct{}
@@ -159,7 +169,9 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	}
 	s := &Speaker{m: m, o: o, reset: make(chan struct{}, 1), changed: make(chan struct{}, 1),
 		quit: make(chan struct{}), done: make(chan struct{}), debug: os.Getenv("GUNIM_DEBUG_AUDIO") != ""}
-	s.q = audio.Quantizer{Bits: o.Bits, Dither: o.Dither}
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
+	s.q.Ready()
 	s.fixed.Store(o.Fixed)
 	s.ahead.Store(int64(o.latency()))
 	out, err := s.open()
@@ -203,9 +215,8 @@ func (s *Speaker) open() (output, error) {
 // pull fills frames with what plays next, rounded as Bits says.
 func (s *Speaker) pull(frames []float32) {
 	s.m.Mix(frames)
-	s.qmu.Lock()
+	s.q.Bits, s.q.Dither = int(s.bits.Load()), s.dither.Load()
 	s.q.Process(frames)
-	s.qmu.Unlock()
 }
 
 // ranDry counts a read that found the buffer empty.
@@ -268,6 +279,13 @@ func (s *Speaker) watch() {
 			if dry > 0 {
 				s.logf("ran dry %d times in %v", dry, every)
 			}
+			if out := s.out.Load(); out != nil {
+				if r, ok := out.output.(*ringOutput); ok {
+					if since, now := r.stoppedTaking(2 * time.Second); now {
+						s.logf("the driver has asked for no sound in %v", since.Round(time.Millisecond))
+					}
+				}
+			}
 			// Once might be a hiccup; more is the buffer too small. It
 			// grows from how far ahead the output works, which may be
 			// further than asked, as a driver's buffer is long.
@@ -311,9 +329,8 @@ func (s *Speaker) Set(o Options) error {
 	defer s.mu.Unlock()
 	prev := s.o
 	s.o = o
-	s.qmu.Lock()
-	s.q.Bits, s.q.Dither = o.Bits, o.Dither
-	s.qmu.Unlock()
+	s.bits.Store(int64(o.Bits))
+	s.dither.Store(o.Dither)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
@@ -330,8 +347,13 @@ func (s *Speaker) reopenLocked() error {
 	if cur := s.out.Load(); cur != nil {
 		s.out.Store(nil)
 		if err := cur.close(); err != nil {
-			s.out.Store(cur)
-			return err
+			if !errors.Is(err, asio.ErrNotAnswering) {
+				s.out.Store(cur)
+				return err
+			}
+			// Let go as it stopped answering: the output asked for
+			// opens all the same.
+			s.logf("%v; opening the output again all the same", err)
 		}
 	}
 	out, err := s.open()
@@ -435,21 +457,66 @@ func (s *Speaker) Err() error {
 	return s.problem
 }
 
+// SuspendFade is how long [Speaker.Suspend] takes to fade out the
+// sound playing, and [Speaker.Resume] to fade it back in.
+const SuspendFade = 150 * time.Millisecond
+
 // Suspend stops the device, as while the application is in the
-// background on a phone. The mixer stops with it.
+// background on a phone. The mixer stops with it. Sound playing fades
+// out first, over [SuspendFade]: Suspend returns at once, and the
+// device stops once the fade has been heard, unless Resume comes
+// first.
 func (s *Speaker) Suspend() error {
+	s.smu.Lock()
+	defer s.smu.Unlock()
 	s.suspended.Store(true)
-	if out := s.out.Load(); out != nil {
-		return out.suspend()
+	s.asked++
+	if s.stopped {
+		return nil
 	}
+	if !s.faded && !s.m.Sounding() {
+		return s.stopLocked()
+	}
+	s.faded = true
+	s.m.FadeOut(SuspendFade)
+	asked := s.asked
+	time.AfterFunc(SuspendFade+s.Latency(), func() {
+		s.smu.Lock()
+		defer s.smu.Unlock()
+		if s.asked == asked && !s.stopped {
+			_ = s.stopLocked()
+		}
+	})
 	return nil
 }
 
-// Resume starts a suspended device again.
+// stopLocked stops the device. It runs with smu held.
+func (s *Speaker) stopLocked() error {
+	out := s.out.Load()
+	if out == nil {
+		return nil
+	}
+	s.stopped = true
+	return out.suspend()
+}
+
+// Resume starts a suspended device again, and fades back in the sound
+// Suspend faded out, over [SuspendFade]. Where nothing sounded as it
+// suspended, a sound played as it resumes starts at once.
 func (s *Speaker) Resume() error {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	s.asked++
 	var err error
-	if out := s.out.Load(); out != nil {
-		err = out.resume()
+	if s.stopped {
+		if out := s.out.Load(); out != nil {
+			err = out.resume()
+		}
+		s.stopped = false
+	}
+	if s.faded {
+		s.faded = false
+		s.m.FadeIn(SuspendFade)
 	}
 	s.suspended.Store(false)
 	return err

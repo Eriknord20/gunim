@@ -164,6 +164,8 @@ func (c *WindowControls) act(b windowButton, u *gunim.UI) {
 		u.ToggleMaximize()
 	case closeButton:
 		u.AskToClose()
+	default:
+		// No button is no button.
 	}
 }
 
@@ -245,11 +247,11 @@ func (c *WindowControls) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _
 			const s = 14
 			at := geom.Rc(mid.X-s/2, mid.Y-s/2, s, s)
 			if c.pinned {
-				paintIcon(p, th, icon.Pin, at, Accent.Get(th), 1)
+				drawIcon(p, th, icon.Pin, at, Accent.Get(th), 1)
 			} else {
 				func() {
 					defer p.Push(paint.Rotate(math.Pi/4, mid))()
-					paintIcon(p, th, icon.Pin, at, glyph, 1)
+					drawIcon(p, th, icon.Pin, at, glyph, 1)
 				}()
 			}
 		case minimizeButton:
@@ -271,6 +273,8 @@ func (c *WindowControls) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _
 					p.RRect(geom.Rc(mid.X-g*0.7, mid.Y-w/2, g*1.4, w), 0, paint.Solid(glyph))
 				}()
 			}
+		default:
+			// No button under the pointer is nothing to draw.
 		}
 	}
 }

@@ -40,7 +40,7 @@ func TestAZipExtractsIntoAFolder(t *testing.T) {
 	root := t.TempDir()
 	tree(t, root, "src/a.txt", "src/sub/b.txt", "src/sub/empty/")
 	fsys := LocalFS()
-	if err := ZipFiles(context.Background(), fsys, []string{at(root, "src/a.txt"), at(root, "src/sub")}, fsys, root, "x.zip", nil); err != nil {
+	if err := ZipFiles(context.Background(), fsys, []string{at(root, "src/a.txt"), at(root, "src/sub")}, fsys, root, "x.zip", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	rec, err := extract(t, at(root, "x.zip"), "x")
@@ -159,7 +159,7 @@ func TestExtractAsksAndExtracts(t *testing.T) {
 	h := newHarness(t, "pics/a.png")
 	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
 	fsys := LocalFS()
-	if err := ZipFiles(context.Background(), fsys, []string{filepath.Join(h.dir, "pics")}, fsys, h.dir, "Pics.Backup.zip", nil); err != nil {
+	if err := ZipFiles(context.Background(), fsys, []string{filepath.Join(h.dir, "pics")}, fsys, h.dir, "Pics.Backup.zip", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	h.do(Command{Name: CmdRefresh})

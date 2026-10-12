@@ -25,22 +25,45 @@ var _ driver.PlacementReader = (*Window)(nil)
 // so the window keeps where it last was while it was neither, and
 // reports that. A full-screen window reports the same, and is not
 // maximized: full screen is not a state to open a window in.
+//
+// Once the window has closed, it reports where the window was as it
+// closed, without asking the main thread, which may have stopped.
 func (w *Window) Placement() (p driver.Placement, ok bool) {
+	if p, ok, gone := w.closedAt(); gone {
+		return p, ok
+	}
 	_ = w.d.call(func() error {
-		if w.closed || w.popup {
+		if w.closed {
+			p, ok, _ = w.closedAt()
 			return nil
 		}
-		w.noteNormal()
-		if len(w.normals) == 0 {
-			return nil
-		}
-		n := w.normals[len(w.normals)-1]
-		p.Bounds = geom.Rc(float32(n[0]), float32(n[1]), float32(n[2]), float32(n[3]))
-		p.Maximized = !w.FullScreen() && !w.gw.SystemFullScreen() && attrib(w.gw, glfw.Maximized)
-		ok = true
+		p, ok = w.placementNow()
 		return nil
 	})
 	return p, ok
+}
+
+// closedAt is where the window was as it closed, and gone whether it
+// has.
+func (w *Window) closedAt() (p driver.Placement, ok, gone bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.final, w.kept, w.gone
+}
+
+// placementNow is where the window is. It runs on the main thread.
+func (w *Window) placementNow() (p driver.Placement, ok bool) {
+	if w.closed || w.popup {
+		return p, false
+	}
+	w.noteNormal()
+	if len(w.normals) == 0 {
+		return p, false
+	}
+	n := w.normals[len(w.normals)-1]
+	p.Bounds = geom.Rc(float32(n[0]), float32(n[1]), float32(n[2]), float32(n[3]))
+	p.Maximized = !w.FullScreen() && !w.gw.SystemFullScreen() && attrib(w.gw, glfw.Maximized)
+	return p, true
 }
 
 // noteNormal keeps where the window is and how big, if it is neither

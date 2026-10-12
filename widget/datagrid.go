@@ -191,6 +191,11 @@ type DataGrid struct {
 	// grid that shows its position some other way.
 	NoHeader bool
 	NoBar    bool
+	// Glide has a selection of one row, or of rows next to each other,
+	// slide and stretch to where a key, a click or [DataGrid.SlideSelectedRows]
+	// puts it, in place of jumping there. An edge that would cross more
+	// than the view jumps.
+	Glide bool
 	// DragRows, when set, lets the rows selected be dragged: a press on
 	// one and a move of a few pixels drags the data it returns, with
 	// ghost under the pointer, held grab from its top left. at is where
@@ -207,7 +212,13 @@ type DataGrid struct {
 	rows     int
 	selected int
 	focused  bool
-	cue      ringCue
+	// glideAt is where the top and bottom edges of a selection sliding
+	// to the rows glideTo are, in rows, and glideVel their speeds in rows
+	// a second; glideOn is set while it slides.
+	glideAt, glideVel [2]float64
+	glideTo           [2]int
+	glideOn           bool
+	cue               ringCue
 	// runs are the rows selected with Multi, and anchor the row a
 	// selection with Shift runs from.
 	runs   [][2]int
@@ -255,6 +266,12 @@ type DataGrid struct {
 
 	// th is the window's live theme, kept from Layout for Step.
 	th *theme.Live
+	// scale is the window's device pixels to a logical one, which the
+	// rows scroll by whole ones of.
+	scale float32
+	// gap, less one, is the row the keyboard waits above with no row
+	// selected, as SetGap puts it; 0 for none.
+	gap int
 
 	// links are where the last paint drew spans that are links.
 	links []gridLink
@@ -341,6 +358,9 @@ func (g *DataGrid) SetRows(n int, u *gunim.UI) {
 	g.goal = g.clampTop(g.goal)
 	g.top = g.clampTop(g.top)
 	g.sentFirst = -1
+	if g.glideTo[1] > g.rows {
+		g.glideOn = false
+	}
 	u.Invalidate()
 }
 
@@ -359,6 +379,9 @@ func (g *DataGrid) SetSelected(i int, u *gunim.UI) {
 	if i >= 0 {
 		g.runs = [][2]int{{i, i + 1}}
 	}
+	if !g.gliding() {
+		g.glideOn = false
+	}
 	if u != nil {
 		u.Invalidate()
 	}
@@ -371,7 +394,7 @@ func (g *DataGrid) Reveal(i int, u *gunim.UI) {
 	if i < 0 || i >= g.rows {
 		return
 	}
-	g.reveal(i)
+	g.revealRow(i)
 	if u == nil || g.rowH <= 0 {
 		g.top, g.vel = g.goal, 0
 		return
@@ -391,6 +414,18 @@ func (g *DataGrid) SelectedRows() [][2]int {
 	return slices.Clone(g.runs)
 }
 
+// SetGap puts the keyboard, while no row is selected, just above row i,
+// where a row taken away was: Down goes on to row i and Up to the row
+// above it, as they would have from the row gone. -1 takes it away, and
+// so does any row selected. With none, the keys start from the top of
+// the view.
+func (g *DataGrid) SetGap(i int) {
+	g.gap = 0
+	if i >= 0 {
+		g.gap = i + 1
+	}
+}
+
 // SetSelectedRows selects the rows in sel, runs of a first row and an end
 // row left out, and puts the keyboard on row cursor, -1 for none, without
 // telling OnSelect or OnSelectRows. It is for a grid with Multi.
@@ -403,8 +438,28 @@ func (g *DataGrid) SetSelectedRows(sel [][2]int, cursor int, u *gunim.UI) {
 	if cursor < 0 || cursor >= g.rows {
 		cursor = -1
 	}
-	g.selected, g.anchor = cursor, cursor
+	// The selection sent again as it is, as an application does when it
+	// reads its rows again, keeps the row Shift extends from: the next
+	// Shift+Down goes on from where the selection started.
+	if !anchorsRuns(g.anchor, cursor, g.runs) {
+		g.anchor = cursor
+	}
+	g.selected = cursor
+	if !g.gliding() {
+		g.glideOn = false
+	}
 	u.Invalidate()
+}
+
+// SlideSelectedRows selects the rows as [DataGrid.SetSelectedRows] does,
+// and with Glide, has the selection slide there from where it was, as
+// for a row the program found by the name the user typed.
+func (g *DataGrid) SlideSelectedRows(sel [][2]int, cursor int, u *gunim.UI) {
+	was, had := g.block()
+	moving := g.gliding()
+	g.SetSelectedRows(sel, cursor, u)
+	g.glideOn = moving
+	g.slideFrom(was, had)
 }
 
 // IsSelected reports whether row i is selected.
@@ -448,8 +503,8 @@ func (g *DataGrid) clampTop(row float64) float64 {
 	return max(0, min(row, float64(g.rows)-g.Visible()))
 }
 
-// reveal scrolls just far enough to show row i whole.
-func (g *DataGrid) reveal(i int) {
+// revealRow scrolls just far enough to show row i whole.
+func (g *DataGrid) revealRow(i int) {
 	vis := g.Visible()
 	switch {
 	case float64(i) < g.goal:
@@ -466,15 +521,18 @@ func (g *DataGrid) selectAndTell(i int, u *gunim.UI) {
 	if i >= 0 {
 		i = min(max(i, 0), g.rows-1)
 	}
+	if i >= 0 {
+		g.gap = 0
+	}
 	if i == g.selected {
 		if i >= 0 {
-			g.reveal(i)
+			g.revealRow(i)
 		}
 		return
 	}
 	g.selected = i
 	if i >= 0 {
-		g.reveal(i)
+		g.revealRow(i)
 	}
 	if g.OnSelect != nil {
 		g.send(g.OnSelect(i, u), u)
@@ -516,6 +574,21 @@ func (g *DataGrid) Step(dt time.Duration) bool {
 		moving = true
 	}
 	if g.away != nil && g.away.Step(dt) {
+		moving = true
+	}
+	if g.glideOn {
+		px := float64(max(g.rowH, 1))
+		still := true
+		for k := range 2 {
+			to := float64(g.glideTo[k])
+			g.glideAt[k], g.glideVel[k] = Quick.Get(g.th).Follow(g.glideAt[k], g.glideVel[k], to, dt)
+			if math.Abs(g.glideAt[k]-to)*px < 0.01 && math.Abs(g.glideVel[k])*px < 1 {
+				g.glideAt[k], g.glideVel[k] = to, 0
+			} else {
+				still = false
+			}
+		}
+		g.glideOn = !still
 		moving = true
 	}
 	if g.arriving {
@@ -598,10 +671,21 @@ func (g *DataGrid) before(i int) (at, above int) {
 	return at, above
 }
 
+// scrolled is how far the rows are scrolled up, in logical pixels, on
+// whole device pixels: a row's text and icon move alike, as onPixels
+// says.
+func (g *DataGrid) scrolled() float64 {
+	off := g.top * float64(g.rowH)
+	if g.scale <= 0 {
+		return off
+	}
+	return math.Round(off*float64(g.scale)) / float64(g.scale)
+}
+
 // rowY returns where row i sits in the grid, below the rows still
 // leaving above it.
 func (g *DataGrid) rowY(i int) float32 {
-	y := g.header + float32((float64(i)-g.top)*float64(g.rowH))
+	y := g.header + float32(float64(i)*float64(g.rowH)-g.scrolled())
 	if len(g.gone) == 0 {
 		return y
 	}
@@ -623,7 +707,7 @@ func (g *DataGrid) arrived(i int) float32 {
 func (g *DataGrid) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
 	th := f.Theme
 	g.view = c.Max
-	g.th = th
+	g.th, g.scale = th, f.Scale
 	g.rowH = GridRowHeight.Get(th)
 	g.header = 0
 	if !g.NoHeader {
@@ -701,13 +785,13 @@ func (g *DataGrid) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			defer p.Layer(paint.LayerOpts{Bounds: geom.Rc(0, g.header, bodyW, box.H-g.header), Opacity: 1, Clip: true})()
 			first := int(math.Floor(g.top))
 			last := min(g.rows, int(math.Ceil(g.top+g.Visible()))+1)
+			g.paintGlide(p, th, bodyW)
 			if len(g.gone) > 0 {
 				g.paintLeaving(p, th, first, last, bodyW, size, pad)
 				return
 			}
 			for i := first; i < last; i++ {
-				y := g.header + float32((float64(i)-g.top)*float64(g.rowH))
-				g.paintRow(p, th, i, y, bodyW, size, pad)
+				g.paintRow(p, th, i, g.rowY(i), bodyW, size, pad)
 			}
 		}()
 	}
@@ -731,7 +815,7 @@ func (g *DataGrid) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 // still below where the rows leaving were, and those rows shutting.
 func (g *DataGrid) paintLeaving(p *paint.Painter, th *theme.Live, first, last int, bodyW, size, pad float32) {
 	open := 1 - g.shut()
-	top := g.header + float32(-g.top*float64(g.rowH))
+	top := g.header - float32(g.scrolled())
 	for i := max(0, first-len(g.leaving)-1); i < last; i++ {
 		y := g.rowY(i)
 		if y > g.view.H || y+g.rowH < g.header {
@@ -783,7 +867,9 @@ func (g *DataGrid) paintRow(p *paint.Painter, th *theme.Live, i int, y, bodyW, s
 		defer p.Push(paint.Translate(geom.Pt(0, -6*(1-in))))()
 	}
 	cursor := g.Multi && g.cue.on && i == g.selected && countRuns(g.runs) > 1
-	g.paintContent(p, th, i, row, g.IsSelected(i), cursor, y, bodyW, size, pad)
+	// A selection sliding is painted on its way, under the rows.
+	selected := g.IsSelected(i) && !g.gliding()
+	g.paintContent(p, th, i, row, selected, cursor, y, bodyW, size, pad)
 }
 
 // paintContent paints row at y, under key in the shape cache: its tint,
@@ -871,7 +957,7 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 			return
 		}
 		if cut {
-			run = g.cutRun(run, room)
+			run = g.cutShort(run, room)
 			cutShort()
 		}
 		ty := y + (g.rowH-run.Height())/2
@@ -886,7 +972,7 @@ func (g *DataGrid) paintCell(p *paint.Painter, th *theme.Live, i, c int, spans [
 		start := pen
 		switch {
 		case s.Icon != nil:
-			paintIcon(p, th, s.Icon, geom.Rc(pen, y+(g.rowH-size)/2, size, size), ink, 1)
+			drawIcon(p, th, s.Icon, geom.Rc(pen, y+(g.rowH-size)/2, size, size), ink, 1)
 			pen += iconW
 		case s.Image != nil:
 			side := min(spanImageSide(size), g.rowH-2)
@@ -986,16 +1072,16 @@ func (g *DataGrid) shape(k spanKey, face *text.Face, s string, size float32) tex
 	return sh.run
 }
 
-// cutRun returns run cut to the glyphs that fit in room with an ellipsis
+// cutShort returns run cut to the glyphs that fit in room with an ellipsis
 // after them.
-func (g *DataGrid) cutRun(run text.Run, room float32) text.Run {
+func (g *DataGrid) cutShort(run text.Run, room float32) text.Run {
 	key := cutKey{run.Face, run.Size}
 	ell, ok := g.cut[key]
 	if !ok {
 		ell = run.Face.Shape("…", run.Size)
 		g.cut[key] = ell
 	}
-	return cutRun(run, ell, room)
+	return cutRunWith(run, ell, room)
 }
 
 func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pad float32) {
@@ -1024,7 +1110,7 @@ func (g *DataGrid) paintHeader(p *paint.Painter, th *theme.Live, bodyW, size, pa
 			right -= sortArrow + 2
 		}
 		if room := right - x - pad; run.Advance > room {
-			run = g.cutRun(run, room)
+			run = g.cutShort(run, room)
 		}
 		at := x + pad
 		if col.End {
@@ -1371,6 +1457,8 @@ func (g *DataGrid) choose(i int, mods input.Mods, focusing bool, u *gunim.UI) {
 		g.pick(i, mods, u)
 		return
 	}
+	was, had := g.block()
+	defer g.slideFrom(was, had)
 	if i == g.selected && !focusing {
 		g.selectAndTell(-1, u)
 	} else {
@@ -1458,7 +1546,9 @@ func (g *DataGrid) key(e input.KeyPress, u *gunim.UI) bool {
 			g.copied(copied, 1, u)
 			return true
 		case e.Key == input.KeyA && g.Multi && g.rows > 0:
+			was, had := g.block()
 			g.setRuns([][2]int{{0, g.rows}}, u)
+			g.slideFrom(was, had)
 			return true
 		}
 		return false
@@ -1468,26 +1558,46 @@ func (g *DataGrid) key(e input.KeyPress, u *gunim.UI) bool {
 	}
 	page := max(1, int(g.Visible())-1)
 	at := g.selected
-	if at < 0 {
+	gap := at < 0 && g.gap > 0 && g.gap-1 <= g.rows
+	switch {
+	case gap && (e.Key == input.KeyUp || e.Key == input.KeyPageUp):
+		// From the gap, as from the row that was there.
+		at = g.gap - 1
+	case gap:
+		// The row after the gap is where the one gone was: Down is
+		// the next row.
+		at = g.gap - 2
+	case at < 0:
 		at = int(math.Ceil(g.top)) - 1
+	}
+	if gap {
+		// Shift selects from the row the keys reach.
+		g.anchor = -1
 	}
 	if g.Multi && g.moveKey(e, at, page, u) {
 		u.Invalidate()
 		return true
 	}
+	was, had := g.block()
 	switch e.Key {
 	case input.KeyUp:
 		g.selectAndTell(max(at-1, 0), u)
+		g.slideFrom(was, had)
 	case input.KeyDown:
 		g.selectAndTell(at+1, u)
+		g.slideFrom(was, had)
 	case input.KeyPageUp:
 		g.selectAndTell(max(at-page, 0), u)
+		g.slideFrom(was, had)
 	case input.KeyPageDown:
 		g.selectAndTell(at+page, u)
+		g.slideFrom(was, had)
 	case input.KeyHome:
 		g.selectAndTell(0, u)
+		g.slideFrom(was, had)
 	case input.KeyEnd:
 		g.selectAndTell(g.rows-1, u)
+		g.slideFrom(was, had)
 	case input.KeyLeft:
 		g.left = max(0, g.left-ScrollLine.Get(u.Theme()))
 	case input.KeyRight:
@@ -1537,9 +1647,14 @@ func (g *DataGrid) moveKey(e input.KeyPress, at, page int, u *gunim.UI) bool {
 		return true
 	}
 	to = min(max(to, 0), g.rows-1)
+	was, had := g.block()
+	defer g.slideFrom(was, had)
+	fromGap := g.selected < 0 && g.gap > 0
 	g.selectAndTell(to, u)
 	if e.Mods.Has(input.ModShift) {
-		if g.anchor < 0 {
+		if g.anchor < 0 && fromGap {
+			g.anchor = to
+		} else if g.anchor < 0 {
 			g.anchor = max(at, 0)
 		}
 		g.setRuns([][2]int{{min(g.anchor, to), max(g.anchor, to) + 1}}, u)
@@ -1550,8 +1665,74 @@ func (g *DataGrid) moveKey(e input.KeyPress, at, page int, u *gunim.UI) bool {
 	return true
 }
 
+// block returns the rows selected, a first row and an end row left out,
+// when they are one or more rows next to each other.
+func (g *DataGrid) block() ([2]int, bool) {
+	if !g.Multi {
+		return [2]int{g.selected, g.selected + 1}, g.selected >= 0
+	}
+	if len(g.runs) != 1 {
+		return [2]int{}, false
+	}
+	return g.runs[0], true
+}
+
+// slideFrom has the selection, which was the rows was when had, slide
+// to the rows selected now, with Glide: from where it is on its way
+// when it was still sliding there. A selection that is not one block,
+// was none, or has an edge that would cross more than the view, does
+// not slide.
+func (g *DataGrid) slideFrom(was [2]int, had bool) {
+	to, ok := g.block()
+	at := [2]float64{float64(was[0]), float64(was[1])}
+	if g.glideOn && had && was == g.glideTo {
+		at = g.glideAt
+	} else {
+		g.glideVel = [2]float64{}
+	}
+	if !g.Glide || !ok || !had || g.rowH <= 0 ||
+		math.Abs(float64(to[0])-at[0]) > g.Visible() || math.Abs(float64(to[1])-at[1]) > g.Visible() {
+		g.glideOn = false
+		return
+	}
+	if at == [2]float64{float64(to[0]), float64(to[1])} {
+		g.glideOn = false
+		return
+	}
+	g.glideAt, g.glideTo, g.glideOn = at, to, true
+}
+
+// Sliding reports whether the selection is still on its way to the rows
+// selected, with Glide.
+func (g *DataGrid) Sliding() bool { return g.gliding() }
+
+// gliding reports whether the selection is sliding to the rows selected.
+func (g *DataGrid) gliding() bool {
+	if !g.glideOn {
+		return false
+	}
+	to, ok := g.block()
+	return ok && to == g.glideTo
+}
+
+// paintGlide paints the selection on its way to a row, under the rows.
+func (g *DataGrid) paintGlide(p *paint.Painter, th *theme.Live, bodyW float32) {
+	if !g.gliding() {
+		return
+	}
+	top := g.rowY(g.glideTo[0]) + float32((g.glideAt[0]-float64(g.glideTo[0]))*float64(g.rowH))
+	end := g.rowY(g.glideTo[1]-1) + g.rowH + float32((g.glideAt[1]-float64(g.glideTo[1]))*float64(g.rowH))
+	c := GridCursor.Get(th)
+	if !g.focused {
+		c.A = c.A * 2 / 3
+	}
+	p.RRect(geom.Rc(0, top, bodyW, max(0, end-top)), 0, paint.Solid(c))
+}
+
 // pick changes the selection for a click on row i, with Multi.
 func (g *DataGrid) pick(i int, mods input.Mods, u *gunim.UI) {
+	was, had := g.block()
+	defer g.slideFrom(was, had)
 	g.selectAndTell(i, u)
 	switch {
 	case mods.Has(input.ModShift):
@@ -1752,4 +1933,13 @@ func (g *DataGrid) selectedCount() int {
 		n += r[1] - r[0]
 	}
 	return n
+}
+
+// anchorsRuns reports whether runs are the rows from anchor to cursor,
+// both included, as Shift and a key that moves select them.
+func anchorsRuns(anchor, cursor int, runs [][2]int) bool {
+	if anchor < 0 || cursor < 0 || len(runs) != 1 {
+		return false
+	}
+	return runs[0] == [2]int{min(anchor, cursor), max(anchor, cursor) + 1}
 }

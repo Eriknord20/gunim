@@ -26,6 +26,12 @@ type PaneHost struct {
 	// where it names its panes. It is called on the pane's serve loop,
 	// so it must be quick, and must not wait for the program.
 	Title func(fs, folder string)
+	// Folder hears the ID of the file system the pane shows and the
+	// whole path of the folder, each time either changes, for the
+	// program to say something of it with [Window.SetNote]. It is called
+	// on the pane's serve loop, so it must be quick, and must not wait
+	// for the program.
+	Folder func(fs, path string)
 	// Commands are the file manager's commands the program's own menus
 	// offer for the pane, as CmdCopy and CmdPaste in an Edit menu of its
 	// own, which run them with [Run]. The pane's menus leave them out.

@@ -54,6 +54,11 @@ type navState struct {
 	sel    map[string]bool
 	cursor string
 	pick   []string
+	// gap says the row the keyboard was on went, as one deleted does, and
+	// after names the row that came after it, "" for the end: the keys go
+	// on from there, not from the top.
+	gap   bool
+	after string
 	// space is the free space of the folder's volume, or spaceErr why it
 	// is unknown.
 	space    space
@@ -84,17 +89,24 @@ func (f filtering) within(g filtering) bool {
 		f.sort == g.sort && f.desc == g.desc
 }
 
-// visited is a folder in the history, and the file system it is on.
+// visited is a folder in the history, the file system it is on, and the
+// name the keyboard was on when the user left it, to be there again on
+// the way back.
 type visited struct {
-	fs   FS
-	path string
+	fs     FS
+	path   string
+	cursor string
 }
 
+// here is the folder showing, as the history keeps it.
+func (a *app) here() visited { return visited{a.fs, a.nav.path, a.nav.cursor} }
+
 // hop is a step through the history to a folder on another file system:
-// step is -1 back and 1 forward.
+// step is -1 back and 1 forward, and cursor the name to put the keyboard
+// on there.
 type hop struct {
-	id, path string
-	step     int
+	id, path, cursor string
+	step             int
 }
 
 func (n *navState) init() { n.sel = map[string]bool{} }
@@ -246,7 +258,7 @@ func (a *app) goHistory(step int) {
 	at := (*from)[len(*from)-1]
 	if id := at.fs.ID(); id != a.fs.ID() {
 		n.dropHop()
-		n.hop = &hop{id: id, path: at.path, step: step}
+		n.hop = &hop{id: id, path: at.path, cursor: at.cursor, step: step}
 		if a.opts.Visit == nil {
 			// Shown here before, so the window has the file system.
 			a.showFS(at.fs, at.path)
@@ -256,10 +268,27 @@ func (a *app) goHistory(step int) {
 		return
 	}
 	*from = (*from)[:len(*from)-1]
-	if n.path != "" {
-		*to = append(*to, visited{a.fs, n.path})
+	left := n.path
+	if left != "" {
+		*to = append(*to, a.here())
 	}
 	a.navigate(at.path, step, false)
+	a.pickAgain(at.cursor, left)
+}
+
+// pickAgain puts the keyboard, in a folder gone back or forward to, on
+// cursor, the name it was on there; or, with none, on the folder in it
+// that leads to left, the folder the user came from.
+func (a *app) pickAgain(cursor, left string) {
+	n := &a.nav
+	if cursor == "" && left != "" {
+		if rel, err := a.ps.Rel(n.path, left); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			cursor, _, _ = strings.Cut(rel, a.ps.Sep())
+		}
+	}
+	if cursor != "" {
+		n.pick = []string{cursor}
+	}
 }
 
 // maxDropped is how many dropped hops a window keeps: a Visit that fails
@@ -321,7 +350,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 		return
 	}
 	if record && n.path != "" && !a.ps.Same(abs, n.path) {
-		n.back = append(n.back, visited{a.fs, n.path})
+		n.back = append(n.back, a.here())
 		n.fwd = nil
 	}
 	n.dropHop()
@@ -339,7 +368,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 	n.all, n.rows, n.err = nil, nil, nil
 	n.filter, n.pick = "", nil
 	clear(n.sel)
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	a.enteredFolder()
 	a.list()
 	a.readSpace()
@@ -529,7 +558,8 @@ func (a *app) refilter() {
 		a.patch(RowsLeft{Gen: n.gen, Rows: left})
 	}
 	a.publishBands()
-	if len(n.pick) > 0 {
+	picked := len(n.pick) > 0
+	if picked {
 		clear(n.sel)
 		for _, name := range n.pick {
 			n.sel[name] = true
@@ -540,10 +570,43 @@ func (a *app) refilter() {
 			n.cursor = n.rows[i].Name
 		}
 		n.pick = nil
+		n.gap = false
+	} else if n.cursor != "" && !slices.ContainsFunc(n.rows, func(e entry) bool { return e.Name == n.cursor }) {
+		a.leaveGap(was)
 	}
-	a.publishSelection()
+	if picked {
+		a.showSelection()
+	} else {
+		a.publishSelection()
+	}
 	a.publishStatus()
 	a.showPreview()
+}
+
+// leaveGap notes where the keyboard's row was, in the rows was showed
+// before, now that it is gone: the row after it that is still there, and
+// the end where none is. The names selected that went go with it.
+func (a *app) leaveGap(was []entry) {
+	n := &a.nav
+	here := make(map[string]bool, len(n.rows))
+	for _, e := range n.rows {
+		here[e.Name] = true
+	}
+	n.gap, n.after = true, ""
+	if i := slices.IndexFunc(was, func(e entry) bool { return e.Name == n.cursor }); i >= 0 {
+		for _, e := range was[i+1:] {
+			if here[e.Name] {
+				n.after = e.Name
+				break
+			}
+		}
+	}
+	n.cursor = ""
+	for name := range n.sel {
+		if !here[name] {
+			delete(n.sel, name)
+		}
+	}
 }
 
 // sortBy sorts the rows by column; toggle turns the order round when they
@@ -576,6 +639,10 @@ func (a *app) publishListing() {
 	if t := a.fs.ID() + "\x00" + l.Title; a.pane != nil && a.pane.host.Title != nil && t != a.title {
 		a.title = t
 		a.pane.host.Title(a.fs.ID(), l.Title)
+	}
+	if f := a.fs.ID() + "\x00" + l.Path; a.pane != nil && a.pane.host.Folder != nil && l.Path != "" && f != a.folder {
+		a.folder = f
+		a.pane.host.Folder(a.fs.ID(), l.Path)
 	}
 }
 
@@ -724,7 +791,7 @@ func (a *app) selected(v Selected) {
 	if !ordered {
 		sel = a.selectedEntries()
 	}
-	n.cursor = ""
+	n.cursor, n.gap = "", false
 	if v.Cursor >= 0 && v.Cursor < len(n.rows) {
 		n.cursor = n.rows[v.Cursor].Name
 	}
@@ -733,10 +800,19 @@ func (a *app) selected(v Selected) {
 }
 
 // publishSelection sends the rows holding the names selected, for the
-// grid to select.
-func (a *app) publishSelection() {
+// grid to select, leaving the view where it is.
+func (a *app) publishSelection() { a.sendSelection(false, false) }
+
+// showSelection sends the selection as publishSelection does, for one
+// the program moved: the view goes to the cursor.
+func (a *app) showSelection() { a.sendSelection(false, true) }
+
+// sendSelection sends the rows holding the names selected, sliding the
+// selection there with slide, and bringing the cursor into view with
+// show.
+func (a *app) sendSelection(slide, show bool) {
 	n := &a.nav
-	s := Selection{Gen: n.gen, Cursor: -1}
+	s := Selection{Gen: n.gen, Cursor: -1, Gap: -1, Slide: slide, Show: show}
 	for i, e := range n.rows {
 		if n.sel[e.Name] {
 			if k := len(s.Runs); k > 0 && s.Runs[k-1][1] == i {
@@ -748,6 +824,12 @@ func (a *app) publishSelection() {
 		if e.Name == n.cursor {
 			s.Cursor = i
 		}
+		if n.gap && e.Name == n.after {
+			s.Gap = i
+		}
+	}
+	if n.gap && n.cursor == "" && n.after == "" {
+		s.Gap = len(n.rows)
 	}
 	a.patch(s)
 }
@@ -770,7 +852,7 @@ func (a *app) typed(v Typed) {
 	clear(n.sel)
 	n.sel[n.rows[i].Name] = true
 	n.cursor = n.rows[i].Name
-	a.publishSelection()
+	a.sendSelection(true, true)
 	a.publishStatus()
 	a.showPreview()
 }
@@ -862,8 +944,14 @@ func (a *app) publishStatusOf(selected func() []entry) {
 	case n.space.total > 0:
 		s.Right = fmt.Sprintf("%s free of %s", humanBytes(int64(n.space.free)), humanBytes(int64(n.space.total)))
 	}
+	if a.note.fs == a.fs.ID() && a.note.path == n.path {
+		s.Note = a.note.text
+	}
 	a.patch(s)
 }
+
+// note is what the program said of the folder path on file system fs.
+type note struct{ fs, path, text string }
 
 func plural(n int, what string) string {
 	if n == 1 {

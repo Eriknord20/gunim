@@ -240,14 +240,32 @@ content clear of both. A `widget.TitleBar` with a `Name` shows that
 name whatever the window's title says, and `TitleAtStart` puts it at
 the left.
 
-`Window.Placement` says where a window is and how big, for the
-application to keep as it closes, and `WindowOptions.Place` opens it
-there next time. A placement whose monitor is gone opens centred on the
+`WindowOptions.PlaceFile` opens a window where the user left it: gunim
+writes where the window is to that file as it closes, and opens it
+there next time. For an application that keeps it with its own
+settings, `Window.Placement` says where a window is and how big, and
+still answers once the window has closed, and `WindowOptions.Place`
+opens it there. A placement whose monitor is gone opens centred on the
 primary monitor, and one larger than its monitor shrinks to fit. A
 window also goes full screen, stays above other windows with
 `WindowOptions.Pinned`, zooms with Ctrl and +, - and 0 or the wheel
 with `WindowOptions.ZoomKeys`, and asks for the user's attention in the
 taskbar.
+
+Colours look as they do in a browser on every display. gunim draws in
+sRGB, and where a window is on a wide gamut monitor, or any other whose
+ICC profile is not sRGB, each frame is converted to the display's
+colours as it goes to the window, so a red or a photo is not
+oversaturated. The profile comes from the X11 root window's
+`_ICC_PROFILE` properties, one for each monitor, and from Windows'
+colour management for the window's monitor, and is read again as the
+window moves to another monitor or the profile changes. Where the
+system converts windows itself, as macOS does, and Windows does under
+Auto Color Management or HDR, gunim leaves it to the system; a Wayland
+session's compositor decides there. `Client.ColorProfile` says which
+profile a window uses and whether it converts, and why not.
+`WindowOptions.NoColorManagement` turns it off for a window, and
+`GUNIM_COLOR=off` for every window.
 
 An application reaches the rest of the desktop through `App`, `Client`
 and `UI`:
@@ -267,7 +285,9 @@ and `UI`:
   system keeps for it, and `Client.Reveal` shows it in the system's file
   manager.
 - **The clipboard.** `UI.SetClipboard` and `UI.ReadClipboard` carry
-  text, and `UI.ClipboardImage` reads a picture.
+  text. `UI.ClipboardImage` reads a picture, and `UI.SetClipboardImage`
+  and `Client.SetClipboardImage` put one there, on Windows, X11 and
+  macOS.
 - **Drag and drop.** Files and pictures drag between windows, out to
   other programs and in from them, and a drop target lights while
   another program's files hover over it. With

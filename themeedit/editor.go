@@ -87,6 +87,11 @@ type Options struct {
 	// demonstrations need the editor's widgets, and play as any other
 	// motion's do over it.
 	Preview gunim.Node
+	// PreviewTitle is the name in the title bar of the window the
+	// Preview draws, such as the program's own name. Empty is "Notes"
+	// over the editor's own widgets, and no name over a Preview of the
+	// program's own.
+	PreviewTitle string
 	// OnChange runs on the UI goroutine with the theme as edited, Base
 	// with the overrides over it, on every change: every step of a drag
 	// too. It usually switches the window to it with [gunim.UI.UseTheme].
@@ -305,12 +310,15 @@ func (e *Editor) build(o Options) {
 	header := widget.NewPad(bar)
 	header.Padding = HeaderPadding
 
-	content := o.Preview
+	content, title := o.Preview, o.PreviewTitle
 	if content == nil {
 		e.spec = newSpecimen()
 		content = e.spec
+		if title == "" {
+			title = "Notes"
+		}
 	}
-	e.preview = newPreviewPanel(content, e.spec, e.pinned(e.Theme()))
+	e.preview = newPreviewPanel(content, e.spec, title, e.pinned(e.Theme()))
 	e.preview.use(e.pinned(e.Theme()))
 
 	e.all = newAllValues(e)

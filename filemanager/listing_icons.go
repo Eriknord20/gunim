@@ -214,7 +214,11 @@ func (iv *iconView) arrive(u *gunim.UI) {
 // selection takes the selection the application sends.
 func (iv *iconView) selection(s Selection, u *gunim.UI) {
 	iv.grid.SetSelected(s.Runs, s.Cursor, u)
-	if s.Cursor >= 0 {
+	iv.grid.SetGap(-1)
+	if s.Cursor < 0 {
+		iv.grid.SetGap(s.Gap)
+	}
+	if s.Cursor >= 0 && s.Show {
 		iv.grid.ShowTile(s.Cursor, u)
 	}
 }

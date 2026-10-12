@@ -136,7 +136,7 @@ func (a *app) showPicture(travel int) {
 	clear(n.sel)
 	n.sel[e.Name] = true
 	n.cursor = e.Name
-	a.publishSelection()
+	a.showSelection()
 	a.publishStatus()
 	a.showPreview()
 }

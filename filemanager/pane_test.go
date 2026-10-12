@@ -373,3 +373,50 @@ func TestAPaneKeepsItsIconsInAnotherWindow(t *testing.T) {
 		return b != nil && b.icons["dir"].Small != nil && b.icons["ext:.txt"].Small != nil
 	})
 }
+
+// A pane tells its host the whole path of each folder it shows, and its
+// status bar shows the host's note on a folder while it shows that
+// folder only.
+func TestAPaneShowsTheHostsNoteOnItsFolder(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	p := newPaneWorldWith(t, func(h *PaneHost) {
+		h.Folder = func(_, path string) {
+			mu.Lock()
+			paths = append(paths, path)
+			mu.Unlock()
+		}
+	}, "sub/", "a.txt")
+	told := func(path string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(paths, path)
+	}
+	s := newPaneScreen(t, p.pw)
+	p.pw.Attach(s.w.Client(), "slot")
+	var b *browser
+	s.until("the pane shows", func() bool {
+		b = s.browser()
+		return b != nil && b.path.path == p.dir && b.listing.cur != nil
+	})
+	s.until("the host hears the folder's path", func() bool { return told(p.dir) })
+	fs := LocalFS().ID()
+	p.pw.SetNote(fs, p.dir, "Git: main")
+	s.until("the note shows", func() bool { return b.status.note.Text == "Git: main" })
+
+	sub := filepath.Join(p.dir, "sub")
+	p.pw.Deliver(gunim.Envelope{From: "pane1/browser", Intent: Navigate{Path: sub}})
+	s.until("the pane goes into sub", func() bool { return b.path.path == sub && told(sub) })
+	s.until("the note goes with the folder", func() bool { return b.status.note.Text == "" })
+	// Late, for the folder the user has left.
+	p.pw.SetNote(fs, p.dir, "Git: main · 1 changed")
+	p.pw.Running() // waits for the serve loop, which has taken the note by then
+	s.frames(3)
+	if got := b.status.note.Text; got != "" {
+		t.Fatalf("a note on the folder left shows in sub: %q", got)
+	}
+	p.pw.SetNote(fs, sub, "Git: other")
+	s.until("the note on sub shows", func() bool { return b.status.note.Text == "Git: other" })
+	p.pw.SetNote(fs, sub, "")
+	s.until("an empty note takes it away", func() bool { return b.status.note.Text == "" })
+}

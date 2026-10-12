@@ -217,13 +217,13 @@ func (b *MenuButton) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	pad := FieldPadding.Get(th)
 	if b.Icon != nil {
 		s := IconSize.Get(th)
-		paintIcon(p, th, b.Icon, geom.Rc(pad, (box.H-s)/2, s, s), Ink.Get(th), 1)
+		drawIcon(p, th, b.Icon, geom.Rc(pad, (box.H-s)/2, s, s), Ink.Get(th), 1)
 	}
 	// A title wider than the box is cut short before the chevron.
 	run := b.shown.run
 	x := pad + b.iconRoom(th)
 	if room := box.W - x - pad - chevron - pad; run.Advance > room {
-		run = cutRun(run, b.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
+		run = cutRunWith(run, b.ell.shape(faceIn(Font, th), "…", TextSize.Get(th)), room)
 	}
 	run.Paint(p, geom.Pt(x, (box.H-run.Height())/2), Ink.Get(th))
 	c := geom.Pt(box.W-pad-chevron/2, box.H/2)
@@ -246,7 +246,7 @@ func (b *MenuButton) paintIconOnly(p *paint.Painter, th *theme.Live, box geom.Si
 		p.RRect(r, radius, paint.Solid(fill))
 	}
 	s := IconSize.Get(th)
-	paintIcon(p, th, b.Icon, geom.Rc((box.W-s)/2, (box.H-s)/2, s, s), Ink.Get(th), 1)
+	drawIcon(p, th, b.Icon, geom.Rc((box.W-s)/2, (box.H-s)/2, s, s), Ink.Get(th), 1)
 }
 
 // iconRoom is the room the icon takes before the title, with its gap.

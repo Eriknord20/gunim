@@ -79,6 +79,13 @@ type Options struct {
 	// Each Transfer runs on a goroutine of its own, and the window does
 	// not close until it returns, so it should return soon once ctx ends.
 	Transfer func(ctx context.Context, w *Window, t Transfer, p *TransferProgress) error
+	// Password, when set, asks the program for the password of a zip, in
+	// place of the window's own dialog: to open one a password protects,
+	// or to protect one being made. The program may offer passwords it
+	// keeps. It runs on a goroutine of its own, and an error, such as the
+	// user saying no, stops what asked; ctx ends when the user stops it
+	// another way. w is the window that asks.
+	Password func(ctx context.Context, w *Window, ask PasswordAsk) (Password, error)
 	// FSName names the file system of ID fs, as the window's title says
 	// first: the machine it is on, say. When nil, or where it returns "",
 	// the title names the folder and the program only. The window asks
@@ -122,6 +129,9 @@ type Transfer struct {
 	// items go into, with all that folders among them hold: ZipFiles
 	// makes it. Nothing may be at its path already.
 	Zip string
+	// Password, when set with Zip, protects what the zip holds, as
+	// ZipFiles does with its password.
+	Password string
 }
 
 // app is the application half. Everything on it runs on the serve loop;
@@ -176,8 +186,12 @@ type app struct {
 	// closeAsked says the user is being asked whether to stop what runs
 	// and close.
 	closeAsked bool
-	// title is the file system and the folder the pane's host was last told of.
-	title string
+	// title is the file system and the folder the pane's host was last told of,
+	// and folder the file system and the path.
+	title, folder string
+	// note is what the program said of a folder for the status bar,
+	// shown while that folder is.
+	note note
 	// script is what is left of the steps to run, once the first folder
 	// is read.
 	script    []string
@@ -548,8 +562,13 @@ func (a *app) savePrefs(change func(p *prefs)) {
 }
 
 // stopAll cancels what is running, and waits for the operations to stop,
-// so none is left writing once the app has gone.
+// so none is left writing once the app has gone. Once is enough.
 func (a *app) stopAll() {
+	select {
+	case <-a.stopped:
+		return
+	default:
+	}
 	for _, r := range a.ops.running {
 		r.cancel()
 	}
