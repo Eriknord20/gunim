@@ -212,3 +212,25 @@ func TestListSettlesAndStopsAskingForFrames(t *testing.T) {
 		t.Fatalf("Height = %v, want the rows fully open", f.list.Height())
 	}
 }
+
+// A row that arrives opens where it belongs, rather than gliding there from
+// the top of the list, as the rows under a folded header do when it
+// opens again.
+func TestAnArrivingRowStartsWhereItBelongs(t *testing.T) {
+	f := newListFixture(t)
+	f.publish(t, []string{"a", "b", "c", "d", "e"}, 120)
+	// Folded: d and e go.
+	f.publish(t, []string{"a", "b", "c"}, 200)
+	// Opened again: they come back, as new rows.
+	f.publish(t, []string{"a", "b", "c", "d", "e"}, 1)
+	for _, k := range []string{"d", "e"} {
+		y, ok := widget.RowY(f.list, widget.Key(k))
+		if !ok {
+			t.Fatalf("row %s is missing", k)
+		}
+		// d opens at c's foot, and e under it, as d opens.
+		if want := float32(3 * cellHeight); y < want-1 {
+			t.Fatalf("a frame after it came back, row %s is at %v, want at %v or below, not on its way from the top", k, y, want)
+		}
+	}
+}
