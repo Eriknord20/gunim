@@ -1036,18 +1036,11 @@ func (w *Window) Frame(delta time.Duration) {
 
 // Input hands the window a platform event, as a driver would: a pointer
 // move, a click, a key, the close button as [driver.CloseAsked]. It is
-// for a window driven with [Window.Frame], such as one from
-// [NewOffscreen], and must be called from the goroutine calling Frame.
-// Positions are in window space, and the pointer is routed through
-// where the last frame drew each node.
-func (w *Window) Input(ev any) {
-	if _, asked := ev.(driver.CloseAsked); asked {
-		// The close button, as the window's loop takes it.
-		w.ui.AskToClose()
-		return
-	}
-	w.platform(ev)
-}
+// for a window driven with [Window.Frame],
+// such as one from [NewOffscreen], and must be called from the goroutine
+// calling Frame. Positions are in window space, and the pointer is
+// routed through where the last frame drew each node.
+func (w *Window) Input(ev any) { w.platform(ev) }
 
 // platform handles one of the platform's events. A window out of sight
 // draws no frames, and a frame is where the application's state reaches
@@ -1055,6 +1048,11 @@ func (w *Window) Input(ev any) {
 // screen off, would act on the state from before the window went out of
 // sight. So such a window applies the queue first.
 func (w *Window) platform(ev any) {
+	if _, asked := ev.(driver.CloseAsked); asked {
+		// The close button, as the loop takes it.
+		w.ui.AskToClose()
+		return
+	}
 	if !w.draws() {
 		w.applyPending()
 	}
