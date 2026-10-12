@@ -22,9 +22,9 @@ type Setup struct {
 // Processor is the part of a plugin that makes or changes the sound. Prepare
 // and Reset run with no block in progress; Process runs on the audio
 // thread, and must not allocate, lock or wait. Latency and Tail run on
-// the audio thread between blocks, or with no block in progress, so a
-// processor answers from the state Process keeps, with no lock: a host
-// that shows them elsewhere asks there and passes the answer on.
+// the host's own goroutine, as VST3 asks them, while blocks run: a
+// processor keeps what they answer from in values safe to read there,
+// as a [Meter] is.
 type Processor interface {
 	// Prepare readies the processor to run as s says. The first block
 	// after it carries every parameter's value as a change at frame 0.
