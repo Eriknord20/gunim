@@ -45,8 +45,9 @@ type Fader struct {
 	// OnBegin runs as a drag on the fader starts, and OnEnd as it ends,
 	// so the gains set between are one gesture to undo. A drag ends as
 	// the button is let go, as a second button is pressed, or by
-	// EndDrag.
-	OnBegin, OnEnd func(u *gunim.UI)
+	// EndDrag. A non-nil result is sent to the application as the
+	// fader's intent.
+	OnBegin, OnEnd func(u *gunim.UI) gunim.Intent
 	// Label names the fader for a screen reader, as the label beside it
 	// does on screen.
 	Label string
@@ -120,10 +121,17 @@ func (f *Fader) EndDrag(u *gunim.UI) {
 	}
 	f.held = false
 	f.hover.Animate(0, anim.Gentle)
-	if f.OnEnd != nil {
-		f.OnEnd(u)
-	}
+	f.ended(u)
 	u.Invalidate()
+}
+
+// ended runs OnEnd, sending its intent.
+func (f *Fader) ended(u *gunim.UI) {
+	if f.OnEnd != nil {
+		if in := f.OnEnd(u); in != nil {
+			u.Send(f, in)
+		}
+	}
 }
 
 // Overhear implements [gunim.Overhearer]: a second button pressed
@@ -206,7 +214,9 @@ func (f *Fader) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		f.held, f.from, f.start = true, e.Pos, f.travel(f.Value())
 		if f.OnBegin != nil {
-			f.OnBegin(u)
+			if in := f.OnBegin(u); in != nil {
+				u.Send(f, in)
+			}
 		}
 	case input.PointerMove:
 		if !f.held {
@@ -220,9 +230,7 @@ func (f *Fader) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerUp:
 		if f.held {
 			f.held = false
-			if f.OnEnd != nil {
-				f.OnEnd(u)
-			}
+			f.ended(u)
 		}
 	case input.Scroll:
 		n := e.Notches.Y

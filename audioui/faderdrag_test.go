@@ -24,8 +24,8 @@ func mixerFader(t *testing.T) (f *Fader, w *gunim.Window, gain *float32, log *[]
 		return nil
 	})
 	f.Low, f.High, f.Curve = -60, 6, 2
-	f.OnBegin = func(*gunim.UI) { *log = append(*log, "begin") }
-	f.OnEnd = func(*gunim.UI) { *log = append(*log, "end") }
+	f.OnBegin = func(*gunim.UI) gunim.Intent { *log = append(*log, "begin"); return nil }
+	f.OnEnd = func(*gunim.UI) gunim.Intent { *log = append(*log, "end"); return nil }
 	w = gunimtest.New(t, geom.Sz(24, 224), nil)
 	gunim.RegisterView(w, "fader", func(struct{}) gunim.Node { return f }, nil)
 	if err := w.Client().Mount(gunim.Root, "fader", "fader", nil); err != nil {
