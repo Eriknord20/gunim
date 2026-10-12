@@ -177,13 +177,19 @@ written in Go. A plugin is a Go package compiled into the program, and
 it registers itself as the program starts. It follows VST3, so the host
 runs a VST3 plugin through the same interfaces. An instrument takes
 notes, each in a group with its own sustain pedal, and bends, presses
-and modulates each note as it sounds. The host keeps every plugin's
-parameters and state, for one undo history and one preset browser. A
-plugin's views are gunim nodes, in three sizes. `audio/plug/plugui` has
-the knobs and sections its views are built from. The plugins themselves
-are packages beside it: `dynamics`, `enhancer`, `eq`, `imager`,
-`maximizer`, `trim` and `xover`, a crossover the others split bands
-with.
+and modulates each note as it sounds. Beside its main sound, a plugin
+may have ports, as VST3 has buses: audio inputs and outputs, such as a
+sidechain or an output for each drum, and control inputs and outputs,
+which carry a value for every frame. A control signal reaches a
+parameter as changes every few frames, so it can drive any parameter
+of any plugin. The host keeps every plugin's parameters and state, for
+one undo history and one preset browser. A plugin's views are gunim
+nodes, in three sizes. `audio/plug/plugui` has the knobs and sections
+its views are built from, and `audio/plug/plugtest` runs a plugin
+through its ports in tests. The plugins themselves are packages beside
+it: `dynamics`, which has a sidechain input, `enhancer`, `eq`,
+`imager`, `maximizer`, `trim` and `xover`, a crossover the others split
+bands with.
 
 Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings

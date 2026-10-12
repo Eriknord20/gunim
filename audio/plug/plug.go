@@ -7,7 +7,8 @@
 // It follows VST3 where VST3 works well, so an adapter can run a VST3
 // plugin through the same interfaces: parameters declared up front,
 // sound processed in blocks with parameter changes and notes at frames
-// within them, and a latency and a tail. It parts from VST3 in three places.
+// within them, ports beyond the main sound as VST3's buses, and a
+// latency and a tail. It parts from VST3 in three places.
 // The host owns the parameters and the state, so it keeps one undo
 // history and one preset browser for every plugin. A plugin's views are
 // gunim nodes the host places where it likes, in three sizes. And a
@@ -46,6 +47,18 @@ type Descriptor struct {
 	// Notes says the plugin takes notes, in [Block.Events]. An
 	// instrument does.
 	Notes bool
+	// AuxIn and AuxOut are the plugin's audio ports beyond its main
+	// input and output, as VST3's aux (auxiliary) buses: a sidechain
+	// in, or an output for each drum of a drum synth. A project names a
+	// port by its place in the list, as VST3 names a bus by its index,
+	// so a plugin adds new ports at the end. [Block.AuxIn] and
+	// [Block.AuxOut] carry their sound.
+	AuxIn, AuxOut []AudioPort
+	// ControlIn and ControlOut are the plugin's control ports: one value
+	// a frame, in the blocks the sound comes in, as an LFO puts out.
+	// They are named by their place in the list too, and
+	// [Block.ControlIn] and [Block.ControlOut] carry their values.
+	ControlIn, ControlOut []ControlPort
 	// Params are the plugin's parameters, each with an ID of its own.
 	Params []Param
 	// Patches are the patches the plugin comes with, as starting points.
@@ -72,6 +85,30 @@ func (d *Descriptor) Param(id uint32) (Param, bool) {
 		}
 	}
 	return Param{}, false
+}
+
+// AudioPort is an audio port of a plugin's, beyond its main input and
+// output.
+type AudioPort struct {
+	// Name is what the host shows it as: "Sidechain", or "Kick".
+	Name string
+	// Channels is how many channels it has. Zero gives it as many as the
+	// main sound, [Setup.Channels].
+	Channels int
+}
+
+// ControlPort is a control port of a plugin's: a value a frame, within
+// a range.
+type ControlPort struct {
+	// Name is what the host shows it as: "Cutoff", or "LFO".
+	Name string
+	// Unit is what the value counts, as "Hz", or empty for a plain
+	// number.
+	Unit string
+	// Min and Max bound the values: an input's, as the host maps a
+	// signal into it, and an output's, as the plugin writes them.
+	// Default is what an input left unconnected stands for.
+	Min, Max, Default float64
 }
 
 // Param is one of a plugin's parameters: a value the host keeps, shows,
@@ -270,6 +307,9 @@ func check(d *Descriptor) error {
 	if d.Instrument() && !d.Notes {
 		return fmt.Errorf("%s is an instrument, of kind %q, so it takes notes: set Notes", d.ID, d.Kind)
 	}
+	if err := checkPorts(d); err != nil {
+		return err
+	}
 	seen := map[uint32]bool{}
 	for _, p := range d.Params {
 		if seen[p.ID] {
@@ -292,6 +332,38 @@ func check(d *Descriptor) error {
 		for id := range pt.Params {
 			if p, ok := d.Param(id); !ok || p.Flags&ReadOnly != 0 {
 				return fmt.Errorf("%s: patch %q sets %d, which is no parameter it may set", d.ID, pt.Name, id)
+			}
+		}
+	}
+	return nil
+}
+
+// checkPorts returns what is wrong with d's ports, if anything: each
+// needs a name of its own among those going its way, an audio port a
+// channel count of zero or more, and a control port a range holding its
+// default.
+func checkPorts(d *Descriptor) error {
+	for way, ports := range map[string][]AudioPort{"aux input": d.AuxIn, "aux output": d.AuxOut} {
+		names := map[string]bool{}
+		for _, p := range ports {
+			if p.Name == "" || names[p.Name] {
+				return fmt.Errorf("%s has an %s named %q twice, or unnamed", d.ID, way, p.Name)
+			}
+			names[p.Name] = true
+			if p.Channels < 0 {
+				return fmt.Errorf("%s: %s %q has %d channels", d.ID, way, p.Name, p.Channels)
+			}
+		}
+	}
+	for way, ports := range map[string][]ControlPort{"control input": d.ControlIn, "control output": d.ControlOut} {
+		names := map[string]bool{}
+		for _, p := range ports {
+			if p.Name == "" || names[p.Name] {
+				return fmt.Errorf("%s has a %s named %q twice, or unnamed", d.ID, way, p.Name)
+			}
+			names[p.Name] = true
+			if p.Max <= p.Min || p.Default < p.Min || p.Default > p.Max {
+				return fmt.Errorf("%s: %s %q runs from %g to %g, from %g", d.ID, way, p.Name, p.Min, p.Max, p.Default)
 			}
 		}
 	}

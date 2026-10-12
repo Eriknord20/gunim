@@ -10,6 +10,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/plugtest"
 )
 
 // host is a host for tests, which notes the gestures it is sent.
@@ -300,10 +301,15 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 	// allocation in Process counted, not a mean rounded down.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	var made uint64
+	key := [][][]float32{{loud(512, 3), loud(512, 4)}}
 	for i := range 64 {
 		b := &plug.Block{In: ch, Out: ch, Frames: 512, Position: plug.Position{Frame: int64(512 * i)},
 			Changes: set(float64(InputID), float64(i%24), float64(GateOnID), float64(i%2), float64(CompRatioID), float64(1+i%8),
 				float64(LimitCeilingID), -float64(i%12))}
+		if i%4 >= 2 {
+			// Half the blocks keyed by a sidechain.
+			b.AuxIn = key
+		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		pr.Process(b)
@@ -603,6 +609,126 @@ func TestTheCompressorsAttackRunsToFourHundredMilliseconds(t *testing.T) {
 		}
 		if got := gr / -20; math.Abs(got-c.want) > 0.02 {
 			t.Errorf("at an attack of %v ms, after 400 ms it has turned down %.2f of the way, want %.2f", c.attack, got, c.want)
+		}
+	}
+}
+
+// keyed runs main through the plugin, with key on its sidechain, or no
+// sidechain where key is nil, in blocks of 512, the gate on and the
+// compressor listening to a band, and returns what came out and the
+// compressor's reduction kept for each frame that came out.
+func keyed(t *testing.T, main, key [][]float32, aux [][][]float32, changes ...float64) (out [][]float32, gr []float32) {
+	t.Helper()
+	p, _ := newDynamics(t)
+	n := len(main[0])
+	ports := plugtest.Ports{In: main, AuxIn: aux, Changes: set(append([]float64{float64(GateOnID), 1, float64(GateThresholdID), -30,
+		float64(CompThresholdID), -20, float64(CompRatioID), 8, float64(CompAttackID), 1, float64(LimitOnID), 0}, changes...)...)}
+	if key != nil {
+		ports.AuxIn = [][][]float32{key}
+	}
+	r := plugtest.Drive(t, &Descriptor, &p.proc, plug.Setup{Rate: 48000, MaxBlock: 512, Channels: len(main)}, n, ports)
+	gr = make([]float32, n)
+	for f := range gr {
+		gr[f], _ = p.proc.compTrace.Get(int64(f))
+	}
+	return r.Out, gr
+}
+
+func TestAnUnconnectedSidechainChangesNothing(t *testing.T) {
+	main := [][]float32{loud(24000, 1), loud(24000, 2)}
+	alone, aloneGR := keyed(t, main, nil, nil, float64(SideModeID), SideBand, float64(SideFreqID), 300)
+	// A nil sidechain, and the sound itself on it, give what the plugin
+	// gives alone, frame for frame.
+	for name, aux := range map[string][][][]float32{"nil": {nil}, "the sound itself": {main}} {
+		out, gr := keyed(t, main, nil, aux, float64(SideModeID), SideBand, float64(SideFreqID), 300)
+		for f := range alone[0] {
+			if out[0][f] != alone[0][f] || out[1][f] != alone[1][f] || gr[f] != aloneGR[f] {
+				t.Fatalf("with %s on the sidechain, frame %d comes out %v %v, turned down %v, want %v %v and %v",
+					name, f, out[0][f], out[1][f], gr[f], alone[0][f], alone[1][f], aloneGR[f])
+			}
+		}
+	}
+}
+
+func TestTheSidechainDrivesTheReduction(t *testing.T) {
+	// A steady tone, quiet, under the threshold, ducked by a kick on the
+	// sidechain: 100 ms loud each 250 ms.
+	const n = 48000
+	main := [][]float32{level(n, 0.05), level(n, 0.05)}
+	kick := make([]float32, n)
+	for f := range kick {
+		if f%12000 < 4800 {
+			kick[f] = 0.8
+		}
+	}
+	ahead := int(math.Round(48000 * lookahead))
+	out, _ := keyed(t, main, [][]float32{kick}, nil, float64(GateOnID), 0, float64(CompReleaseID), 20)
+	for f := ahead; f < n; f++ {
+		// The frame heard ahead frames before comes out now.
+		at := (f - ahead) % 12000
+		down := 20 * math.Log10(float64(out[0][f])/0.05)
+		switch {
+		case at >= 480 && at < 4800 && down > -10:
+			t.Fatalf("10 ms into the kick, at frame %d, the tone is turned down %.2f dB, want 10 or more", f, -down)
+		case at >= 4800+4800 && down < -0.5:
+			t.Fatalf("100 ms after the kick, at frame %d, the tone is turned down %.2f dB", f, -down)
+		case at < 4800 && out[1][f] != out[0][f]:
+			t.Fatalf("at frame %d the channels come out %v and %v", f, out[0][f], out[1][f])
+		}
+	}
+	// Loud sound with a silent sidechain is left as it is, and the gate,
+	// hearing silence, shuts.
+	loudMain := [][]float32{level(n, 0.5)}
+	out, gr := keyed(t, loudMain, [][]float32{make([]float32, n)}, nil, float64(GateRangeID), 20)
+	if gr[n-1] != 0 {
+		t.Errorf("with a silent sidechain, loud sound is turned down %v dB by the compressor", gr[n-1])
+	}
+	if got := 20 * math.Log10(float64(out[0][n-1])/0.5); math.Abs(got+20) > 0.1 {
+		t.Errorf("with a silent sidechain the gate turns the sound down %.2f dB, want its range, 20", got)
+	}
+}
+
+func TestTheSidechainMayComeAndGoBetweenBlocks(t *testing.T) {
+	p, _ := newDynamics(t)
+	pr := &p.proc
+	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 1})
+	changes := set(float64(CompThresholdID), -20, float64(CompRatioID), 8, float64(CompAttackID), 1,
+		float64(CompReleaseID), 20, float64(LimitOnID), 0)
+	silent := [][][]float32{{make([]float32, 512)}}
+	for i := range 96 {
+		// Loud sound, unconnected for 32 blocks, keyed by silence for
+		// 32, then unconnected again.
+		ch := [][]float32{level(512, 0.5)}
+		b := &plug.Block{In: ch, Out: ch, Frames: 512, Changes: changes, Position: plug.Position{Frame: int64(512 * i)}}
+		if i >= 32 && i < 64 {
+			b.AuxIn = silent
+		}
+		pr.Process(b)
+		changes = nil
+		gr := pr.Report(CompGRID)
+		switch i {
+		case 31, 95:
+			if gr > -10 {
+				t.Errorf("unconnected, block %d is turned down %v dB, want its own sound's 12 or so", i, gr)
+			}
+		case 63:
+			if gr < -0.1 {
+				t.Errorf("keyed by silence, block %d is turned down %v dB", i, gr)
+			}
+		}
+	}
+}
+
+func TestListeningPlaysTheSidechain(t *testing.T) {
+	const n = 4800
+	main := [][]float32{level(n, 0.5), level(n, 0.5)}
+	key := [][]float32{level(n, 0.01)}
+	out, _ := keyed(t, main, key, nil, float64(GateOnID), 0, float64(SideModeID), SideFull, float64(SideListenID), 1)
+	// The key, mono, on both channels, the lookahead late.
+	ahead := int(math.Round(48000 * lookahead))
+	for f := ahead; f < n; f++ {
+		if math.Abs(float64(out[0][f])-0.01) > 1e-6 || math.Abs(float64(out[1][f])-0.01) > 1e-6 {
+			t.Fatalf("listening, frame %d comes out %v %v, want the sidechain's 0.01", f, out[0][f], out[1][f])
 		}
 	}
 }
