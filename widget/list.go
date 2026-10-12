@@ -280,11 +280,18 @@ func (l *List) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		// The target is where the row belongs; the spring says where it
 		// is right now. That gap is the movement animation. A row being
 		// dragged goes where the pointer has it.
-		if l.drag.active && k == l.drag.key {
+		switch {
+		case l.drag.active && k == l.drag.key:
 			r.y.Jump(l.drag.y)
-		} else {
+		case !r.placed:
+			// A row just come opens where it belongs: its arrival is
+			// its height opening and its contents fading in, not a
+			// glide from the top of the list.
+			r.y.Jump(y)
+		default:
 			r.y.Animate(y, move)
 		}
+		r.placed = true
 		kid.Place(geom.Pt(0, r.y.Value()))
 		l.slots[k] = [2]float32{y, size.H}
 
@@ -456,8 +463,9 @@ type row struct {
 	// scrolls, which appears and goes at once: the change is in what
 	// is in view, where nothing arrived or left.
 	instant bool
-	// laid is set by the row's first layout.
-	laid bool
+	// laid is set by the row's first layout, and placed once the list
+	// has put it somewhere.
+	laid, placed bool
 }
 
 func newRow(key Key, child gunim.Node) *row {
