@@ -65,6 +65,9 @@ type OffscreenWindow struct {
 	vibrate func([]time.Duration) error
 	// fingers is what TakeFingers last said.
 	fingers bool
+	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
+	edgeSwipes     []geom.Rect
+	edgeSwipeCalls int
 	// compass answers WatchHeading; see SetCompass.
 	compass func(on bool)
 	// anchor is where a popup was last attached, and origin where the
@@ -858,6 +861,21 @@ func (w *OffscreenWindow) FingersTaken() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.fingers
+}
+
+// KeepEdgeSwipes implements [EdgeSwipeKeeper] by keeping bands, for a test to read with EdgeSwipesKept.
+func (w *OffscreenWindow) KeepEdgeSwipes(bands []geom.Rect) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.edgeSwipes = append(w.edgeSwipes[:0], bands...)
+	w.edgeSwipeCalls++
+}
+
+// EdgeSwipesKept returns the bands KeepEdgeSwipes last kept, and how many times it has been called.
+func (w *OffscreenWindow) EdgeSwipesKept() (bands []geom.Rect, calls int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]geom.Rect(nil), w.edgeSwipes...), w.edgeSwipeCalls
 }
 
 // SetCompass gives the window a pretend compass, for a test standing in for a device with one: fn hears each call

@@ -51,7 +51,7 @@ func (d *Driver) touch(action, id int, x, y float32, now time.Time) (own bool) {
 		w = d.hitLocked(at)
 		d.touched = w
 		own = w != nil && w.takesFingers
-		d.takeFingersLocked(own)
+		d.takeFingersLocked(w)
 		d.keyed, d.refit = false, false
 		*g = gesture{}
 		if now.Sub(d.lastAt) < doubleTapTime && abs(at.X-d.lastTap.X) < doubleTapSpace && abs(at.Y-d.lastTap.Y) < doubleTapSpace {
@@ -150,9 +150,17 @@ func (d *Driver) liftFingersLocked(now time.Time) {
 	clear(d.fingers)
 }
 
-// takeFingersLocked tells the view whether a touch's fingers are
-// fingers of their own, when that changes.
-func (d *Driver) takeFingersLocked(on bool) {
+// takeFingersLocked hands the view the setting of the window the touch
+// in progress started in, where it differs from the last it handed.
+// changed is the window whose setting may have changed: the view hears
+// only the touch's window, and as a touch starts, the window it starts
+// in, nil for none. It runs with mu held, so the calls reach Java in
+// the order the windows made them.
+func (d *Driver) takeFingersLocked(changed *Window) {
+	if changed != d.touched {
+		return
+	}
+	on := changed != nil && changed.takesFingers
 	if on == d.fingersOn {
 		return
 	}

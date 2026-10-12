@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -67,6 +68,9 @@ type Window struct {
 	// touch that starts in the window is a finger of its own, and a
 	// second one starts no pinch.
 	takesFingers bool
+	// excluded is the bands KeepEdgeSwipes last kept from the system's
+	// edge gestures, in the window's logical pixels.
+	excluded []geom.Rect
 
 	// The fields below belong to the render thread.
 
@@ -253,6 +257,7 @@ func (w *Window) SetBackground(c color.NRGBA) {
 func (w *Window) Hide() error {
 	w.d.mu.Lock()
 	w.hidden = true
+	w.d.excludeGesturesLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -262,6 +267,7 @@ func (w *Window) Hide() error {
 func (w *Window) Show() error {
 	w.d.mu.Lock()
 	w.hidden = false
+	w.d.excludeGesturesLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -407,11 +413,51 @@ func (w *Window) Vibrate(pattern ...time.Duration) error { return vibrate(patter
 func (w *Window) TakeFingers(on bool) error {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
-	w.takesFingers = on
-	if w.d.touched == w {
-		w.d.takeFingersLocked(on)
+	if w.closed {
+		return nil
 	}
+	w.takesFingers = on
+	w.d.takeFingersLocked(w)
 	return nil
+}
+
+// KeepEdgeSwipes implements [driver.EdgeSwipeKeeper] with the view's
+// system gesture exclusion, from Android 10; before it back is a
+// button, and the call changes nothing. The one view takes the bands of
+// every open window that shows, so each window keeps its own.
+func (w *Window) KeepEdgeSwipes(bands []geom.Rect) {
+	w.d.mu.Lock()
+	defer w.d.mu.Unlock()
+	if w.closed {
+		return
+	}
+	w.excluded = append(w.excluded[:0], bands...)
+	w.d.excludeGesturesLocked()
+}
+
+// excludeGesturesLocked hands Java the rects every open window that
+// shows keeps from the system's gestures, in device pixels, where they
+// differ from the last it handed. It runs with mu held, so the calls
+// reach Java in the order the windows made them; Java queues the change
+// for its UI thread and returns at once.
+func (d *Driver) excludeGesturesLocked() {
+	px := func(v float32) int32 { return int32(math.Round(float64(v * d.density))) }
+	var xy []int32
+	for _, w := range d.windows {
+		if w.closed || w.hidden {
+			continue
+		}
+		at := w.rectLocked().Min
+		for _, r := range w.excluded {
+			r = r.Add(at)
+			xy = append(xy, px(r.Min.X), px(r.Min.Y), px(r.Max.X), px(r.Max.Y))
+		}
+	}
+	if slices.Equal(xy, d.excludedSent) {
+		return
+	}
+	d.excludedSent = xy
+	excludeGestures(xy)
 }
 
 // ChooseFiles implements [driver.FileChooser] for folders: the system's
@@ -446,6 +492,7 @@ var (
 	_ driver.LinkOpener      = (*Window)(nil)
 	_ driver.Vibrator        = (*Window)(nil)
 	_ driver.FingerTaker     = (*Window)(nil)
+	_ driver.EdgeSwipeKeeper = (*Window)(nil)
 	_ driver.Compass         = (*Window)(nil)
 	_ driver.SafeAreaer      = (*Window)(nil)
 	_ driver.KeyboardCoverer = (*Window)(nil)

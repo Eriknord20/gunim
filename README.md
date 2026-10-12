@@ -425,6 +425,15 @@ the program to smooth, and indoors it can be off by tens of degrees.
 `go run ./tools/gunimapk -run ./example/compass` shows a needle that
 points north.
 
+A node that implements `gunim.EdgeSwipeKeeper` keeps swipes in from the
+screen's edges within the bands it names, so a game steered by
+dragging takes a drag begun at the edge, and Android's back gesture
+takes the swipes elsewhere. The engine moves the bands with the node
+after each frame, as it moves, resizes or turns with the screen, and
+gives the edges back as the node leaves or the window hides. Android
+honours at most 200 dp of each side's height; on Android before 10 and
+with 3-button navigation the bands change nothing.
+
 A tap on a text field opens the soft keyboard, whose edits, autocorrect
 and composition reach the field as `input.TextEdit`s, and the window
 slides up with the keyboard to keep the field in view. `Frame.Keyboard`
