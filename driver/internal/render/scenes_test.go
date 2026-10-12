@@ -292,7 +292,7 @@ func TestItemsSharingAMeshDrawInABatchAsTheyWouldAlone(t *testing.T) {
 	white := color.NRGBA{0xff, 0xff, 0xff, 0xff}
 	ball := paint.NewSphere(12, 24, white)
 	box := paint.NewBox(geom.V3(0.5, 0.5, 0.5), white)
-	var items []paint.SceneItem
+	items := make([]paint.SceneItem, 0, 60)
 	for i := range 60 {
 		x := float32(i%10)/4 - 1.1
 		y := float32(i/10)/3 - 0.9
@@ -319,7 +319,7 @@ func TestItemsSharingAMeshDrawInABatchAsTheyWouldAlone(t *testing.T) {
 	}
 	alone, batched := shot(true), shot(false)
 	if r.scenes.batch.prog == 0 {
-		t.Skip("this GL draws no instances")
+		t.Fatal("the batch program did not build")
 	}
 	worst, off := 0, 0
 	for i := range alone {

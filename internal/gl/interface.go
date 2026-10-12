@@ -111,8 +111,7 @@ type Context interface {
 	UniformMatrix3fv(location int32, value []float32)
 	UniformMatrix4fv(location int32, value []float32)
 	UseProgram(program uint32)
-	VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int)
 	VertexAttribDivisor(index, divisor uint32) // gunim change
-	HasInstancing() bool                       // gunim change
+	VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int)
 	Viewport(x int32, y int32, width int32, height int32)
 }

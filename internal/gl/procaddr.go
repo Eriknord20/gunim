@@ -38,17 +38,6 @@ func (p *procAddressGetter) get(name string) uintptr {
 	return proc
 }
 
-// optional is a function the context may lack, as an old desktop GL
-// lacks instancing: zero where it is missing, and no error.
-func (p *procAddressGetter) optional(names ...string) uintptr {
-	for _, name := range names {
-		if proc, err := p.ctx.getProcAddress(name); err == nil && proc != 0 {
-			return proc
-		}
-	}
-	return 0
-}
-
 func (p *procAddressGetter) error() error {
 	return p.err
 }

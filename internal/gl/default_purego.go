@@ -111,8 +111,8 @@ type defaultContext struct {
 	gpUniformMatrix3fv         uintptr
 	gpUniformMatrix4fv         uintptr
 	gpUseProgram               uintptr
-	gpVertexAttribPointer      uintptr
 	gpVertexAttribDivisor      uintptr // gunim change
+	gpVertexAttribPointer      uintptr
 	gpViewport                 uintptr
 
 	isES bool
@@ -596,19 +596,13 @@ func (c *defaultContext) UseProgram(program uint32) {
 	c.call(c.gpUseProgram, uintptr(program))
 }
 
-func (c *defaultContext) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int) {
-	c.call(c.gpVertexAttribPointer, uintptr(index), uintptr(size), uintptr(xtype), uintptr(boolToInt(normalized)), uintptr(stride), uintptr(offset))
-}
-
-// gunim change: HasInstancing reports whether the context draws
-// instances, which an old desktop GL may not.
-func (c *defaultContext) HasInstancing() bool {
-	return c.gpDrawElementsInstanced != 0 && c.gpVertexAttribDivisor != 0
-}
-
 // gunim change: an attribute that steps once an instance.
 func (c *defaultContext) VertexAttribDivisor(index, divisor uint32) {
 	c.call(c.gpVertexAttribDivisor, uintptr(index), uintptr(divisor))
+}
+
+func (c *defaultContext) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int) {
+	c.call(c.gpVertexAttribPointer, uintptr(index), uintptr(size), uintptr(xtype), uintptr(boolToInt(normalized)), uintptr(stride), uintptr(offset))
 }
 
 func (c *defaultContext) Viewport(x int32, y int32, width int32, height int32) {
@@ -671,7 +665,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpDisable = g.get("glDisable")
 	c.gpDisableVertexAttribArray = g.get("glDisableVertexAttribArray")
 	c.gpDrawElements = g.get("glDrawElements")
-	c.gpDrawElementsInstanced = g.optional("glDrawElementsInstanced", "glDrawElementsInstancedARB") // gunim change
+	c.gpDrawElementsInstanced = g.get("glDrawElementsInstanced") // gunim change
 	c.gpEnable = g.get("glEnable")
 	c.gpEnableVertexAttribArray = g.get("glEnableVertexAttribArray")
 	c.gpFinish = g.get("glFinish")
@@ -720,8 +714,8 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpUniformMatrix3fv = g.get("glUniformMatrix3fv")
 	c.gpUniformMatrix4fv = g.get("glUniformMatrix4fv")
 	c.gpUseProgram = g.get("glUseProgram")
+	c.gpVertexAttribDivisor = g.get("glVertexAttribDivisor") // gunim change
 	c.gpVertexAttribPointer = g.get("glVertexAttribPointer")
-	c.gpVertexAttribDivisor = g.optional("glVertexAttribDivisor", "glVertexAttribDivisorARB") // gunim change
 	c.gpViewport = g.get("glViewport")
 
 	return g.error()

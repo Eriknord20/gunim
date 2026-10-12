@@ -166,7 +166,8 @@ type Light struct {
 	Color, Ambient color.NRGBA
 }
 
-// SceneItem is a mesh placed in a scene.
+// SceneItem is a mesh placed in a scene. Solid items that overlap
+// exactly, at the same depth, draw in any order, so either may show.
 type SceneItem struct {
 	Mesh *Mesh
 	// Model places, turns and scales the mesh in the world; a zero Model

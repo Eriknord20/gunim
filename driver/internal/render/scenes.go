@@ -264,17 +264,13 @@ var batchFS = strings.NewReplacer(
 ).Replace(sceneFS)
 
 // batchReady builds the batch program on first use, and reports whether
-// the GL draws batches: one without instancing draws each item alone.
+// it built: a batch shader that fails to build draws each item alone.
 func (r *Renderer) batchReady(header string) bool {
 	b := &r.scenes.batch
 	if b.prog != 0 || b.failed {
 		return !b.failed
 	}
 	g := r.GL
-	if !g.HasInstancing() {
-		b.failed = true
-		return false
-	}
 	vs, err := compile(g, gl.VERTEX_SHADER, header+batchVS)
 	if err != nil {
 		b.failed = true
@@ -569,8 +565,11 @@ func (r *Renderer) drawBatches(items []paint.SceneItem, vp geom.Mat4, eye, dir g
 	g.BindBuffer(gl.ARRAY_BUFFER, b.inst)
 	if len(b.data) > b.instCap {
 		b.instCap = max(len(b.data), 2*b.instCap)
-		g.BufferInit(gl.ARRAY_BUFFER, b.instCap, glDynamicDraw)
 	}
+	// A fresh store each scene, so a second scene in the frame writes
+	// while the GPU still draws the first, rather than waiting on it as
+	// a tile-based phone GPU would.
+	g.BufferInit(gl.ARRAY_BUFFER, b.instCap, glDynamicDraw)
 	g.BufferSubData(gl.ARRAY_BUFFER, 0, b.data)
 	stride := int32(instanceFloats * 4)
 	for gi := range b.groups {
