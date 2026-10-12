@@ -44,7 +44,8 @@ const (
 // one step to undo: of a parameter of the host's, or of whatever the
 // knob is bound to. A value that runs either side of zero fills its arc
 // from zero. It lights as the pointer comes over it, and its tooltip
-// says how to turn it.
+// says how to turn it. A second button pressed mid-turn ends the turn
+// where it got to.
 type Knob struct {
 	anim.Group
 	p plug.Param
@@ -94,6 +95,29 @@ func (k *Knob) SetParam(p plug.Param, v float64, u *gunim.UI) {
 	}
 	k.p, k.v = p, v
 	u.Invalidate()
+}
+
+// EndDrag ends a turn under way where it got to, as letting go does,
+// for a window that ends a press on its own keys, as Escape.
+func (k *Knob) EndDrag(u *gunim.UI) {
+	if !k.held {
+		return
+	}
+	k.held = false
+	k.end(u)
+	k.hover.Animate(0, widget.Quick.Get(u.Theme()))
+	u.Invalidate()
+}
+
+// Dragging reports whether a turn by the pointer is under way.
+func (k *Knob) Dragging() bool { return k.held }
+
+// Overhear implements [gunim.Overhearer]: a second button pressed
+// while a turn runs ends it, as the press goes elsewhere.
+func (k *Knob) Overhear(e input.Event, u *gunim.UI) {
+	if _, ok := e.(input.PointerDown); ok && k.held {
+		k.EndDrag(u)
+	}
 }
 
 // Value returns the value the knob shows.
