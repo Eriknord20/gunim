@@ -1470,6 +1470,9 @@ type UI struct {
 	seq uint64
 	// focusLaid waits for a layout to give a node the keyboard; see [UI.FocusFirstLaidOut].
 	focusLaid *laidFocus
+	// revealing are the nodes Reveal named, to bring into view once a
+	// frame has laid them out and drawn them.
+	revealing []*state
 	painter   paint.Painter
 	animating bool
 	invalid   bool
@@ -2400,6 +2403,7 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 	u.syncText(u.focus, false)
 	u.hoverAgain(now)
 	u.framePopups(f)
+	u.revealDrawn()
 	u.watchHeading()
 	u.keepEdgeSwipes()
 	u.publishAccess(u.w.dw, u.root, u.w.title)

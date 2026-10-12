@@ -731,9 +731,44 @@ func (u *UI) focusLaidOut() {
 // focusing it does, and leaves the keyboard where it is: for a list
 // that follows what the user works in, such as a row for the pane in
 // front.
+//
+// It goes by where the next frame lays n out and draws it. A node
+// inserted just now, or one that content growing around it moves, is
+// brought into view where it lands, and a scroll counts the content
+// it gained.
 func (u *UI) Reveal(n Node) {
-	if s, ok := u.index[n]; ok {
-		u.revealState(s)
+	s, ok := u.index[n]
+	if !ok {
+		return
+	}
+	if !slices.Contains(u.revealing, s) {
+		u.revealing = append(u.revealing, s)
+	}
+	u.invalid = true
+}
+
+// revealDrawn brings into view the nodes [UI.Reveal] named, now the
+// frame has laid them out and drawn them. One the frame left undrawn
+// waits for a frame that draws it, and one that left the tree is
+// dropped.
+func (u *UI) revealDrawn() {
+	if len(u.revealing) == 0 {
+		return
+	}
+	pending := u.revealing
+	u.revealing = nil
+	for _, s := range pending {
+		switch {
+		case s.leaving() || u.index[s.node] != s:
+		case s.drawn != u.seq:
+			if !slices.Contains(u.revealing, s) {
+				u.revealing = append(u.revealing, s)
+			}
+		default:
+			u.revealState(s)
+			// The scroll it started runs from the next frame.
+			u.animating = true
+		}
 	}
 }
 
