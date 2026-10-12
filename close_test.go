@@ -9,6 +9,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 )
 
 // quitAsked is what the application hears when the user asks to close
@@ -139,5 +140,24 @@ func TestAnOffscreenWindowWithNoAskToCloseCloses(t *testing.T) {
 	case <-w.done:
 	default:
 		t.Fatal("asked to close, the window stayed open")
+	}
+}
+
+func TestAnOffscreenWindowTakesItsThemeTitleAndZoom(t *testing.T) {
+	th := theme.Make("offscreen-test")
+	w := NewOffscreenWith(WindowOptions{Title: "Song", Theme: th, Zoom: 1.5, ZoomKeys: true})
+	if got := w.ui.theme.Active().Name; got != "offscreen-test" {
+		t.Fatalf("the window's theme is %q, want %q", got, "offscreen-test")
+	}
+	if w.title != "Song" {
+		t.Fatalf("the window's own title bar would read %q, want %q", w.title, "Song")
+	}
+	if got := w.ui.Zoom(); got != 1.5 {
+		t.Fatalf("the window zooms %v, want 1.5", got)
+	}
+	w.Frame(time.Second / 60)
+	w.Input(input.KeyPress{Key: input.Key0, Mods: input.ModControl})
+	if got := w.ui.Zoom(); got != 1 {
+		t.Fatalf("Ctrl+0 with ZoomKeys left the zoom at %v, want 1", got)
 	}
 }

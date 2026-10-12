@@ -1629,8 +1629,12 @@ func (p *PartTip) Handle(e input.Event, u *gunim.UI, owner gunim.Node, words str
 	p.tip.handle(e, u, owner, words, tipDelay)
 }
 
-// Hide hides the tooltip, such as while the part under the pointer is dragged.
-func (p *PartTip) Hide(u *gunim.UI) { p.tip.hide(u) }
+// Hide hides the tooltip, such as while the part under the pointer is dragged, until the pointer leaves and comes
+// back, as a press does.
+func (p *PartTip) Hide(u *gunim.UI) {
+	p.tip.quiet = true
+	p.tip.hide(u)
+}
 
 // tipper shows a tooltip for the node it serves.
 type tipper struct {

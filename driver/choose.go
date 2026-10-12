@@ -10,7 +10,8 @@ type ChooseOptions struct {
 	// Multiple lets more than one be chosen.
 	Multiple bool
 	// Folder is the folder the dialog opens in. Empty, or a folder that
-	// is not there, leaves that to the system.
+	// is not there, leaves that to the system. [gunim.Client.ChooseFiles]
+	// makes a relative one whole first.
 	Folder string
 	// Filters narrow the files shown, the first chosen to begin with.
 	// None shows every file.
@@ -44,6 +45,7 @@ type SaveOptions struct {
 	// Folder is the folder the dialog opens in, as the folder of the
 	// file being saved again under another name. Empty, or a folder
 	// that is not there, leaves that to the system.
+	// [gunim.Client.SaveFile] makes a relative one whole first.
 	Folder string
 	// Filters offer kinds of file to save as, the first chosen to begin
 	// with. None offers every file.
