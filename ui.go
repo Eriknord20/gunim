@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -414,12 +415,8 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	}
 
 	w := newWindow(dw, o.Root)
-	if o.Theme.Name != "" {
-		w.ui.theme = theme.NewLive(o.Theme)
-	}
-	w.title = o.Title
+	w.setUp(o)
 	w.placeFile = o.PlaceFile
-	w.askToClose = o.AskToClose
 	w.ui.underBar = o.UnderTitleBar
 	w.ui.fixed = o.Fixed
 	w.ui.startChrome(o.TitleBar)
@@ -430,10 +427,6 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	}
 	animated := w.ui.chrome != nil && !o.Instant
 	w.ui.arriving, w.ui.animated = animated, animated
-	w.ui.zoomKeys = o.ZoomKeys
-	if o.Zoom > 0 {
-		w.ui.SetZoom(o.Zoom)
-	}
 	w.open = a.drv.NewWindow
 	w.app = a
 	a.windows.add(w)
@@ -765,27 +758,43 @@ func (c Client) Input(ctx context.Context, ev input.Event) error {
 
 // ChooseFiles shows the system's dialog for choosing files or folders to
 // open, owned by the window, and returns what was chosen, or nothing when
-// the dialog was cancelled. It blocks until the dialog closes or ctx ends;
-// an ended ctx leaves the dialog open.
+// the dialog was cancelled. A relative o.Folder is taken from the
+// program's working folder, as [filepath.Abs] takes it. It blocks until
+// the dialog closes or ctx ends; an ended ctx leaves the dialog open.
 func (c Client) ChooseFiles(ctx context.Context, o driver.ChooseOptions) ([]string, error) {
 	fc, ok := c.w.dw.(driver.FileChooser)
 	if !ok {
 		return nil, driver.ErrNoChooser
 	}
+	o.Folder = absFolder(o.Folder)
 	return awaitDialog(ctx, c, func() ([]string, error) { return fc.ChooseFiles(o) })
 }
 
 // SaveFile shows the system's dialog for choosing where to save a file,
 // owned by the window, and returns the path chosen, or "" when the dialog
 // was cancelled. The dialog asks before it lets an existing file be
-// chosen. It blocks until the dialog closes or ctx ends; an ended ctx
-// leaves the dialog open.
+// chosen. A relative o.Folder is taken from the program's working
+// folder, as [filepath.Abs] takes it. It blocks until the dialog closes
+// or ctx ends; an ended ctx leaves the dialog open.
 func (c Client) SaveFile(ctx context.Context, o driver.SaveOptions) (string, error) {
 	fs, ok := c.w.dw.(driver.FileSaver)
 	if !ok {
 		return "", driver.ErrNoChooser
 	}
+	o.Folder = absFolder(o.Folder)
 	return awaitDialog(ctx, c, func() (string, error) { return fs.SaveFile(o) })
+}
+
+// absFolder is folder as a whole path, for the system's dialogs, which
+// each read a relative one their own way; an empty folder stays empty.
+func absFolder(folder string) string {
+	if folder == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(folder); err == nil {
+		return abs
+	}
+	return folder
 }
 
 // Open opens the file or folder at path with the program the system keeps
@@ -958,19 +967,25 @@ func NewOffscreenWith(o WindowOptions) *Window {
 		o.Size = geom.Sz(800, 600)
 	}
 	w := NewOffscreen(o.Size, o.Root)
+	w.setUp(o)
+	if o.Title != "" {
+		w.Offscreen().SetTitle(o.Title)
+	}
+	return w
+}
+
+// setUp sets w up by the options a window on a display and an offscreen
+// one share: its theme, title, AskToClose, zoom keys and zoom.
+func (w *Window) setUp(o WindowOptions) {
 	if o.Theme.Name != "" {
 		w.ui.theme = theme.NewLive(o.Theme)
 	}
 	w.title = o.Title
-	if o.Title != "" {
-		w.Offscreen().SetTitle(o.Title)
-	}
 	w.askToClose = o.AskToClose
 	w.ui.zoomKeys = o.ZoomKeys
 	if o.Zoom > 0 {
 		w.ui.SetZoom(o.Zoom)
 	}
-	return w
 }
 
 // offscreenMade is told of each offscreen window made, for the engine's
