@@ -731,9 +731,50 @@ func (u *UI) focusLaidOut() {
 // focusing it does, and leaves the keyboard where it is: for a list
 // that follows what the user works in, such as a row for the pane in
 // front.
+//
+// It goes by where the next frame lays n out and draws it. A node
+// inserted just now, or one that content growing around it moves, is
+// brought into view where it lands, and a scroll counts the content
+// it gained. A container that lays a node out and skips drawing it,
+// as widget.VirtualList does outside its view, reveals it by its own
+// call, such as VirtualList.ScrollToKey.
 func (u *UI) Reveal(n Node) {
-	if s, ok := u.index[n]; ok {
-		u.revealState(s)
+	s, ok := u.index[n]
+	if !ok {
+		return
+	}
+	if !slices.Contains(u.revealing, s) {
+		u.revealing = append(u.revealing, s)
+	}
+	u.invalid = true
+}
+
+// revealDrawn brings into view the nodes [UI.Reveal] named, now the
+// frame has laid them out and drawn them. One the frame has yet to lay
+// out waits for a frame that does; one it laid out and left undrawn,
+// and one that left the tree, are dropped.
+func (u *UI) revealDrawn() {
+	if len(u.revealing) == 0 {
+		return
+	}
+	pending := u.revealing
+	u.revealing = nil
+	for _, s := range pending {
+		switch {
+		case s.leaving() || u.index[s.node] != s:
+		case s.drawn != u.seq && s.laid == u.seq:
+			// Laid out and left undrawn, as a virtual list leaves a row
+			// outside its view: the container that skipped it reveals
+			// it by its own call.
+		case s.drawn != u.seq:
+			if !slices.Contains(u.revealing, s) {
+				u.revealing = append(u.revealing, s)
+			}
+		default:
+			u.revealState(s)
+			// The scroll it started runs from the next frame.
+			u.animating = true
+		}
 	}
 }
 
