@@ -219,21 +219,22 @@ func (a *Analyzer) HeardBefore(dst []float32, from int64) (frames []float32, now
 
 func (a *Analyzer) heardOf(dst []float32, from int64, before bool) (frames []float32, now int64) {
 	m := a.m
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now = m.heardLocked()
-	ring := &m.stereo
+	now = m.heard()
+	rings := m.rings.Load()
+	ring := rings.stereo
 	if before {
-		ring = &m.dryStereo
+		ring = rings.dryStereo
 	}
-	if *ring == nil {
-		*ring = make([]float32, 2*historyFrames)
+	if ring == nil {
+		m.wantRings(false, !before, before)
 		return dst, now
 	}
-	from = max(from, now-historyFrames/2, m.played-historyFrames, 0)
+	// Frames the mixer has written over since are left out: a little
+	// under a second is kept, far behind what it writes.
+	from = max(from, now-historyFrames/2, m.played.Load()-historyFrames, 0)
 	for f := from; f < now; f++ {
 		at := 2 * (f & (historyFrames - 1))
-		dst = append(dst, (*ring)[at], (*ring)[at+1])
+		dst = append(dst, floatFrom(ring[at].Load()), floatFrom(ring[at+1].Load()))
 	}
 	return dst, now
 }
@@ -244,21 +245,20 @@ func (m *Mixer) recent(out []float32) { m.recentOf(out, false) }
 // recentOf fills out with the last len(out) frames heard, as mono: as
 // they were before the voices' inserts, with before.
 func (m *Mixer) recentOf(out []float32, before bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	history := m.history
-	if before && m.dryHistory != nil {
-		history = m.dryHistory
+	if dry := m.rings.Load().dryHistory; before && dry != nil {
+		history = dry
 	}
-	end := m.heardLocked()
+	end := m.heard()
 	start := end - int64(len(out))
+	played := m.played.Load()
 	for i := range out {
 		f := start + int64(i)
-		if f < 0 || f < m.played-historyFrames {
+		if f < 0 || f < played-historyFrames {
 			out[i] = 0
 			continue
 		}
-		out[i] = history[f&(historyFrames-1)]
+		out[i] = floatFrom(history[f&(historyFrames-1)].Load())
 	}
 }
 

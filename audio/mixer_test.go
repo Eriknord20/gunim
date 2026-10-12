@@ -42,9 +42,7 @@ func TestASoundEndsAndItsVoiceIsDone(t *testing.T) {
 	if out[2*299] != 0.5 || out[2*300] != 0 {
 		t.Errorf("frames 299 and 300 are %v and %v, want the sound's last and then silence", out[2*299], out[2*300])
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("the voice is not done once its sound ended")
 	}
 	if m.Playing() != 0 {
@@ -109,9 +107,7 @@ func TestStopFadesOutAndEnds(t *testing.T) {
 	if end := out[len(out)-2]; end != 0 {
 		t.Errorf("after a stop the sound is at %v, want silence", end)
 	}
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Error("a stopped voice is not done")
 	}
 }
@@ -330,9 +326,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 			t.Fatalf("frame %d is %v, want %v: the second source ran on from the first's last frame", i, out[2*i], want)
 		}
 	}
-	select {
-	case <-v.Turned():
-	default:
+	if !soon(v.Turned()) {
 		t.Fatal("the turn went unheard")
 	}
 	if p := v.Position(); p != Duration(500) {
@@ -342,9 +336,7 @@ func TestAVoiceTurnsToTheNextSourceWithoutAGap(t *testing.T) {
 		t.Fatalf("the voice's length is %v, want the second source's, %v", l, Duration(1000))
 	}
 	m.Mix(out)
-	select {
-	case <-v.Done():
-	default:
+	if !soon(v.Done()) {
 		t.Fatal("the voice played on after its last source ended")
 	}
 }
@@ -362,6 +354,29 @@ func TestAVoiceIsHeardAtTheTurnOnlyOnceTheSpeakersReachIt(t *testing.T) {
 	m.Mix(make([]float32, 2*400))
 	if p := v.Position(); p != Duration(200) {
 		t.Fatalf("200 frames of the second heard, the voice says %v", p)
+	}
+}
+
+func TestAVoicesPositionNeverGoesBackAsTheSpeakersTakeABlock(t *testing.T) {
+	m := NewMixer()
+	held := int64(300)
+	m.SetLatency(func() int64 { return held })
+	v := m.Play(&level{v: 0.5, n: 1 << 20}, Options{})
+	m.Mix(make([]float32, 2*2000))
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("2000 mixed, 300 held, the voice says %v", p)
+	}
+	// The speakers took a block of 1000 the mixer has yet to count as
+	// mixed, as happens between the two reads: the frames heard do not
+	// go back.
+	held = 1300
+	if p := v.Position(); p != Duration(1700) {
+		t.Fatalf("with a block taken before it is counted, the voice says %v, back from 1700", p)
+	}
+	m.Mix(make([]float32, 2*1000))
+	held = 1200
+	if p := v.Position(); p != Duration(1800) {
+		t.Fatalf("counted, the voice says %v, want 1800", p)
 	}
 }
 
@@ -421,6 +436,17 @@ func TestAMixerAtAnotherRate(t *testing.T) {
 	}
 	if got := m.Duration(44100); got != time.Second {
 		t.Errorf("44100 frames last %v", got)
+	}
+}
+
+// soon says ch receives, or is closed, within a second: the mixer
+// tells of an end or a turn a moment after it mixes it.
+func soon(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(time.Second):
+		return false
 	}
 }
 

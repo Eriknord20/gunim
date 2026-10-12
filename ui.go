@@ -80,12 +80,27 @@ func runApp(ctx context.Context, drv driver.Driver, fn func(*App) error) error {
 	// windows' clients and from ctx, and finishes what it does as it
 	// ends before the process exits, unless it takes too long.
 	cancel()
+	grace := time.NewTimer(fnGrace)
+	defer grace.Stop()
+	var err error
 	select {
-	case err := <-errc:
-		return errors.Join(err, runErr)
-	case <-time.After(fnGrace):
+	case err = <-errc:
+	case <-grace.C:
 		return runErr
 	}
+	// The windows finish closing too, in the same grace, so what they
+	// keep as they close, as a PlaceFile, is written before the process
+	// exits.
+	closed := make(chan struct{})
+	go func() {
+		app.loops.Wait()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-grace.C:
+	}
+	return errors.Join(err, runErr)
 }
 
 // fnGrace is how long Main waits for fn to end once the event loop
@@ -100,6 +115,8 @@ type App struct {
 	cues atomic.Pointer[cuePlayer]
 	// windows is the open windows, for drags between them.
 	windows windows
+	// loops counts the windows' goroutines still running.
+	loops sync.WaitGroup
 }
 
 // NowPlaying is what a media application plays; see [App.SetNowPlaying].
@@ -330,6 +347,11 @@ type WindowOptions struct {
 	// primary monitor instead, and one larger than its monitor's work area shrinks to fit; see
 	// [driver.FitPlacement]. A maximized placement opens maximized, and goes back to its bounds when restored.
 	Place *driver.Placement
+	// PlaceFile keeps the window's place in this file between runs, so the window opens where the user left it. The
+	// window opens where the file says, unless Place is set, and the file is written as the window closes, with where
+	// the window was then, as [Window.Placement] reports it. A file missing or unreadable opens the window at Size, as
+	// on the first run.
+	PlaceFile string
 	// TitleBar is the title bar a chromeless window gets, in place of the one registered with [RegisterTitleBar].
 	TitleBar TitleBar
 	// UnderTitleBar lets the application draw the whole of a chromeless window, with the engine's title bar over its
@@ -362,6 +384,11 @@ type WindowOptions struct {
 	// press there, as without it. The title bar and the edges bring the
 	// window to the front on a press as ever.
 	DragFromBehind bool
+	// NoColorManagement leaves the window's colours unconverted. Without it, on a display whose colours are not
+	// sRGB's, such as a wide gamut monitor, each frame is converted from sRGB to the display's ICC profile, so colours
+	// and pictures look as they do in a browser, not oversaturated. [Client.ColorProfile] says what the window does.
+	// GUNIM_COLOR=off turns it off for every window, for debugging.
+	NoColorManagement bool
 }
 
 // NewWindow opens a window and starts its UI goroutine.
@@ -369,11 +396,14 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	if o.Size == (geom.Size{}) {
 		o.Size = geom.Sz(800, 600)
 	}
+	if o.Place == nil && o.PlaceFile != "" {
+		o.Place = readPlace(o.PlaceFile)
+	}
 	do := driver.Options{
 		Title: o.Title, Size: o.Size, Monitor: o.Monitor,
 		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Text: o.Text, Place: o.Place,
-		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed,
+		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw
@@ -388,6 +418,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 		w.ui.theme = theme.NewLive(o.Theme)
 	}
 	w.title = o.Title
+	w.placeFile = o.PlaceFile
 	w.askToClose = o.AskToClose
 	w.ui.underBar = o.UnderTitleBar
 	w.ui.fixed = o.Fixed
@@ -406,6 +437,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.open = a.drv.NewWindow
 	w.app = a
 	a.windows.add(w)
+	a.loops.Add(1)
 	go w.loop()
 	return w, nil
 }
@@ -437,6 +469,9 @@ type Window struct {
 	// out, or back in, and stay open; see Client.Fade.
 	leave chan struct{}
 	fade  chan bool
+	// placeFile is where the window's place is kept as it closes; see
+	// [WindowOptions.PlaceFile].
+	placeFile string
 	// title is the window's title, which a screen reader reads for it.
 	title string
 	// askToClose is sent to the application when the user asks to close
@@ -956,11 +991,12 @@ func (w *Window) Err() error { return w.err }
 // Placement is where the window is on the screen and whether it is maximized, for the application to save as it
 // quits, and open the window there next time with [WindowOptions.Place]. The bounds are in screen coordinates,
 // as [driver.Monitor.Bounds] are, and for a maximized or minimized window they are where it goes back to when
-// restored. ok is false where the platform cannot say, or the window has closed.
+// restored. ok is false where the platform cannot say.
 //
-// Read it before closing the window, such as on its [WindowOptions.AskToClose] intent: once the window has closed
-// there is nothing left to ask. It waits on the main goroutine, which runs the platform's events, so call it from the
-// function given to [Main] or a goroutine of the application's, not from the main goroutine itself.
+// Once the window has closed, it reports where the window was as it closed, so an application can save it as it
+// quits; [WindowOptions.PlaceFile] does that for it. While the window is open, it waits on the main goroutine, which
+// runs the platform's events, so call it from the function given to [Main] or a goroutine of the application's, not
+// from the main goroutine itself.
 func (w *Window) Placement() (p driver.Placement, ok bool) {
 	if r, is := w.dw.(driver.PlacementReader); is {
 		return r.Placement()
@@ -996,6 +1032,9 @@ func (w *Window) Close() { w.closeOnce.Do(func() { close(w.done) }) }
 // it to reach the screen, so the window draws at most once per refresh
 // whatever the application does with [Client].
 func (w *Window) loop() {
+	if w.app != nil {
+		defer w.app.loops.Done()
+	}
 	defer close(w.out)
 	defer w.ui.closeAllPopups()
 	defer func() {
@@ -1007,6 +1046,8 @@ func (w *Window) loop() {
 		if err := w.dw.Close(); err != nil {
 			w.err = errors.Join(w.err, fmt.Errorf("gunim: close window: %w", err))
 		}
+		// Before the application hears the window has closed.
+		w.keepPlace()
 	}()
 	// The compass stops before the window closes.
 	defer w.ui.stopHeading()

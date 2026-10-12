@@ -485,11 +485,25 @@ func (a *app) finish(id int, j job, rec record, err error) {
 	case errors.Is(err, errStopped):
 		a.patch(Notice{Title: "Stopped: " + r.title, Body: done + " done before it stopped.", Undo: undo, Kind: "warning"})
 	default:
-		body := err.Error()
-		if len(rec.steps) > 0 {
-			body += "\n\n" + done + " done before this."
+		item := ""
+		if len(j.srcs) == 1 {
+			item = a.ps.Base(j.srcs[0])
 		}
-		a.showError(ErrorBox{Title: failedTitle(j), Body: body})
+		box := ErrorBox{Title: failedTitle(j), Body: explain(err, a.ps, item), Detail: err.Error()}
+		if box.Body == "" {
+			box.Body, box.Detail = err.Error(), ""
+		}
+		if len(rec.steps) > 0 {
+			box.Body += " " + done + " done before this."
+		}
+		again, ok := a.retryJob(j, rec)
+		box.Retry = ok
+		title := r.title
+		a.showErrorThen(box, func(retry bool) {
+			if retry {
+				a.startOp(again, title)
+			}
+		})
 		if keep {
 			a.patch(Notice{Title: "Partly done: " + r.title, Undo: undo, Kind: "warning"})
 		}
@@ -589,6 +603,9 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 	a.post(func() {
 		ask := ClashAsk{Op: op, Name: a.ps.Base(c.dst), Where: a.ps.placeName(a.ps.Dir(c.dst)),
 			New: c.from, Old: describe(a.fs, c.dst), SameKind: c.sameKind, CanForAll: true}
+		if e, err := statEntry(a.fs, c.dst); err == nil {
+			ask.OldFolder = e.Dir
+		}
 		if ask.New == "" {
 			ask.New = describe(a.fs, c.src)
 		}
@@ -615,13 +632,24 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 func describe(fsys FS, path string) string {
 	e, err := statEntry(fsys, path)
 	if err != nil {
-		return "cannot be read: " + err.Error()
+		return "can't be read: " + err.Error()
 	}
-	s := e.Type
-	if !e.Dir {
-		s += ", " + humanBytes(e.Size)
+	return ItemFacts(e.Size, e.Dir, e.Mod)
+}
+
+// ItemFacts says what an item is, as the dialog that asks whether to
+// replace it compares two: "219 bytes · 10 Oct 2026 15:15", or for a
+// folder "Folder · 10 Oct 2026 15:15". A program that asks through
+// [TransferProgress.Clash] says the item coming the same way.
+func ItemFacts(size int64, dir bool, mod time.Time) string {
+	s := humanBytes(size)
+	if dir {
+		s = "Folder"
 	}
-	return s + ", modified " + e.Mod.Format("2006-01-02 15:04")
+	if !mod.IsZero() {
+		s += " · " + mod.Format("2 Jan 2006 15:04")
+	}
+	return s
 }
 
 // confirm asks c, and runs yes once the user agrees.
@@ -661,9 +689,45 @@ func (a *app) promptWith(p Prompt, got func(v Prompted)) {
 }
 
 // showError says an operation failed, in a dialog, and to Options.Log.
-func (a *app) showError(e ErrorBox) {
+func (a *app) showError(e ErrorBox) { a.showErrorThen(e, func(bool) {}) }
+
+// showErrorThen shows e, and tells then whether Retry was picked.
+func (a *app) showErrorThen(e ErrorBox, then func(retry bool)) {
 	a.logShown(e)
-	a.showDialog(&dialog{view: "error", state: e, answer: func(gunim.Intent) {}})
+	a.showDialog(&dialog{view: "error", state: e, answer: func(in gunim.Intent) {
+		v, _ := in.(DialogClosed)
+		then(v.Retry && e.Retry)
+	}})
+}
+
+// retryJob is what trying j again does, after it failed with rec done:
+// a copy or a move of the items that did not arrive, a delete or a move
+// to the trash of those still there, and the rest again as they were.
+// It reports false where there is nothing to try again, as for an undo.
+func (a *app) retryJob(j job, rec record) (job, bool) {
+	left := func(done func(src string) bool) []string {
+		var out []string
+		for _, src := range j.srcs {
+			if !done(src) {
+				out = append(out, src)
+			}
+		}
+		return out
+	}
+	switch j.kind {
+	case OpUndo:
+		return j, false
+	case OpCopy, OpMove:
+		j.srcs = left(func(src string) bool { return slices.Contains(rec.landed, a.ps.Base(src)) })
+		return j, len(j.srcs) > 0
+	case OpTrash, OpDelete:
+		j.srcs = left(func(src string) bool {
+			return slices.ContainsFunc(rec.steps, func(s step) bool { return a.ps.Same(s.from, src) })
+		})
+		return j, len(j.srcs) > 0
+	case OpRename, OpNewFolder, OpZip, OpExtract:
+	}
+	return j, true
 }
 
 // showDialog queues d, and shows it once the dialogs before it are

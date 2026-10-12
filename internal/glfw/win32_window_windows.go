@@ -633,6 +633,7 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 	window.borderMessage(uMsg, wParam)
 	window.coveredMessage(uMsg, wParam, lParam)
 	window.moveSizeMessage(uMsg)
+	window.colorMessage(uMsg)
 	if window.historyMessage(uMsg, lParam) {
 		return _APPCOMMAND_HANDLED
 	}

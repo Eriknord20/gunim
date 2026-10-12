@@ -74,10 +74,14 @@ type UndoOp struct {
 // ClashAsk is the state of the dialog that asks what to do about an item
 // going where one of its name is.
 type ClashAsk struct {
-	Op        int
-	Name      string
-	Where     string
+	Op    int
+	Name  string
+	Where string
+	// New and Old say what the item coming and the one there are, as
+	// ItemFacts writes them, and OldFolder that the one there is a
+	// folder.
 	New, Old  string
+	OldFolder bool
 	SameKind  bool
 	CanForAll bool
 }
@@ -142,13 +146,18 @@ type Prompted struct {
 	Checked bool
 }
 
-// ErrorBox is the state of a dialog that says an operation failed.
+// ErrorBox is the state of a dialog that says an operation failed: in
+// Body, in words, and the error itself in Detail, small, under it.
+// Retry offers to try again.
 type ErrorBox struct {
 	Title, Body string
+	Detail      string
+	Retry       bool
 }
 
-// DialogClosed says a dialog that only tells has closed.
-type DialogClosed struct{}
+// DialogClosed says a dialog that only tells has closed, and with Retry
+// that the operation it was about is to be tried again.
+type DialogClosed struct{ Retry bool }
 
 func init() {
 	gunim.RegisterType[Ops]("files.ops")

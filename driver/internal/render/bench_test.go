@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/internal/glfw"
+	"github.com/marrasen/gunim/internal/icc"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
 )
@@ -109,9 +110,21 @@ func paintGallery(p *paint.Painter, rows int, hover float32) {
 // window. The frames are recorded beforehand, so this times drawing
 // alone; compare it with BenchmarkRenderGallery, which draws the whole
 // frame straight to the window.
-func BenchmarkRenderHover(b *testing.B) {
+func BenchmarkRenderHover(b *testing.B) { benchHover(b, nil) }
+
+// BenchmarkRenderHoverConverted is BenchmarkRenderHover on a Display P3
+// screen: the copy to the window converts each pixel to the display's
+// colours. The difference between the two is what converting costs.
+func BenchmarkRenderHoverConverted(b *testing.B) {
+	benchHover(b, icc.DisplayP3().LUT(icc.LUTSize))
+}
+
+func benchHover(b *testing.B, lut *icc.LUT) {
 	r, done := hiddenGL(b)
 	defer done()
+	if err := r.SetColor(lut); err != nil {
+		b.Fatal(err)
+	}
 	var still, lit, diff paint.Painter
 	recordGallery(&still, 40, 0)
 	recordGallery(&lit, 40, 1)
