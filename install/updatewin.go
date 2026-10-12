@@ -179,6 +179,9 @@ type updater struct {
 	// launch starts the new copy, and pid is this process; a test sets
 	// them.
 	launch func(exe string, args []string, env ...string) error
+	// others counts the other copies of the program at exe running; see
+	// otherCopies.
+	others func(exe string) int
 	pid    int
 	// left says the window was left; a test reads it.
 	left bool
@@ -190,7 +193,7 @@ type updater struct {
 }
 
 func newUpdater(a App, c gunim.Client, sc scene) *updater {
-	return &updater{a: a, c: c, sc: sc, events: make(chan func(), 16), launch: launch, pid: os.Getpid(), check: Check}
+	return &updater{a: a, c: c, sc: sc, events: make(chan func(), 16), launch: launch, others: otherCopies, pid: os.Getpid(), check: Check}
 }
 
 // start serves the window, and reads the notes of the releases after
@@ -257,6 +260,15 @@ func (r *updater) handle(in gunim.Intent) {
 	case updateNow:
 		if r.working || r.sc.Page != pageUpdate {
 			return
+		}
+		// Other copies running would go on as the release before: the
+		// user is told, and the next press goes ahead.
+		if r.sc.Others == 0 {
+			if n := r.others(r.target()); n > 0 {
+				r.sc.Others = n
+				r.show()
+				return
+			}
 		}
 		r.updateNow()
 	case retried:
@@ -389,6 +401,28 @@ func (r *updater) updateNow() {
 			}
 		})
 	}()
+}
+
+// target is the program the update replaces.
+func (r *updater) target() string {
+	if r.u.Exe != "" {
+		return r.u.Exe
+	}
+	dir, err := r.a.dir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, r.a.exe())
+}
+
+// othersLine says other copies of the program are running, which the
+// update would leave on the release before.
+func othersLine(sc scene) string {
+	have := strings.TrimPrefix(sc.Have, "v")
+	if sc.Others == 1 {
+		return "Another copy of " + sc.Name + " is running. Close it first, or it goes on running " + have + "."
+	}
+	return strconv.Itoa(sc.Others) + " other copies of " + sc.Name + " are running. Close them first, or they go on running " + have + "."
 }
 
 // restart starts the release put in place, which waits for this
@@ -805,6 +839,11 @@ func updatePage(p *page, sc scene) {
 			}
 		}
 		heading(p, title, sub)
+		if sc.Others > 0 {
+			// Updated, they would go on as the release before.
+			l := say(p, othersLine(sc))
+			l.Color = failInk
+		}
 		p.notes = newNotesBox(sc)
 		p.fill = p.notes
 		p.add(20, p.notes)
@@ -816,6 +855,9 @@ func updatePage(p *page, sc scene) {
 		act := widget.NewButton("Update Now")
 		if sc.Ready {
 			act.Label = "Restart Now"
+		}
+		if sc.Others > 0 {
+			act.Label = "Update Anyway"
 		}
 		act.Kind = widget.ButtonPrimary
 		act.OnClick = widget.Sends(updateNow{})

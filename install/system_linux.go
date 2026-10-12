@@ -578,12 +578,26 @@ const procDir = "/proc"
 
 // running lists the processes running the program at exe.
 func running(exe string) ([]int, error) {
+	procs, err := runningParents(exe)
+	if err != nil {
+		return nil, err
+	}
+	pids := make([]int, 0, len(procs))
+	for pid := range procs {
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
+
+// runningParents lists the processes running the program at exe, each
+// with the process that started it.
+func runningParents(exe string) (map[int]int, error) {
 	want := resolve(exe)
 	entries, err := os.ReadDir(procDir)
 	if err != nil {
 		return nil, err
 	}
-	var pids []int
+	procs := map[int]int{}
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
@@ -596,10 +610,31 @@ func running(exe string) ([]int, error) {
 		// A program replaced while it runs reads as deleted.
 		to = strings.TrimSuffix(to, " (deleted)")
 		if to == want {
-			pids = append(pids, pid)
+			procs[pid] = parentOf(pid)
 		}
 	}
-	return pids, nil
+	return procs, nil
+}
+
+// parentOf is the process that started pid, from /proc/<pid>/stat, whose
+// fourth field it is, after the command's name in brackets, which may
+// itself hold spaces and brackets.
+func parentOf(pid int) int {
+	raw, err := os.ReadFile(filepath.Join(procDir, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return 0
+	}
+	s := string(raw)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 {
+		return 0
+	}
+	f := strings.Fields(s[i+1:])
+	if len(f) < 2 {
+		return 0
+	}
+	ppid, _ := strconv.Atoi(f[1])
+	return ppid
 }
 
 // toolWait is how long one of the desktop's own tools is given before

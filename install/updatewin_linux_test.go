@@ -157,6 +157,54 @@ func TestUpdateWindowUpdatesAndRestarts(t *testing.T) {
 	}
 }
 
+// With another copy of the program running, Update Now first says it would
+// go on as the release before, and puts nothing in place; pressed again,
+// the update goes ahead.
+func TestUpdateWindowSaysAnotherCopyRuns(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "studio")
+	if err := os.WriteFile(exe, []byte("one"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeGitHub(t,
+		release{tag: "v2.0.0", notes: "Faster.", files: map[string][]byte{asset("2.0.0"): []byte("two")}},
+		release{tag: "v1.0.0", notes: "First.", files: map[string][]byte{asset("1.0.0"): []byte("one")}},
+	)
+	a := App{Name: "studio", Version: "v1.0.0", Dir: func() (string, error) { return dir, nil },
+		Updates: GitHub{Repo: "marrasen/studio", API: srv.URL}, UpdateKey: testKey}
+	rel, _, err := Check(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, r := offscreenUpdate(t, a, Update{Release: rel, Quit: func() error { return nil }}, pageUpdate)
+	var asked []string
+	r.others = func(exe string) int { asked = append(asked, exe); return 1 }
+	var started int
+	r.launch = func(string, []string, ...string) error { started++; return nil }
+	updateFrames(w, r, 5)
+
+	r.handle(updateNow{})
+	updateFrames(w, r, 10)
+	if r.sc.Page != pageUpdate || r.sc.Others != 1 || started != 0 || r.working {
+		t.Fatalf("with another copy running, Update Now went to %q, others %d, started %d", r.sc.Page, r.sc.Others, started)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "one" {
+		t.Fatalf("the program was replaced before the user agreed: %q", raw)
+	}
+	if !slices.Equal(asked, []string{exe}) {
+		t.Fatalf("asked after the copies of %v, want %s", asked, exe)
+	}
+	if !strings.Contains(othersLine(r.sc), "Another copy of studio is running") || !strings.Contains(othersLine(r.sc), "1.0.0") {
+		t.Fatalf("the window says %q", othersLine(r.sc))
+	}
+
+	r.handle(updateNow{})
+	until(t, func() bool { updateFrames(w, r, 1); return r.left })
+	if raw, _ := os.ReadFile(exe); string(raw) != "two" || started != 1 {
+		t.Fatalf("pressed again, the program holds %q and %d copies started", raw, started)
+	}
+}
+
 // A release in place already restarts at once; with no way to end the
 // program, the window says it starts next time.
 func TestUpdateWindowReadyAndNoRestart(t *testing.T) {

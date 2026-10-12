@@ -341,6 +341,12 @@ program's own driving the same `install.Session`.
 ![The installer](install/installer.png)
 ![Installed](install/installed.png)
 
+Package `single` keeps one copy of a program running: a copy started
+while another runs hands its command line to that one, which opens a
+window for it, and ends. An update's window says when other copies are
+running, which would go on as the release before, and lets the user
+close them first.
+
 ## Android
 
 The same programs build for Android. `tools/gunimapk` turns one into an
