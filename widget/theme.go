@@ -299,6 +299,16 @@ var (
 	// Caret is the motion the caret and the selection glide with.
 	// Make it very stiff for a caret that jumps.
 	Caret = theme.Spring("motion.caret", anim.Spring{Response: 0.09, Damping: 1})
+	// FieldMenuCut and the three after it are the words of the edit
+	// menu a text field's long press or right click opens: English
+	// unless a theme says them in its own language. An app that
+	// switches window themes sets them in a [NewThemed] scope around
+	// its content, since a switch of the window's theme to, say,
+	// [Light], brings the English words back.
+	FieldMenuCut       = theme.Choice("field.menu.cut", "Cut")
+	FieldMenuCopy      = theme.Choice("field.menu.copy", "Copy")
+	FieldMenuPaste     = theme.Choice("field.menu.paste", "Paste")
+	FieldMenuSelectAll = theme.Choice("field.menu.select.all", "Select all")
 )
 
 // Text area tokens. The frame, colours and padding are the text

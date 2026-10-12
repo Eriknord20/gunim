@@ -65,6 +65,7 @@ type defaultContext struct {
 	gpDisable                  uintptr
 	gpDisableVertexAttribArray uintptr
 	gpDrawElements             uintptr
+	gpDrawElementsInstanced    uintptr // gunim change
 	gpEnable                   uintptr
 	gpEnableVertexAttribArray  uintptr
 	gpFinish                   uintptr
@@ -110,6 +111,7 @@ type defaultContext struct {
 	gpUniformMatrix3fv         uintptr
 	gpUniformMatrix4fv         uintptr
 	gpUseProgram               uintptr
+	gpVertexAttribDivisor      uintptr // gunim change
 	gpVertexAttribPointer      uintptr
 	gpViewport                 uintptr
 
@@ -333,6 +335,11 @@ func (c *defaultContext) DisableVertexAttribArray(index uint32) {
 
 func (c *defaultContext) DrawElements(mode uint32, count int32, xtype uint32, offset int) {
 	c.call(c.gpDrawElements, uintptr(mode), uintptr(count), uintptr(xtype), uintptr(offset))
+}
+
+// gunim change: instanced drawing, for a scene's items sharing a mesh.
+func (c *defaultContext) DrawElementsInstanced(mode uint32, count int32, xtype uint32, offset int, instances int32) {
+	c.call(c.gpDrawElementsInstanced, uintptr(mode), uintptr(count), uintptr(xtype), uintptr(offset), uintptr(instances))
 }
 
 func (c *defaultContext) Enable(cap uint32) {
@@ -589,6 +596,11 @@ func (c *defaultContext) UseProgram(program uint32) {
 	c.call(c.gpUseProgram, uintptr(program))
 }
 
+// gunim change: an attribute that steps once an instance.
+func (c *defaultContext) VertexAttribDivisor(index, divisor uint32) {
+	c.call(c.gpVertexAttribDivisor, uintptr(index), uintptr(divisor))
+}
+
 func (c *defaultContext) VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int) {
 	c.call(c.gpVertexAttribPointer, uintptr(index), uintptr(size), uintptr(xtype), uintptr(boolToInt(normalized)), uintptr(stride), uintptr(offset))
 }
@@ -653,6 +665,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpDisable = g.get("glDisable")
 	c.gpDisableVertexAttribArray = g.get("glDisableVertexAttribArray")
 	c.gpDrawElements = g.get("glDrawElements")
+	c.gpDrawElementsInstanced = g.get("glDrawElementsInstanced") // gunim change
 	c.gpEnable = g.get("glEnable")
 	c.gpEnableVertexAttribArray = g.get("glEnableVertexAttribArray")
 	c.gpFinish = g.get("glFinish")
@@ -701,6 +714,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpUniformMatrix3fv = g.get("glUniformMatrix3fv")
 	c.gpUniformMatrix4fv = g.get("glUniformMatrix4fv")
 	c.gpUseProgram = g.get("glUseProgram")
+	c.gpVertexAttribDivisor = g.get("glVertexAttribDivisor") // gunim change
 	c.gpVertexAttribPointer = g.get("glVertexAttribPointer")
 	c.gpViewport = g.get("glViewport")
 

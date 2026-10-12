@@ -257,18 +257,82 @@ func TestASceneItemDrawsWithoutAllocating(t *testing.T) {
 	}
 }
 
-// BenchmarkRenderScene draws a frame holding a scene of 500 items.
+// BenchmarkRenderScene draws a frame holding a scene of 500 items,
+// sharing a mesh: in batches, and each alone.
 func BenchmarkRenderScene(b *testing.B) {
-	r, done := hiddenGL(b)
+	for _, alone := range []bool{false, true} {
+		name := "batched"
+		if alone {
+			name = "alone"
+		}
+		b.Run(name, func(b *testing.B) {
+			r, done := hiddenGL(b)
+			defer done()
+			r.scenes.batch.off = alone
+			ops := sceneOps(500)
+			w, h := int(benchSize.W), int(benchSize.H)
+			r.Draw(ops, paint.Everything, w, h, 1)
+			r.GL.Finish()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				r.Draw(ops, paint.Everything, w, h, 1)
+				r.GL.Finish()
+			}
+		})
+	}
+}
+
+// Items sharing a mesh draw in one instanced call, and look as they
+// would drawn one by one: tinted, turned, squashed and mirrored, among
+// see-through ones and others of their own.
+func TestItemsSharingAMeshDrawInABatchAsTheyWouldAlone(t *testing.T) {
+	r, done := hiddenGL(t)
 	defer done()
-	ops := sceneOps(500)
-	w, h := int(benchSize.W), int(benchSize.H)
-	r.Draw(ops, paint.Everything, w, h, 1)
-	r.GL.Finish()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		r.Draw(ops, paint.Everything, w, h, 1)
-		r.GL.Finish()
+	white := color.NRGBA{0xff, 0xff, 0xff, 0xff}
+	ball := paint.NewSphere(12, 24, white)
+	box := paint.NewBox(geom.V3(0.5, 0.5, 0.5), white)
+	items := make([]paint.SceneItem, 0, 60)
+	for i := range 60 {
+		x := float32(i%10)/4 - 1.1
+		y := float32(i/10)/3 - 0.9
+		m := geom.Move3(geom.V3(x, y, float32(i%3)*0.2)).Mul(geom.TurnY(float32(i) * 0.4)).Mul(geom.Scale3(geom.V3(0.14, 0.1+0.01*float32(i%5), 0.12)))
+		it := paint.SceneItem{Mesh: ball, Model: m, Shine: 30, Tint: color.NRGBA{uint8(255 - 30*(i%4)), uint8(40 * (i % 6)), uint8(60 + 50*(i%3)), 0xff}}
+		switch {
+		case i%7 == 0:
+			it.Model = it.Model.Mul(geom.Scale3(geom.V3(-1, 1, 1)))
+		case i%5 == 0:
+			it.Mesh = box
+		case i%11 == 0:
+			it.Tint.A = 0x90
+		}
+		items = append(items, it)
+	}
+	scene := paint.Scene{
+		Camera: paint.Camera{Eye: geom.V3(0, 0, 4)},
+		Light:  paint.Light{Direction: geom.V3(-0.4, -1, -0.6)},
+		Items:  items,
+	}
+	shot := func(off bool) []byte {
+		r.scenes.batch.off = off
+		return drawn(r, func(p *paint.Painter) { p.Scene(geom.Rc(0, 0, 400, 400), scene) })
+	}
+	alone, batched := shot(true), shot(false)
+	if r.scenes.batch.prog == 0 {
+		t.Fatal("the batch program did not build")
+	}
+	worst, off := 0, 0
+	for i := range alone {
+		d := int(alone[i]) - int(batched[i])
+		if d < 0 {
+			d = -d
+		}
+		if d > 2 {
+			off++
+		}
+		worst = max(worst, d)
+	}
+	if off > len(alone)/2000 {
+		t.Errorf("drawn in batches, %d of %d channels differ by more than 2 from drawn alone (worst %d)", off, len(alone), worst)
 	}
 }
