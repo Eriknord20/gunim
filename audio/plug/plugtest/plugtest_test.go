@@ -142,3 +142,109 @@ func TestPlayShowsFramesLeftUnwritten(t *testing.T) {
 		}
 	}
 }
+
+// patched is a plugin with a port of each kind, which shows what reaches
+// them: it turns its sound by its depth, a control input, and puts the
+// depth out as it heard it on a control output; its key, an aux input of
+// one channel, comes out twice on an aux output of as many channels as
+// the main sound.
+var patched = plug.Descriptor{
+	ID: "test.patched", Name: "Patched",
+	AuxIn:      []plug.AudioPort{{Name: "Key", Channels: 1}},
+	AuxOut:     []plug.AudioPort{{Name: "Twice"}},
+	ControlIn:  []plug.ControlPort{{Name: "Depth", Max: 1, Default: 0.5}},
+	ControlOut: []plug.ControlPort{{Name: "Depth heard", Max: 1}},
+	New:        func(plug.Host) plug.Plugin { return nil },
+}
+
+type patch struct{ recorder }
+
+func (p *patch) Process(b *plug.Block) {
+	depth, key := b.ControlInput(0), b.AuxInput(0)
+	heard, twice := b.ControlOutput(0), b.AuxOutput(0)
+	for f := range b.Frames {
+		d := float32(patched.ControlIn[0].Default)
+		if depth != nil {
+			d = depth[f]
+		}
+		for c := range b.Out {
+			b.Out[c][f] = b.In[c][f] * d
+		}
+		if heard != nil {
+			heard[f] = d
+		}
+		for _, ch := range twice {
+			ch[f] = 0
+			if key != nil {
+				ch[f] = 2 * key[0][f]
+			}
+		}
+	}
+}
+
+func TestControlReachesAPluginEveryFrame(t *testing.T) {
+	const frames = 300 // four blocks of 64 and one of 44
+	in, depth, key := make([]float32, frames), make([]float32, frames), make([]float32, frames)
+	for f := range frames {
+		in[f] = 1 + float32(f%7)
+		depth[f] = float32(f) / frames
+		key[f] = float32(f%5) / 10
+	}
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2}
+	r := Drive(t, &patched, &patch{}, s, frames, Ports{In: [][]float32{in, in}, AuxIn: [][][]float32{{key}},
+		ControlIn: [][]float32{depth}})
+	for f := range frames {
+		if got := r.ControlOut[0][f]; got != depth[f] {
+			t.Fatalf("at frame %d the plugin heard a depth of %v, want %v", f, got, depth[f])
+		}
+		for c := range 2 {
+			if got, want := r.Out[c][f], in[f]*depth[f]; got != want {
+				t.Fatalf("at frame %d channel %d comes out %v, want %v", f, c, got, want)
+			}
+			if got := r.AuxOut[0][c][f]; got != 2*key[f] {
+				t.Fatalf("at frame %d the key comes out on channel %d as %v, want %v", f, c, got, 2*key[f])
+			}
+		}
+	}
+}
+
+func TestAnInputLeftUnconnectedReadsAsNil(t *testing.T) {
+	in := level(128, 1)
+	// The control input stands at its Default, and the key is silent.
+	r := Drive(t, &patched, &patch{}, plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}, 128, Ports{In: [][]float32{in}})
+	for f := range 128 {
+		if r.Out[0][f] != 0.5 || r.ControlOut[0][f] != 0.5 || r.AuxOut[0][0][f] != 0 {
+			t.Fatalf("unconnected, at frame %d the plugin puts out %v, %v and %v, want 0.5, 0.5 and 0",
+				f, r.Out[0][f], r.ControlOut[0][f], r.AuxOut[0][0][f])
+		}
+	}
+	// A nil port in the list leaves it unconnected too.
+	r = Drive(t, &patched, &patch{}, plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}, 128,
+		Ports{In: [][]float32{in}, AuxIn: [][][]float32{nil}, ControlIn: [][]float32{nil}})
+	if r.Out[0][100] != 0.5 || r.AuxOut[0][0][100] != 0 {
+		t.Errorf("with nil ports, the plugin puts out %v and %v, want 0.5 and 0", r.Out[0][100], r.AuxOut[0][0][100])
+	}
+}
+
+func TestDrivingPortsAllocatesNothing(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	in := level(4800, 1)
+	made := AllocsUnder(t, "plugtest.playBlocks", func() {
+		Drive(t, &patched, &patch{}, plug.Setup{Rate: 48000, MaxBlock: 128, Channels: 2}, 4800,
+			Ports{In: [][]float32{in, in}, AuxIn: [][][]float32{{in}}, ControlIn: [][]float32{in}})
+	})
+	if made != 0 {
+		t.Errorf("driving the ports made %d things over 38 blocks", made)
+	}
+}
+
+// level returns n frames at v.
+func level(n int, v float32) []float32 {
+	s := make([]float32, n)
+	for i := range s {
+		s[i] = v
+	}
+	return s
+}

@@ -49,6 +49,16 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"patch of a meter": {ID: "test.meter", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Flags: ReadOnly}},
 			Patches: []Patch{{Name: "A", Params: map[uint32]float64{1: 0}}}},
 		"instrument without notes": {ID: "test.deaf", Name: "X", New: newer, Kind: "Instrument|Synth"},
+		"unnamed aux input":        {ID: "test.aux", Name: "X", New: newer, AuxIn: []AudioPort{{Channels: 2}}},
+		"aux outputs of one name": {ID: "test.auxes", Name: "X", New: newer,
+			AuxOut: []AudioPort{{Name: "Kick"}, {Name: "Kick"}}},
+		"negative channels": {ID: "test.chans", Name: "X", New: newer, AuxIn: []AudioPort{{Name: "Key", Channels: -1}}},
+		"control of no range": {ID: "test.ctl", Name: "X", New: newer,
+			ControlIn: []ControlPort{{Name: "Cutoff", Min: 1, Max: 1, Default: 1}}},
+		"control default out": {ID: "test.ctldef", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "LFO", Min: -1, Max: 1, Default: 2}}},
+		"controls of one name": {ID: "test.ctls", Name: "X", New: newer,
+			ControlIn: []ControlPort{{Name: "A", Max: 1}, {Name: "A", Max: 1}}},
 	} {
 		func() {
 			defer func() {
@@ -111,5 +121,70 @@ func TestAnInstrumentIsKnownByItsKind(t *testing.T) {
 	Register(Descriptor{ID: prefix + "vocoder", Name: "Vocoder", Kind: "Fx|Modulation", Notes: true, New: newer})
 	if d, _ := Lookup(prefix + "synth"); !d.Instrument() || !d.Notes {
 		t.Errorf("the synth registered as %+v", d)
+	}
+}
+
+func TestPortsReadAsNilWhereUnconnected(t *testing.T) {
+	ch := []float32{1, 2}
+	// A host that knows no ports leaves the lists empty; another leaves
+	// a port nil, or lists fewer than the plugin has.
+	for name, b := range map[string]*Block{
+		"none":      {Frames: 2},
+		"nil":       {Frames: 2, AuxIn: [][][]float32{nil}, AuxOut: [][][]float32{{}}, ControlIn: [][]float32{nil}, ControlOut: [][]float32{{}}},
+		"too short": {Frames: 2, AuxIn: [][][]float32{{ch}}, AuxOut: [][][]float32{{ch}}, ControlIn: [][]float32{ch}, ControlOut: [][]float32{ch}},
+	} {
+		i := 0
+		if name == "too short" {
+			i = 1
+		}
+		if b.AuxInput(i) != nil || b.AuxOutput(i) != nil || b.ControlInput(i) != nil || b.ControlOutput(i) != nil {
+			t.Errorf("%s: an unconnected port reads as connected", name)
+		}
+		if b.AuxInput(-1) != nil {
+			t.Errorf("%s: port -1 reads as connected", name)
+		}
+	}
+	b := &Block{Frames: 2, AuxIn: [][][]float32{nil, {ch}}, ControlOut: [][]float32{nil, ch}}
+	if got := b.AuxInput(1); len(got) != 1 || &got[0][0] != &ch[0] {
+		t.Errorf("aux input 1 reads as %v", got)
+	}
+	if got := b.ControlOutput(1); len(got) != 2 || &got[0] != &ch[0] {
+		t.Errorf("control output 1 reads as %v", got)
+	}
+}
+
+func TestAControlSignalDrivesAParameterByChanges(t *testing.T) {
+	p := Param{ID: 9, Min: -12, Max: 12}
+	values := make([]float32, 100)
+	for f := range values {
+		values[f] = float32(f) / 4
+		if f >= 64 {
+			values[f] = 20 // past the top: held at Max, and sent once
+		}
+	}
+	got := AppendControl([]Change{{Frame: 0, ID: 1, Value: 3}}, p, values, 16)
+	want := []Change{{0, 1, 3}, {0, 9, 0}, {16, 9, 4}, {32, 9, 8}, {48, 9, 12}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the changes are %v, want %v", got, want)
+	}
+	// Every frame, at a step of 1, or of less.
+	if got := AppendControl(nil, p, values[:3], 0); len(got) != 3 || got[2] != (Change{2, 9, 0.5}) {
+		t.Errorf("at a step of 0, the changes are %v", got)
+	}
+	// On a parameter's steps: a switch moves once.
+	sw := Param{ID: 2, Max: 1, Steps: 1}
+	if got := AppendControl(nil, sw, []float32{0.1, 0.2, 0.7, 0.9}, 1); fmt.Sprint(got) != fmt.Sprint([]Change{{0, 2, 0}, {2, 2, 1}}) {
+		t.Errorf("a switch changes %v", got)
+	}
+	dst := make([]Change, 0, 512/ControlStep)
+	signal := make([]float32, 512)
+	for f := range signal {
+		signal[f] = float32(math.Sin(float64(f) / 40))
+	}
+	if n := testing.AllocsPerRun(100, func() { dst = AppendControl(dst[:0], p, signal, ControlStep) }); n != 0 {
+		t.Errorf("with room, AppendControl made %v things", n)
+	}
+	if len(dst) != 512/ControlStep {
+		t.Errorf("a block of 512 frames takes %d changes, want %d", len(dst), 512/ControlStep)
 	}
 }

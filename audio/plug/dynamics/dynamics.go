@@ -5,6 +5,11 @@
 // smoothly before they come. The sound goes in through Input, through
 // the three in that order, and out through Output.
 //
+// Its aux input is a sidechain: where the host connects one, the gate
+// and the compressor listen to it in place of the sound they shape, as
+// a bass ducks under the kick drum. The limiter always listens to the
+// sound itself, to keep it under its ceiling.
+//
 // Its panel draws the sound in and out as it plays, with how far each
 // part turns it down, over knobs for every control, beside two classic
 // VU meters.
@@ -39,7 +44,9 @@ const (
 	CompMakeupID    uint32 = 26
 	// The compressor's sidechain: what it listens to, the whole sound or
 	// a band of it, by SideModeID, about SideFreqID; SideListenID plays
-	// what it listens to, to find the band by ear.
+	// what it listens to, to find the band by ear. The sound is the
+	// sidechain input's, where one is connected, and the plugin's own
+	// otherwise.
 	SideModeID   uint32 = 27
 	SideFreqID   uint32 = 28
 	SideListenID uint32 = 29
@@ -82,6 +89,9 @@ func hz(v float64) string {
 	return fmt.Sprintf("%.0f Hz", v)
 }
 
+// SidechainPort is the sidechain's place in the plugin's aux inputs.
+const SidechainPort = 0
+
 // The sidechain's modes: the whole sound, or what is under, about or
 // over its frequency.
 const (
@@ -119,6 +129,7 @@ var Descriptor = plug.Descriptor{
 	Vendor:  "Marras",
 	Version: "0.1.0",
 	Kind:    "Fx|Dynamics",
+	AuxIn:   []plug.AudioPort{{Name: "Sidechain"}},
 	Params: []plug.Param{
 		{ID: InputID, Name: "Input", Unit: "dB", Min: -24, Max: 24, Flags: plug.Automatable, Format: signed},
 		{ID: OutputID, Name: "Output", Unit: "dB", Min: -24, Max: 24, Flags: plug.Automatable, Format: signed},
@@ -432,6 +443,13 @@ func (p *processor) Process(b *plug.Block) {
 	if stereo {
 		inR, outR = b.In[1], b.Out[1]
 	}
+	// The sidechain, where one is connected, is what the gate and the
+	// compressor listen to.
+	keyL, keyR := inL, inR
+	keyed := false
+	if key := b.AuxInput(SidechainPort); key != nil {
+		keyL, keyR, keyed = key[0], key[min(1, len(key)-1)], true
+	}
 	next := 0
 	gateLeast, compLeast, limLeast := 0.0, 0.0, 1.0
 	g, k, l := &p.gate, &p.comp, &p.lim
@@ -446,14 +464,19 @@ func (p *processor) Process(b *plug.Block) {
 		left, right := float64(inL[i])*p.in, float64(inR[i])*p.in
 		peak := max(math.Abs(left), math.Abs(right))
 
-		// The compressor listens to the sidechain: the whole sound, or a
-		// band of it.
-		heard, sl, sr := peak, left, right
+		// The gate listens to the sound, or the sidechain where one is
+		// connected; the compressor to that, whole or a band of it.
+		sl, sr, keyPeak := left, right, peak
+		if keyed {
+			sl, sr = float64(keyL[i]), float64(keyR[i])
+			keyPeak = max(math.Abs(sl), math.Abs(sr))
+		}
+		heard := keyPeak
 		if p.side.mode != SideFull {
-			sl, sr = p.side.run(0, left), p.side.run(1, right)
+			sl, sr = p.side.run(0, sl), p.side.run(1, sr)
 			heard = max(math.Abs(sl), math.Abs(sr))
 		}
-		gdb := g.step(peak)
+		gdb := g.step(keyPeak)
 		cdb := k.step(dbOf(heard) + gdb)
 		shape := gainOf(gdb+cdb) * k.makeup
 		left, right = left*shape, right*shape

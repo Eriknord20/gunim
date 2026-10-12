@@ -12,7 +12,8 @@ type Setup struct {
 	// MaxBlock is the most frames a block will have.
 	MaxBlock int
 	// Channels is how many channels come out, and go in where sound
-	// goes in: an instrument's sound comes out of it alone.
+	// goes in: an instrument's sound comes out of it alone. An
+	// [AudioPort] of zero channels has as many.
 	Channels int
 	// Offline says the sound is being rendered, as for an export, where
 	// a block may take longer than it lasts.
@@ -65,15 +66,40 @@ func (m *Meter) Set(v float64) { m.bits.Store(math.Float64bits(v)) }
 func (m *Meter) Get() float64 { return math.Float64frombits(m.bits.Load()) }
 
 // Block is a block of sound to process.
+//
+// The ports beyond the main sound, as the [Descriptor] lists them, come
+// by their place in its lists, each with Frames frames. A port the host
+// leaves unconnected is nil, or past the end of its list, so a host
+// that knows no ports runs every plugin: the plugin reads an input as
+// its own sound would have it (a compressor keys on what it compresses,
+// a control input stands at its Default), and skips an output. The
+// connections may change from one block to the next. Read the ports
+// with [Block.AuxInput] and its kin, which return nil for one
+// unconnected.
 type Block struct {
 	// In holds each channel's frames, and Out the channels to write.
 	// Out may be In, to process in place. An instrument's In is nil,
 	// and it writes every frame of Out.
 	In, Out [][]float32
+	// AuxIn holds each aux input's channels, by [Descriptor.AuxIn].
+	AuxIn [][][]float32
+	// AuxOut holds each aux output's channels to write, by
+	// [Descriptor.AuxOut]. The plugin writes every frame of each one
+	// connected.
+	AuxOut [][][]float32
+	// ControlIn holds each control input's values, a frame each, by
+	// [Descriptor.ControlIn], as the port's Min and Max bound them.
+	ControlIn [][]float32
+	// ControlOut holds each control output's values to write, by
+	// [Descriptor.ControlOut]. The plugin writes every frame of each one
+	// connected, within the port's Min and Max.
+	ControlOut [][]float32
 	// Frames is how many frames each channel has.
 	Frames int
 	// Changes are the parameters changed during the block, in the order
-	// of their frames.
+	// of their frames: the user's, the host's automation, and the
+	// control signals the host drives parameters with, as
+	// [AppendControl] makes them.
 	Changes []Change
 	// Events are the notes and their expression during the block, in
 	// the order of their frames, for a plugin that takes notes.
@@ -82,11 +108,76 @@ type Block struct {
 	Position Position
 }
 
+// AuxInput returns aux input i's channels, or nil where it is
+// unconnected.
+func (b *Block) AuxInput(i int) [][]float32 { return port(b.AuxIn, i) }
+
+// AuxOutput returns aux output i's channels to write, or nil where it is
+// unconnected.
+func (b *Block) AuxOutput(i int) [][]float32 { return port(b.AuxOut, i) }
+
+// ControlInput returns control input i's values, or nil where it is
+// unconnected.
+func (b *Block) ControlInput(i int) []float32 { return port(b.ControlIn, i) }
+
+// ControlOutput returns control output i's values to write, or nil where
+// it is unconnected.
+func (b *Block) ControlOutput(i int) []float32 { return port(b.ControlOut, i) }
+
+// port returns ports[i], or nil where i is past the end or the port has
+// nothing in it.
+func port[T any](ports [][]T, i int) []T {
+	if i < 0 || i >= len(ports) || len(ports[i]) == 0 {
+		return nil
+	}
+	return ports[i]
+}
+
 // Change is a parameter's new value, from a frame in a block on.
+//
+// A control signal reaches a parameter as changes too: the host takes
+// the signal's value every few frames, with [AppendControl], and sends
+// each as a change. So every plugin's parameters take control signals,
+// through the code that takes their changes already, as a VST3 plugin
+// takes sample-accurate automation as points at frames in its block.
+// The host picks how often, and so bounds the work a plugin does per
+// change, as working out a filter again. A plugin that needs a value
+// every frame, as an FM synth's pitch, declares a control input for it.
 type Change struct {
 	Frame int
 	ID    uint32
 	Value float64
+}
+
+// ControlStep is how many frames apart a host takes a control signal's
+// value for a parameter, by default: under a
+// millisecond at 48 kHz, so an LFO moves a parameter smoothly, and 16
+// changes in a block of 512 frames.
+const ControlStep = 32
+
+// AppendControl appends to dst the changes that drive parameter p by a
+// control signal over a block, and returns the longer slice. values
+// holds p's value at each of the block's frames, in p's own units, as
+// the host maps the signal into them. It takes the value at frame 0 and
+// every step frames after, within p's range, and leaves out a value the
+// same as the one before. It allocates nothing where dst has room: a
+// host makes dst room enough before the sound starts, a change for every
+// step frames of its longest block.
+//
+// A host sending changes of several parameters in one block sorts them
+// by frame after, as with slices.SortStableFunc, which allocates nothing.
+func AppendControl(dst []Change, p Param, values []float32, step int) []Change {
+	step = max(step, 1)
+	last := math.NaN()
+	for f := 0; f < len(values); f += step {
+		v := p.Clamp(float64(values[f]))
+		if v == last {
+			continue
+		}
+		last = v
+		dst = append(dst, Change{Frame: f, ID: p.ID, Value: v})
+	}
+	return dst
 }
 
 // Event is a note starting or ending, or changing as it sounds, at a
