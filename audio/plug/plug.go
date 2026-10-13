@@ -155,8 +155,12 @@ const (
 )
 
 // Clamp returns v within the parameter's range, on a step where it has
-// steps.
+// steps. A NaN, as a file or a modulation may bring, is the Default,
+// and an infinity the end of the range it points to.
 func (p Param) Clamp(v float64) float64 {
+	if math.IsNaN(v) {
+		v = p.Default
+	}
 	v = min(max(v, p.Min), p.Max)
 	if p.Steps > 0 {
 		return p.Plain(p.Normal(v))
