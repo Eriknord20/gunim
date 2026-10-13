@@ -68,6 +68,19 @@ type Descriptor struct {
 	// They are named by their place in the list too, and
 	// [Block.ControlIn] and [Block.ControlOut] carry their values.
 	ControlIn, ControlOut []ControlPort
+	// Ports, where set, says which of the ports above a plugin has in
+	// a state, as a synth has an output for each part of the drum kit
+	// it plays, and only its main output for a melodic sound. The ports
+	// keep their places in the lists, so a project's connections keep
+	// naming them, and a port a state lacks comes back with a state
+	// that has it. The host gives a port the plugin lacks nothing, as it
+	// gives a port left unconnected: the plugin mixes such an output
+	// into its main one. Ports is a pure function of the state, as
+	// [Plugin.State] writes it: the host asks it again whenever the
+	// state changes, as SetState sets one or a view tells of an edit with
+	// [Host.Changed], and may ask it from any goroutine. Nil gives a
+	// plugin every port in every state. [Descriptor.PortsIn] reads it.
+	Ports func(state []byte) Ports
 	// Params are the plugin's parameters, each with an ID of its own.
 	Params []Param
 	// Patches are the patches the plugin comes with, as starting points.
@@ -105,6 +118,52 @@ func (d *Descriptor) Param(id uint32) (Param, bool) {
 	}
 	return Param{}, false
 }
+
+// Ports says which ports a plugin has in a state, of those its
+// [Descriptor] declares, by their places in its lists: true for each
+// port it has. A port past the end of a list here is one it lacks.
+type Ports struct {
+	AuxIn, AuxOut, ControlIn, ControlOut []bool
+}
+
+// PortsIn returns the ports a plugin of d has in state: what d.Ports
+// says, within the ports d declares, or every port d declares where
+// d.Ports is nil.
+func (d *Descriptor) PortsIn(state []byte) Ports {
+	all := func(n int) []bool {
+		out := make([]bool, n)
+		for i := range out {
+			out[i] = true
+		}
+		return out
+	}
+	if d.Ports == nil {
+		return Ports{AuxIn: all(len(d.AuxIn)), AuxOut: all(len(d.AuxOut)), ControlIn: all(len(d.ControlIn)), ControlOut: all(len(d.ControlOut))}
+	}
+	p := d.Ports(state)
+	within := func(has []bool, n int) []bool {
+		out := make([]bool, n)
+		copy(out, has)
+		return out
+	}
+	return Ports{AuxIn: within(p.AuxIn, len(d.AuxIn)), AuxOut: within(p.AuxOut, len(d.AuxOut)),
+		ControlIn: within(p.ControlIn, len(d.ControlIn)), ControlOut: within(p.ControlOut, len(d.ControlOut))}
+}
+
+// has reports whether list holds true at i.
+func has(list []bool, i int) bool { return i >= 0 && i < len(list) && list[i] }
+
+// HasAuxIn reports whether the plugin has aux input i.
+func (p Ports) HasAuxIn(i int) bool { return has(p.AuxIn, i) }
+
+// HasAuxOut reports whether the plugin has aux output i.
+func (p Ports) HasAuxOut(i int) bool { return has(p.AuxOut, i) }
+
+// HasControlIn reports whether the plugin has control input i.
+func (p Ports) HasControlIn(i int) bool { return has(p.ControlIn, i) }
+
+// HasControlOut reports whether the plugin has control output i.
+func (p Ports) HasControlOut(i int) bool { return has(p.ControlOut, i) }
 
 // AudioPort is an audio port of a plugin's, beyond its main input and
 // output.

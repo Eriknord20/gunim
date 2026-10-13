@@ -259,3 +259,33 @@ func TestAFinderMakesAPluginKnownAsItIsAskedFor(t *testing.T) {
 		t.Fatalf("the finder was asked %v", asked)
 	}
 }
+
+func TestPortsInFollowTheState(t *testing.T) {
+	d := Descriptor{ID: "test.kit", Name: "Kit", AuxOut: []AudioPort{{Name: "Kick"}, {Name: "Snare"}, {Name: "Hats"}},
+		ControlOut: []ControlPort{{Name: "Env", Max: 1}}}
+	all := d.PortsIn(nil)
+	for i := range d.AuxOut {
+		if !all.HasAuxOut(i) {
+			t.Errorf("with no Ports, the plugin lacks aux output %d, want every port", i)
+		}
+	}
+	if !all.HasControlOut(0) || all.HasAuxIn(0) || all.HasAuxOut(3) || all.HasAuxOut(-1) {
+		t.Errorf("with no Ports: %+v, want the ports declared and no others", all)
+	}
+	// A state of "drums" has the kick and the hats, and asks for an
+	// output past the declared ones, which stays out.
+	d.Ports = func(state []byte) Ports {
+		if string(state) == "drums" {
+			return Ports{AuxOut: []bool{true, false, true, true}}
+		}
+		return Ports{}
+	}
+	drums := d.PortsIn([]byte("drums"))
+	if !drums.HasAuxOut(0) || drums.HasAuxOut(1) || !drums.HasAuxOut(2) || drums.HasAuxOut(3) || len(drums.AuxOut) != 3 {
+		t.Errorf("a drum state has aux outputs %v, want the kick and the hats of the three declared", drums.AuxOut)
+	}
+	pad := d.PortsIn([]byte("pad"))
+	if pad.HasAuxOut(0) || pad.HasControlOut(0) || len(pad.AuxOut) != 3 {
+		t.Errorf("a melodic state has aux outputs %v and control outputs %v, want none", pad.AuxOut, pad.ControlOut)
+	}
+}
