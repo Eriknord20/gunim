@@ -364,14 +364,7 @@ func (m *Map) span(i int, to Ticks) float64 {
 // ticksAfter is the position reached s seconds after tempo change i,
 // which must not be more than the segment lasts.
 func (m *Map) ticksAfter(i int, s float64) Ticks {
-	a := m.tempos[i]
-	if b, ramp := m.ramp(i); ramp && s > 0 {
-		total := float64(b.At-a.At) / PPQ
-		secs := 120 * total / (a.BPM + b.BPM)
-		k := (b.BPM - a.BPM) / secs
-		return a.At + Quarters((a.BPM*s+k*s*s/2)/60)
-	}
-	return a.At + Quarters(s*a.BPM/60)
+	return m.tempos[i].At + Quarters(m.quartersAfter(i, s))
 }
 
 // ramp reports whether tempo change i slides, and to which change. A
@@ -444,6 +437,71 @@ func framesAt(d time.Duration, rate int64) int64 {
 func (m *Map) AtFrame(f int64, rate int) Ticks {
 	r := int64(max(rate, 1))
 	return m.At(time.Duration(f/r)*time.Second + time.Duration(f%r*int64(time.Second)/r))
+}
+
+// QuartersAtFrame is where frame f at rate falls, in quarter notes
+// from tick 0, unrounded: exact where [Map.AtFrame] rounds to a tick. A
+// host fills a plugin's beat with it, as plug's Position.Beat.
+func (m *Map) QuartersAtFrame(f int64, rate int) float64 {
+	r, i, s := m.segmentAtFrame(f, rate)
+	return float64(r.tempos[i].At)/PPQ + r.quartersAfter(i, s)
+}
+
+// BPMAtFrame is the tempo at frame f at rate, part way up a ramp where
+// it falls inside one: as plug's Position.Tempo and EndTempo take it.
+func (m *Map) BPMAtFrame(f int64, rate int) float64 {
+	r, i, s := m.segmentAtFrame(f, rate)
+	a := r.tempos[i]
+	b, ramp := r.ramp(i)
+	if !ramp || s <= 0 {
+		return a.BPM
+	}
+	secs := 120 * float64(b.At-a.At) / PPQ / (a.BPM + b.BPM)
+	return a.BPM + (b.BPM-a.BPM)*min(s, secs)/secs
+}
+
+// BPMReachingFrame is the tempo frame f at rate is reached at: the
+// tempo of the stretch of the map frame f-1 falls in, steady or ramping,
+// run on to f. So a change falling between f-1 and f leaves the tempo
+// before it. A host fills plug's Position.EndTempo with it at the frame
+// after a block's last, so the block's tempo runs evenly from its start
+// to its end.
+func (m *Map) BPMReachingFrame(f int64, rate int) float64 {
+	r, i, s := m.segmentAtFrame(f-1, rate)
+	s += 1 / float64(max(rate, 1))
+	a := r.tempos[i]
+	b, ramp := r.ramp(i)
+	if !ramp {
+		return a.BPM
+	}
+	secs := 120 * float64(b.At-a.At) / PPQ / (a.BPM + b.BPM)
+	return a.BPM + (b.BPM-a.BPM)*s/secs
+}
+
+// segmentAtFrame returns the map ready to read, the tempo change in
+// force at frame f at rate, and the seconds from that change to f.
+func (m *Map) segmentAtFrame(f int64, rate int) (r *Map, i int, s float64) {
+	r = m.ready()
+	rt := int64(max(rate, 1))
+	s = float64(f/rt) + float64(f%rt)/float64(rt) - r.start.Seconds()
+	i, found := slices.BinarySearchFunc(r.secs, s, cmp.Compare[float64])
+	if !found {
+		i = max(i-1, 0)
+	}
+	return r, i, s - r.secs[i]
+}
+
+// quartersAfter is the quarter notes s seconds after tempo change i,
+// which must not be more than the segment lasts, unrounded.
+func (m *Map) quartersAfter(i int, s float64) float64 {
+	a := m.tempos[i]
+	if b, ramp := m.ramp(i); ramp && s > 0 {
+		total := float64(b.At-a.At) / PPQ
+		secs := 120 * total / (a.BPM + b.BPM)
+		k := (b.BPM - a.BPM) / secs
+		return (a.BPM*s + k*s*s/2) / 60
+	}
+	return s * a.BPM / 60
 }
 
 // BPM is the tempo in force at a position, part way up a ramp where it

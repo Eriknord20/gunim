@@ -380,3 +380,34 @@ func TestTheZeroMeterCountsQuarters(t *testing.T) {
 		t.Errorf("the zero meter's beat is %d ticks, want %d", got, PPQ)
 	}
 }
+
+func TestQuartersAtAFrameAreExact(t *testing.T) {
+	const rate = 48000
+	m := New(60, 4, 4)
+	m.SetTempos([]Tempo{{At: 0, BPM: 60, Ramp: true}, {At: 4 * PPQ, BPM: 180}})
+	m.SetStart(250 * time.Millisecond)
+	for f := int64(0); f < 5*rate; f += 997 {
+		q := m.QuartersAtFrame(f, rate)
+		// AtFrame rounds the same place to a tick.
+		if d := math.Abs(q*PPQ - float64(m.AtFrame(f, rate))); d > 0.5 {
+			t.Fatalf("frame %d falls at %v quarter notes, %v ticks from AtFrame's", f, q, d)
+		}
+		if f < rate/4 && f > 0 && q >= 0 {
+			t.Fatalf("frame %d, before the start, falls at %v quarter notes", f, q)
+		}
+	}
+	// The ramp's middle, in time: 60 to 180 over 4 quarter notes lasts
+	// two seconds, and a second in it plays 1.5 quarter notes at 120.
+	if q, bpm := m.QuartersAtFrame(rate+rate/4, rate), m.BPMAtFrame(rate+rate/4, rate); math.Abs(q-1.5) > 1e-12 || math.Abs(bpm-120) > 1e-9 {
+		t.Errorf("a second into the ramp is %v quarter notes at %v, want 1.5 at 120", q, bpm)
+	}
+	if bpm := m.BPMAtFrame(10*rate, rate); bpm != 180 {
+		t.Errorf("after the ramp the tempo is %v, want 180", bpm)
+	}
+	// The ramp ends on frame 108000: reaching it, the tempo is the
+	// ramp's end; from it, the next change's.
+	m.SetTempos([]Tempo{{At: 0, BPM: 60, Ramp: true}, {At: 4 * PPQ, BPM: 180}, {At: 10 * PPQ, BPM: 90}})
+	if a, b := m.BPMReachingFrame(rate/4+4*rate, rate), m.BPMAtFrame(rate/4+4*rate, rate); a != 180 || b != 90 {
+		t.Errorf("at the step to 90, the tempo reaching it is %v and from it %v, want 180 and 90", a, b)
+	}
+}
