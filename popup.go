@@ -175,6 +175,9 @@ type surface struct {
 	// pointerRegion.
 	region    []geom.Rect
 	regionSet bool
+	// covered says the system reports the window out of sight. A popup in sight keeps the parent window drawing
+	// while the parent is covered; see Window.draws.
+	covered bool
 }
 
 // popupDebug is set by GUNIM_DEBUG_POPUP=1, which logs to standard error how each popup got its window and how long
@@ -781,7 +784,31 @@ func (u *UI) popupEvent(e popupEvent) {
 		}
 		return
 	}
+	if c, ok := e.ev.(driver.WindowCovered); ok {
+		u.popupCovered(e.s, c.Covered)
+		return
+	}
 	u.handleOn(e.s.root, e.ev)
+}
+
+// popupCovered notes whether s's window is out of sight. A popup is on top of other windows, so one can still be
+// seen, and be fading out, after the parent window is covered: the parent draws on while it is.
+func (u *UI) popupCovered(s *surface, covered bool) {
+	drew := u.w.draws()
+	s.covered = covered
+	if !drew && u.w.draws() {
+		u.w.resumed, u.invalid = true, true
+	}
+}
+
+// popupInSight reports whether a popup's window is open and not out of sight.
+func (u *UI) popupInSight() bool {
+	for _, s := range u.popups {
+		if s.dw != nil && !s.covered {
+			return true
+		}
+	}
+	return false
 }
 
 // forward passes a popup window's events to the UI goroutine until the
