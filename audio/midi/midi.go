@@ -11,14 +11,22 @@
 // Times are [time.Time] values on Go's monotonic clock, the one
 // [time.Now] reads. [Out.Send] takes the time a message is to leave,
 // and a message is held until then, so a host sends a block's notes as
-// it renders the block, each at the time its frame is heard. A host
-// that reads time.Now as it starts rendering a block, and plays its
-// output a latency later, sends a note at frame f of the block at
+// it renders the block, each at the time its frame is heard. An
+// [Event] from [OpenIn] carries the time its message arrived, on the
+// same clock.
 //
-//	start.Add(latency + time.Duration(f)*time.Second/time.Duration(rate))
+// Package audio/speaker ties the mixer's frames to that clock:
+// Speaker.Anchor says which frame is heard when. A host takes the
+// anchor once a block, sends a note for frame f at its time, and
+// places a message that came in on the frame heard as it arrived:
 //
-// An [Event] from [OpenIn] carries the time its message arrived, on the
-// same clock, so a host places it the same way back.
+//	a := spk.Anchor()
+//	err := out.Send(a.TimeOf(f), midi.NoteOn(0, 60, 100))
+//	...
+//	frame := a.FrameAt(e.Time)
+//
+// A note sent for a frame the mixer renders now leaves the speaker's
+// latency from now, as the frame is heard.
 //
 // # Systems
 //
