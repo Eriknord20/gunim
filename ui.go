@@ -309,6 +309,11 @@ type WindowOptions struct {
 	// existing one.
 	Parent *Window
 	Anchor geom.Point
+	// Owned makes an ordinary window belong to Parent, as a palette or a plugin's window does: it stays in front of
+	// Parent, and Windows keeps it off the taskbar. It is an ordinary window in every other way: it moves to any
+	// monitor, has its title bar, and opens at Place where that is set, or else at Anchor in Parent's space. Windows
+	// and X11 do so; macOS leaves it an ordinary window.
+	Owned bool
 	// Root is the node at the top of the tree. A nil Root gets an empty
 	// [Box], and views can be mounted into it later through
 	// [Client.Mount].
@@ -402,7 +407,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	}
 	do := driver.Options{
 		Title: o.Title, Size: o.Size, Monitor: o.Monitor,
-		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons,
+		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Owned: o.Owned && o.Parent != nil,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Text: o.Text, Place: o.Place,
 		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
 	}

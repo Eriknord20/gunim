@@ -71,3 +71,38 @@ func TestAnOwnedPopupStaysWithItsWindow(t *testing.T) {
 		}
 	}
 }
+
+// An ordinary window that is Owned belongs to its parent: it stays in front of it and is not topmost; one that is
+// not has no owner.
+func TestAnOwnedWindowBelongsToItsParent(t *testing.T) {
+	if display == nil {
+		t.Skip("no display")
+	}
+	p, err := display.NewWindow(driver.Options{Title: "gunim test", Size: geom.Sz(200, 120)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	parent, ok := p.(*Window)
+	if !ok {
+		t.Fatalf("the window is a %T", p)
+	}
+	var ph windows.HWND
+	if err := display.call(func() (err error) { ph, err = parent.gw.GetWin32Window(); return err }); err != nil {
+		t.Fatal(err)
+	}
+	for _, owned := range []bool{false, true} {
+		dw, err := display.NewWindow(driver.Options{Title: "gunim owned", Parent: parent, Size: geom.Sz(160, 100), Owned: owned})
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner, top := ownerAndTopmost(t, dw)
+		_ = dw.Close()
+		switch {
+		case owned && (owner != ph || top):
+			t.Errorf("an owned window has owner %#x, want %#x, and is topmost %v", owner, ph, top)
+		case !owned && owner != 0:
+			t.Errorf("a window has owner %#x, want none", owner)
+		}
+	}
+}
