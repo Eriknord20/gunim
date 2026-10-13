@@ -155,10 +155,10 @@ func through(pr plug.Processor, in [2][]float32, changes []plug.Change) [2][]flo
 // run plays in through a new stabilizer set by changes, and returns it
 // and all that comes out, failing where any of it is not a number or
 // is infinite.
-func run(t *testing.T, in [2][]float32, changes []plug.Change) (*plugin, [2][]float32) {
+func run(t *testing.T, in [2][]float32, changes []plug.Change) (p *plugin, out [2][]float32) {
 	t.Helper()
-	p, _ := newStabilizer(t)
-	out := through(p.Processor(), in, changes)
+	p, _ = newStabilizer(t)
+	out = through(p.Processor(), in, changes)
 	for c := range out {
 		for i, v := range out[c] {
 			if f := float64(v); math.IsNaN(f) || math.IsInf(f, 0) {
@@ -206,12 +206,9 @@ func bandLevel(power []float64, bin, lo, hi float64) float64 {
 	return 10 * math.Log10(sum+1e-30)
 }
 
-// tilt returns how many decibels an octave x rises over its last
-// frames, as sixth-octave bands from 125 Hz to 8 kHz read it, fitted by
-// least squares: pink noise 0, white noise 3.
-func tilt(x []float32, frames int) float64 { return tiltOver(x, frames, 125, 8000) }
-
-// tiltOver is tilt, from lo to hi alone.
+// tiltOver returns how many decibels an octave x rises over its last
+// frames, as sixth-octave bands from lo to hi read it, fitted by least
+// squares: pink noise 0, white noise 3.
 func tiltOver(x []float32, frames int, lo, hi float64) float64 {
 	power, bin := welch(x, frames)
 	var sx, sy, sxx, sxy, n float64
@@ -612,7 +609,7 @@ type sound struct {
 	at     int
 }
 
-func (s *sound) Heard(dst []float32) (int, int64, int) {
+func (s *sound) Heard(dst []float32) (frames int, at int64, hz int) {
 	n := min(len(dst)/2, s.at)
 	for i := range n {
 		f := s.at - n + i

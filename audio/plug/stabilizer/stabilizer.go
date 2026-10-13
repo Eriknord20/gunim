@@ -84,7 +84,7 @@ var (
 // targetNames and targetTips name the targets, and say what each is,
 // in the order of tonal.Targets.
 var targetNames, targetTips = func() ([]string, []string) {
-	var names, tips []string
+	names, tips := make([]string, 0, len(tonal.Targets)), make([]string, 0, len(tonal.Targets))
 	for _, t := range tonal.Targets {
 		names, tips = append(names, t.Short), append(tips, t.Tip)
 	}
@@ -428,7 +428,8 @@ func (p *processor) Process(b *plug.Block) {
 		}
 		p.in[0][p.pos], p.in[1][p.pos] = l, r
 		p.pos = (p.pos + 1) & mask
-		if p.count++; p.count == p.hop {
+		p.count++
+		if p.count == p.hop {
 			p.count = 0
 			p.step(b.Position.Frame + int64(i))
 		}
@@ -501,7 +502,7 @@ func (p *processor) step(at int64) {
 		p.out[0][k] += real(v) * w
 		p.out[1][k] -= imag(v) * w
 	}
-	p.trace(at)
+	p.record(at)
 }
 
 // hear hears the hop's power: over the speed, for Shape, held while the
@@ -551,8 +552,8 @@ func (p *processor) fade(f float64) float64 {
 }
 
 // reach returns the bins round bin k that are heard with it, from lo to
-// hi: those within half of Smooth octaves either side, at least least
-// either side.
+// hi: those within half of Smooth octaves either side, and no fewer
+// than least bins either side.
 func (p *processor) reach(k, least int) (lo, hi int) {
 	r := math.Exp2(p.smooth / 2)
 	lo = min(int(float64(k)/r+0.5), k-least)
@@ -682,12 +683,12 @@ func (p *processor) gainAt(x float64) float64 {
 	return p.gain[k]*(1-t) + p.gain[k+1]*t
 }
 
-// trace keeps the gain at each traced frequency for the hop's frames
+// record keeps the gain at each traced frequency for the hop's frames
 // from at: the strongest of the bins nearest it, so a narrow cut
 // between two traced frequencies still shows; or, where no bin is
 // nearest it, as low down as the bins are far apart, the gain between
 // the two bins it falls between.
-func (p *processor) trace(at int64) {
+func (p *processor) record(at int64) {
 	for i, x := range p.traceAt {
 		g := p.gainAt(x)
 		if span := p.traceBins[i]; span[0] <= span[1] {
