@@ -62,14 +62,7 @@ func TestARALayoutsMatchTheHeaders(t *testing.T) {
 // fakeDocument makes a document of the fake ARA plugin a, for host.
 func fakeDocument(t *testing.T, a *fakeARAPlugin, host ARAHost) (*ARAFactory, *Document) {
 	t.Helper()
-	var f *ARAFactory
-	var err error
-	onUI(func() {
-		f, err = araFactoryAt(a.factory.addr(), Class{Name: "Fake", Category: "Audio Module Class", ARA: true}, nil)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := (&FakeARA{a: a}).Factory()
 	d, err := f.NewDocument("Song", host)
 	if err != nil {
 		t.Fatal(err)
@@ -78,17 +71,15 @@ func fakeDocument(t *testing.T, a *fakeARAPlugin, host ARAHost) (*ARAFactory, *D
 }
 
 // bound makes an instance of the fake plugin of a bound to d in roles.
-func bound(t *testing.T, a *fakeARAPlugin, d *Document, roles Roles) (*Plugin, *fakePlugin) {
+func bound(t *testing.T, a *fakeARAPlugin, d *Document, roles Roles) (*Plugin, *fakeInstance) {
 	t.Helper()
-	fp := &fakePlugin{ara: a, ins: []fakeBus{{name: "In", channels: 2}}, outs: []fakeBus{{name: "Out", channels: 2}}}
-	fp.makeObjects()
-	p, err := d.newPluginWith(Config{Rate: 48000, Block: 256, Offline: true}, roles, func(p *Plugin) error {
-		return p.build(fp.comp, nil)
-	})
+	p, err := d.NewPlugin(Config{Rate: 48000, Block: 256, Offline: true}, roles)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p, fp
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return p, a.instances[len(a.instances)-1]
 }
 
 // noViolations fails the test where the fake saw a rule of ARA's broken.
@@ -116,10 +107,9 @@ func pollFor(t *testing.T, d *Document, keep func(u Update) bool) Update {
 var cMajor = [12]bool{true, false, true, false, true, true, false, true, false, true, false, true}
 
 func TestAFactoryIsInitializedWhileADocumentIsOpen(t *testing.T) {
-	a := newFakeARA()
+	a := makeFakeARA()
 	f, d := fakeDocument(t, a, &sineHost{})
-	var again *ARAFactory
-	onUI(func() { again, _ = araFactoryAt(a.factory.addr(), f.Class, nil) })
+	again := (&FakeARA{a: a}).Factory()
 	d2, err := again.NewDocument("Two", &sineHost{})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +141,7 @@ func TestAFactoryIsInitializedWhileADocumentIsOpen(t *testing.T) {
 }
 
 func TestTheMusicalContextReadsAsTheHostWroteIt(t *testing.T) {
-	a := newFakeARA()
+	a := makeFakeARA()
 	_, d := fakeDocument(t, a, &sineHost{})
 	defer d.Close()
 	content := Content{
@@ -202,7 +192,7 @@ type aDocument struct {
 
 func newADocument(t *testing.T) *aDocument {
 	t.Helper()
-	x := &aDocument{a: newFakeARA(), host: &sineHost{}}
+	x := &aDocument{a: makeFakeARA(), host: &sineHost{}}
 	x.f, x.d = fakeDocument(t, x.a, x.host)
 	t.Cleanup(x.d.Close)
 	err := x.d.Edit(func(e *Edit) {
@@ -499,6 +489,19 @@ func TestADocumentClosesItsPluginsAndObjects(t *testing.T) {
 		t.Fatal("a closed document stored")
 	}
 	noViolations(t, x.a)
+}
+
+func TestAFakesEditsAreHeardThroughItsExportedSide(t *testing.T) {
+	x := newADocument(t)
+	fake := &FakeARA{a: x.a}
+	fake.Edit(x.d, "take-2", 0.75, TimeRange{0, 1})
+	if g := fake.Gain(x.d, "take-2"); g != 0.75 {
+		t.Fatalf("gain %v", g)
+	}
+	u := pollFor(t, x.d, func(u Update) bool { return u.Kind == ModificationChanged })
+	if u.Modification != x.mod2 || len(fake.Broken()) != 0 {
+		t.Fatalf("news %+v, broken %v", u, fake.Broken())
+	}
 }
 
 func TestABindFailsForAPluginWithoutARA(t *testing.T) {

@@ -51,10 +51,13 @@ type Extension struct {
 // song is, in place of its input.
 func (d *Document) NewPlugin(cfg Config, roles Roles) (*Plugin, error) {
 	m := d.f.module
-	if m == nil {
-		return nil, fmt.Errorf("vst3: %s: its factory came from no module", d.f.Name)
+	switch {
+	case m != nil:
+		return d.newPluginWith(cfg, roles, func(p *Plugin) error { return p.create(m) })
+	case d.f.build != nil:
+		return d.newPluginWith(cfg, roles, d.f.build)
 	}
-	return d.newPluginWith(cfg, roles, func(p *Plugin) error { return p.create(m) })
+	return nil, fmt.Errorf("vst3: %s: its factory came from no module", d.f.Name)
 }
 
 // newPluginWith makes a plugin of the factory's class with build, as

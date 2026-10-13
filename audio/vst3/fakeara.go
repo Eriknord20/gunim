@@ -9,13 +9,70 @@ import (
 	"unsafe"
 )
 
-// A fake ARA plugin, written in Go as a plugin's ARA side is laid out:
-// a factory, document controllers, and an extension for each instance
-// bound. It keeps ARA's rules as the ARA library's debug builds check
-// them, and writes down each it sees broken. Its analysis reads each
-// source whole through the host, on a goroutine of its own; its
-// renderers play the regions they hold, each source sample times its
-// modification's gain, where the process context says the song is.
+// FakeARA is an ARA plugin written in Go, laid out as a plugin's ARA
+// side and its VST3 component are, for the tests of a host that has no
+// ARA plugin to hand. It keeps ARA's rules as the ARA library's debug
+// builds check them, and Broken lists each it saw broken. Its analysis
+// reads each source whole through the host, on a goroutine of its own,
+// reading a source whose ID ends in "64" as doubles; its renderers play
+// the regions they hold where the process context says the song is,
+// each sample of the source times its modification's gain, which Edit
+// sets as a user does in a plugin's editor; its archives are JSON.
+type FakeARA struct{ a *fakeARAPlugin }
+
+// NewFakeARA makes a fake ARA plugin.
+func NewFakeARA() *FakeARA { return &FakeARA{a: makeFakeARA()} }
+
+// Factory returns the fake's ARA factory, of the class "Fake": its
+// documents' NewPlugin makes instances of the fake.
+func (f *FakeARA) Factory() *ARAFactory {
+	var fa *ARAFactory
+	onUI(func() {
+		fa, _ = araFactoryAt(f.a.factory.addr(), Class{Name: "Fake", Category: "Audio Module Class", SubCategories: "Fx", ARA: true}, nil)
+	})
+	fa.build = f.a.build
+	return fa
+}
+
+// Edit sets the gain of the modification of ID id in document d, as a
+// user does in the plugin's editor, and has the plugin tell d's host
+// that changed over r, of the modification's time, as it next polls.
+func (f *FakeARA) Edit(d *Document, id string, gain float64, r TimeRange) {
+	if fd := f.a.docOf(d); fd != nil {
+		fd.edit(id, gain, r.Start, r.Duration)
+	}
+}
+
+// Gain returns the gain of the modification of ID id in document d.
+func (f *FakeARA) Gain(d *Document, id string) float64 {
+	fd := f.a.docOf(d)
+	if fd == nil {
+		return 0
+	}
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	for _, m := range fd.mods {
+		if m.id == id {
+			return m.gain
+		}
+	}
+	return 0
+}
+
+// Broken lists the rules of ARA's the fake saw broken.
+func (f *FakeARA) Broken() []string { return f.a.broken() }
+
+// docOf returns the fake's document of the host's d.
+func (a *fakeARAPlugin) docOf(d *Document) *fakeDoc {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, fd := range a.docs {
+		if fd.ref == d.dc.ref {
+			return fd
+		}
+	}
+	return nil
+}
 
 type fakeARAPlugin struct {
 	mu         sync.Mutex
@@ -25,12 +82,14 @@ type fakeARAPlugin struct {
 	generation int
 	docs       []*fakeDoc
 	violations []string
+	// instances are the fake's instances, as made.
+	instances []*fakeInstance
 }
 
 // fakeArchiveID is the fake's archives' form.
 const fakeArchiveID = "org.gunim.fake.archive"
 
-func newFakeARA() *fakeARAPlugin {
+func makeFakeARA() *fakeARAPlugin {
 	a := &fakeARAPlugin{}
 	f := newStruct(araFactoryFields...)
 	f.put(afLowest, araGeneration2Final)
@@ -732,7 +791,7 @@ func (d *fakeDoc) edit(id string, gain, from, length float64) {
 
 type fakeExt struct {
 	d             *fakeDoc
-	f             *fakePlugin
+	f             *fakeInstance
 	roles         Roles
 	inst          *cstruct
 	regions       []uintptr
@@ -743,17 +802,17 @@ type fakeExt struct {
 	hidden        []uintptr
 }
 
-var fakeARAEntryKind = &kind{iids: []uid{iidARAPlugInEntry}, other: fakeOther, make: func() []uintptr {
+var fakeARAEntryKind = &kind{iids: []uid{iidARAPlugInEntry}, other: fakeInstOther, make: func() []uintptr {
 	return []uintptr{
-		newCallback(func(this uintptr) uintptr { return fakeOf(this).ara.factory.addr() }),
+		newCallback(func(this uintptr) uintptr { return instOf(this).ara.factory.addr() }),
 		newCallback(func(this, dc uintptr) uintptr { return 0 }),
 	}
 }}
 
-var fakeARAEntry2Kind = &kind{iids: []uid{iidARAPlugInEntry2}, other: fakeOther, make: func() []uintptr {
+var fakeARAEntry2Kind = &kind{iids: []uid{iidARAPlugInEntry2}, other: fakeInstOther, make: func() []uintptr {
 	return []uintptr{
 		newCallback(func(this, dc, known, assigned uintptr) uintptr {
-			f := fakeOf(this)
+			f := instOf(this)
 			d := fakeDocOf(dc)
 			if d == nil {
 				f.ara.violate("a bind to no document")
@@ -860,8 +919,8 @@ var fakeExtTables = sync.OnceValue(func() fakeExtTab {
 })
 
 // render renders the instance's regions into the main output, as a
-// playback renderer, where the song plays.
-func (a *fakeARAPlugin) render(f *fakePlugin, d *processData) {
+// playback renderer, where the song plays; else it passes its input on.
+func (a *fakeARAPlugin) render(f *fakeInstance, d *processData) {
 	x := f.araExt
 	if x == nil || x.roles&PlaybackRenderer == 0 {
 		return
@@ -902,3 +961,136 @@ func (a *fakeARAPlugin) render(f *fakePlugin, d *processData) {
 		}
 	}
 }
+
+// fakeInstance is an instance of the fake: its VST3 component and
+// audio processor, and its ARA entries, each an object of the host's
+// kind, all answering for one another.
+type fakeInstance struct {
+	ara                       *fakeARAPlugin
+	comp, proc, entry, entry2 uintptr
+
+	mu       sync.Mutex
+	isActive bool
+	araExt   *fakeExt
+}
+
+type fakeInstObject struct {
+	object
+	f *fakeInstance
+}
+
+func instOf(this uintptr) *fakeInstance { return self[fakeInstObject](this).f }
+
+// fakeInstOther answers a query of one of the instance's interfaces.
+func fakeInstOther(this uintptr, id uid) uintptr {
+	f := instOf(this)
+	var p uintptr
+	switch id {
+	case iidComponent:
+		p = f.comp
+	case iidAudioProcessor:
+		p = f.proc
+	case iidARAPlugInEntry:
+		p = f.entry
+	case iidARAPlugInEntry2:
+		p = f.entry2
+	}
+	if p != 0 {
+		selfObject(p).refs.Add(1)
+	}
+	return p
+}
+
+// build makes an instance of the fake for p, on the plugins' thread.
+func (a *fakeARAPlugin) build(p *Plugin) error {
+	f := &fakeInstance{ara: a}
+	mk := func(k *kind) uintptr { return keep(&fakeInstObject{f: f}, k, false) }
+	f.comp, f.proc, f.entry, f.entry2 = mk(fakeInstCompKind), mk(fakeInstProcKind), mk(fakeARAEntryKind), mk(fakeARAEntry2Kind)
+	a.mu.Lock()
+	a.instances = append(a.instances, f)
+	a.mu.Unlock()
+	return p.build(f.comp, nil)
+}
+
+// The instance's component: a stereo input and output, no controller.
+var fakeInstCompKind = &kind{iids: []uid{iidComponent}, other: fakeInstOther, make: func() []uintptr {
+	ok := func() uintptr { return resultOf(resultOK) }
+	return []uintptr{
+		newCallback(func(this, ctx uintptr) uintptr { return ok() }),
+		newCallback(func(this uintptr) uintptr {
+			// Terminated, it lets go of its ARA extension, as a plugin
+			// destroyed does.
+			if x := instOf(this).araExt; x != nil {
+				x.d.mu.Lock()
+				x.d.exts = slices.DeleteFunc(x.d.exts, func(e *fakeExt) bool { return e == x })
+				x.d.mu.Unlock()
+			}
+			return ok()
+		}),
+		newCallback(func(this, cid uintptr) uintptr { return resultOf(resultFalse) }),
+		newCallback(func(this, mode uintptr) uintptr { return ok() }),
+		newCallback(func(this, media, dir uintptr) uintptr {
+			if i32(media) == mediaAudio {
+				return 1
+			}
+			return 0
+		}),
+		newCallback(func(this, media, dir, index, info uintptr) uintptr {
+			if i32(media) != mediaAudio || i32(index) != 0 {
+				return resultOf(resultFalse)
+			}
+			*ptr[busInfo](info) = busInfo{mediaType: mediaAudio, direction: i32(dir), channels: 2}
+			return ok()
+		}),
+		newCallback(func(this, in, out uintptr) uintptr { return resultOf(resultFalse) }),
+		newCallback(func(this, media, dir, index, state uintptr) uintptr { return ok() }),
+		newCallback(func(this, state uintptr) uintptr {
+			f := instOf(this)
+			f.mu.Lock()
+			f.isActive = state&0xff != 0
+			f.mu.Unlock()
+			return ok()
+		}),
+		newCallback(func(this, stream uintptr) uintptr { return ok() }),
+		newCallback(func(this, stream uintptr) uintptr { return ok() }),
+	}
+}}
+
+// The instance's audio processor: it renders as a playback renderer,
+// or passes its input on.
+var fakeInstProcKind = &kind{iids: []uid{iidAudioProcessor}, other: fakeInstOther, make: func() []uintptr {
+	ok := func() uintptr { return resultOf(resultOK) }
+	return []uintptr{
+		newCallback(func(this, ins, nIn, outs, nOut uintptr) uintptr { return ok() }),
+		newCallback(func(this, dir, index, arr uintptr) uintptr {
+			*ptr[uint64](arr) = stereo
+			return ok()
+		}),
+		newCallback(func(this, size uintptr) uintptr { return ok() }),
+		newCallback(func(this uintptr) uintptr { return 0 }),
+		newCallback(func(this, setup uintptr) uintptr { return ok() }),
+		newCallback(func(this, state uintptr) uintptr { return ok() }),
+		newCallback(func(this, data uintptr) uintptr {
+			f := instOf(this)
+			d := ptr[processData](data)
+			n := int(d.frames)
+			chans := func(at uintptr) [][]float32 {
+				bb := ptr[busBuffers](at)
+				out := make([][]float32, bb.channels)
+				for c := range out {
+					out[c] = unsafe.Slice(*ptr[*float32](bb.buffers + uintptr(c)*unsafe.Sizeof(uintptr(0))), n)
+				}
+				return out
+			}
+			if d.numInputs > 0 && d.numOutputs > 0 {
+				in, out := chans(d.inputs), chans(d.outputs)
+				for c := range out {
+					copy(out[c], in[c%len(in)])
+				}
+			}
+			f.ara.render(f, d)
+			return ok()
+		}),
+		newCallback(func(this uintptr) uintptr { return 0 }),
+	}
+}}

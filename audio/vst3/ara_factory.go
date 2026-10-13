@@ -63,6 +63,8 @@ type ARAFactory struct {
 	module *Module
 	// docs counts the documents open: ARA is initialized while any is.
 	docs int
+	// build makes an instance of a factory of no module's, as the fake's.
+	build func(p *Plugin) error
 }
 
 // The factories initialized, by their address: ARA initializes a

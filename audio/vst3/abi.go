@@ -66,6 +66,10 @@
 // processes. An editor view shows the plugin's editor ([Plugin.OpenEditor])
 // over the whole document, showing what [Extension.Select] picks.
 //
+// [FakeARA] is an ARA plugin written in Go, for the tests of a host
+// with none to hand: it analyses, renders, archives and takes edits as
+// a plugin does, and lists the rules of ARA's a host broke.
+//
 // ARA's structures are packed to the byte on x86, and naturally aligned
 // on ARM; the package writes and reads them field by field, as each
 // platform lays them out. The definitions follow Celemony's ARA_API
