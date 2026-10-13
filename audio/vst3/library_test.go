@@ -29,6 +29,12 @@ func readJournal(t *testing.T, path string) journalFile {
 // next library starts, as a crash leaves it, has that library skip it
 // and list it as failed, until Retry loads it again.
 func TestAModuleThatCrashedIsSkipped(t *testing.T) {
+	// The library scans the system's folders too: point them at an empty
+	// one, so the plugins installed on the machine stay out of the test.
+	empty := t.TempDir()
+	for _, env := range []string{"CommonProgramFiles", "LOCALAPPDATA", "HOME", "USERPROFILE"} {
+		t.Setenv(env, empty)
+	}
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "Crashy.vst3")
 	if err := os.MkdirAll(filepath.Join(bundle, "Contents"), 0o755); err != nil {
