@@ -82,35 +82,50 @@ func noise(a float64) [2][]float32 {
 	r := uint64(1)
 	for i := range out[0] {
 		r = r*6364136223846793005 + 1442695040888963407
-		v := float32(float64(int32(r>>33)) / (1 << 31) * a)
+		v := float32(float64(int32(r>>32)) / (1 << 31) * a)
 		out[0][i], out[1][i] = v, v
 	}
 	return out
 }
 
 // through plays in through pr, set by changes, and returns the last
-// half second of what comes out.
+// half second of what comes out, as late as in: what comes out late,
+// by pr's latency, is waited for, the sound after in silent.
 func through(pr plug.Processor, in [2][]float32, changes []plug.Change) [2][]float32 {
 	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
+	lat := pr.Latency()
 	var out [2][]float32
-	for at := 0; at < len(in[0]); at += 512 {
-		n := min(512, len(in[0])-at)
-		ch := [][]float32{slices.Clone(in[0][at : at+n]), slices.Clone(in[1][at : at+n])}
+	for at := 0; at < len(in[0])+lat; at += 512 {
+		n := min(512, len(in[0])+lat-at)
+		ch := [][]float32{make([]float32, n), make([]float32, n)}
+		for c := range ch {
+			copy(ch[c], in[c][min(at, len(in[c])):min(at+n, len(in[c]))])
+		}
 		pr.Process(&plug.Block{In: ch, Out: ch, Frames: n, Changes: changes,
 			Position: plug.Position{Frame: int64(at)}})
 		changes = nil
 		out[0], out[1] = append(out[0], ch[0]...), append(out[1], ch[1]...)
 	}
 	for c := range out {
-		out[c] = out[c][24000:]
+		out[c] = out[c][24000+lat:]
 	}
 	return out
 }
 
+// run plays in through a new enhancer, set by changes, as through does,
+// and fails t if anything that comes out is not a number.
 func run(t *testing.T, in [2][]float32, changes []plug.Change) [2][]float32 {
 	t.Helper()
 	p, _ := newEnhancer(t)
-	return through(p.Processor(), in, changes)
+	out := through(p.Processor(), in, changes)
+	for c := range out {
+		for i, v := range out[c] {
+			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+				t.Fatalf("set by %v, frame %d of channel %d comes out %v", changes, i, c, v)
+			}
+		}
+	}
+	return out
 }
 
 // level returns x's level at hz, in decibels, a sine of 1 at 0.
@@ -166,7 +181,7 @@ func TestABandAddsHarmonicsToItsOwnPitches(t *testing.T) {
 func TestEachStyleAddsItsOwnHarmonics(t *testing.T) {
 	h := map[int][8]float64{}
 	for _, s := range []int{Tape, Tube, Crisp} {
-		out := run(t, tone(300, 0.5), set(float64(AmountID+1), 30, float64(StyleID+1), float64(s)))
+		out := run(t, tone(300, 0.5), set(float64(AmountID+1), 30, float64(StyleID+1), float64(s), float64(DriveID+1), 9))
 		var lv [8]float64
 		for k := 2; k < 8; k++ {
 			lv[k] = level(out[0], float64(k)*300)
@@ -186,12 +201,92 @@ func TestEachStyleAddsItsOwnHarmonics(t *testing.T) {
 	}
 }
 
-func TestTheCurvesMeanKeepsAliasesDown(t *testing.T) {
-	// A tone at 15 kHz, driven hard: its third harmonic, at 45 kHz, is
-	// over what 48 kHz can hold, and folds back to 3 kHz.
-	out := run(t, tone(15000, 0.5), set(float64(AmountID+3), 100, float64(StyleID+3), Crisp))
-	if alias := level(out[0], 3000) - level(out[0], 15000); alias > -40 {
-		t.Errorf("the third harmonic of a tone at 15 kHz folds back to 3 kHz at %.1f dB under it, want 40", -alias)
+func TestAliasesAreKeptDown(t *testing.T) {
+	// A loud tone at 15 kHz, its harmonics added at their most: its
+	// third, at 45 kHz, is over what 48 kHz can hold, and would fold back
+	// to 3 kHz; and its level, matched over too few frames, would waver
+	// three thousand times a second, and the tone with it.
+	out := run(t, tone(15000, 0.5), set(float64(AmountID+3), 200, float64(StyleID+3), Crisp))
+	for _, hz := range []float64{3000, 6000, 9000, 12000} {
+		if alias := level(out[0], hz) - level(out[0], 15000); alias > -55 {
+			t.Errorf("a tone at 15 kHz adds %.0f Hz at %.1f dB under it, want 55", hz, -alias)
+		}
+	}
+}
+
+func TestTheBandKeepsItsOwnLevel(t *testing.T) {
+	// Driven hard, a band's curve would take its pitch down with it: the
+	// driven band is matched to the band, so what is added is harmonics
+	// alone, past all as well, where they stand out further.
+	in := level(tone(300, 0.5)[0], 300)
+	var h3 [3]float64
+	for i, a := range []float64{50, 100, 200} {
+		out := run(t, tone(300, 0.5), set(float64(AmountID+1), a, float64(DriveID+1), 36))
+		if got := level(out[0], 300); !(math.Abs(got-in) <= 0.1) {
+			t.Errorf("at %v%%, driven 36 dB, the tone comes out at %+.2f dB, against %+.2f dB in", a, got, in)
+		}
+		h3[i] = level(out[0], 900)
+	}
+	if math.Abs(h3[1]-h3[0]-6) > 0.5 || math.Abs(h3[2]-h3[1]-6) > 0.5 {
+		t.Errorf("at 50%%, 100%% and 200%%, the third harmonic is at %.1f, %.1f and %.1f dB: want 6 dB apart", h3[0], h3[1],
+			h3[2])
+	}
+}
+
+func TestDriveAddsMoreHarmonics(t *testing.T) {
+	var h3, h5 [4]float64
+	in := level(tone(300, 0.3)[0], 300)
+	for i, d := range []float64{0, 3, 12, 24} {
+		out := run(t, tone(300, 0.3), set(float64(AmountID+1), 100, float64(DriveID+1), d))
+		h3[i], h5[i] = level(out[0], 900), level(out[0], 1500)
+		if got := level(out[0], 300); !(math.Abs(got-in) <= 0.1) {
+			t.Errorf("driven %v dB, the tone comes out at %+.2f dB, against %+.2f dB in", d, got, in)
+		}
+	}
+	for i := 1; i < len(h3); i++ {
+		if !(h3[i] >= h3[i-1]+3 && h5[i] >= h5[i-1]+3) {
+			t.Errorf("driven 0, 3, 12 and 24 dB, the third harmonic is at %.1f dB and the fifth at %.1f: want each more",
+				h3, h5)
+			break
+		}
+	}
+}
+
+func TestAFallingBandIsNotSwelled(t *testing.T) {
+	// A note dying away, as a kick does: the driven band's match falls
+	// with it, so the band is not lifted as it falls.
+	for _, c := range []struct{ hz, ms float64 }{{60, 20}, {60, 5}, {300, 5}, {3000, 5}} {
+		in := tone(c.hz, 0.5)
+		for ch := range in {
+			for i := 24000; i < 48000; i++ {
+				in[ch][i] *= float32(max(math.Exp(-float64(i-24000)/(c.ms*48)), 0.02))
+			}
+		}
+		band := 0
+		if c.hz > 1200 {
+			band = 2
+		} else if c.hz > 120 {
+			band = 1
+		}
+		changes := set(float64(AmountID+uint32(band)), 100, float64(DriveID+uint32(band)), 24)
+		steady, out := run(t, tone(c.hz, 0.5), changes), run(t, in, changes)
+		// Over a cycle at a time: what comes out against what went in,
+		// over what a steady tone comes out at.
+		win := int(48000 / c.hz)
+		peakOf := func(x []float32) float64 {
+			pk := 0.0
+			for _, v := range x {
+				pk = max(pk, math.Abs(float64(v)))
+			}
+			return pk
+		}
+		over := 20 * math.Log10(peakOf(steady[0][:win])/0.5)
+		for i := 0; i+win < 24000; i += 48 {
+			if lift := 20*math.Log10(peakOf(out[0][i:i+win])/peakOf(in[0][24000+i:24000+i+win])) - over; lift > 1.5 {
+				t.Errorf("a tone at %v Hz, falling over %v ms, is lifted %.1f dB %v ms on", c.hz, c.ms, lift, i/48)
+				break
+			}
+		}
 	}
 }
 
@@ -246,7 +341,7 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 	for i := range blocks {
 		blocks[i] = &plug.Block{In: ch, Out: ch, Frames: 512, Position: plug.Position{Frame: int64(i * 512)},
 			Changes: set(float64(CrossoverID+uint32(i%3)), float64(100+i*40), float64(AmountID+uint32(i%4)), float64(i),
-				float64(StyleID+uint32(i%4)), float64(i%styles))}
+				float64(StyleID+uint32(i%4)), float64(i%styles), float64(DriveID+uint32(i%4)), float64(i%37))}
 	}
 	made := plugtest.AllocsUnder(t, "enhancer.(*processor).Process", func() {
 		for _, b := range blocks {
@@ -262,18 +357,22 @@ func TestTheHarmonicsShownAreTheOnesAdded(t *testing.T) {
 	// A tone at harmonicsTone in the low mid, where the band passes it
 	// whole: the harmonics the processor adds to it are the ones shown.
 	for _, s := range []int{Tape, Tube, Crisp} {
-		for _, a := range []float64{20, 60} {
-			out := run(t, tone(300, harmonicsTone), set(float64(AmountID+1), a, float64(StyleID+1), float64(s)))
-			shown := harmonicsOf(s, a/100)
-			for k := 2; k <= 3; k++ {
-				got := level(out[0], float64(k)*300) - 20*math.Log10(harmonicsTone)
-				if want := shown[k-2]; want > -70 && math.Abs(got-want) > 1.5 {
-					t.Errorf("%s at %v%% adds harmonic %d at %.1f dB, but shows it at %.1f dB", styleNames[s], a, k, got, want)
+		for _, d := range []float64{6, 24} {
+			for _, a := range []float64{20, 60, 150} {
+				out := run(t, tone(300, harmonicsTone), set(float64(AmountID+1), a, float64(StyleID+1), float64(s),
+					float64(DriveID+1), d))
+				shown := harmonicsOf(s, a/100, d)
+				for k := 2; k <= 3; k++ {
+					got := level(out[0], float64(k)*300) - 20*math.Log10(harmonicsTone)
+					if want := shown[k-2]; want > -70 && math.Abs(got-want) > 1.5 {
+						t.Errorf("%s at %v%%, driven %v dB, adds harmonic %d at %.1f dB, but shows it at %.1f dB",
+							styleNames[s], a, d, k, got, want)
+					}
 				}
 			}
 		}
 	}
-	if none := harmonicsOf(Crisp, 0); none[1] > harmonicsFloor+1 {
+	if none := harmonicsOf(Crisp, 0, 12); none[1] > harmonicsFloor+1 {
 		t.Errorf("at none, crisp shows a third harmonic at %.1f dB", none[1])
 	}
 }
@@ -287,12 +386,12 @@ func TestTheDisplayDragsABandsAmountAndACrossover(t *testing.T) {
 	d := pn.disp
 	d.Layout(gunim.Constraints{Max: geom.Sz(1200, 600)}, gunim.Frame{}, gunim.Children{})
 	d.line = 400
-	// The high band, dragged up by half its reach: 50%.
+	// The high band, dragged up by half its reach: half its most.
 	at := geom.Pt(d.xOf(10000), d.line)
 	d.Handle(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1}, nil)
 	d.Handle(input.PointerMove{Pos: at.Add(geom.Pt(0, -d.reach()/2))}, nil)
 	d.Handle(input.PointerUp{Pos: at, Button: input.ButtonPrimary}, nil)
-	if got := h.values[AmountID+3]; math.Abs(got-50) > 0.5 || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
+	if got := h.values[AmountID+3]; math.Abs(got-amountMax/2) > 0.5 || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("dragged up half its reach, the high band's amount is %v, by %v", got, h.log)
 	}
 	// A double-click sets it back.

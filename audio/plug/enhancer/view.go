@@ -89,9 +89,12 @@ func (v values) crossovers() [bands - 1]float64 {
 // style is band b's style.
 func (v values) style(b int) int { return int(math.Round(v[StyleID+uint32(b)])) }
 
+// amountMax is the most a band's amount is set to.
+var amountMax = param(AmountID).Max
+
 // bandOf returns the band parameter id is of, or -1.
 func bandOf(id uint32) int {
-	for _, from := range []uint32{AmountID, StyleID} {
+	for _, from := range []uint32{AmountID, StyleID, DriveID} {
 		if id >= from && id < from+bands {
 			return int(id - from)
 		}
@@ -394,7 +397,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	p.RRect(geom.Rc(0, d.line, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.18)))
 	for b, span := range d.bandsAt() {
 		c := styleColor(th, d.v.style(b))
-		top := d.line - float32(d.v[AmountID+uint32(b)]/100)*d.reach()
+		top := d.line - float32(d.v[AmountID+uint32(b)]/amountMax)*d.reach()
 		r := geom.Rc(span[0]+3, top, span[1]-span[0]-6, d.line-top)
 		glow, lit := d.glow[b].Value(), d.bandLit[b].Value()
 		fill := 0.14 + 0.3*glow + 0.12*lit
@@ -534,7 +537,7 @@ func (d *display) drag(pos geom.Point, fine bool, u *gunim.UI) {
 		d.h.Set(id, v, u)
 	case holdBand:
 		id := AmountID + uint32(d.hotBand)
-		per := 100 / max(d.reach(), 1)
+		per := float32(amountMax) / max(d.reach(), 1)
 		if fine {
 			per /= 10
 		}
@@ -562,36 +565,50 @@ const (
 	harmonicsFloor = -80
 )
 
-// blendOf returns, for a band at amount a whose style is the styles
-// mixed by w, its whole curve at x: x and what the curves add to it. The
-// curve's pane mixes them as one style gives way to another.
-func blendOf(w [styles]float64, a, x float64) float64 {
-	g := math.Exp(a * driveDB / 20 * math.Ln10)
-	add := 0.0
+// drivenOf returns x driven by the styles mixed by w, drive decibels
+// into them, and back down by as much, as the processor drives a band.
+// The curve's pane mixes them as one style gives way to another.
+func drivenOf(w [styles]float64, drive, x float64) float64 {
+	d := math.Exp(drive / 20 * math.Ln10)
+	y := 0.0
 	for s, ws := range w {
 		if ws != 0 {
-			add += ws * (curve(s, g*x)/g - x)
+			y += ws * curve(s, d*x)
 		}
 	}
-	return x + a*add
+	return y / d
+}
+
+// matchOf returns how much of a tone at amp the styles mixed by w carry,
+// driven by drive, as the processor's match finds it.
+func matchOf(w [styles]float64, drive, amp float64) float64 {
+	return carried(&w, amp*math.Exp(drive/20*math.Ln10))
+}
+
+// blendOf returns, for a band at amount a, whose style is the styles
+// mixed by w, driven by drive and matched by g, its whole curve at x: x
+// and what the curves add to it.
+func blendOf(w [styles]float64, a, drive, g, x float64) float64 {
+	return x + a*(drivenOf(w, drive, x)/g-x)
 }
 
 // harmonicsOf returns the level of each harmonic, from the second, that
-// style s at amount a adds to a tone at harmonicsTone, in decibels under
-// the tone.
-func harmonicsOf(s int, a float64) [harmonicsShown]float64 {
+// style s at amount a and drive adds to a tone at harmonicsTone, in
+// decibels under the tone.
+func harmonicsOf(s int, a, drive float64) [harmonicsShown]float64 {
 	var w [styles]float64
 	w[s] = 1
-	return harmonicsBlend(w, a)
+	return harmonicsBlend(w, a, drive)
 }
 
 // harmonicsBlend is harmonicsOf for styles mixed by w.
-func harmonicsBlend(w [styles]float64, a float64) [harmonicsShown]float64 {
+func harmonicsBlend(w [styles]float64, a, drive float64) [harmonicsShown]float64 {
 	const n = 256
+	g := matchOf(w, drive, harmonicsTone)
 	var sum [harmonicsShown + 2]complex128
 	for i := range n {
 		ph := 2 * math.Pi * float64(i) / n
-		y := blendOf(w, a, harmonicsTone*math.Sin(ph))
+		y := blendOf(w, a, drive, g, harmonicsTone*math.Sin(ph))
 		for k := 2; k < len(sum); k++ {
 			sum[k] += complex(y, 0) * cmplx.Exp(complex(0, -float64(k)*ph))
 		}
@@ -607,15 +624,17 @@ func harmonicsBlend(w [styles]float64, a float64) [harmonicsShown]float64 {
 // curvePane shows, on glass, the curve of the band the panel looks at:
 // the curve a sound through it bends along, against the straight line
 // it would follow untouched; and beside it the harmonics it adds to a
-// tone, a bar each. As the band, its amount or its style changes, the
-// curve and the bars glide to the new ones, the colour with them, and
+// tone, a bar each. As the band, its amount, its drive or its style
+// changes, the curve and the bars glide to the new ones, the colour with them, and
 // the title gives way to the new one.
 type curvePane struct {
 	v    values
 	band int
-	// amount and weight are the amount and how much of each style the
-	// pane draws, gliding; shownBand the band they glide to.
+	// amount, drive and weight are the amount, as a share, the drive and
+	// how much of each style the pane draws, gliding; shownBand the band
+	// they glide to.
 	amount    *anim.Float
+	drive     *anim.Float
 	weight    [styles]*anim.Float
 	shownBand int
 	// title is the title, and was the one before, giving way as swap
@@ -623,15 +642,16 @@ type curvePane struct {
 	title, was string
 	swap       *anim.Float
 	harm       [harmonicsShown]float64
-	harmOf     [styles + 1]float32
+	harmOf     [styles + 2]float32
 	group      anim.Group
 	size       geom.Size
 }
 
 func newCurvePane(v values, band int) *curvePane {
 	c := &curvePane{v: v, band: band, shownBand: band, swap: anim.NewFloat(1),
-		amount: anim.NewFloat(float32(v[AmountID+uint32(band)] / 100))}
-	c.group.Add(c.amount, c.swap)
+		amount: anim.NewFloat(float32(v[AmountID+uint32(band)] / 100)),
+		drive:  anim.NewFloat(float32(v[DriveID+uint32(band)]))}
+	c.group.Add(c.amount, c.drive, c.swap)
 	for s := range c.weight {
 		c.weight[s] = anim.NewFloat(float32(onOff(s == v.style(band))))
 		c.group.Add(c.weight[s])
@@ -642,8 +662,8 @@ func newCurvePane(v values, band int) *curvePane {
 
 // titleOf is the title of the band the pane looks at.
 func (c *curvePane) titleOf() string {
-	return fmt.Sprintf("%s  ·  %s  ·  %s", bandNames[c.band], styleNames[c.v.style(c.band)],
-		pct(c.v[AmountID+uint32(c.band)]))
+	return fmt.Sprintf("%s  ·  %s  ·  %s  ·  %s", bandNames[c.band], styleNames[c.v.style(c.band)],
+		driveFmt(c.v[DriveID+uint32(c.band)]), pct(c.v[AmountID+uint32(c.band)]))
 }
 
 // Step implements [gunim.Animator]: the curve glides to the band's.
@@ -652,14 +672,17 @@ func (c *curvePane) Step(dt time.Duration) bool {
 	if to := float32(c.v[AmountID+uint32(c.band)] / 100); c.amount.Target() != to {
 		c.amount.Animate(to, sp)
 	}
+	if to := float32(c.v[DriveID+uint32(c.band)]); c.drive.Target() != to {
+		c.drive.Animate(to, sp)
+	}
 	for s, w := range c.weight {
 		if to := float32(onOff(s == c.v.style(c.band))); w.Target() != to {
 			w.Animate(to, sp)
 		}
 	}
 	if t := c.titleOf(); t != c.title {
-		// Another band's title rises in; the same band's, its amount or
-		// style changed, turns over at once, as it is being set.
+		// Another band's title rises in; the same band's, its amount,
+		// drive or style changed, turns over at once, as it is being set.
 		if c.band != c.shownBand {
 			c.was = c.title
 			c.swap.Jump(0)
@@ -681,14 +704,14 @@ func (c *curvePane) weights() [styles]float64 {
 
 // harmonics are the harmonics the pane draws now, worked out again only
 // as the curve moves.
-func (c *curvePane) harmonics(w [styles]float64, a float64) [harmonicsShown]float64 {
-	var key [styles + 1]float32
+func (c *curvePane) harmonics(w [styles]float64, a, drive float64) [harmonicsShown]float64 {
+	var key [styles + 2]float32
 	for s := range w {
 		key[s] = float32(w[s])
 	}
-	key[styles] = float32(a)
-	if key != c.harmOf || c.harmOf == ([styles + 1]float32{}) {
-		c.harm, c.harmOf = harmonicsBlend(w, a), key
+	key[styles], key[styles+1] = float32(a), float32(drive)
+	if key != c.harmOf || c.harmOf == ([styles + 2]float32{}) {
+		c.harm, c.harmOf = harmonicsBlend(w, a, drive), key
 	}
 	return c.harm
 }
@@ -723,7 +746,7 @@ func colourOf(th *theme.Live, w [styles]float64) color.NRGBA {
 func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink := widget.Ink.Get(th)
-	w, a := c.weights(), float64(max(c.amount.Value(), 0))
+	w, a, drive := c.weights(), float64(max(c.amount.Value(), 0)), float64(max(c.drive.Value(), 0))
 	col := colourOf(th, w)
 	plugui.PaintGlass(p, th, geom.Rect{Max: box.Point()}, widget.CardRadius.Get(th)+4)
 	swap := min(max(c.swap.Value(), 0), 1)
@@ -743,11 +766,13 @@ func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	p.RRect(geom.Rc(ctr.X-0.5, sq.Min.Y, 1, side), 0, paint.Solid(audioui.Faded(ink, 0.12)))
 	p.RRect(geom.Rc(sq.Min.X, ctr.Y-0.5, side, 1), 0, paint.Solid(audioui.Faded(ink, 0.12)))
 	audioui.Segment(p, geom.Pt(ctr.X-half, ctr.Y+half), geom.Pt(ctr.X+half, ctr.Y-half), 1, audioui.Faded(ink, 0.25))
+	// The curve, matched over the whole of what it shows.
 	const steps = 64
+	g := matchOf(w, drive, 1)
 	var prev geom.Point
 	for i := range steps + 1 {
 		x := -1 + 2*float64(i)/steps
-		y := blendOf(w, a, x)
+		y := blendOf(w, a, drive, g, x)
 		pt := geom.Pt(ctr.X+float32(x)*half, ctr.Y-float32(max(min(y, 1), -1))*half)
 		if i > 0 {
 			audioui.Segment(p, prev, pt, 2, col)
@@ -757,7 +782,7 @@ func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	// The harmonics, the second up, as tall as they are loud.
 	bars := geom.Rc(sq.Max.X+curvePad, sq.Min.Y, box.W-sq.Max.X-2*curvePad, side-14)
 	bw := bars.Size().W / harmonicsShown
-	for k, lv := range c.harmonics(w, a) {
+	for k, lv := range c.harmonics(w, a, drive) {
 		t := float32(1 - lv/harmonicsFloor)
 		h := t * bars.Size().H
 		x := bars.Min.X + float32(k)*bw
@@ -770,7 +795,7 @@ func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 // Access implements [gunim.Accessible].
 func (c *curvePane) Access() access.Info {
 	s := c.v.style(c.band)
-	h := harmonicsOf(s, c.v[AmountID+uint32(c.band)]/100)
+	h := harmonicsOf(s, c.v[AmountID+uint32(c.band)]/100, c.v[DriveID+uint32(c.band)])
 	return access.Info{Role: access.RoleGroup, Name: bandNames[c.band] + " curve",
 		Value: fmt.Sprintf("%s, second harmonic %.0f dB, third %.0f dB", styleNames[s], h[0], h[1])}
 }
@@ -778,7 +803,7 @@ func (c *curvePane) Access() access.Info {
 // panel is the display filling the panel; over it, on glass, the mix
 // and the output at the top left, the curve of the band last touched at
 // the top right, and along the foot the sections: the crossovers, and
-// each band's amount and style.
+// each band's drive, amount and style.
 type panel struct {
 	v        values
 	disp     *display
@@ -810,8 +835,10 @@ func newPanel(h plug.Host) *panel {
 	p.sections = append(p.sections, plugui.NewSection(h, &Descriptor, "CROSSOVERS", 0,
 		CrossoverID, CrossoverID+1, CrossoverID+2))
 	for b := range bands {
-		s := plugui.NewSection(h, &Descriptor, bandNames[b], 0, AmountID+uint32(b))
-		s.Knobs[0].Tooltip = "How much the band's harmonics are added: none leaves it as it was"
+		s := plugui.NewSection(h, &Descriptor, bandNames[b], 0, DriveID+uint32(b), AmountID+uint32(b))
+		s.Knobs[0].Tooltip = "How hard the band is driven into its curve: harder adds more harmonics, and higher ones"
+		s.Knobs[1].Tooltip = "How much of the band's harmonics are added, the band's own level kept: " +
+			"none leaves it as it was; past 100%, they stand out further"
 		sel := plugui.NewSelector("Style", styleNames, styleTips)
 		sel.Columns = 2
 		sel.SetSelected(v.style(b), nil)
@@ -892,7 +919,7 @@ func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
 	p.output.Follow(id, v, u)
 	if b := bandOf(id); b >= 0 {
 		p.touched, p.curve.band = b, b
-		if id >= StyleID {
+		if id >= StyleID && id < StyleID+bands {
 			p.styles[b].SetSelected(int(math.Round(v)), u)
 		}
 	}
@@ -943,7 +970,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	for b := range bands {
 		col := styleColor(th, c.v.style(b))
 		x := float32(b)*w + 1
-		if a := plugui.ChipScale(c.v[AmountID+uint32(b)], 100); a > 0 {
+		if a := plugui.ChipScale(c.v[AmountID+uint32(b)], amountMax); a > 0 {
 			h := max(a*(box.H-1), 1)
 			p.RRect(geom.Rc(x, box.H-1-h, w-2, h), 1, paint.Solid(audioui.Faded(col, 0.3)))
 		}
