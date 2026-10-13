@@ -161,10 +161,12 @@ shelves, cuts and notches, whose bands glide to new settings without
 clicks. A `LoudnessMeter` measures integrated loudness in LUFS as
 ITU-R BS.1770 defines it, as EBU R128 and ReplayGain 2 use it, and
 `FormatOf` says what a decoded sound was stored as, an `FFT` takes a
-sound's spectrum block after block, and a `WAVWriter`
-writes 16 or 24-bit WAV, dithered, or 32-bit float, tagged. Its `Range` reads
-the loudness range, LRA, as EBU Tech 3342 defines it, and several
-sounds' readings pooled measure an album as one.
+sound's spectrum block after block, a `WAVWriter` writes 16 or
+24-bit WAV, dithered, or 32-bit float, tagged, and a `FLACWriter`
+writes the same 16 or 24-bit samples as FLAC, compressed without loss
+and tagged. The meter's `Range` reads the loudness range, LRA, as EBU
+Tech 3342 defines it, and several sounds' readings pooled measure an
+album as one.
 
 Package `audio/capture` records the computer's inputs: a microphone, a
 guitar through an audio interface, a synth's output. It records through
