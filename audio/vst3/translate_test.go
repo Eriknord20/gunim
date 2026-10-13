@@ -323,7 +323,8 @@ func TestAVST3PluginRunsBehindPlugsInterfaces(t *testing.T) {
 
 // TestAnEditorsChangesAreCounted makes changes in a fake's editor, as a
 // plugin calls its handler: each change counts, a gesture shows while
-// it lasts, and a plugin saying its state changed counts too.
+// it lasts, and a plugin saying its state changed counts too; what it
+// tells as the host sets its state counts not.
 func TestAnEditorsChangesAreCounted(t *testing.T) {
 	f := fakeSynth()
 	p, err := f.open(t, Config{Rate: 48000, Block: 64})
@@ -358,6 +359,15 @@ func TestAnEditorsChangesAreCounted(t *testing.T) {
 	call(h, 6, restartParamValues)
 	if p.Edits() != 3 || p.Editing() {
 		t.Fatalf("after the values were said changed, %d edits, editing %v", p.Edits(), p.Editing())
+	}
+	// What it tells as the host sets its state is no edit.
+	f.tells = true
+	st, err := p.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetState(st); err != nil || p.Edits() != 3 || f.setStates != 1 {
+		t.Fatalf("setting its state made %d edits, of %d states set: %v", p.Edits(), f.setStates, err)
 	}
 }
 

@@ -27,8 +27,10 @@ type fakePlugin struct {
 	events bool
 	tuning bool
 	midi   map[[2]int]uint32
-	// state is what it saves, and latency and tail what it says.
+	// state is what it saves, and latency and tail what it says;
+	// tells says it tells its parameters changed as its state is set.
 	state   []byte
+	tells   bool
 	latency int
 	tail    uint32
 
@@ -147,7 +149,12 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 			f.mu.Lock()
 			f.state = buf[:n]
 			f.setStates++
+			tells, h := f.tells, f.handler
 			f.mu.Unlock()
+			if tells && h != 0 {
+				callFloat(h, 4, 5, 0.25)
+				call(h, 6, restartParamValues)
+			}
 			return ok()
 		}),
 		newCallback(func(this, stream uintptr) uintptr {

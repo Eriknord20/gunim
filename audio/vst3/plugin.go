@@ -833,13 +833,17 @@ func splitState(name string, b []byte) (comp, ctrl []byte, err error) {
 	return comp, b[4 : 4+m], nil
 }
 
-// SetState sets the plugin's state, as State gave it.
+// SetState sets the plugin's state, as State gave it. The changes the
+// plugin tells as it takes the state are the host's own, so Edits
+// counts none of them.
 func (p *Plugin) SetState(b []byte) error {
 	comp, ctrl, err := splitState(p.Class.Name, b)
 	if err != nil {
 		return err
 	}
 	onUI(func() {
+		edits := p.editsMade.Load()
+		defer p.editsMade.Store(edits)
 		s, sp := newStream(append([]byte(nil), comp...))
 		defer drop(sp)
 		if r := result(call(p.comp, mSetState, sp)); r != resultOK {
