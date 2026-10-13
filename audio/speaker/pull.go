@@ -6,6 +6,7 @@ import (
 
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/internal/duplex"
 )
 
 // A pullDevice is a device that asks for its sound, as an ASIO driver
@@ -34,6 +35,12 @@ type ringOutput struct {
 	dev  pullDevice
 	info asio.Info
 	q    atomic.Pointer[ring]
+	// base is the mixer frame the ring's first frame is: the feed alone
+	// reads the mixer, so frame i of the ring is the mixer's base+i.
+	base atomic.Int64
+	// tap hands the driver's inputs to package audio/capture, once the
+	// output has started.
+	tap atomic.Pointer[duplex.Tap]
 	// target is how many frames the ring is kept at.
 	target atomic.Int64
 	// primed says the ring has reached its target once, so a buffer the
@@ -51,7 +58,7 @@ type ringOutput struct {
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
-	dev, err := openPull(asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Reset: s.askReset, Log: s.logf})
+	dev, err := openPull(asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Record: r.record, Reset: s.askReset, Log: s.logf})
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +71,10 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 func (r *ringOutput) start(ahead time.Duration) {
 	r.taken.Store(time.Now().UnixNano())
 	r.setAhead(ahead)
+	r.base.Store(r.s.m.Mixed())
+	tap := duplex.NewTap(r.info.Driver, r.info.Rate, r.info.Buffer, r.info.InputLatency, r.info.InputNames)
+	r.tap.Store(tap)
+	duplex.Publish(tap)
 	go r.feed()
 }
 
@@ -84,6 +95,20 @@ func (r *ringOutput) take(frames []float32) {
 	case r.wake <- struct{}{}:
 	default:
 	}
+}
+
+// record hands the driver's inputs on, as the device takes a buffer,
+// with the mixer frame at the speakers as they came in: the first frame
+// the device takes now, the ring's next, is heard Latency frames from
+// now, and the inputs reached the driver InputLatency frames ago.
+func (r *ringOutput) record(in []float32, channels int) {
+	tap := r.tap.Load()
+	q := r.q.Load()
+	if tap == nil || q == nil {
+		return
+	}
+	heard := r.base.Load() + q.r.Load() - int64(r.info.Latency+r.info.InputLatency)
+	tap.Deliver(in, channels, heard)
 }
 
 // feed keeps the ring filled to its target, reading the mixer a chunk
@@ -168,6 +193,9 @@ func (r *ringOutput) resume() error {
 }
 
 func (r *ringOutput) close() error {
+	if tap := r.tap.Load(); tap != nil {
+		duplex.Withdraw(tap)
+	}
 	close(r.quit)
 	<-r.done
 	return r.dev.Close()

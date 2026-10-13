@@ -10,6 +10,7 @@ import (
 
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/internal/duplex"
 )
 
 // fakeDriver stands in for an ASIO driver: the test takes its buffers,
@@ -40,9 +41,12 @@ func (f *fakeDriver) open(c asio.Config) (pullDevice, error) {
 // take takes one buffer from the speaker, as the driver does.
 func (f *fakeDriver) take() []float32 {
 	f.mu.Lock()
-	fill := f.cfg.Fill
-	n := f.info.Buffer
+	fill, record := f.cfg.Fill, f.cfg.Record
+	n, ins := f.info.Buffer, f.info.Recorded
 	f.mu.Unlock()
+	if record != nil && ins > 0 {
+		record(make([]float32, n*ins), ins)
+	}
 	frames := make([]float32, 2*n)
 	fill(frames)
 	return frames
@@ -295,4 +299,65 @@ func TestADriverThatStopsAnsweringIsLetGo(t *testing.T) {
 		out := s.out.Load()
 		return out != nil && out.output != was
 	})
+}
+
+// ramp is a source whose every frame is its own index, a millionth of
+// it, as the mixer's frames are while it is the only one playing.
+type ramp struct{ at int64 }
+
+func (r *ramp) Read(dst []float32) (int, error) {
+	for i := range len(dst) / 2 {
+		v := float32(r.at) * 1e-6
+		dst[2*i], dst[2*i+1] = v, v
+		r.at++
+	}
+	return len(dst) / 2, nil
+}
+
+// TestADriverHandsItsInputsOnAsHeard records a driver's inputs, as
+// package audio/capture does: before each buffer the driver plays, its
+// inputs come stamped with the mixer frame heard as they came in, the
+// buffer's first frame less the driver's output and input latencies.
+// The tap goes as the speaker closes.
+func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32,
+		Inputs: 4, Recorded: 2, InputNames: []string{"Mic", "Guitar"}, InputLatency: 200})
+	m := audio.NewMixer()
+	m.Play(&ramp{}, audio.Options{})
+	s, err := Open(m, Options{Driver: "Fake", Latency: 50 * time.Millisecond, Fixed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tap := duplex.Current()
+	if tap == nil || tap.Driver != "Fake" || len(tap.Names) != 2 || tap.Latency != 200 {
+		t.Fatalf("the tap is %+v", tap)
+	}
+	var heard []int64
+	tap.Attach(func(in []float32, channels int, h int64) {
+		if channels != 2 || len(in) != 2*256 {
+			t.Errorf("the inputs came as %d samples of %d channels", len(in), channels)
+		}
+		heard = append(heard, h)
+	})
+	waitFor(t, "the ring to fill", ringOf(t, s).primed.Load)
+	// The voice fades in over its first frames: read past them.
+	f.take()
+	for range 4 {
+		out := f.take()
+		first := int64(math.Round(float64(out[0]) * 1e6))
+		if h := heard[len(heard)-1]; h != first-500 {
+			t.Fatalf("the inputs were stamped %d, before a buffer starting at frame %d: want %d", h, first, first-500)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-tap.Gone():
+	default:
+		t.Fatal("the tap stays open after the speaker closed")
+	}
+	if duplex.Current() != nil {
+		t.Fatal("the closed driver's tap is still current")
+	}
 }

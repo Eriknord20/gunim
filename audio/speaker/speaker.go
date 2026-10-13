@@ -11,6 +11,10 @@
 //
 // [Speaker.Set] changes how they play while they play: the driver, the
 // rate, the samples' bits, and how far ahead the mixer works.
+//
+// Package audio/capture records the inputs of the ASIO driver the
+// speakers play through, and stamps what it records with
+// [Speaker.Heard].
 package speaker
 
 import (
@@ -247,6 +251,11 @@ func (s *Speaker) held() int64 {
 	}
 	return 0
 }
+
+// Heard returns the mixer's frame at the speakers now: how many of the
+// frames it mixed have been heard. Package audio/capture stamps what it
+// records with it.
+func (s *Speaker) Heard() int64 { return s.m.Heard() }
 
 // Latency returns how long a sound takes to be heard after it starts,
 // as the speaker works now.

@@ -282,12 +282,14 @@ func (m *Mixer) SetLatency(f func() int64) { m.latency.Store(&f) }
 // Mixed returns how many frames the mixer has mixed.
 func (m *Mixer) Mixed() int64 { return m.played.Load() }
 
-// heard returns how many frames have been heard. It never goes back:
+// Heard returns how many of the frames mixed have been heard, as the
+// latency [Mixer.SetLatency] set tells: the mixer frame at the speakers
+// now. It takes no lock and allocates nothing. It never goes back:
 // played and the frames the speakers hold are read a moment apart, and
 // where the mixer hands the speakers a block between the two, the
 // speakers hold it before played counts it, and the frames heard would
 // seem to go back a block.
-func (m *Mixer) heard() int64 {
+func (m *Mixer) Heard() int64 {
 	h := m.played.Load()
 	if f := m.latency.Load(); f != nil {
 		h = max(0, h-(*f)())
@@ -969,7 +971,7 @@ func (v *Voice) Position() time.Duration {
 		if seq&1 == 1 {
 			continue
 		}
-		at := v.positionAt(v.m.heard(), rate)
+		at := v.positionAt(v.m.Heard(), rate)
 		if v.markSeq.Load() == seq {
 			return at
 		}

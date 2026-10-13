@@ -219,7 +219,7 @@ func (a *Analyzer) HeardBefore(dst []float32, from int64) (frames []float32, now
 
 func (a *Analyzer) heardOf(dst []float32, from int64, before bool) (frames []float32, now int64) {
 	m := a.m
-	now = m.heard()
+	now = m.Heard()
 	rings := m.rings.Load()
 	ring := rings.stereo
 	if before {
@@ -249,7 +249,7 @@ func (m *Mixer) recentOf(out []float32, before bool) {
 	if dry := m.rings.Load().dryHistory; before && dry != nil {
 		history = dry
 	}
-	end := m.heard()
+	end := m.Heard()
 	start := end - int64(len(out))
 	played := m.played.Load()
 	for i := range out {
