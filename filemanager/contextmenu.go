@@ -251,7 +251,7 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 			case CmdViewer:
 				return !one || sel[0].Dir
 			case localOpenWindow:
-				return !one || !sel[0].Dir
+				return !one || !sel[0].Dir && !browsable(sel[0].Name)
 			case localOpenWith:
 				return !one || sel[0].Dir
 			case CmdPin:
