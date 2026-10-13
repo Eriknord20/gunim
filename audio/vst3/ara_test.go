@@ -576,3 +576,62 @@ func TestAScanMarksTheClassesAnARAFactoryPairsWith(t *testing.T) {
 		}
 	}
 }
+
+func TestTheFakeKeepsARAsOrderOfRestores(t *testing.T) {
+	x := newADocument(t)
+	x.analyse(t)
+	x.a.docs[0].data = "settings"
+	store := func(f *StoreFilter) []byte {
+		t.Helper()
+		b, err := x.d.Store(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	src := store(&StoreFilter{Sources: []*AudioSource{x.src}})
+	mod := store(&StoreFilter{Modifications: []*AudioModification{x.mod}})
+	doc := store(&StoreFilter{Document: true})
+	restoreSrc := &RestoreFilter{Sources: []Rename{{"media-1", "media-1"}}}
+	restoreMod := &RestoreFilter{Modifications: []Rename{{"take-1", "take-1"}}}
+	restoreDoc := &RestoreFilter{Document: true}
+	for _, tt := range []struct {
+		name  string
+		steps func(e *Edit, s *AudioSource) // the source made, the modification to make
+		want  string
+	}{
+		{"as the SDK's test host does", func(e *Edit, s *AudioSource) {
+			_ = e.Restore(src, fakeArchiveID, restoreSrc)
+			m := e.AddModification(s, ModificationProps{Name: "one", ID: "take-1"})
+			_ = e.Restore(mod, fakeArchiveID, restoreMod)
+			_ = e.Restore(doc, fakeArchiveID, restoreDoc)
+			e.RemoveModification(m)
+		}, ""},
+		{"the document's data first", func(e *Edit, s *AudioSource) {
+			_ = e.Restore(doc, fakeArchiveID, restoreDoc)
+			_ = e.Restore(src, fakeArchiveID, restoreSrc)
+		}, "a source's or modification's state restored after the document's data"},
+		{"a modification before its source", func(e *Edit, s *AudioSource) {
+			m := e.AddModification(s, ModificationProps{Name: "one", ID: "take-1"})
+			_ = e.Restore(mod, fakeArchiveID, restoreMod)
+			_ = e.Restore(src, fakeArchiveID, restoreSrc)
+			e.RemoveModification(m)
+		}, "a modification restored onto a source made in the same edit, before the source's state"},
+	} {
+		was := len(x.a.broken())
+		_, d := fakeDocument(t, x.a, x.host)
+		err := d.Edit(func(e *Edit) {
+			s := e.AddSource(SourceProps{Name: "one", ID: "media-1", Frames: 96000, Rate: 48000, Channels: 2})
+			tt.steps(e, s)
+			e.RemoveSource(s)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Close()
+		got := x.a.broken()[was:]
+		if tt.want == "" && len(got) > 0 || tt.want != "" && !slices.Contains(got, tt.want) {
+			t.Errorf("%s: the fake saw %q broken, want %q", tt.name, got, tt.want)
+		}
+	}
+}
