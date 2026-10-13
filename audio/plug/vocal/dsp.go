@@ -360,9 +360,44 @@ func (p *processor) Process(b *plug.Block) {
 	}
 	st.frames = b.Frames
 	p.stats = st
+	p.flush()
 	p.deEssMeter.Set(deEssLeast)
 	p.peakMeter.Set(st.peakLeast)
 	p.glueMeter.Set(st.glueLeast)
+}
+
+// tiny is the level under which flush rounds what the chain holds to
+// zero: some 600 decibels under full scale.
+const tiny = 1e-30
+
+// flush rounds to zero what the filters, the followers and the
+// compressors hold under tiny. Left alone, each decays in silence to a
+// subnormal number and sticks there, and the processor does sums on
+// subnormals, which run many times slower, for as long as the silence
+// lasts.
+func (p *processor) flush() {
+	z := func(v *float64) {
+		if math.Abs(*v) < tiny {
+			*v = 0
+		}
+	}
+	zs := func(s *biquadState) { z(&s.z1); z(&s.z2) }
+	for ch := range maxChannels {
+		zs(&p.deEssSt[ch])
+		zs(&p.deEssLo[ch])
+		zs(&p.tapeSt[ch])
+		for k := range p.eqSt {
+			zs(&p.eqSt[k][ch])
+		}
+	}
+	for k := range 2 {
+		zs(&p.octFollowSt[k])
+		zs(&p.widthSt[k])
+	}
+	zs(&p.octToneSt)
+	for _, v := range []*float64{&p.deEssGR.gr, &p.peak.gr, &p.glue.gr, &p.par.gr, &p.glueMS, &p.parMS, &p.octEnv} {
+		z(v)
+	}
 }
 
 // runDeEss turns down the hiss in x, frame f, and returns how far. It

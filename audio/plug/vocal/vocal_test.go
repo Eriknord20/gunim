@@ -267,6 +267,33 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 	}
 }
 
+func TestSilenceAfterTheVoiceLeavesNothingSubnormalHeld(t *testing.T) {
+	v := makeVoice(1, voiceOpts{level: 0.5, hiss: 0.1})
+	// The voice, and then forty seconds of silence.
+	silence := int(40 * rate)
+	frames := [2][]float32{append(v[0], make([]float32, silence)...), append(v[1], make([]float32, silence)...)}
+	_, pr := run(map[uint32]float64{ParallelID: 50, TapeID: 50, OctaveID: 50}, frames)
+	subnormal := func(x float64) bool { return x != 0 && math.Abs(x) < 0x1p-1022 }
+	held := []float64{pr.deEssGR.gr, pr.peak.gr, pr.glue.gr, pr.par.gr, pr.glueMS, pr.parMS, pr.octEnv}
+	for _, s := range append(append(pr.deEssSt[:], pr.deEssLo[:]...), pr.tapeSt[:]...) {
+		held = append(held, s.z1, s.z2)
+	}
+	for k := range pr.eqSt {
+		for _, s := range pr.eqSt[k] {
+			held = append(held, s.z1, s.z2)
+		}
+	}
+	for _, s := range append(append(pr.octFollowSt[:], pr.widthSt[:]...), pr.octToneSt) {
+		held = append(held, s.z1, s.z2)
+	}
+	held = append(held, pr.line...)
+	for i, x := range held {
+		if subnormal(x) {
+			t.Fatalf("after forty seconds of silence, value %d held is %g, subnormal, which is slow to sum", i, x)
+		}
+	}
+}
+
 // memSource is a track in memory, as a host gives a plugin.
 type memSource struct{ frames [2][]float32 }
 
