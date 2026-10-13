@@ -430,6 +430,9 @@ func TestAViewTakesTheSelectionAndTheEditorRendererItsRegions(t *testing.T) {
 	if !slices.Equal(fp.araExt.selection, []uintptr{x.r2.ref, x.r1.ref}) || *fp.araExt.selRange != (TimeRange{1, 4}) {
 		t.Fatalf("selection %v, range %v", fp.araExt.selection, fp.araExt.selRange)
 	}
+	if names, span := (&FakeARA{a: x.a}).Selected(x.d); !slices.Equal(names, []string{"two", ""}) || *span != (TimeRange{1, 4}) {
+		t.Fatalf("Selected: %q, %v", names, span)
+	}
 	_ = ext.Select(Selection{})
 	if len(fp.araExt.selection) != 0 || fp.araExt.selRange != nil {
 		t.Fatal("an empty selection kept the last")
@@ -453,13 +456,11 @@ func TestAViewTakesTheSelectionAndTheEditorRendererItsRegions(t *testing.T) {
 
 func TestThePluginsTransportRequestsComeAsUpdates(t *testing.T) {
 	x := newADocument(t)
-	fd := x.a.docs[0]
-	pb := fd.host.playback
-	pb.call(0)
-	callLocate(pb, 12.5)
-	callCycle(pb, 2, 6.25)
-	pb.call(4, 1)
-	pb.call(1)
+	fake := &FakeARA{a: x.a}
+	fake.Request(x.d, Play, 0, 0)
+	fake.Request(x.d, Locate, 12.5, 0)
+	fake.Request(x.d, Cycle, 2, 6.25)
+	fake.Request(x.d, Stop, 0, 0)
 	got := x.d.Poll()
 	want := []Update{{Kind: Play}, {Kind: Locate, Time: 12.5}, {Kind: Cycle, Time: 2, Duration: 6.25}, {Kind: CycleOn, On: true},
 		{Kind: Stop}}

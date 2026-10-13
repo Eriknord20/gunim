@@ -62,6 +62,53 @@ func (f *FakeARA) Gain(d *Document, id string) float64 {
 // Broken lists the rules of ARA's the fake saw broken.
 func (f *FakeARA) Broken() []string { return f.a.broken() }
 
+// Selected returns what the host last picked for the editor view of
+// document d to show: the names of the regions, and the span, or nil.
+func (f *FakeARA) Selected(d *Document) (regions []string, span *TimeRange) {
+	fd := f.a.docOf(d)
+	if fd == nil {
+		return nil, nil
+	}
+	var sel []uintptr
+	onUI(func() {
+		for _, x := range fd.exts {
+			if x.roles&EditorView != 0 {
+				sel, span = slices.Clone(x.selection), x.selRange
+			}
+		}
+	})
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	for _, ref := range sel {
+		if r := fd.regions[ref]; r != nil {
+			regions = append(regions, r.props.Name)
+		}
+	}
+	return regions, span
+}
+
+// Request has the fake ask document d's host's transport, as a plugin's
+// editor does: to play, to stop, to move to at seconds, or to loop from
+// at for length seconds, and to turn the loop on.
+func (f *FakeARA) Request(d *Document, what UpdateKind, at, length float64) {
+	fd := f.a.docOf(d)
+	if fd == nil {
+		return
+	}
+	pb := fd.host.playback
+	switch what { //nolint:exhaustive // the transport's requests alone
+	case Play:
+		pb.call(0)
+	case Stop:
+		pb.call(1)
+	case Locate:
+		callLocate(pb, at)
+	case Cycle:
+		callCycle(pb, at, length)
+		pb.call(4, 1)
+	}
+}
+
 // docOf returns the fake's document of the host's d.
 func (a *fakeARAPlugin) docOf(d *Document) *fakeDoc {
 	a.mu.Lock()
