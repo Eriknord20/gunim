@@ -34,12 +34,16 @@ const (
 
 // fetches reports whether the window's files open with the computer's
 // programs only by a copy fetched to it first: they are of another file
-// system, which cannot open them itself.
+// system, which cannot open them itself, or in an archive.
 func (a *app) fetches() bool {
+	if a.nav.archive != "" {
+		// What an archive holds is no file of the system's.
+		return true
+	}
 	if a.fs.ID() == "" {
 		return false
 	}
-	_, ok := a.fs.(SystemOpener)
+	_, ok := optional[SystemOpener](a.fs)
 	return !ok
 }
 

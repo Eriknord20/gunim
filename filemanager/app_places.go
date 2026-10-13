@@ -130,7 +130,7 @@ func (a *app) defaultPlaces() ([]Place, error) {
 	top := a.ps.VolumeName(home) + a.ps.Sep()
 	out := []Place{{Name: "Home", Path: home, Kind: "home", FS: a.fs.ID()},
 		{Name: a.ps.placeName(top), Path: top, Kind: "drive", FS: a.fs.ID()}}
-	if sr, ok := a.fs.(SpaceReporter); ok {
+	if sr, ok := optional[SpaceReporter](a.fs); ok {
 		if free, total, err := sr.Space(top); errors.Is(err, errors.ErrUnsupported) {
 			// The file system cannot say after all.
 		} else if err != nil {

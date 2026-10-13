@@ -44,9 +44,13 @@ type Hub struct {
 	// the computer's programs, kept until the hub ends, and watching
 	// says the hub looks at them for changes. ids holds the ID of the
 	// file system each window shows, for the watch to find one to tell.
-	copies   *openCopies
+	copies *openCopies
+	// keys are the passwords of the archives the windows opened.
+	keys     zipKeys
 	watching bool
 	ids      map[*app]string
+	// fss holds the file system each window shows.
+	fss map[*app]FS
 }
 
 // NewHub makes a hub whose windows open on ga, and close when ctx ends.
@@ -268,6 +272,10 @@ func joinHub(a *app, h *Hub) *Hub {
 		h.ids = map[*app]string{}
 	}
 	h.ids[a] = a.fs.ID()
+	if h.fss == nil {
+		h.fss = map[*app]FS{}
+	}
+	h.fss[a] = unwrapFS(a.fs)
 	a.takeClip(h)
 	h.mu.Unlock()
 	// A change waiting for a window is offered in this one.
@@ -275,13 +283,26 @@ func joinHub(a *app, h *Hub) *Hub {
 	return h
 }
 
-// shows notes that a shows the file system of ID id now.
-func (h *Hub) shows(a *app, id string) {
+// shows notes that a shows the file system fsys now.
+func (h *Hub) shows(a *app, fsys FS) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.ids[a]; ok {
-		h.ids[a] = id
+		h.ids[a], h.fss[a] = fsys.ID(), unwrapFS(fsys)
 	}
+}
+
+// fsOf returns the file system of ID id that a window of h shows, with
+// its archives opened as folders, or nil where none shows it.
+func (h *Hub) fsOf(id string) FS {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, fsys := range h.fss {
+		if fsys.ID() == id {
+			return withArchives(fsys, &h.keys)
+		}
+	}
+	return nil
 }
 
 // clipboard is the paths cut or copied, and whether they were cut: on
@@ -301,6 +322,7 @@ func (h *Hub) leave(a *app) {
 	h.mu.Lock()
 	h.apps = slices.DeleteFunc(h.apps, func(o *app) bool { return o == a })
 	delete(h.ids, a)
+	delete(h.fss, a)
 	c := h.copies
 	h.mu.Unlock()
 	if c != nil {

@@ -116,8 +116,12 @@ type Window struct {
 	// hiddenBy says the system reports the window out of sight while it
 	// is open, covered by other windows or on another desktop, and
 	// unseen what the window was told last, with the screen's state.
-	// They are used on the main thread.
+	// unseenWaiting says the window is waiting to be told it is out of
+	// sight, and unseenWaits counts the waits, so one called off tells
+	// nothing; see tellUnseen. They are used on the main thread.
 	hiddenBy, unseen bool
+	unseenWaiting    bool
+	unseenWaits      int
 	// uncovered puts the window on the screen once; see uncover.
 	uncovered sync.Once
 	// opened is when the window was made, for GUNIM_DEBUG_WINDOW.

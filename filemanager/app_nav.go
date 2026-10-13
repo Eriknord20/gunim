@@ -30,7 +30,10 @@ const overviewBands = 160
 // navState is what the app knows about the folder showing and how the
 // user got there.
 type navState struct {
-	path      string
+	path string
+	// archive is the archive the folder showing is in, or is, once the
+	// window has found it, and "" for none.
+	archive   string
 	back, fwd []visited
 	// hop is a step back or forward to another file system, asked for
 	// and not yet shown, and dropped are those the user went on from
@@ -212,7 +215,7 @@ func (a *app) navCommand(name string) bool {
 		// The files open together, so a fetch to open them asks once.
 		var files []string
 		for _, e := range a.selectedEntries() {
-			if e.Dir || e.Err != "" || e.Broken {
+			if e.Dir || e.Err != "" || e.Broken || a.opensAsFolder(e) {
 				a.activate(e)
 				continue
 			}
@@ -370,6 +373,9 @@ func (a *app) navigate(path string, travel int, record bool) {
 		travel = direction(a.ps, n.path, abs)
 	}
 	n.path, n.travel = abs, travel
+	if n.archive != "" && !a.ps.inside(abs, n.archive) {
+		a.inFolderOf("")
+	}
 	// The window forgets the files' own icons of the folder left.
 	for k := range a.iconsSent {
 		if strings.HasPrefix(k, "file:") {
@@ -383,6 +389,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 	clear(n.sel)
 	n.cursor, n.gap = "", false
 	a.enteredFolder()
+	a.findArchive(abs)
 	a.list()
 	a.readSpace()
 	a.publishPlaces()
@@ -394,7 +401,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 // once the file system says; where it cannot say, the path goes as typed,
 // to show why there.
 func (a *app) goTyped(typed string) {
-	tc, ok := a.fs.(TrueCaser)
+	tc, ok := optional[TrueCaser](a.fs)
 	abs, err := a.ps.Abs(typed)
 	if !ok || err != nil {
 		a.navigate(typed, 0, true)
@@ -480,6 +487,10 @@ func dirTime(fsys FS, path string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	if !info.IsDir() {
+		// An archive shows as the folder of what it holds.
+		if ar, ok := fsys.(*archives); ok && browsable(fsys.Paths().Base(path)) && ar.isArchive(path) {
+			return info.ModTime(), nil
+		}
 		return time.Time{}, fmt.Errorf("%s is not a folder", fsys.Paths().Show(path))
 	}
 	return info.ModTime(), nil
@@ -663,6 +674,9 @@ func (a *app) publishListing() {
 	}
 	if n.err != nil {
 		l.Err = n.err.Error()
+	}
+	if n.archive != "" {
+		l.ReadOnly = a.ps.Base(n.archive)
 	}
 	a.patch(l)
 	if t := a.fs.ID() + "\x00" + l.Title; a.pane != nil && a.pane.host.Title != nil && t != a.title {
@@ -917,11 +931,11 @@ func (a *app) selectedPaths() []string {
 // activate opens e: a folder in the window, and a file with its program.
 func (a *app) activate(e entry) {
 	path := a.ps.Join(a.nav.path, e.Name)
-	if e.Dir && a.newWindowAsked() {
+	if (e.Dir || a.opensAsFolder(e)) && a.newWindowAsked() {
 		a.openWindow(path)
 		return
 	}
-	if e.Dir {
+	if e.Dir || a.opensAsFolder(e) {
 		a.navigate(path, 1, true)
 		return
 	}
@@ -1012,7 +1026,7 @@ func count(n int) string {
 // readSpace reads the free space of the folder's volume in the
 // background, on a file system that knows it.
 func (a *app) readSpace() {
-	sr, ok := a.fs.(SpaceReporter)
+	sr, ok := optional[SpaceReporter](a.fs)
 	if !ok {
 		return
 	}

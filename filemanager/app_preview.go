@@ -195,7 +195,7 @@ func itemPreview(ctx context.Context, fsys FS, seq int, path string, e entry, fe
 		pv.Facts = append(pv.Facts, Fact{"Size", size})
 	}
 	pv.Facts = append(pv.Facts, Fact{"Modified", fmtTime(e.Mod)})
-	if l, ok := fsys.(Linker); ok && e.Kind == KindLink {
+	if l, ok := optional[Linker](fsys); ok && e.Kind == KindLink {
 		target, err := l.Readlink(path)
 		if err != nil {
 			pv.Err = "Reading the link: " + err.Error()

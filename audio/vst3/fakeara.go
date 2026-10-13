@@ -215,6 +215,13 @@ type fakeDoc struct {
 	readers []uintptr
 	exts    []*fakeExt
 	wg      sync.WaitGroup
+	// The edit cycle's restores, for ARA's rules of partial
+	// persistence: the sources made in it, the sources and
+	// modifications whose states it restored, and whether it restored
+	// the document's data.
+	made                     map[uintptr]bool
+	srcRestored, modRestored map[uintptr]bool
+	docRestored              bool
 }
 
 type fakeContext struct {
@@ -428,6 +435,7 @@ var fakeDCTable = sync.OnceValue(func() fnTable {
 			d.a.violate("beginEditing twice")
 		}
 		d.editing = true
+		d.made, d.srcRestored, d.modRestored, d.docRestored = map[uintptr]bool{}, map[uintptr]bool{}, map[uintptr]bool{}, false
 		return 0
 	})
 	set(dcEndEditing, func(ctl uintptr) uintptr {
@@ -515,6 +523,7 @@ var fakeDCTable = sync.OnceValue(func() fnTable {
 		s := &fakeSource{host: host}
 		readSource(props, s)
 		ref := newHandle(s)
+		d.made[ref] = true
 		d.mu.Lock()
 		d.sources[ref] = s
 		d.mu.Unlock()
@@ -790,30 +799,72 @@ func (d *fakeDoc) restore(reader, filter uintptr) bool {
 		d.data = a.Doc
 	}
 	d.mu.Lock()
-	for _, s := range d.sources {
+	// The objects whose states this call restores.
+	srcs, mods := map[uintptr]bool{}, map[uintptr]bool{}
+	for ref, s := range d.sources {
 		if n, ok := name(srcNames, s.id); ok {
 			if p, ok := a.Sources[n]; ok {
 				// The analysis comes back; the samples it renders from
 				// are read again as the edit ends.
 				s.peak, s.requested = p, true
+				srcs[ref] = true
 			}
 		}
 	}
 	var changed []*fakeMod
-	for _, m := range d.mods {
+	for ref, m := range d.mods {
 		if n, ok := name(modNames, m.id); ok {
-			if g, ok := a.Mods[n]; ok && g != m.gain {
-				m.gain = g
-				changed = append(changed, m)
+			if g, ok := a.Mods[n]; ok {
+				mods[ref] = true
+				if g != m.gain {
+					m.gain = g
+					changed = append(changed, m)
+				}
 			}
 		}
 	}
+	d.checkRestore(srcs, mods, doc)
 	d.mu.Unlock()
 	// A restore tells of what it changed, as a plugin may.
 	for _, m := range changed {
 		d.later(func() { d.host.model.call(2, m.host, 0, 0) })
 	}
 	return true
+}
+
+// checkRestore checks a restore of the states of the sources srcs and
+// the modifications mods, and of the document's data where doc, against
+// ARA's rules of partial persistence, as ARAInterface.h gives them under
+// restoreObjectsFromArchive and ARAStoreObjectsFilter::documentData:
+//   - the document's data is restored last in the edit cycle;
+//   - a source's state is restored with or before its modifications';
+//   - a modification of a source made in the same edit cycle is
+//     restored with or after its source's state, as Melodyne asserts
+//     ("restoring audio modification onto a freshly created audio
+//     source").
+//
+// d.mu is held.
+func (d *fakeDoc) checkRestore(srcs, mods map[uintptr]bool, doc bool) {
+	if d.docRestored && (len(srcs) > 0 || len(mods) > 0) {
+		d.a.violate("a source's or modification's state restored after the document's data")
+	}
+	for ref := range srcs {
+		for mref, m := range d.mods {
+			if m.src == ref && d.modRestored[mref] {
+				d.a.violate("a source's state restored after a modification of it")
+			}
+		}
+		d.srcRestored[ref] = true
+	}
+	for ref := range mods {
+		if src := d.mods[ref].src; d.made[src] && !d.srcRestored[src] {
+			d.a.violate("a modification restored onto a source made in the same edit, before the source's state")
+		}
+		d.modRestored[ref] = true
+	}
+	if doc {
+		d.docRestored = true
+	}
 }
 
 // edit sets the gain of the modification of ID id, as the user does in

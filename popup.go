@@ -33,7 +33,9 @@ type PopupOptions struct {
 	// Anchor is the rectangle the popup attaches to, in the opener's
 	// own space. The popup opens just below it, starting at its left
 	// edge. Where the screen runs out below and there is more room
-	// above, it opens above. It slides sideways to stay on the screen.
+	// above, it opens above. A popup the window opened slides sideways
+	// to stay inside the window, where it fits in the window's width,
+	// and on the screen.
 	Anchor geom.Rect
 	// Max bounds the content's size. Zero allows up to 4096 each way.
 	Max geom.Size
@@ -175,6 +177,9 @@ type surface struct {
 	// pointerRegion.
 	region    []geom.Rect
 	regionSet bool
+	// covered says the system reports the window out of sight. A popup in sight keeps the parent window drawing
+	// while the parent is covered; see Window.draws.
+	covered bool
 }
 
 // popupDebug is set by GUNIM_DEBUG_POPUP=1, which logs to standard error how each popup got its window and how long
@@ -469,23 +474,54 @@ func (u *UI) popupAnchor(s *surface) geom.Rect {
 		at := besideAt(anchor, s.root.size, in, room)
 		return geom.Rect{Min: at, Max: at}
 	}
+	var in geom.Insets
 	for _, k := range s.root.kids {
 		pp, ok := k.node.(PopupPadder)
 		if !ok {
 			continue
 		}
-		in := pp.PopupPadding()
+		in = pp.PopupPadding()
 		if s.opts.Over {
 			// The content, inside its padding, sits on the anchor's corner
 			anchor.Min = anchor.Min.Sub(geom.Pt(in.Left, in.Top))
 			anchor.Max = anchor.Max.Sub(geom.Pt(in.Left, in.Top))
-			break
+			return anchor
 		}
 		anchor.Min.X -= in.Left
 		anchor.Min.Y += in.Bottom
 		anchor.Max.Y -= in.Top
 		break
 	}
+	if s.opts.Over {
+		return anchor
+	}
+	return u.insideWindow(s, anchor, in)
+}
+
+// insideWindow slides anchor, where a popup of the main window opens
+// below or above, sideways so the popup's card, its content inside the
+// padding in, lies inside the window: a drop-down near the window's
+// left edge whose list is wider than its box stays in the window. A
+// card wider than the window starts at the window's left edge. A popup
+// opened from another popup keeps its anchor.
+func (u *UI) insideWindow(s *surface, anchor geom.Rect, in geom.Insets) geom.Rect {
+	if u.surfaceOf(s.root.opener) != nil {
+		return anchor
+	}
+	width, card := u.root.size.W, s.root.size.W-in.Left-in.Right
+	if width <= 0 || card <= 0 {
+		return anchor
+	}
+	left := anchor.Min.X + in.Left
+	var dx float32
+	switch {
+	case left < 0 || card > width:
+		dx = -left
+	case left+card > width:
+		dx = width - (left + card)
+	}
+	anchor.Min.X += dx
+	anchor.Max.X += dx
 	return anchor
 }
 
@@ -781,7 +817,31 @@ func (u *UI) popupEvent(e popupEvent) {
 		}
 		return
 	}
+	if c, ok := e.ev.(driver.WindowCovered); ok {
+		u.popupCovered(e.s, c.Covered)
+		return
+	}
 	u.handleOn(e.s.root, e.ev)
+}
+
+// popupCovered notes whether s's window is out of sight. A popup is on top of other windows, so one can still be
+// seen, and be fading out, after the parent window is covered: the parent draws on while it is.
+func (u *UI) popupCovered(s *surface, covered bool) {
+	drew := u.w.draws()
+	s.covered = covered
+	if !drew && u.w.draws() {
+		u.w.resumed, u.invalid = true, true
+	}
+}
+
+// popupInSight reports whether a popup's window is open and not out of sight.
+func (u *UI) popupInSight() bool {
+	for _, s := range u.popups {
+		if s.dw != nil && !s.covered {
+			return true
+		}
+	}
+	return false
 }
 
 // forward passes a popup window's events to the UI goroutine until the
