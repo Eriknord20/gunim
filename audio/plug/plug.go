@@ -429,8 +429,45 @@ func checkPorts(d *Descriptor) error {
 	return nil
 }
 
-// Lookup returns the plugin registered as id, and whether there is one.
+// A Finder makes a plugin known by its ID as it is first asked for, as
+// a host's VST3 plugins on disk are: it registers the plugin of id, and
+// reports whether it did. It remembers an ID it found nothing of, as
+// Lookup asks again each time; and it calls neither Lookup nor All.
+type Finder func(id string) bool
+
+var (
+	findersMu sync.Mutex
+	finders   []Finder
+)
+
+// AddFinder has Lookup ask f for each plugin none registered, after
+// the finders added before.
+func AddFinder(f Finder) {
+	findersMu.Lock()
+	defer findersMu.Unlock()
+	finders = append(finders, f)
+}
+
+// Lookup returns the plugin registered as id, and whether there is one:
+// one registered already, or one a [Finder] registers as it is asked.
 func Lookup(id string) (Descriptor, bool) {
+	if d, ok := registered(id); ok {
+		return d, true
+	}
+	findersMu.Lock()
+	fs := slices.Clone(finders)
+	findersMu.Unlock()
+	for _, f := range fs {
+		if f(id) {
+			return registered(id)
+		}
+	}
+	return Descriptor{}, false
+}
+
+// registered returns the plugin registered as id, and whether there is
+// one.
+func registered(id string) (Descriptor, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	d, ok := registry[id]

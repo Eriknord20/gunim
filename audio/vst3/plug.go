@@ -221,7 +221,7 @@ func ports(buses []Bus, base string) []plug.AudioPort {
 func (m *Module) Register(c Class) (plug.Descriptor, error) {
 	registerMu.Lock()
 	defer registerMu.Unlock()
-	if d, ok := plug.Lookup(PlugID(c)); ok {
+	if d, ok := registered[PlugID(c)]; ok {
 		return d, nil
 	}
 	d, err := m.Describe(c)
@@ -229,10 +229,25 @@ func (m *Module) Register(c Class) (plug.Descriptor, error) {
 		return plug.Descriptor{}, err
 	}
 	plug.Register(d)
+	registered[d.ID] = d
 	return d, nil
 }
 
-var registerMu sync.Mutex
+// registered holds the plugins Register registered, by ID: it looks
+// there, as plug.Lookup may ask a Library, which registers.
+var (
+	registerMu sync.Mutex
+	registered = map[string]plug.Descriptor{}
+)
+
+// registeredAs returns the plugin Register registered as id, and
+// whether there is one.
+func registeredAs(id string) (plug.Descriptor, bool) {
+	registerMu.Lock()
+	defer registerMu.Unlock()
+	d, ok := registered[id]
+	return d, ok
+}
 
 // The modules loaded by Load, by path: loaded once, kept while the
 // program runs, as a plugin's library is seldom safe to unload.
@@ -267,7 +282,7 @@ var ErrNotFound = errors.New("vst3: no plugin found of that ID")
 // module makes it. A plugin registered already gives the descriptor
 // registered.
 func RegisterID(id string, bundles []Bundle) (plug.Descriptor, error) {
-	if d, ok := plug.Lookup(id); ok {
+	if d, ok := registeredAs(id); ok {
 		return d, nil
 	}
 	cid, ok := ClassID(id)

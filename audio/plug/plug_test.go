@@ -233,3 +233,29 @@ func TestAControlSignalDrivesAParameterByChanges(t *testing.T) {
 		t.Errorf("a block of 512 frames takes %d changes, want %d", len(dst), 512/ControlStep)
 	}
 }
+
+// TestAFinderMakesAPluginKnownAsItIsAskedFor looks up a plugin no one
+// registered: a finder registers it as it is asked, once, and an ID it
+// finds nothing of stays unknown.
+func TestAFinderMakesAPluginKnownAsItIsAskedFor(t *testing.T) {
+	asked := map[string]int{}
+	AddFinder(func(id string) bool {
+		asked[id]++
+		if id != "test.found" {
+			return false
+		}
+		Register(Descriptor{ID: id, Name: "Found", Kind: "Fx", New: func(Host) Plugin { return nil }})
+		return true
+	})
+	for range 2 {
+		if d, ok := Lookup("test.found"); !ok || d.Name != "Found" {
+			t.Fatalf("looked up, the plugin found is %+v, %v", d, ok)
+		}
+	}
+	if _, ok := Lookup("test.nowhere"); ok {
+		t.Fatal("a plugin no finder finds was found")
+	}
+	if asked["test.found"] != 1 || asked["test.nowhere"] != 1 {
+		t.Fatalf("the finder was asked %v", asked)
+	}
+}

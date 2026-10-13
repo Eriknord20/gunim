@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/marrasen/gunim/audio/plug"
@@ -230,5 +231,36 @@ func TestAnyInstrument(t *testing.T) {
 	res = plugtest.Drive(t, &d, again.Processor(), s, n, plugtest.Ports{Events: chord})
 	if second := level(res.Out[0], 0, n*3/4); math.Abs(second-first) > 0.2*first {
 		t.Errorf("a copy of its state plays at %.4f, the first at %.4f", second, first)
+	}
+}
+
+// TestALibraryFindsPluginsAsPlugLooksThemUp scans LSP's folder, and
+// hands its Find to package plug: an instrument found is looked up by
+// its ID, loaded as it is first asked for, and an ID found nowhere stays
+// unknown, with the reason kept.
+func TestALibraryFindsPluginsAsPlugLooksThemUp(t *testing.T) {
+	lib := NewLibrary(t.TempDir())
+	missing := "vst3." + strings.Repeat("0", 31) + "1"
+	if lib.Find(missing) || lib.Err(missing) == nil {
+		t.Fatalf("an ID of no plugin was found, or its reason lost: %v", lib.Err(missing))
+	}
+	if lib.Find("marrasen.trim") {
+		t.Fatal("a Go plugin's ID was found as a VST3 plugin's")
+	}
+	m := lsp(t)
+	lib = NewLibrary(filepath.Dir(m.Path))
+	var sampler Found
+	for _, f := range lib.Plugins() {
+		if f.Name == "Sampler Stereo" {
+			sampler = f
+		}
+	}
+	if !sampler.Instrument() || sampler.Path != m.Path {
+		t.Fatalf("the library found the sampler as %+v", sampler)
+	}
+	plug.AddFinder(lib.Find)
+	d, ok := plug.Lookup(sampler.ID)
+	if !ok || d.Name != "Sampler Stereo" || !d.Instrument() {
+		t.Fatalf("looked up, the sampler is %+v, %v: %v", d, ok, lib.Err(sampler.ID))
 	}
 }
