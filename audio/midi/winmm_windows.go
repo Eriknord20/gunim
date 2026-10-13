@@ -56,6 +56,7 @@ const (
 	timerHighResolution = 0x2
 	timerAllAccess      = 0x1F0003
 
+	mmUnspecified = 1
 	mmAllocated   = 4
 	mmInvalHandle = 5
 	mmNoDriver    = 6
@@ -75,6 +76,8 @@ type mmError struct {
 
 func (e *mmError) Error() string {
 	switch e.code {
+	case mmUnspecified:
+		return e.op + ": the system failed to open it"
 	case mmAllocated:
 		return e.op + ": another program has the port open"
 	case midiNoDevice, mmNoDriver:
