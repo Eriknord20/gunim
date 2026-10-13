@@ -30,6 +30,7 @@ var rowItems = []menuItem{
 	{"Open with system", "", CmdOpenSystem},
 	{"Open with", "", localOpenWith},
 	{"Open in new window", "", localOpenWindow},
+	{"Go to its folder", "", CmdGoToFolder},
 	{"Show in system file manager", "", CmdReveal},
 	{"-", "", ""},
 	{"Cut", "Ctrl+X", CmdCut},
@@ -212,6 +213,10 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		}
 		if !b.shell.OpenWith {
 			items = without(items, localOpenWith)
+		}
+		if !one || sel[0].At == 0 {
+			// Only for an item the filter found in a folder under this one.
+			items = without(items, CmdGoToFolder)
 		}
 		if !one || sel[0].Dir || !isArchive(sel[0].Name) {
 			// Only for an archive it can open.

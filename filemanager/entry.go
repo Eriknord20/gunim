@@ -21,7 +21,10 @@ const (
 
 // entry is one item of a folder, as the app half keeps it.
 type entry struct {
+	// Name is the item's name, or, for an item of a folder under the one
+	// showing, its path under that folder, whose name starts at at.
 	Name string
+	at   int
 	Kind Kind
 	// Dir is set for a folder, and for a link to one.
 	Dir    bool
@@ -45,6 +48,9 @@ type entry struct {
 	// lower is the name in lower case, for sorting and filtering.
 	lower string
 }
+
+// base is the item's own name, with no folder before it.
+func (e entry) base() string { return e.Name[e.at:] }
 
 // listDir reads the entries of dir on fsys. An entry it cannot read
 // lists with its name and why, and an entry deleted while it lists is
