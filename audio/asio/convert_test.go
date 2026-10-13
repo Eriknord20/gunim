@@ -86,3 +86,32 @@ func TestNaNIsSilence(t *testing.T) {
 		t.Errorf("NaN came out %d", got)
 	}
 }
+
+// TestInputsReadBackWhatWasWritten writes rounded sound as every
+// sample type, and reads it into one channel of three, as an input
+// comes in.
+func TestInputsReadBackWhatWasWritten(t *testing.T) {
+	steps := []int32{-32768, -32767, -1234, -1, 0, 1, 77, 32766, 32767}
+	frames := make([]float32, 2*len(steps))
+	for i, k := range steps {
+		frames[2*i] = float32(k) / 32768
+	}
+	for _, typ := range []sampleType{int16LSB, int24LSB, int32LSB, float32LSB, float64LSB, int32LSB16, int32LSB18, int32LSB20, int32LSB24} {
+		bytes, _ := typ.size()
+		src := make([]byte, bytes*len(steps))
+		write(src, frames, 0, typ)
+		dst := make([]float32, 3*len(steps))
+		for i := range dst {
+			dst[i] = 9
+		}
+		read(dst, src, 1, 3, typ)
+		for i := range steps {
+			if got, want := dst[3*i+1], frames[2*i]; got != want {
+				t.Errorf("type %d: frame %d read %v, want %v", typ, i, got, want)
+			}
+			if dst[3*i] != 9 || dst[3*i+2] != 9 {
+				t.Errorf("type %d: frame %d wrote past its channel: %v", typ, i, dst[3*i:3*i+3])
+			}
+		}
+	}
+}

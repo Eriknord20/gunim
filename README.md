@@ -166,6 +166,14 @@ writes 16 or 24-bit WAV, dithered, or 32-bit float, tagged. Its `Range` reads
 the loudness range, LRA, as EBU Tech 3342 defines it, and several
 sounds' readings pooled measure an album as one.
 
+Package `audio/capture` records the computer's inputs: a microphone, a
+guitar through an audio interface, a synth's output. It records through
+PulseAudio or PipeWire on Linux and WASAPI on Windows, and through the
+ASIO driver the speakers play through, in step with its buffers. Each
+block it records is stamped with the mixer frame heard as it came in,
+so a recording lines up with what was playing. `Measure` plays a click
+and finds it in the recording, to tell how far the stamps are off.
+
 Package `audio/vst3` hosts VST3 plugins, in pure Go. It finds the
 plugins in the system's folders and loads one. It runs stereo sound
 through an effect in realtime or offline, and saves and restores its
@@ -805,6 +813,7 @@ path data.
 | `gunim/anim` | `Animated[T]`, springs, tweens, easings |
 | `gunim/audio` | A mixer, voices with animated volume and pan, clips, decoders for WAV, MP3, Ogg Vorbis and FLAC, and an analyzer for visuals |
 | `gunim/audio/speaker` | Plays a mixer through the speakers, with oto |
+| `gunim/audio/capture` | Records the computer's inputs, stamped in the speaker's frames, and measures the round trip |
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
 | `gunim/audio/plug` | A plugin format for effects and instruments written in Go, with views drawn in gunim, and the plugins made in it |

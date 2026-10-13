@@ -20,6 +20,14 @@ type Info struct {
 	// Outputs is how many outputs the driver has; the sound plays on the
 	// first two, or on one where it has one.
 	Outputs int
+	// Inputs is how many inputs the driver has. Where [Config.Record]
+	// is set, Recorded is how many of them it records, and
+	// InputNames what the driver calls those. InputLatency is how many
+	// frames pass from a sound at the inputs to Record's call with it,
+	// as the driver reports it.
+	Inputs, Recorded int
+	InputNames       []string
+	InputLatency     int
 }
 
 // fitBuffer returns the buffer size nearest want that a driver allows:
