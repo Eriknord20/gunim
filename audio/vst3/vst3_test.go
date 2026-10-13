@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/marrasen/gunim/audio/plug"
 )
 
 // The tests run LSP's plugins, where they are: LSP_VST3 names the bundle.
@@ -132,10 +134,10 @@ func TestAPluginOfASidechainProcesses(t *testing.T) {
 
 func TestABundleListsTheEffectsItsModuleMakes(t *testing.T) {
 	m := lsp(t)
-	listed := moduleInfo(m.Path)
-	made := m.Effects()
-	if len(listed) == 0 || len(listed) != len(made) {
-		t.Fatalf("the bundle lists %d effects, the module makes %d", len(listed), len(made))
+	listed, ok := moduleInfo(m.Path)
+	made := append(m.Effects(), m.Instruments()...)
+	if !ok || len(listed) == 0 || len(listed) != len(made) {
+		t.Fatalf("the bundle lists %d effects and instruments, the module makes %d", len(listed), len(made))
 	}
 	names := map[uid]string{}
 	for _, c := range made {
@@ -146,8 +148,18 @@ func TestABundleListsTheEffectsItsModuleMakes(t *testing.T) {
 			t.Fatalf("listed %s as %x, which the module makes as %q", c.Name, c.ID, names[c.ID])
 		}
 	}
-	if b := Scan(filepath.Dir(m.Path)); len(b) != 1 || b[0].Name != "lsp-plugins" {
+	b := Scan(filepath.Dir(m.Path))
+	if len(b) != 1 || b[0].Name != "lsp-plugins" || !b[0].Listed {
 		t.Fatalf("the scan found %v", b)
+	}
+	if len(b[0].Effects) != len(m.Effects()) || len(b[0].Instruments) != len(m.Instruments()) || len(m.Instruments()) == 0 {
+		t.Fatalf("the scan found %d effects and %d instruments, the module makes %d and %d",
+			len(b[0].Effects), len(b[0].Instruments), len(m.Effects()), len(m.Instruments()))
+	}
+	for _, c := range b[0].Instruments {
+		if !strings.HasPrefix(c.SubCategories, "Instrument") {
+			t.Fatalf("%s is filed as an instrument, of %q", c.Name, c.SubCategories)
+		}
 	}
 }
 
@@ -216,6 +228,20 @@ func TestProcessingTakesNoLockAndMakesNothing(t *testing.T) {
 	})
 	if made != 0 {
 		t.Fatalf("processing made %d things over 100 blocks", made)
+	}
+	// And a block of package plug's, of changes and notes.
+	b := &plug.Block{Frames: 512, In: [][]float32{make([]float32, 512), make([]float32, 512)},
+		Out: [][]float32{make([]float32, 512), make([]float32, 512)}, Changes: make([]plug.Change, 0, 8),
+		Events: []plug.Event{{Frame: 3, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 1},
+			{Frame: 9, Kind: plug.Pedal, Value: 1}, {Frame: 20, Kind: plug.NoteOff, Note: 1}}}
+	made = allocsUnder(t, "(*Plugin).ProcessBlock", func() {
+		for i := range 100 {
+			b.Changes = append(b.Changes[:0], plug.Change{Frame: i % 512, ID: gain.ID, Value: float64(i%10) / 10})
+			p.ProcessBlock(b)
+		}
+	})
+	if made != 0 {
+		t.Fatalf("processing plug's blocks made %d things over 100 blocks", made)
 	}
 }
 

@@ -540,42 +540,96 @@ func (c *paramChanges) free() {
 	drop(uintptr(unsafe.Pointer(&c.object))) //nolint:gosec // its own address
 }
 
-// An event list, empty: a mastering effect takes no notes, and the
-// events it sends are let go.
-
-type eventList struct{ object }
-
-var eventsKind = &kind{iids: []uid{iidEventList}, make: func() []uintptr {
-	return []uintptr{
-		newCallback(func(this uintptr) uintptr { return 0 }),
-		newCallback(func(this, index, e uintptr) uintptr { return resultOf(resultFalse) }),
-		newCallback(func(this, e uintptr) uintptr { return resultOf(resultOK) }),
-	}
-}}
-
-var theEvents = sync.OnceValue(func() uintptr {
-	return keep(new(eventList), eventsKind, false)
-})
-
 // The handler of a plugin's edits: its editor tells the host each change
-// of a parameter, which the host passes on to the processor.
+// of a parameter, which the host passes on to the processor, and each
+// gesture's start and end. Its second half, IComponentHandler2, hears
+// the plugin say its state changed otherwise, and its groups of edits.
 
 type handler struct {
 	object
+	p  *Plugin
+	h2 uintptr
+}
+
+type handler2 struct {
+	object
 	p *Plugin
+}
+
+// newHandler returns the handler of p's edits, ready to hand to its
+// controller.
+func newHandler(p *Plugin) *handler {
+	h := &handler{p: p}
+	keep(h, handlerKind, false)
+	h.h2 = keep(&handler2{p: p}, handler2Kind, false)
+	return h
+}
+
+// drop lets go of the handler and its second half.
+func (h *handler) drop() {
+	drop(h.h2)
+	drop(uintptr(unsafe.Pointer(&h.object))) //nolint:gosec // its own address
+}
+
+// gesture counts a gesture in the editor starting, by 1, or ending, by
+// -1, never below none.
+func (p *Plugin) gesture(by int32) {
+	for {
+		n := p.gestures.Load()
+		if p.gestures.CompareAndSwap(n, max(n+by, 0)) {
+			return
+		}
+	}
 }
 
 var handlerKind = &kind{iids: []uid{iidComponentHandler}, make: func() []uintptr {
 	h := self[handler]
 	return []uintptr{
-		newCallback(func(this, id uintptr) uintptr { return resultOf(resultOK) }),
+		newCallback(func(this, id uintptr) uintptr {
+			h(this).p.gesture(1)
+			return resultOf(resultOK)
+		}),
 		newFloatCallback(func(this, id uintptr, v float64) uintptr {
 			h(this).p.edited(uint32(id), v)
 			return resultOf(resultOK)
 		}),
-		newCallback(func(this, id uintptr) uintptr { return resultOf(resultOK) }),
+		newCallback(func(this, id uintptr) uintptr {
+			h(this).p.gesture(-1)
+			return resultOf(resultOK)
+		}),
 		newCallback(func(this, flags uintptr) uintptr {
 			h(this).p.restart(i32(flags))
+			return resultOf(resultOK)
+		}),
+	}
+}, other: func(this uintptr, id uid) uintptr {
+	if id != iidComponentHandler2 {
+		return 0
+	}
+	h := self[handler](this)
+	if h == nil {
+		return 0
+	}
+	selfObject(h.h2).refs.Add(1)
+	return h.h2
+}}
+
+var handler2Kind = &kind{iids: []uid{iidComponentHandler2}, make: func() []uintptr {
+	h := self[handler2]
+	return []uintptr{
+		newCallback(func(this, state uintptr) uintptr {
+			if state&0xff != 0 {
+				h(this).p.editsMade.Add(1)
+			}
+			return resultOf(resultOK)
+		}),
+		newCallback(func(this, name uintptr) uintptr { return resultOf(resultFalse) }),
+		newCallback(func(this uintptr) uintptr {
+			h(this).p.gesture(1)
+			return resultOf(resultOK)
+		}),
+		newCallback(func(this uintptr) uintptr {
+			h(this).p.gesture(-1)
 			return resultOf(resultOK)
 		}),
 	}

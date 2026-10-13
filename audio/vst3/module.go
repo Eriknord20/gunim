@@ -23,11 +23,12 @@ type Module struct {
 }
 
 // Class is a kind of object a module makes: for a host, the audio
-// effects.
+// effects and the instruments.
 type Class struct {
 	ID uid
-	// Name is the effect's name, Category its kind, as "Audio Module
-	// Class" for an effect, and SubCategories what it does, as "Fx|EQ".
+	// Name is the plugin's name, Category its kind, as "Audio Module
+	// Class" for an effect or an instrument, and SubCategories what it
+	// does, as "Fx|EQ" or "Instrument|Synth".
 	Name, Category, SubCategories string
 	Vendor, Version               string
 }
@@ -35,9 +36,21 @@ type Class struct {
 // IDString writes the class's ID as hexadecimal, as a project keeps it.
 func (c Class) IDString() string { return fmt.Sprintf("%X", c.ID[:]) }
 
+// Audio says whether the class is an audio component, which a host runs:
+// an effect or an instrument.
+func (c Class) Audio() bool { return c.Category == "Audio Module Class" }
+
+// Instrument says whether the class is an instrument: an audio
+// component whose first subcategory is "Instrument", as in
+// "Instrument|Synth". An instrument plays the notes it takes.
+func (c Class) Instrument() bool {
+	first, _, _ := strings.Cut(c.SubCategories, "|")
+	return c.Audio() && first == "Instrument"
+}
+
 // Effect says whether the class is an audio effect, a component a host
-// runs sound through.
-func (c Class) Effect() bool { return c.Category == "Audio Module Class" }
+// runs sound through: an audio component other than an instrument.
+func (c Class) Effect() bool { return c.Audio() && !c.Instrument() }
 
 // binaryPath returns the library within a bundle, for this platform, or
 // path itself where it is a file.
@@ -77,13 +90,13 @@ func Open(path string) (*Module, error) {
 		return nil, err
 	}
 	var m *Module
-	onUI(func() { m, err = load(path, bin) })
+	onUI(func() { m, err = loadModule(path, bin) })
 	return m, err
 }
 
-// load loads the library bin of the plugin at path, on the plugins'
-// thread, as a module expects to be loaded.
-func load(path, bin string) (*Module, error) {
+// loadModule loads the library bin of the plugin at path, on the
+// plugins' thread, as a module expects to be loaded.
+func loadModule(path, bin string) (*Module, error) {
 	lib, err := openLibrary(bin)
 	if err != nil {
 		return nil, fmt.Errorf("vst3: %s: %w", path, err)
@@ -157,10 +170,16 @@ func load(path, bin string) (*Module, error) {
 }
 
 // Effects returns the module's audio effects.
-func (m *Module) Effects() []Class {
+func (m *Module) Effects() []Class { return m.classes(Class.Effect) }
+
+// Instruments returns the module's instruments.
+func (m *Module) Instruments() []Class { return m.classes(Class.Instrument) }
+
+// classes returns the module's classes that keep says to.
+func (m *Module) classes(keep func(Class) bool) []Class {
 	var out []Class
 	for _, c := range m.Classes {
-		if c.Effect() {
+		if keep(c) {
 			out = append(out, c)
 		}
 	}
@@ -191,7 +210,7 @@ func (m *Module) Close() error {
 	return err
 }
 
-// Find returns the effect of the module with the ID id, written as
+// Find returns the class of the module with the ID id, written as
 // [Class.IDString] writes it.
 func (m *Module) Find(id string) (Class, bool) {
 	for _, c := range m.Classes {

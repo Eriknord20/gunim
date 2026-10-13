@@ -1,9 +1,19 @@
-// Package vst3 hosts VST3 plugins, as a mastering chain does Ozone: it
-// loads a plugin's module, makes its effect, runs sound through it in
-// realtime or offline, keeps and restores its state, and shows its
-// editor in a window of the system's. It is pure Go: the plugin's
-// interfaces are tables of functions, called as they are laid out, and
-// the host's are written here the same way.
+// Package vst3 hosts VST3 plugins, as a mastering chain does Ozone and
+// a DAW does a synth: it loads a plugin's module, makes its effect or
+// its instrument, runs sound through it in realtime or offline, plays
+// notes on it, keeps and restores its state, and shows its editor in a
+// window of the system's. It is pure Go: the plugin's interfaces are
+// tables of functions, called as they are laid out, and the host's are
+// written here the same way.
+//
+// A plugin also runs behind package plug's interfaces, as
+// [Module.Describe] and [Module.Register] describe it: its parameters
+// from 0 to 1, as VST3 carries them, its buses beyond the main ones as
+// aux ports, and its notes as VST3's events. Each note's group plays on
+// a channel of its own; a bend is the note's own where the plugin takes
+// VST3's tuning note expression, and else moves its group's pitch
+// bend, and the sustain pedal and the mod wheel move the parameters the
+// plugin maps those MIDI controllers to.
 //
 // The definitions follow Steinberg's VST3 interfaces, MIT-licensed, in
 // pluginterfaces.
@@ -37,23 +47,26 @@ func iid(l1, l2, l3, l4 uint32) uid {
 
 // The interfaces' IDs.
 var (
-	iidFUnknown         = iid(0x00000000, 0x00000000, 0xC0000000, 0x00000046)
-	iidPluginFactory2   = iid(0x0007B650, 0xF24B4C0B, 0xA464EDB9, 0xF00B2ABB)
-	iidPluginFactory3   = iid(0x4555A2AB, 0xC1234E57, 0x9B122910, 0x36878931)
-	iidComponent        = iid(0xE831FF31, 0xF2D54301, 0x928EBBEE, 0x25697802)
-	iidAudioProcessor   = iid(0x42043F99, 0xB7DA453C, 0xA569E79D, 0x9AAEC33D)
-	iidEditController   = iid(0xDCD7BBE3, 0x7742448D, 0xA874AACC, 0x979C759E)
-	iidConnectionPoint  = iid(0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1)
-	iidComponentHandler = iid(0x93A0BEA3, 0x0BD045DB, 0x8E890B0C, 0xC1E46AC6)
-	iidHostApplication  = iid(0x58E595CC, 0xDB2D4969, 0x8B6AAF8C, 0x36A664E5)
-	iidBStream          = iid(0xC3BF6EA2, 0x30994752, 0x9B6BF990, 0x1EE33E9B)
-	iidMessage          = iid(0x936F033B, 0xC6C047DB, 0xBB0882F8, 0x13C1E613)
-	iidAttributeList    = iid(0x1E5F0AEB, 0xCC7F4533, 0xA2544011, 0x38AD5EE4)
-	iidParamValueQueue  = iid(0x01263A18, 0xED074F6F, 0x98C9D356, 0x4686F9BA)
-	iidParameterChanges = iid(0xA4779663, 0x0BB64A56, 0xB44384A8, 0x466FEB9D)
-	iidEventList        = iid(0x3A2C4214, 0x346349FE, 0xB2C4F397, 0xB9695A44)
-	iidPlugFrame        = iid(0x367FAF01, 0xAFA94693, 0x8D4DA2A0, 0xED0882A3)
-	iidRunLoop          = iid(0x18C35366, 0x97764F1A, 0x9C5B8385, 0x7A871389)
+	iidFUnknown          = iid(0x00000000, 0x00000000, 0xC0000000, 0x00000046)
+	iidPluginFactory2    = iid(0x0007B650, 0xF24B4C0B, 0xA464EDB9, 0xF00B2ABB)
+	iidPluginFactory3    = iid(0x4555A2AB, 0xC1234E57, 0x9B122910, 0x36878931)
+	iidComponent         = iid(0xE831FF31, 0xF2D54301, 0x928EBBEE, 0x25697802)
+	iidAudioProcessor    = iid(0x42043F99, 0xB7DA453C, 0xA569E79D, 0x9AAEC33D)
+	iidEditController    = iid(0xDCD7BBE3, 0x7742448D, 0xA874AACC, 0x979C759E)
+	iidConnectionPoint   = iid(0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1)
+	iidComponentHandler  = iid(0x93A0BEA3, 0x0BD045DB, 0x8E890B0C, 0xC1E46AC6)
+	iidComponentHandler2 = iid(0xF040B4B3, 0xA36045EC, 0xABCDC045, 0xB4D5A2CC)
+	iidMidiMapping       = iid(0xDF0FF9F7, 0x49B74669, 0xB63AB732, 0x7ADBF5E5)
+	iidNoteExpression    = iid(0xB7F8F859, 0x41234872, 0x91169581, 0x4F3721A3)
+	iidHostApplication   = iid(0x58E595CC, 0xDB2D4969, 0x8B6AAF8C, 0x36A664E5)
+	iidBStream           = iid(0xC3BF6EA2, 0x30994752, 0x9B6BF990, 0x1EE33E9B)
+	iidMessage           = iid(0x936F033B, 0xC6C047DB, 0xBB0882F8, 0x13C1E613)
+	iidAttributeList     = iid(0x1E5F0AEB, 0xCC7F4533, 0xA2544011, 0x38AD5EE4)
+	iidParamValueQueue   = iid(0x01263A18, 0xED074F6F, 0x98C9D356, 0x4686F9BA)
+	iidParameterChanges  = iid(0xA4779663, 0x0BB64A56, 0xB44384A8, 0x466FEB9D)
+	iidEventList         = iid(0x3A2C4214, 0x346349FE, 0xB2C4F397, 0xB9695A44)
+	iidPlugFrame         = iid(0x367FAF01, 0xAFA94693, 0x8D4DA2A0, 0xED0882A3)
+	iidRunLoop           = iid(0x18C35366, 0x97764F1A, 0x9C5B8385, 0x7A871389)
 )
 
 // The result codes every platform shares.
@@ -136,6 +149,13 @@ const (
 	mSetFrame                = 12
 	mCanResize               = 13
 	mCheckSizeConstraint     = 14
+
+	// IMidiMapping.
+	mGetMidiControllerAssignment = 3
+
+	// INoteExpressionController.
+	mGetNoteExpressionCount = 3
+	mGetNoteExpressionInfo  = 4
 )
 
 // call calls method m of the object obj, with integer arguments, and

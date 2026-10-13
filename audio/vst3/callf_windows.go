@@ -20,3 +20,18 @@ func callN(fn uintptr, args []uintptr) uintptr {
 	r, _, _ := syscall.SyscallN(fn, args...)
 	return r
 }
+
+// callFloatOut calls method m of obj, of an integer argument, which
+// returns a double: as getParamNormalized. The system's call returns
+// XMM0, where x64 returns a double, as its second result.
+func callFloatOut(obj uintptr, m int, a uintptr) float64 {
+	_, r2, _ := syscall.SyscallN(method(obj, m), obj, a)
+	return math.Float64frombits(uint64(r2))
+}
+
+// callFloatArg calls method m of obj, of an integer argument, a double
+// and a pointer: as getParamStringByValue.
+func callFloatArg(obj uintptr, m int, a uintptr, v float64, b uintptr) uintptr {
+	r, _, _ := syscall.SyscallN(method(obj, m), obj, a, uintptr(math.Float64bits(v)), b)
+	return r
+}
