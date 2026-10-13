@@ -271,7 +271,7 @@ func TestASteadyToneKeepsItsLevelAndGainsNoHarmonics(t *testing.T) {
 	}
 }
 
-// attack returns, over the hits of the second second of x, the level of
+// attack returns, over the hits from one second into x to two, the level of
 // each hit's first 10 ms over that of 50 to 100 ms after it starts, in
 // decibels: how far its attack stands over its tail.
 func attack(x []float32) float64 {

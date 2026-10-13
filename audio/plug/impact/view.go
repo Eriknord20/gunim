@@ -126,7 +126,7 @@ type display struct {
 	frames []float32
 	meter  *audioui.Spectrometer
 	freqs  []float32
-	// is is the level measured of the sound going out, and isSm as
+	// is holds the level measured of the sound going out, and isSm as
 	// drawn, easing to it; at is the frame heard last, still how long
 	// nothing new came.
 	is, isSm []float32
