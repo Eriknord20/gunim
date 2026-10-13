@@ -1031,6 +1031,7 @@ func (w *Window) Frame(delta time.Duration) {
 	}
 	w.applyPending()
 	w.clock = w.clock.Add(delta)
+	w.ui.stepped = true
 	w.ui.frame(w.clock, delta)
 }
 
@@ -1538,6 +1539,9 @@ type UI struct {
 	popups []*surface
 	// timers are waiting to run, in no order.
 	timers []*timer
+	// stepped says [Window.Frame] steps the window's time, as a test
+	// does: its clock is the steps', and the wall clock's plays no part.
+	stepped bool
 	// locals holds what Local stores.
 	locals map[any]any
 	// pointer is where the pointer was last in the window. drag is the
@@ -1663,8 +1667,13 @@ func (u *UI) wakeAfter(d time.Duration) {
 
 // clock returns the later of the last frame's time and the wall
 // clock's: the frame's time runs a refresh ahead while frames draw, and
-// is long past once the window has slept.
+// is long past once the window has slept. A window stepped by
+// [Window.Frame] keeps the time its steps make alone, so a timer comes
+// due after the steps it waits for, however long they take to draw.
 func (u *UI) clock() time.Time {
+	if u.stepped {
+		return u.now
+	}
 	if now := time.Now(); now.After(u.now) {
 		return now
 	}
