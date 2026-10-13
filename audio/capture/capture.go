@@ -80,6 +80,33 @@ func Devices() ([]Device, error) {
 	return append(out, sys...), err
 }
 
+// DriverInputs returns the inputs of the ASIO driver spk plays through,
+// as a device to pick before they are open, and false where spk plays
+// through the system's own sound, or the driver has no inputs. Its ID
+// opens them once spk plays with [speaker.Options].Record set; until
+// then the device has every input the driver has, and ChannelNames is
+// empty. [Devices] lists it once its inputs are open.
+func DriverInputs(spk *speaker.Speaker) (Device, bool) {
+	if spk == nil {
+		return Device{}, false
+	}
+	return driverDevice(spk.State(), duplex.Current())
+}
+
+// driverDevice is DriverInputs for a speaker playing as st, t the tap
+// of the driver whose inputs are open, or nil.
+func driverDevice(st speaker.State, t *duplex.Tap) (Device, bool) {
+	if st.Driver == "" || st.ASIO == nil {
+		return Device{}, false
+	}
+	if t != nil && t.Driver == st.Driver {
+		return Device{ID: asioPrefix + t.Driver, Name: t.Driver, Channels: len(t.Names), ChannelNames: t.Names,
+			Rate: t.Rate, Driver: t.Driver}, len(t.Names) > 0
+	}
+	return Device{ID: asioPrefix + st.Driver, Name: st.Driver, Channels: st.ASIO.Inputs, Rate: st.Rate,
+		Driver: st.Driver}, st.ASIO.Inputs > 0
+}
+
 // Options says how to open an input.
 type Options struct {
 	// Device is the input to record, by its ID from [Devices]. Empty
