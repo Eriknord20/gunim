@@ -491,6 +491,27 @@ func TestAnInjectedClickOffAPopupGoesToTheWindow(t *testing.T) {
 	}
 }
 
+func TestAPopupSlidesSidewaysToStayInsideItsWindow(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		anchor geom.Rect
+		want   geom.Rect
+	}{
+		// The recorder is at (10, 10), the window 800 wide, and the menu
+		// 120 wide.
+		{"inside: where it is", geom.Rc(0, 0, 100, 50), geom.Rc(10, 10, 100, 50)},
+		{"past the left edge: at it", geom.Rc(-80, 0, 100, 50), geom.Rc(0, 10, 100, 50)},
+		{"past the right edge: against it", geom.Rc(700, 0, 100, 50), geom.Rc(680, 10, 100, 50)},
+	} {
+		w, _, opener := newStage(t, paint.Identity)
+		w.ui.OpenPopup(opener, newMenu(), PopupOptions{Anchor: tt.anchor})
+		run(w, 1)
+		if got := popupWindow(t, w).Anchor(); got != tt.want {
+			t.Errorf("%s: the popup is put at %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 // A popup sits on top of other windows, so it can be seen, and be fading
 // out, after its window is covered: the window draws on while it is.
 func TestACoveredWindowDrawsWhileItsPopupIsInSight(t *testing.T) {
