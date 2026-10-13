@@ -200,8 +200,9 @@ type TabGroup interface {
 // An Overhearer is a node that hears of the user's input in its window, whoever takes it: a view whose chrome fades
 // while the user is idle and comes back at any move, press, wheel or key. Before routing each [input.PointerMove],
 // [input.PointerDown], [input.Scroll] and [input.KeyPress] in the main window, the engine tells the Overhearers the
-// last frame drew, in paint order. They cannot take the event or change it, and a pointer's place is in the
-// window's space, not the node's.
+// last frame drew, in paint order, and then the one holding the pointer, where that frame left it undrawn, so a
+// control held mid-drag hears a second button even scrolled out of view. They cannot take the event or change it,
+// and a pointer's place is in the window's space, not the node's.
 type Overhearer interface {
 	Node
 	Overhear(e input.Event, u *UI)

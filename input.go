@@ -436,12 +436,18 @@ func (u *UI) keyEvent(ev any) {
 	}
 }
 
-// overhear tells the [Overhearer]s the last frame drew of ev, in paint order.
+// overhear tells the [Overhearer]s the last frame drew of ev, in paint
+// order, and then the one holding the pointer, where the last frame
+// left it undrawn, as a fader scrolled out of view mid-drag.
 func (u *UI) overhear(ev input.Event) {
+	held := u.capture
 	var walk func(s *state)
 	walk = func(s *state) {
 		if s.presence == Exiting || (s != u.root && s.drawn != u.seq) {
 			return
+		}
+		if s == held {
+			held = nil
 		}
 		if o, ok := s.node.(Overhearer); ok {
 			u.on(s, func() { o.Overhear(ev, u) })
@@ -451,6 +457,11 @@ func (u *UI) overhear(ev input.Event) {
 		}
 	}
 	walk(u.root)
+	if held != nil && held.presence != Exiting {
+		if o, ok := held.node.(Overhearer); ok {
+			u.on(held, func() { o.Overhear(ev, u) })
+		}
+	}
 }
 
 // catchKey offers ev to the [KeyCatcher]s the last frame drew, in paint order, and reports whether one took it.
