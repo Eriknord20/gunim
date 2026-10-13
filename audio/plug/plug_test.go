@@ -8,6 +8,24 @@ import (
 	"time"
 )
 
+func TestClampTurnsNaNToTheDefaultAndInfinityToTheEnds(t *testing.T) {
+	for _, p := range []Param{
+		{Min: 0.3, Max: 1.5, Default: 0.8},
+		{Min: -24, Max: 24, Default: 6, Steps: 4},
+		{Min: 20, Max: 20000, Default: 440, Log: true},
+	} {
+		if got := p.Clamp(math.NaN()); got != p.Clamp(p.Default) {
+			t.Errorf("%+v: Clamp(NaN) = %g, want the default %g", p, got, p.Clamp(p.Default))
+		}
+		if got := p.Clamp(math.Inf(1)); got != p.Max {
+			t.Errorf("%+v: Clamp(+Inf) = %g, want %g", p, got, p.Max)
+		}
+		if got := p.Clamp(math.Inf(-1)); got != p.Min {
+			t.Errorf("%+v: Clamp(-Inf) = %g, want %g", p, got, p.Min)
+		}
+	}
+}
+
 func TestParamValuesStayInRangeAndOnSteps(t *testing.T) {
 	p := Param{Min: -24, Max: 24, Steps: 4}
 	for _, c := range []struct{ in, want float64 }{{-30, -24}, {30, 24}, {5, 0}, {7, 12}, {-13, -12}} {
@@ -49,8 +67,9 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			Patches: []Patch{{Name: "A", Params: map[uint32]float64{2: 0}}}},
 		"patch of a meter": {ID: "test.meter", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Flags: ReadOnly}},
 			Patches: []Patch{{Name: "A", Params: map[uint32]float64{1: 0}}}},
-		"instrument without notes": {ID: "test.deaf", Name: "X", New: newer, Kind: "Instrument|Synth"},
-		"unnamed aux input":        {ID: "test.aux", Name: "X", New: newer, AuxIn: []AudioPort{{Channels: 2}}},
+		"instrument without notes":  {ID: "test.deaf", Name: "X", New: newer, Kind: "Instrument|Synth"},
+		"generator without control": {ID: "test.mute", Name: "X", New: newer, Kind: "Generator|LFO"},
+		"unnamed aux input":         {ID: "test.aux", Name: "X", New: newer, AuxIn: []AudioPort{{Channels: 2}}},
 		"aux outputs of one name": {ID: "test.auxes", Name: "X", New: newer,
 			AuxOut: []AudioPort{{Name: "Kick"}, {Name: "Kick"}}},
 		"negative channels": {ID: "test.chans", Name: "X", New: newer, AuxIn: []AudioPort{{Name: "Key", Channels: -1}}},
@@ -104,6 +123,28 @@ func TestRegisteredPluginsAreListedAndFound(t *testing.T) {
 		}
 	}()
 	Register(Descriptor{ID: prefix + "a", Name: "Again", New: newer})
+}
+
+func TestAGeneratorIsKnownByItsKind(t *testing.T) {
+	for kind, want := range map[string]bool{
+		"Generator": true, "Generator|LFO": true,
+		"": false, "Fx|Generator": false, "Instrument|Synth": false, "Generators|LFO": false,
+	} {
+		d := Descriptor{Kind: kind}
+		if got := d.Generator(); got != want {
+			t.Errorf("of kind %q, Generator = %v, want %v", kind, got, want)
+		}
+		if d.Generator() && d.Instrument() {
+			t.Errorf("of kind %q, the plugin is both a generator and an instrument", kind)
+		}
+	}
+	listedRuns++
+	id := fmt.Sprintf("listed%d.lfo", listedRuns)
+	Register(Descriptor{ID: id, Name: "LFO", Kind: "Generator|LFO", New: func(Host) Plugin { return nil },
+		ControlOut: []ControlPort{{Name: "LFO", Min: -1, Max: 1}}})
+	if d, _ := Lookup(id); !d.Generator() {
+		t.Errorf("the LFO registered as %+v", d)
+	}
 }
 
 func TestAnInstrumentIsKnownByItsKind(t *testing.T) {

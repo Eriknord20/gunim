@@ -2,7 +2,7 @@
 // written in Go: a plugin is a Go package, compiled into the app that
 // uses it, which registers itself as it starts. An effect changes the
 // sound going in; an instrument plays notes, and its sound comes out of
-// it alone.
+// it alone; a generator makes control alone, as an LFO.
 //
 // It follows VST3 where VST3 works well, so an adapter can run a VST3
 // plugin through the same interfaces: parameters declared up front,
@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/geom"
 )
 
 // Descriptor is what a plugin is, as the host lists it before making
@@ -83,6 +84,16 @@ type Descriptor struct {
 func (d *Descriptor) Instrument() bool {
 	category, _, _ := strings.Cut(d.Kind, "|")
 	return category == "Instrument"
+}
+
+// Generator reports whether d is a generator: its Kind is in the
+// Generator category, as "Generator|LFO", one plug adds beside VST3's.
+// A generator makes control alone, on its [Descriptor.ControlOut]
+// ports: the host gives it blocks whose In and Out are nil, and places
+// it in no chain of sound.
+func (d *Descriptor) Generator() bool {
+	category, _, _ := strings.Cut(d.Kind, "|")
+	return category == "Generator"
 }
 
 // Param returns the parameter id, and whether d has one.
@@ -162,8 +173,12 @@ const (
 )
 
 // Clamp returns v within the parameter's range, on a step where it has
-// steps.
+// steps. A NaN, as a file or a modulation may bring, is the Default,
+// and an infinity the end of the range it points to.
 func (p Param) Clamp(v float64) float64 {
+	if math.IsNaN(v) {
+		v = p.Default
+	}
 	v = min(max(v, p.Min), p.Max)
 	if p.Steps > 0 {
 		return p.Plain(p.Normal(v))
@@ -274,6 +289,36 @@ type Host interface {
 	Traced(id uint32, f int64) (v float32, ok bool)
 }
 
+// ParamMenuHost is a [Host] with a menu for a parameter, as a DAW's
+// "Automate" and "Modulate by". A right click on a control that turns
+// a parameter asks for it.
+type ParamMenuHost interface {
+	// ParamMenu opens the host's menu for parameter id, at pos in the
+	// window's logical pixels, and reports whether it opened one.
+	ParamMenu(id uint32, pos geom.Point, u *gunim.UI) bool
+}
+
+// Modulation is how control moves a parameter as it plays.
+type Modulation struct {
+	// Depth is how far the control wired to the parameter reaches from
+	// its value, along [Param.Normal], from -1 to 1.
+	Depth float64
+	// Now is the parameter's value as heard now.
+	Now float64
+	// Sets says control sets the value, as automation does, so the
+	// value the control turns stands aside.
+	Sets bool
+}
+
+// ModulationHost is a [Host] that says how control moves its
+// parameters, for a control to show the value as heard beside its own.
+// A view asks it each frame.
+type ModulationHost interface {
+	// Modulation returns how control moves parameter id, and false
+	// where no control does.
+	Modulation(id uint32) (Modulation, bool)
+}
+
 // Sound is a plugin's sound, as the host keeps it while it plays.
 type Sound interface {
 	// Heard fills dst, stereo frames interleaved, with the last frames
@@ -317,6 +362,9 @@ func check(d *Descriptor) error {
 	}
 	if d.LookAhead < 0 || d.LookAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead %v, which takes Notes and a duration of zero or more", d.ID, d.LookAhead)
+	}
+	if d.Generator() && len(d.ControlOut) == 0 {
+		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)
 	}
 	if err := checkPorts(d); err != nil {
 		return err

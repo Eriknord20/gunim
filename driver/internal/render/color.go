@@ -119,6 +119,10 @@ func (r *Renderer) SetColor(lut *icc.LUT) error {
 	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 	g.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 	g.TexImage2D(gl.TEXTURE_2D, 0, glRGBA16F, int32(n*n), int32(n), gl.RGBA, glHalfFloat, pix)
+	// Masks and glyphs are uploaded tightly packed, a byte a pixel, and every other upload counts on rows
+	// that start one byte after the last. Left at 4, a mask whose width is not a multiple of 4 comes out
+	// sheared into streaks.
+	g.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	g.ActiveTexture(gl.TEXTURE0)
 	c.lut = lut
 	return nil

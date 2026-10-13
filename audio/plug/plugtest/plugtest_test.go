@@ -365,3 +365,47 @@ func TestHearingNewsAllocatesNothing(t *testing.T) {
 		t.Errorf("hearing news made %d things", made)
 	}
 }
+
+// ramp is a generator whose one control output counts the frames from
+// the start, whose second holds the tempo it was given, and whose third
+// the beat its block starts on.
+var ramp = plug.Descriptor{
+	ID: "test.ramp", Name: "Ramp", Kind: "Generator|LFO",
+	ControlOut: []plug.ControlPort{{Name: "Frame", Max: 1e6}, {Name: "Tempo", Max: 999}, {Name: "Beat", Max: 999}},
+	New:        func(plug.Host) plug.Plugin { return nil },
+}
+
+type ramper struct {
+	recorder
+	sawSound bool
+}
+
+func (r *ramper) Process(b *plug.Block) {
+	if b.In != nil || b.Out != nil {
+		r.sawSound = true
+	}
+	frame, tempo, beat := b.ControlOutput(0), b.ControlOutput(1), b.ControlOutput(2)
+	for f := range b.Frames {
+		frame[f] = float32(b.Position.Frame + int64(f))
+		tempo[f] = float32(b.Position.Tempo)
+		beat[f] = float32(b.Position.Beat)
+	}
+}
+
+func TestAGeneratorRunsWithoutSound(t *testing.T) {
+	r := &ramper{}
+	res := Drive(t, &ramp, r, plug.Setup{Rate: 48000, MaxBlock: 64}, 200, Ports{Tempo: 120})
+	if r.sawSound || res.Out != nil {
+		t.Errorf("the generator was given sound, or gave some: %v", res.Out)
+	}
+	for f := range 200 {
+		if res.ControlOut[0][f] != float32(f) || res.ControlOut[1][f] != 120 {
+			t.Fatalf("at frame %d the generator put out %v and %v, want %d and 120",
+				f, res.ControlOut[0][f], res.ControlOut[1][f], f)
+		}
+		// Two beats a second: the block at frame 192 starts on beat 0.008.
+		if want := float32(f/64*64) / 24000; res.ControlOut[2][f] != want {
+			t.Fatalf("at frame %d the block starts on beat %v, want %v", f, res.ControlOut[2][f], want)
+		}
+	}
+}
