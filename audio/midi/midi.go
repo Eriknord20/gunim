@@ -205,6 +205,7 @@ type Out struct {
 	name  string
 	addr  portAddr
 	state atomic.Pointer[error] // ErrGone or ErrClosed once either is so
+	notes sounding
 	sys   outSys
 }
 
@@ -256,13 +257,16 @@ func (o *Out) Send(at time.Time, m Message) error {
 	if m.Len() == 0 {
 		return fmt.Errorf("midi: a message of status %#x is undefined", m.Status)
 	}
-	return o.sys.send(o, at, m)
+	if err := o.sys.send(o, at, m); err != nil {
+		return err
+	}
+	o.notes.sent(sinceEpoch(at), sinceEpoch(time.Now()), m)
+	return nil
 }
 
-// Cancel lets go of the messages sent ahead that have yet to leave.
-// The notes already sounding stay on, so a host that stops follows it
-// with a NoteOff for each, or with [Control] 123, all notes off, on
-// each channel.
+// Cancel lets go of the messages sent ahead that have yet to leave,
+// NoteOffs among them. The notes already sounding stay on, so a host
+// that stops follows Cancel with [Out.NotesOff].
 func (o *Out) Cancel() error {
 	if e := o.state.Load(); e != nil {
 		return *e
@@ -270,15 +274,46 @@ func (o *Out) Cancel() error {
 	return o.sys.cancel(o)
 }
 
-// Close lets go of messages yet to leave, and closes o.
+// NotesOff lets go at once of every note o may have left sounding: it
+// sends a NoteOff for each note struck whose NoteOff has yet to leave,
+// and lifts the sustain pedal, [Control] 64 to 0, on each channel that
+// played a note or moved the pedal. A host that stops calls
+// [Out.Cancel], then NotesOff. It makes nothing new.
+func (o *Out) NotesOff() error {
+	if e := o.state.Load(); e != nil {
+		return *e
+	}
+	return o.endNotes()
+}
+
+func (o *Out) endNotes() error {
+	var err error
+	keep := func(e error) {
+		if err == nil {
+			err = e
+		}
+	}
+	o.notes.end(sinceEpoch(time.Now()),
+		func(ch, key int) { keep(o.sys.send(o, time.Time{}, NoteOff(ch, key, 0))) },
+		func(ch int) { keep(o.sys.send(o, time.Time{}, Control(ch, 64, 0))) })
+	return err
+}
+
+// Close lets go of messages yet to leave, lets go of the notes left
+// sounding as [Out.NotesOff] does, and closes o.
 func (o *Out) Close() error {
-	if e := o.state.Swap(&ErrClosed); e != nil && errors.Is(*e, ErrClosed) {
+	e := o.state.Swap(&ErrClosed)
+	if e != nil && errors.Is(*e, ErrClosed) {
 		return nil
 	}
 	open.mu.Lock()
 	delete(open.outs, o)
 	open.mu.Unlock()
-	return o.sys.close(o)
+	var err error
+	if e == nil {
+		err = errors.Join(o.sys.cancel(o), o.endNotes())
+	}
+	return errors.Join(err, o.sys.close(o))
 }
 
 func (o *Out) gone() {

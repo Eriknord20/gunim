@@ -150,3 +150,22 @@ func TestTheSystemsPortsList(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestCloseLetsGoOfTheNotesLeftSounding(t *testing.T) {
+	o, k := fakeOut(t)
+	_ = o.Send(time.Time{}, NoteOn(0, 60, 100))
+	_ = o.Send(time.Now().Add(time.Hour), NoteOff(0, 60, 0))
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := k.arrived()
+	want := []Message{NoteOn(0, 60, 100), NoteOff(0, 60, 0), Control(0, 64, 0)}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].Status != want[i].Status || got[i].Data1 != want[i].Data1 || got[i].Data2 != want[i].Data2 {
+			t.Errorf("message %d: got %v, want %v", i, got[i].Message, want[i])
+		}
+	}
+}

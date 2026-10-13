@@ -587,7 +587,8 @@ func (s *outSys) cancel(o *Out) error {
 	return check("snd_seq_remove_events", int32(r))
 }
 
-func (s *outSys) close(o *Out) error { return s.cancel(o) }
+// close is done by Out.Close, which cancelled o's messages.
+func (s *outSys) close(*Out) error { return nil }
 
 func (s *outSys) gone(o *Out) { _ = s.cancel(o) }
 

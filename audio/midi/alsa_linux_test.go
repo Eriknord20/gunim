@@ -35,13 +35,22 @@ func loop(t *testing.T, f func(Event)) *Out {
 	if err := i.sys.open(i); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = i.Close() })
 	o := &Out{name: "loop", addr: own}
 	if err := o.sys.open(o); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = o.Close() })
+	t.Cleanup(func() { closeLoop(o, i) })
 	return o
+}
+
+// closeLoop closes o, which lets go of its notes, and i once those
+// have come in, so they reach no test after.
+func closeLoop(o *Out, ins ...*In) {
+	_ = o.Close()
+	time.Sleep(30 * time.Millisecond)
+	for _, i := range ins {
+		_ = i.Close()
+	}
 }
 
 // arrival is an event, and when the In's f was called with it.
@@ -181,6 +190,78 @@ func TestCancelLetsGoOfItsOwnOutsMessagesAlone(t *testing.T) {
 	}
 }
 
+// drain returns what comes in until nothing has for wait.
+func drain(got chan arrival, wait time.Duration) []Message {
+	var ms []Message
+	for {
+		select {
+		case a := <-got:
+			ms = append(ms, a.Message)
+		case <-time.After(wait):
+			return ms
+		}
+	}
+}
+
+func TestCloseLetsGoOfTheNotesLeftSounding(t *testing.T) {
+	f, got := collect(100)
+	o := loop(t, f)
+	soon := time.Now().Add(300 * time.Millisecond)
+	for _, s := range []struct {
+		at time.Time
+		m  Message
+	}{
+		{time.Time{}, NoteOn(0, 60, 100)},
+		{soon, NoteOff(0, 60, 0)}, // waits, and Close lets it go
+		{time.Time{}, NoteOn(1, 61, 100)},
+		{time.Time{}, NoteOn(2, 62, 100)},
+		{time.Time{}, NoteOn(2, 62, 0)}, // off already
+		{time.Time{}, Control(3, 64, 127)},
+		{soon, NoteOn(4, 63, 100)}, // waits, and Close lets it go
+	} {
+		if err := o.Send(s.at, s.m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(drain(got, 50*time.Millisecond)); n != 5 {
+		t.Fatalf("%d messages came before Close, want the 5 sent for now", n)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := []Message{NoteOff(0, 60, 0), NoteOff(1, 61, 0), NoteOff(4, 63, 0),
+		Control(0, 64, 0), Control(1, 64, 0), Control(2, 64, 0), Control(3, 64, 0), Control(4, 64, 0)}
+	// Past the time of the messages that waited, so one let through
+	// would show.
+	if ms := drain(got, 400*time.Millisecond); !slices.EqualFunc(ms, want, equal) {
+		t.Errorf("Close sent %v\nwant %v", ms, want)
+	}
+}
+
+func TestNotesOffAfterCancelEndsTheNotesOnce(t *testing.T) {
+	f, got := collect(100)
+	o := loop(t, f)
+	_ = o.Send(time.Time{}, NoteOn(9, 36, 100))
+	_ = o.Send(time.Now().Add(200*time.Millisecond), NoteOff(9, 36, 0))
+	drain(got, 20*time.Millisecond)
+	if err := o.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.NotesOff(); err != nil {
+		t.Fatal(err)
+	}
+	want := []Message{NoteOff(9, 36, 0), Control(9, 64, 0)}
+	if ms := drain(got, 300*time.Millisecond); !slices.EqualFunc(ms, want, equal) {
+		t.Errorf("NotesOff sent %v, want %v", ms, want)
+	}
+	if err := o.NotesOff(); err != nil {
+		t.Fatal(err)
+	}
+	if ms := drain(got, 30*time.Millisecond); len(ms) != 0 {
+		t.Errorf("NotesOff again sent %v, want nothing", ms)
+	}
+}
+
 func TestSendingMakesNothing(t *testing.T) {
 	f, _ := collect(1)
 	o := loop(t, f)
@@ -200,9 +281,10 @@ func TestSendingMakesNothing(t *testing.T) {
 		k++
 		if k%100 == 0 {
 			_ = o.Cancel()
+			_ = o.NotesOff()
 		}
 	}); n != 0 {
-		t.Errorf("Send and Cancel made %v things a run, want none", n)
+		t.Errorf("Send, Cancel and NotesOff made %v things a run, want none", n)
 	}
 	_ = o.Cancel()
 }
@@ -228,12 +310,11 @@ func TestAnInClosedHearsNothingMore(t *testing.T) {
 	if err := other.sys.open(other); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = other.Close() }()
 	o := &Out{name: "loop", addr: own}
 	if err := o.sys.open(o); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = o.Close() }()
+	defer closeLoop(o, other)
 	for k := range 100 {
 		_ = o.Send(time.Time{}, NoteOn(0, k, 1))
 	}

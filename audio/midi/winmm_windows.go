@@ -372,13 +372,17 @@ type inSys struct {
 	h      uintptr // HMIDIIN
 	key    uintptr // its key in ins
 	start  time.Time
-	events chan inEvent
-	hdrs   [inBuffers]midiHdr
-	bufs   [inBuffers][inBufferSize]byte
-	p      Parser
-	quit   atomic.Bool
-	done   chan struct{}
-	shut   sync.Once
+	events chan inEvent // short messages; a burst past its room is lost
+	// longs carries the sysex buffers WinMM hands back, with room for
+	// every one, so each comes back to be given to WinMM again.
+	longs chan inEvent
+	stop  chan struct{}
+	hdrs  [inBuffers]midiHdr
+	bufs  [inBuffers][inBufferSize]byte
+	p     Parser
+	quit  atomic.Bool
+	done  chan struct{}
+	shut  sync.Once
 }
 
 // An inEvent is what WinMM's callback was told.
@@ -402,9 +406,13 @@ var inCallback = sync.OnceValue(func() uintptr {
 		}
 		if v, ok := ins.Load(key); ok {
 			if i, ok := v.(*In); ok {
+				ch := i.sys.events
+				if msg == mimLongData {
+					ch = i.sys.longs
+				}
 				select {
-				case i.sys.events <- inEvent{msg, p1, p2}:
-				default: // a burst past the buffer is lost
+				case ch <- inEvent{msg, p1, p2}:
+				default:
 				}
 			}
 		}
@@ -415,6 +423,8 @@ var inCallback = sync.OnceValue(func() uintptr {
 func (s *inSys) open(i *In) error {
 	s.key = insNext.Add(1)
 	s.events = make(chan inEvent, 1024)
+	s.longs = make(chan inEvent, inBuffers)
+	s.stop = make(chan struct{})
 	ins.Store(s.key, i)
 	if err := mm("midiInOpen", call(procMidiInOpen, uintptr(unsafe.Pointer(&s.h)), uintptr(i.addr.id),
 		inCallback(), s.key, callbackFunction)); err != nil {
@@ -435,16 +445,16 @@ func (s *inSys) open(i *In) error {
 		}
 	}
 	s.done = make(chan struct{})
+	// WinMM counts the stamps from midiInStart, a moment after this.
+	s.start = time.Now()
 	go s.run(i)
-	before := time.Now()
 	if err := mm("midiInStart", call(procMidiInStart, s.h)); err != nil {
 		s.quit.Store(true)
-		s.events <- inEvent{}
+		close(s.stop)
 		<-s.done
 		s.release()
 		return err
 	}
-	s.start = before.Add(time.Since(before) / 2)
 	return nil
 }
 
@@ -452,7 +462,14 @@ func (s *inSys) open(i *In) error {
 // back to WinMM once read.
 func (s *inSys) run(i *In) {
 	defer close(s.done)
-	for e := range s.events {
+	for {
+		var e inEvent
+		select {
+		case e = <-s.events:
+		case e = <-s.longs:
+		case <-s.stop:
+			return
+		}
 		if s.quit.Load() {
 			return
 		}
@@ -500,12 +517,10 @@ func (s *inSys) release() {
 func (s *inSys) close(*In) error {
 	s.shut.Do(func() {
 		s.quit.Store(true)
-		// Reset hands every buffer back, and the callback tells run.
+		// Reset hands every buffer back, and run gives none to WinMM
+		// again as it stops.
 		call(procMidiInReset, s.h)
-		select {
-		case s.events <- inEvent{}:
-		default:
-		}
+		close(s.stop)
 		<-s.done
 		s.release()
 	})
