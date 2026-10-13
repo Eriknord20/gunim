@@ -191,6 +191,16 @@ it: `dynamics`, which has a sidechain input, `enhancer`, `eq`,
 `imager`, `maximizer`, `trim` and `xover`, a crossover the others split
 bands with.
 
+Package `audio/midi` sends and receives MIDI through the computer's
+ports: notes and the MIDI clock out to hardware synths, and notes in
+from a keyboard. It lists ports by name, and tells as they come and go.
+A message is sent with the time it is to leave, on the clock
+`time.Now` reads, and waits in the system until then, so a host
+schedules notes against its sound; a message that comes in carries the
+time it arrived. Sending makes nothing new, so a host sends from the
+goroutine that renders its sound. It speaks the ALSA sequencer on Linux
+and WinMM on Windows.
+
 Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings
 and curves, in the colours of a dark studio.
@@ -799,6 +809,7 @@ path data.
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
 | `gunim/audio/plug` | A plugin format for effects and instruments written in Go, with views drawn in gunim, and the plugins made in it |
 | `gunim/audio/vst3` | Hosts VST3 effects: their sound, state, parameters and editors |
+| `gunim/audio/midi` | MIDI ports in and out, with messages timed to leave and stamped as they arrive |
 | `gunim/audioui` | Meters and faders, a spectrum and a spectrogram, a waveform, and loudness readings for audio programs |
 | `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, light that adds, layers that clip and tilt, and 3D scenes |
 | `gunim/icon` | Lucide's icons as strokes, drawn as tinted masks; `icon/byname` looks them up by name |
