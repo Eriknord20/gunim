@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim/audio/asio"
 	"github.com/marrasen/gunim/audio/internal/duplex"
+	"github.com/marrasen/gunim/audio/speaker"
 )
 
 // fakeDevice stands in for a device: the test hands the stream its
@@ -295,5 +297,30 @@ func TestASIOInputsRecordThroughTheTap(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDriverInputsListsTheDriversInputsBeforeTheyOpen(t *testing.T) {
+	if _, ok := driverDevice(speaker.State{Rate: 48000}, nil); ok {
+		t.Fatal("the system's own sound lists driver inputs")
+	}
+	st := speaker.State{Driver: "MOTU", Rate: 48000, ASIO: &asio.Info{Driver: "MOTU", Inputs: 4}}
+	d, ok := driverDevice(st, nil)
+	if !ok || d.ID != asioPrefix+"MOTU" || d.Channels != 4 || d.Driver != "MOTU" || len(d.ChannelNames) != 0 {
+		t.Fatalf("before the inputs open: %+v, %v", d, ok)
+	}
+	// Open, the tap names them.
+	tap := duplex.NewTap("MOTU", 48000, 64, 32, []string{"In 1", "In 2"})
+	d, ok = driverDevice(st, tap)
+	if !ok || d.Channels != 2 || d.ChannelNames[1] != "In 2" {
+		t.Fatalf("with the inputs open: %+v, %v", d, ok)
+	}
+	// Another driver's tap, from before the speaker changed, names none.
+	d, _ = driverDevice(st, duplex.NewTap("Other", 44100, 64, 32, []string{"A"}))
+	if d.Channels != 4 {
+		t.Fatalf("another driver's tap: %+v", d)
+	}
+	if _, ok := driverDevice(speaker.State{Driver: "Out only", ASIO: &asio.Info{}}, nil); ok {
+		t.Fatal("a driver with no inputs lists them")
 	}
 }
