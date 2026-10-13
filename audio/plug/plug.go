@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
@@ -48,6 +49,13 @@ type Descriptor struct {
 	// Notes says the plugin takes notes, in [Block.Events]. An
 	// instrument does.
 	Notes bool
+	// LookAhead is how long before a note starts the plugin asks to hear
+	// of it, for an instrument that sounds ahead of its notes: a swell
+	// into the beat, a breath, a grace note, a glide that arrives on
+	// time. The host tells it of each note it plays from the music, as
+	// the note comes within LookAhead, in [Block.Upcoming]. Zero asks
+	// for none. It needs Notes.
+	LookAhead time.Duration
 	// AuxIn and AuxOut are the plugin's audio ports beyond its main
 	// input and output, as VST3's aux (auxiliary) buses: a sidechain
 	// in, or an output for each drum of a drum synth. A project names a
@@ -351,6 +359,9 @@ func check(d *Descriptor) error {
 	}
 	if d.Instrument() && !d.Notes {
 		return fmt.Errorf("%s is an instrument, of kind %q, so it takes notes: set Notes", d.ID, d.Kind)
+	}
+	if d.LookAhead < 0 || d.LookAhead > 0 && !d.Notes {
+		return fmt.Errorf("%s looks ahead %v, which takes Notes and a duration of zero or more", d.ID, d.LookAhead)
 	}
 	if d.Generator() && len(d.ControlOut) == 0 {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)

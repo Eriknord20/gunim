@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClampTurnsNaNToTheDefaultAndInfinityToTheEnds(t *testing.T) {
@@ -76,6 +77,9 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			ControlIn: []ControlPort{{Name: "Cutoff", Min: 1, Max: 1, Default: 1}}},
 		"control default out": {ID: "test.ctldef", Name: "X", New: newer,
 			ControlOut: []ControlPort{{Name: "LFO", Min: -1, Max: 1, Default: 2}}},
+		"look-ahead without notes": {ID: "test.ahead", Name: "X", New: newer, LookAhead: time.Second},
+		"look-ahead below zero": {ID: "test.behind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
+			LookAhead: -time.Millisecond},
 		"controls of one name": {ID: "test.ctls", Name: "X", New: newer,
 			ControlIn: []ControlPort{{Name: "A", Max: 1}, {Name: "A", Max: 1}}},
 	} {

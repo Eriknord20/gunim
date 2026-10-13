@@ -40,9 +40,10 @@ type Processor interface {
 	Tail() int
 	// Reset drops the sound held from before, as playing jumps to
 	// another place. An instrument ends every note, lifts every group's
-	// pedal and returns each expression to its rest; the host then
-	// starts the notes and puts down the pedals that sound at the new
-	// place.
+	// pedal, returns each expression to its rest and forgets the notes
+	// told of in [Block.Upcoming]; the host then starts the notes and
+	// puts down the pedals that sound at the new place, and tells of
+	// the notes coming within the look-ahead there.
 	Reset()
 }
 
@@ -105,6 +106,10 @@ type Block struct {
 	// Events are the notes and their expression during the block, in
 	// the order of their frames, for a plugin that takes notes.
 	Events []Event
+	// Upcoming is news of notes that start in a later block, in the
+	// order the host sends it, for a plugin with a
+	// [Descriptor.LookAhead]. It holds as the block starts.
+	Upcoming []Upcoming
 	// Position is where the block starts.
 	Position Position
 }
@@ -188,7 +193,8 @@ type Event struct {
 	Frame int
 	Kind  EventKind
 	// Note is the note's ID, the note's alone from its NoteOn to its
-	// NoteOff.
+	// NoteOff, and from the news of it in [Block.Upcoming] on, where
+	// the host sends some.
 	Note int32
 	// Group is the lane the note plays in: a Pedal holds only the notes
 	// of its own group.
@@ -294,3 +300,48 @@ func (p Position) BeatAt(f, n int, rate float64) float64 {
 	}
 	return p.Beat + (p.Tempo*s+k*s*s/2)/60
 }
+
+// Upcoming is news of a note the host starts in a later block, for a
+// plugin that sounds ahead of its notes, as its [Descriptor.LookAhead]
+// asks.
+//
+// The host tells of each note it plays from the music once, with
+// Coming, as the note comes within the look-ahead, and with Moved or
+// Removed as an edit changes it. The NoteOn that starts it, in the
+// block it lands in, carries the same Note. As playing starts or jumps,
+// as a loop runs on from its start, and after a Reset, the host tells
+// of the notes coming within the look-ahead from there. A note started
+// as it happens, as a key played live, comes unannounced, as does one
+// landing in the block where playing starts or jumps.
+type Upcoming struct {
+	Kind UpcomingKind
+	// Frame is where the note lands, counted from the block's start:
+	// Frames or more, in a later block, where its NoteOn comes. A
+	// Removed's is 0.
+	Frame int
+	// Note is the note's ID, which its NoteOn carries.
+	Note int32
+	// Group is the lane it plays in, as an [Event]'s.
+	Group int32
+	// Pitch and Velocity are its NoteOn's.
+	Pitch    float64
+	Velocity float64
+}
+
+// UpcomingKind is what an [Upcoming] tells.
+type UpcomingKind uint8
+
+// The kinds of news.
+const (
+	// Coming tells of a note that lands at Frame, at Pitch and
+	// Velocity.
+	Coming UpcomingKind = iota
+	// Moved tells that a note told of lands at Frame now, at Pitch and
+	// Velocity, as an edit moved or changed it.
+	Moved
+	// Removed takes back a note told of, as an edit took it out of the
+	// music: its NoteOn is called off. A plugin passes over a Removed
+	// for a note it never heard of: a host that took back its own news
+	// late sends one to be sure.
+	Removed
+)

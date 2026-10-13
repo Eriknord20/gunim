@@ -1,6 +1,6 @@
 // Package plugtest helps test plugins: it counts what a processor
-// allocates, plays an instrument notes, and drives a plugin's ports, to
-// check what comes out.
+// allocates, plays an instrument notes and tells it of them ahead, and
+// drives a plugin's ports, to check what comes out.
 package plugtest
 
 import (
@@ -90,10 +90,41 @@ type Ports struct {
 	Changes []plug.Change
 	// Events are notes, for a plugin that takes them.
 	Events []plug.Event
+	// Upcoming is news of notes, for a plugin that looks ahead, as
+	// [Announce] makes it.
+	Upcoming []Ahead
 	// Tempo is each block's [plug.Position.Tempo] and EndTempo, in
 	// quarter notes a minute: zero where none is known. Each block's [plug.Position.Beat]
 	// counts the beats at that tempo from the start.
 	Tempo float64
+}
+
+// Ahead is news of a note as [Drive] sends it: in the block holding
+// frame At, with Frame, where the note lands, counted from the start
+// too. Drive turns it into the block's own count.
+type Ahead struct {
+	At int
+	plug.Upcoming
+}
+
+// Announce returns the news a host sends of the NoteOns in events, for
+// a plugin looking window frames ahead, played in blocks of s.MaxBlock:
+// a Coming for each, in the block holding the frame window before it,
+// or the first block, where the note lands in a later block.
+func Announce(s plug.Setup, window int, events ...plug.Event) []Ahead {
+	var out []Ahead
+	for _, e := range events {
+		if e.Kind != plug.NoteOn {
+			continue
+		}
+		at := max(e.Frame-window, 0)
+		if at/s.MaxBlock == e.Frame/s.MaxBlock {
+			continue
+		}
+		out = append(out, Ahead{At: at, Upcoming: plug.Upcoming{Kind: plug.Coming, Frame: e.Frame, Note: e.Note,
+			Group: e.Group, Pitch: e.Pitch, Velocity: e.Velocity}})
+	}
+	return out
 }
 
 // Result is what came out of a processor [Drive] ran, each of it as long
@@ -114,7 +145,8 @@ type Result struct {
 // of s.MaxBlock, with the ports in p connected and every output
 // connected, and returns what came out. The first block carries each of
 // d's settable parameters' Default as a change at frame 0, and p's changes and
-// events go to the blocks they fall in, in the order of their frames.
+// events go to the blocks they fall in, in the order of their frames, and
+// its news to the blocks holding their At, in the order of At.
 // Drive fills every output with NaN before each block, so a frame the
 // processor leaves unwritten shows. A generator, as
 // [plug.Descriptor.Generator] reports one, runs with In and Out nil,
@@ -165,6 +197,16 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 		}
 	}
 	changes = append(changes, more...)
+	news := slices.Clone(p.Upcoming)
+	slices.SortStableFunc(news, func(a, b Ahead) int { return a.At - b.At })
+	for _, u := range news {
+		if u.At < 0 || u.At >= frames {
+			t.Fatalf("plugtest: news sent at frame %d falls outside the %d run", u.At, frames)
+		}
+		if end := (u.At/s.MaxBlock + 1) * s.MaxBlock; u.Kind != plug.Removed && u.Frame < end {
+			t.Fatalf("plugtest: news sent at frame %d of note %d landing at %d, which is in its own block", u.At, u.Note, u.Frame)
+		}
+	}
 
 	// What comes out, and the room each block writes to.
 	res := Result{Out: channels(s.Channels, frames), AuxOut: make([][][]float32, len(d.AuxOut)),
@@ -203,6 +245,16 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 			e.Frame -= at
 			b.Events = append(b.Events, e)
 			events = events[1:]
+		}
+		for len(news) > 0 && news[0].At < at+n {
+			u := news[0].Upcoming
+			if u.Kind == plug.Removed {
+				u.Frame = 0
+			} else {
+				u.Frame -= at
+			}
+			b.Upcoming = append(b.Upcoming, u)
+			news = news[1:]
 		}
 		for len(changes) > 0 && changes[0].Frame < at+n {
 			c := changes[0]
