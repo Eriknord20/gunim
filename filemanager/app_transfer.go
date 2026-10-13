@@ -78,6 +78,12 @@ func lastName(path string) string {
 // system of ID to, or move them there with move: one transfer for each
 // folder they are in, each an operation of the window.
 func (a *app) transfer(from string, ps PathStyle, paths []string, to, into string, move bool) {
+	if to == a.fs.ID() {
+		if at := a.archiveOf(into, true); at != "" {
+			a.refuseArchive(at)
+			return
+		}
+	}
 	var ts []Transfer
 	for _, p := range paths {
 		i := slices.IndexFunc(ts, func(t Transfer) bool { return ps.Same(ps.Dir(t.Paths[0]), ps.Dir(p)) })
@@ -111,6 +117,13 @@ func (a *app) placeLabel(fs, path string) string {
 // operation of the window, with paths of the file system it comes from
 // written as ps. worked, when set, is told once it went well.
 func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
+	if t.From == nil {
+		t.From = a.archiveSource(t.FromFS, t.Paths)
+	}
+	if t.From != nil {
+		// What an archive holds stays in it: a move out of it copies.
+		t.Move = false
+	}
 	what, where := whatIn(ps, t.Paths), a.placeLabel(t.ToFS, t.Into)
 	title, done, kind := "Copying "+what+" to "+where, "Copied "+what+" to "+where, OpCopy
 	switch {

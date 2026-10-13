@@ -259,6 +259,11 @@ func (a *app) edited(k copyKey) {
 		c.release(k, a, true)
 		return
 	}
+	if a.archiveOf(k.path, false) != "" {
+		// An archive is not written back to.
+		c.release(k, a, false)
+		return
+	}
 	switch a.prefs.UploadEdited {
 	case uploadNever:
 		c.release(k, a, false)

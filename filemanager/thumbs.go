@@ -298,7 +298,7 @@ func decodePicture(fsys FS, path string) (img image.Image, size image.Point, err
 
 // systemThumb returns the thumbnail the system keeps of the file at path on fsys, or nil where it keeps none.
 func systemThumb(fsys FS, path string, size int) (image.Image, error) {
-	if o, ok := fsys.(OnlineReporter); ok {
+	if o, ok := optional[OnlineReporter](fsys); ok {
 		return o.SystemThumb(path, size)
 	}
 	return nil, nil

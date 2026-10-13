@@ -387,7 +387,7 @@ func (x *extractor) file(name string, in io.Reader, mode fs.FileMode, mod time.T
 	if werr := errors.Join(poured, w.Close()); werr != nil {
 		return werr
 	}
-	if st, ok := fsys.(Stamper); ok {
+	if st, ok := optional[Stamper](fsys); ok {
 		if mode == 0 {
 			mode = 0o644
 		}
@@ -418,7 +418,7 @@ func (x *extractor) makeLinks() error {
 			return fmt.Errorf("writing %s: %w", ps.Show(ps.Dir(p)), merr)
 		}
 		if !l.hard {
-			if ln, ok := fsys.(Linker); ok {
+			if ln, ok := optional[Linker](fsys); ok {
 				if lerr := ln.Symlink(l.target, p); lerr != nil {
 					return fmt.Errorf("writing %s: %w", ps.Show(p), lerr)
 				}
@@ -453,24 +453,54 @@ func (x *extractor) copyFile(from, to string) error {
 }
 
 // seekReaderAt reads at an offset from a file that can only seek, as a
-// zip's reader asks, one read at a time.
+// zip's reader asks, one read at a time. A short read takes readAhead
+// bytes, and the next reads come from those, so a server is asked once
+// for what a zip's reader asks for a few bytes at a time.
 type seekReaderAt struct {
-	mu sync.Mutex
-	rs io.ReadSeeker
+	mu  sync.Mutex
+	rs  io.ReadSeeker
+	buf []byte
+	// at is where buf starts in the file.
+	at int64
 }
+
+// readAhead is how much a short read takes from the file.
+const readAhead = 64 << 10
 
 // ReadAt implements [io.ReaderAt].
 func (s *seekReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if off >= s.at && off+int64(len(p)) <= s.at+int64(len(s.buf)) {
+		return copy(p, s.buf[off-s.at:]), nil
+	}
 	if _, err := s.rs.Seek(off, io.SeekStart); err != nil {
 		return 0, err
 	}
-	n, err := io.ReadFull(s.rs, p)
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		err = io.EOF
+	if len(p) >= readAhead {
+		n, err := io.ReadFull(s.rs, p)
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			err = io.EOF
+		}
+		return n, err
 	}
-	return n, err
+	if cap(s.buf) < readAhead {
+		s.buf = make([]byte, readAhead)
+	}
+	n, err := io.ReadFull(s.rs, s.buf[:readAhead])
+	s.buf, s.at = s.buf[:n], off
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		err = nil
+	}
+	if err != nil {
+		s.buf = s.buf[:0]
+		return 0, err
+	}
+	got := copy(p, s.buf)
+	if got < len(p) {
+		return got, io.EOF
+	}
+	return got, nil
 }
 
 // countingReader tells n of the bytes it reads from r.

@@ -64,7 +64,7 @@ func (a *app) iconKey(dir string, e entry) string {
 	if i := strings.LastIndexByte(e.Name, '.'); i > 0 {
 		ext = strings.ToLower(e.Name[i:])
 	}
-	if ownIcon(ext) && a.fs.ID() == "" && !e.Online && e.Kind != KindLink && !e.Broken {
+	if ownIcon(ext) && a.fs.ID() == "" && a.nav.archive == "" && !e.Online && e.Kind != KindLink && !e.Broken {
 		return "file:" + a.ps.Join(dir, e.Name) + "@" + e.Mod.String()
 	}
 	return "ext:" + ext

@@ -123,6 +123,10 @@ type Listing struct {
 	// Err says why the folder cannot be shown.
 	Err                        string
 	CanBack, CanForward, CanUp bool
+	// ReadOnly names the archive the folder is in, or is, whose items
+	// the window reads and does not change, so the menus offer nothing
+	// that would.
+	ReadOnly string
 }
 
 // Row is one entry as the grid shows it.
