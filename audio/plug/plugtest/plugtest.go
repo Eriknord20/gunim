@@ -122,7 +122,7 @@ func Announce(s plug.Setup, window int, events ...plug.Event) []Ahead {
 			continue
 		}
 		out = append(out, Ahead{At: at, Upcoming: plug.Upcoming{Kind: plug.Coming, Frame: e.Frame, Note: e.Note,
-			Group: e.Group, Pitch: e.Pitch, Velocity: e.Velocity}})
+			Group: e.Group, Pitch: e.Pitch, Velocity: e.Velocity, Turn: e.Turn}})
 	}
 	return out
 }
