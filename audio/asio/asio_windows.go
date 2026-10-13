@@ -146,12 +146,13 @@ type Device struct {
 	fill func([]float32)
 	// record hears the inputs, ins of them, read as inTypes say into
 	// inBuf, where Config.Record is set.
-	record  func([]float32, int)
-	ins     int
-	inTypes []sampleType
-	inBuf   []float32
-	reset   func()
-	log     func(string, ...any)
+	record    func([]float32, int)
+	recording func() bool
+	ins       int
+	inTypes   []sampleType
+	inBuf     []float32
+	reset     func()
+	log       func(string, ...any)
 	// outs is how many channels play: two, or one for a driver of one
 	// output. buf is the frames Fill fills.
 	outs int
@@ -185,7 +186,7 @@ func Open(c Config) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Device{t: t, fill: c.Fill, record: c.Record, reset: c.Reset, log: c.Log}
+	d := &Device{t: t, fill: c.Fill, record: c.Record, recording: c.Recording, reset: c.Reset, log: c.Log}
 	cbOnce.Do(makeCallbacks)
 	done := t.start(func() { err = d.open(clsid, c) })
 	if !waitFor(done, openWait) {
@@ -538,7 +539,7 @@ func (d *Device) switchTo(half int32) {
 		return
 	}
 	n := d.info.Buffer
-	if d.ins > 0 {
+	if d.ins > 0 && (d.recording == nil || d.recording()) {
 		in := d.inBuf[:n*d.ins]
 		for ch, typ := range d.inTypes {
 			bytes, _ := typ.size()

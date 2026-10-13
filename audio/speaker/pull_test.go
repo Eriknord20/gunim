@@ -41,10 +41,10 @@ func (f *fakeDriver) open(c asio.Config) (pullDevice, error) {
 // take takes one buffer from the speaker, as the driver does.
 func (f *fakeDriver) take() []float32 {
 	f.mu.Lock()
-	fill, record := f.cfg.Fill, f.cfg.Record
+	fill, record, recording := f.cfg.Fill, f.cfg.Record, f.cfg.Recording
 	n, ins := f.info.Buffer, f.info.Recorded
 	f.mu.Unlock()
-	if record != nil && ins > 0 {
+	if record != nil && ins > 0 && (recording == nil || recording()) {
 		record(make([]float32, n*ins), ins)
 	}
 	frames := make([]float32, 2*n)
@@ -324,11 +324,14 @@ func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
 		Inputs: 4, Recorded: 2, InputNames: []string{"Mic", "Guitar"}, InputLatency: 200})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
-	s, err := Open(m, Options{Driver: "Fake", Latency: 50 * time.Millisecond, Fixed: true})
+	s, err := Open(m, Options{Driver: "Fake", Latency: 50 * time.Millisecond, Fixed: true, Record: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tap := duplex.Current()
+	if f.cfg.Recording() {
+		t.Fatal("the driver's inputs are read before a stream hears them")
+	}
 	if tap == nil || tap.Driver != "Fake" || len(tap.Names) != 2 || tap.Latency != 200 {
 		t.Fatalf("the tap is %+v", tap)
 	}
@@ -339,6 +342,9 @@ func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
 		}
 		heard = append(heard, h)
 	})
+	if !f.cfg.Recording() {
+		t.Fatal("the driver's inputs go unread with a stream hearing them")
+	}
 	waitFor(t, "the ring to fill", ringOf(t, s).primed.Load)
 	// The voice fades in over its first frames: read past them.
 	f.take()
@@ -359,5 +365,30 @@ func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
 	}
 	if duplex.Current() != nil {
 		t.Fatal("the closed driver's tap is still current")
+	}
+}
+
+// TestADriverPlaysAloneUnlessToldToRecord opens a driver with inputs,
+// without Record: the speaker asks for none of them, and offers no tap.
+// Set with Record, it opens the driver again with them.
+func TestADriverPlaysAloneUnlessToldToRecord(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32, Inputs: 4, InputNames: []string{"Mic"}})
+	m := audio.NewMixer()
+	o := Options{Driver: "Fake"}
+	s, err := Open(m, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if f.cfg.Record != nil || f.cfg.Recording != nil || duplex.Current() != nil {
+		t.Fatal("the speaker asked for the driver's inputs unasked")
+	}
+	f.info.Recorded = 1
+	o.Record = true
+	if err := s.Set(o); err != nil {
+		t.Fatal(err)
+	}
+	if f.opens != 2 || f.cfg.Record == nil || duplex.Current() == nil {
+		t.Fatalf("after Record was set the driver opened %d times, recording %v", f.opens, f.cfg.Record != nil)
 	}
 }

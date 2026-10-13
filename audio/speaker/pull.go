@@ -41,6 +41,8 @@ type ringOutput struct {
 	// tap hands the driver's inputs to package audio/capture, once the
 	// output has started.
 	tap atomic.Pointer[duplex.Tap]
+	// records says the driver was opened with its inputs.
+	records bool
 	// target is how many frames the ring is kept at.
 	target atomic.Int64
 	// primed says the ring has reached its target once, so a buffer the
@@ -58,7 +60,12 @@ type ringOutput struct {
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
-	dev, err := openPull(asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Record: r.record, Reset: s.askReset, Log: s.logf})
+	c := asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Reset: s.askReset, Log: s.logf}
+	if o.Record {
+		c.Record, c.Recording = r.record, r.recording
+		r.records = true
+	}
+	dev, err := openPull(c)
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +79,11 @@ func (r *ringOutput) start(ahead time.Duration) {
 	r.taken.Store(time.Now().UnixNano())
 	r.setAhead(ahead)
 	r.base.Store(r.s.m.Mixed())
-	tap := duplex.NewTap(r.info.Driver, r.info.Rate, r.info.Buffer, r.info.InputLatency, r.info.InputNames)
-	r.tap.Store(tap)
-	duplex.Publish(tap)
+	if r.records && r.info.Recorded > 0 {
+		tap := duplex.NewTap(r.info.Driver, r.info.Rate, r.info.Buffer, r.info.InputLatency, r.info.InputNames)
+		r.tap.Store(tap)
+		duplex.Publish(tap)
+	}
 	go r.feed()
 }
 
@@ -109,6 +118,12 @@ func (r *ringOutput) record(in []float32, channels int) {
 	}
 	heard := r.base.Load() + q.r.Load() - int64(r.info.Latency+r.info.InputLatency)
 	tap.Deliver(in, channels, heard)
+}
+
+// recording says a stream hears the driver's inputs.
+func (r *ringOutput) recording() bool {
+	tap := r.tap.Load()
+	return tap != nil && tap.Attached()
 }
 
 // feed keeps the ring filled to its target, reading the mixer a chunk

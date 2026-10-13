@@ -159,7 +159,7 @@ func (e *hresultError) Error() string {
 
 func failed(op string, hr uint32) error {
 	if hr == errDeviceInvalidated || hr == errNotFound {
-		return fmt.Errorf("%w (%s)", ErrLost, op)
+		return ErrLost
 	}
 	return &hresultError{op: op, hr: hr}
 }
@@ -185,7 +185,7 @@ func onCOMThread(f func() error) error {
 func enumerator() (uintptr, error) {
 	var e uintptr
 	if hr, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(&clsidMMDeviceEnumerator)), 0, clsctxAll,
-		uintptr(unsafe.Pointer(&iidIMMDeviceEnumerator)), uintptr(unsafe.Pointer(&e))); hr != 0 {
+		uintptr(unsafe.Pointer(&iidIMMDeviceEnumerator)), uintptr(unsafe.Pointer(&e))); uint32(hr) != 0 {
 		return 0, failed("listing the inputs", uint32(hr))
 	}
 	return e, nil
@@ -474,14 +474,14 @@ func (b *wasapiIn) loop(capture uintptr) error {
 			continue
 		}
 		for !b.quit.Load() {
-			if hr, _, _ := syscall.SyscallN(getNext, capture, uintptr(unsafe.Pointer(&p.n))); hr != 0 {
+			if hr, _, _ := syscall.SyscallN(getNext, capture, uintptr(unsafe.Pointer(&p.n))); uint32(hr) != 0 {
 				return failed("recording", uint32(hr))
 			}
 			if p.n == 0 {
 				break
 			}
 			if hr, _, _ := syscall.SyscallN(getBuffer, capture, uintptr(unsafe.Pointer(&p.data)), uintptr(unsafe.Pointer(&p.frames)),
-				uintptr(unsafe.Pointer(&p.flags)), uintptr(unsafe.Pointer(&p.devPos)), uintptr(unsafe.Pointer(&p.at))); hr != 0 {
+				uintptr(unsafe.Pointer(&p.flags)), uintptr(unsafe.Pointer(&p.devPos)), uintptr(unsafe.Pointer(&p.at))); uint32(hr) != 0 {
 				return failed("recording", uint32(hr))
 			}
 			idle = time.Now()
@@ -501,7 +501,7 @@ func (b *wasapiIn) loop(capture uintptr) error {
 				}
 				b.s.putAgo(in, ago)
 			}
-			if hr, _, _ := syscall.SyscallN(releaseBuffer, capture, uintptr(p.frames)); hr != 0 {
+			if hr, _, _ := syscall.SyscallN(releaseBuffer, capture, uintptr(p.frames)); uint32(hr) != 0 {
 				return failed("recording", uint32(hr))
 			}
 		}

@@ -284,7 +284,9 @@ func (m *Mixer) Mixed() int64 { return m.played.Load() }
 
 // Heard returns how many of the frames mixed have been heard, as the
 // latency [Mixer.SetLatency] set tells: the mixer frame at the speakers
-// now. It takes no lock and allocates nothing. It never goes back:
+// now. It allocates nothing, and waits only as long as the latency
+// function does: package audio/speaker's takes the system player's lock
+// a moment, where the system's own sound plays. It never goes back:
 // played and the frames the speakers hold are read a moment apart, and
 // where the mixer hands the speakers a block between the two, the
 // speakers hold it before played counts it, and the frames heard would

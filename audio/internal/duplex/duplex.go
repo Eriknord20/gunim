@@ -36,6 +36,9 @@ func NewTap(driver string, rate, buffer, latency int, names []string) *Tap {
 // false where another sink hears them already.
 func (t *Tap) Attach(f Sink) bool { return t.sink.CompareAndSwap(nil, &f) }
 
+// Attached reports whether a sink hears the inputs.
+func (t *Tap) Attached() bool { return t.sink.Load() != nil }
+
 // Detach stops any sink hearing the inputs.
 func (t *Tap) Detach() { t.sink.Store(nil) }
 

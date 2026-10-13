@@ -60,6 +60,11 @@ type Config struct {
 	// [Info].Latency frames after it. Record runs on the driver's
 	// thread, as Fill does, so it must be as quick.
 	Record func(in []float32, channels int)
+	// Recording, where set, says whether Record wants the inputs now.
+	// The driver's thread asks it each buffer, before it reads them:
+	// where it returns false the inputs are left unread and Record
+	// uncalled. It must be as quick as Record.
+	Recording func() bool
 	// Reset, where set, is called once, on a goroutine of its own, as
 	// the driver asks to be opened again: after its rate, buffer size
 	// or latency changes, as in its control panel. Close the device and

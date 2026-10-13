@@ -68,8 +68,8 @@ const asioPrefix = "asio:"
 
 // Devices lists the inputs: the system's, and the inputs of the ASIO
 // driver the speakers play through, where they play through one. To
-// record from an ASIO driver, play through it: set
-// [speaker.Options].Driver.
+// record from an ASIO driver, play through it with its inputs open: set
+// [speaker.Options].Driver and Record.
 func Devices() ([]Device, error) {
 	var out []Device
 	if t := duplex.Current(); t != nil {
