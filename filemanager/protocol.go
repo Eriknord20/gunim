@@ -112,6 +112,10 @@ type Listing struct {
 	Sort       SortBy
 	Desc       bool
 	Filter     string
+	// Deep says the filter looks in the folders under this one too, and
+	// Walking that it is still looking through them, with nothing found
+	// yet.
+	Deep, Walking bool
 	// Travel is the way the user went to get here: 1 into a folder or
 	// forward, -1 up or back, and 0 elsewhere or nowhere.
 	Travel  int
@@ -123,7 +127,11 @@ type Listing struct {
 
 // Row is one entry as the grid shows it.
 type Row struct {
+	// Name is the item's name, or, for an item a filter found in a folder
+	// under the one showing, its path under that folder, whose name
+	// starts at byte At.
 	Name   string
+	At     int
 	Kind   Kind
 	Dir    bool
 	Hidden bool
@@ -140,6 +148,18 @@ type Row struct {
 	Type     string
 	// Tint picks the colour of the row's mark.
 	Tint Tint
+}
+
+// base is the item's own name, with no folder before it.
+func (r Row) base() string { return r.Name[r.At:] }
+
+// folder is the path under the folder showing of the folder the item is
+// in, empty for an item of the folder showing.
+func (r Row) folder() string {
+	if r.At == 0 {
+		return ""
+	}
+	return r.Name[:r.At-1]
 }
 
 // Tint is a group of kinds of file that share a colour.
@@ -291,6 +311,12 @@ const (
 	CmdUndo      = "undo"
 	CmdPin       = "pin"
 	CmdHidden    = "hidden"
+	// CmdDeepFilter has the filter look in the folders under the one
+	// showing too, or stop doing so.
+	CmdDeepFilter = "deepfilter"
+	// CmdGoToFolder goes to the folder of the item selected that the
+	// filter found in a folder under the one showing, and selects it there.
+	CmdGoToFolder = "gotofolder"
 	// CmdSystemIcons shows the icons Windows does, or the window's own.
 	CmdSystemIcons = "systemicons"
 	CmdPreview     = "preview"

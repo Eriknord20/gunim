@@ -40,6 +40,10 @@ func columns() []widget.GridColumn {
 	}
 }
 
+// folderColumn is the column that names the folder an item is in, shown
+// while the filter looks in the folders under the one showing.
+var folderColumn = widget.GridColumn{Title: "Folder"}
+
 // listingArea is the main area: a deck of listing pages, one for each
 // folder gone into, the one showing on top.
 type listingArea struct {
@@ -190,6 +194,8 @@ type listingPage struct {
 	menu   *widget.ContextMenu
 	gen    int
 	filter string
+	// deep says the grid shows the Folder column.
+	deep bool
 	// blocks are the rows of gen by their first, stale the rows of the gen
 	// before, shown until the new ones arrive, and asked the blocks asked
 	// for.
@@ -272,6 +278,7 @@ func (pg *listingPage) set(l Listing, u *gunim.UI) {
 		pg.gen = l.Gen
 	}
 	pg.filter = strings.ToLower(l.Filter)
+	pg.setDeep(l.Deep && l.Filter != "")
 	if sorted := [2]int{int(l.Sort), map[bool]int{false: 0, true: 1}[l.Desc]}; sorted != pg.sorted {
 		pg.sorted, pg.arrive = sorted, true
 	}
@@ -295,6 +302,12 @@ func (pg *listingPage) set(l Listing, u *gunim.UI) {
 	case l.All == 0:
 		pg.msg.Color = Faint
 		pg.msg.Text = "This folder is empty."
+	case l.Total == 0 && l.Walking:
+		pg.msg.Color = Faint
+		pg.msg.Text = "Looking through the folders under here…"
+	case l.Total == 0 && l.Filter != "" && l.Deep:
+		pg.msg.Color = Faint
+		pg.msg.Text = "Nothing here or in the folders under here matches “" + l.Filter + "”."
 	case l.Total == 0 && l.Filter != "":
 		pg.msg.Color = Faint
 		pg.msg.Text = "Nothing here matches “" + l.Filter + "”."
@@ -305,6 +318,20 @@ func (pg *listingPage) set(l Listing, u *gunim.UI) {
 		pg.msg.Text = ""
 	}
 	u.Invalidate()
+}
+
+// setDeep shows the Folder column, or hides it.
+func (pg *listingPage) setDeep(on bool) {
+	g := pg.grid
+	if on == pg.deep {
+		return
+	}
+	pg.deep = on
+	if on {
+		g.Columns = append(g.Columns, folderColumn)
+	} else {
+		g.Columns = g.Columns[:SortFolder]
+	}
 }
 
 func (pg *listingPage) setBands(bs []Band) {
@@ -397,19 +424,24 @@ func (pg *listingPage) row(i int) (widget.GridRow, bool) {
 		name = append(name, mark, widget.GridSpan{Text: "  "})
 	}
 	at := len(name)
-	name = append(name, widget.GridSpan{Text: r.Name, Faint: r.Hidden || r.Broken, Marks: marks(r.Name, pg.filter)})
+	base := r.base()
+	name = append(name, widget.GridSpan{Text: base, Faint: r.Hidden || r.Broken, Marks: marks(base, pg.filter)})
 	if r.Kind == KindLink {
 		name = append(name, widget.GridSpan{Text: "  ↗", Ink: Caption})
 	}
 	if r.Dir {
 		name[at].Face = widget.BoldFont
 	}
-	return widget.GridRow{Cells: [][]widget.GridSpan{
+	cells := [][]widget.GridSpan{
 		name,
 		{{Text: r.Size, Ink: Faint}},
 		{{Text: r.Modified, Ink: Faint}},
 		{{Text: r.Type, Ink: Faint}},
-	}}, true
+	}
+	if pg.deep {
+		cells = append(cells, []widget.GridSpan{{Text: r.folder(), Ink: Faint}})
+	}
+	return widget.GridRow{Cells: cells}, true
 }
 
 // cloudMark is the mark of how a cloud provider keeps an item, as

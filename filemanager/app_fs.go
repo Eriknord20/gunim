@@ -28,6 +28,7 @@ func (a *app) showFS(fsys FS, dir string) {
 	a.nav.hop = nil
 	a.closeViewer()
 	a.search.stop()
+	a.tree.forget()
 	// The counts go on, so the answers of the old index are dropped.
 	a.search = searchState{gen: a.search.gen + 1, seq: a.search.seq}
 	a.opts.FS, a.fs, a.ps = fsys, fsys, fsys.Paths()

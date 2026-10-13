@@ -229,12 +229,24 @@ func (a *app) navCommand(name string) bool {
 		a.publishShell()
 		a.savePrefs(func(p *prefs) { p.SystemIcons = &on })
 		a.keyIcons(a.nav.path, a.nav.all)
+		a.nameIcons(a.tree.root, a.tree.all)
 		a.refilter()
 	case CmdHidden:
 		a.shell.ShowHidden = !a.shell.ShowHidden
 		show := a.shell.ShowHidden
 		a.publishShell()
 		a.savePrefs(func(p *prefs) { p.ShowHidden = show })
+		a.refilter()
+	case CmdGoToFolder:
+		if es := a.selectedEntries(); len(es) == 1 && es[0].at > 0 {
+			e := es[0]
+			a.navigate(a.ps.Join(n.path, e.Name[:e.at]), 1, true)
+			n.pick = []string{e.base()}
+		}
+	case CmdDeepFilter:
+		a.tree.on = !a.tree.on
+		on := a.tree.on
+		a.savePrefs(func(p *prefs) { p.DeepFilter = on })
 		a.refilter()
 	case CmdSortName, CmdSortSize, CmdSortTime, CmdSortType:
 		by := map[string]SortBy{CmdSortName: SortName, CmdSortSize: SortSize, CmdSortTime: SortModified, CmdSortType: SortType}[name]
@@ -367,6 +379,7 @@ func (a *app) navigate(path string, travel int, record bool) {
 	n.moves++
 	n.all, n.rows, n.err = nil, nil, nil
 	n.filter, n.pick = "", nil
+	a.tree.forget()
 	clear(n.sel)
 	n.cursor, n.gap = "", false
 	a.enteredFolder()
@@ -436,9 +449,13 @@ func (a *app) list() {
 	}()
 }
 
-// relist reads the folder showing again, keeping the selection.
+// relist reads the folder showing again, keeping the selection, and the
+// tree under it when the filter looks there.
 func (a *app) relist() {
 	n := &a.nav
+	if a.deep() {
+		a.walkDeep(true)
+	}
 	path := n.path
 	ctx := a.ctx
 	gen, fsys := n.gen, a.fs
@@ -534,8 +551,10 @@ func (a *app) refilter() {
 	if n.loading || n.err != nil {
 		return
 	}
+	a.keepDeep()
+	all := a.entries()
 	was, last := n.rows, n.filtered
-	n.filtered = filtering{all: n.all, sort: n.sort, desc: n.desc, hidden: a.shell.ShowHidden,
+	n.filtered = filtering{all: all, sort: n.sort, desc: n.desc, hidden: a.shell.ShowHidden,
 		text: strings.ToLower(n.filter), present: true}
 	same := last.within(n.filtered) && last.hidden == n.filtered.hidden
 	var left []int
@@ -546,10 +565,10 @@ func (a *app) refilter() {
 		n.rows = filterEntries(was, n.filter, a.shell.ShowHidden)
 		left = goneFrom(was, n.rows)
 	case same:
-		n.rows = filterEntries(n.all, n.filter, a.shell.ShowHidden)
-		left = goneAlong(n.all, was, n.rows)
+		n.rows = filterEntries(all, n.filter, a.shell.ShowHidden)
+		left = goneAlong(all, was, n.rows)
 	default:
-		n.rows = filterEntries(n.all, n.filter, a.shell.ShowHidden)
+		n.rows = filterEntries(all, n.filter, a.shell.ShowHidden)
 		left = gone(was, n.rows)
 	}
 	n.gen++
@@ -559,6 +578,11 @@ func (a *app) refilter() {
 	}
 	a.publishBands()
 	picked := len(n.pick) > 0
+	if picked && a.deep() && a.tree.walking && !slices.ContainsFunc(n.rows, func(e entry) bool { return slices.Contains(n.pick, e.Name) }) {
+		// The tree is walked again, as after a rename, and what to pick
+		// comes with it.
+		picked = false
+	}
 	if picked {
 		clear(n.sel)
 		for _, name := range n.pick {
@@ -571,7 +595,7 @@ func (a *app) refilter() {
 		}
 		n.pick = nil
 		n.gap = false
-	} else if n.cursor != "" && !slices.ContainsFunc(n.rows, func(e entry) bool { return e.Name == n.cursor }) {
+	} else if n.cursor != "" && len(n.pick) == 0 && !slices.ContainsFunc(n.rows, func(e entry) bool { return e.Name == n.cursor }) {
 		a.leaveGap(was)
 	}
 	if picked {
@@ -619,8 +643,13 @@ func (a *app) sortBy(by SortBy, toggle bool) {
 		n.sort, n.desc = by, false
 	}
 	by, desc := n.sort, n.desc
-	a.savePrefs(func(p *prefs) { p.Sort, p.Desc = by, desc })
+	if by != SortFolder {
+		// The Folder column is there only while the filter looks under
+		// the folder.
+		a.savePrefs(func(p *prefs) { p.Sort, p.Desc = by, desc })
+	}
 	sortEntries(n.all, n.sort, n.desc)
+	sortEntries(a.tree.all, n.sort, n.desc)
 	a.refilter()
 }
 
@@ -628,8 +657,8 @@ func (a *app) publishListing() {
 	n := &a.nav
 	l := Listing{
 		Gen: n.gen, Path: n.path, Title: a.ps.placeName(n.path), Crumbs: crumbs(a.ps, n.path),
-		Total: len(n.rows), All: len(n.all), Sort: n.sort, Desc: n.desc, Filter: n.filter,
-		Travel: n.travel, Loading: n.loading,
+		Total: len(n.rows), All: len(a.entries()), Sort: n.sort, Desc: n.desc, Filter: n.filter,
+		Deep: a.tree.on, Walking: a.deep() && a.tree.walking && !a.tree.again, Travel: n.travel, Loading: n.loading,
 		CanBack: len(n.back) > 0, CanForward: len(n.fwd) > 0, CanUp: a.ps.Dir(n.path) != n.path,
 	}
 	if n.err != nil {
@@ -688,6 +717,9 @@ func (a *app) sendRows(v NeedRows) {
 			continue
 		}
 		end := min(start+blockRows, len(n.rows))
+		// The icons of the items found under the folder are asked for
+		// here, as their rows show.
+		a.sendIcons(n.rows[start:end])
 		rows := make([]Row, 0, end-start)
 		for _, e := range n.rows[start:end] {
 			rows = append(rows, rowOf(e))
@@ -698,7 +730,7 @@ func (a *app) sendRows(v NeedRows) {
 
 // rowOf is how the grid shows e.
 func rowOf(e entry) Row {
-	r := Row{Name: e.Name, Kind: e.Kind, Dir: e.Dir, Hidden: e.Hidden, Broken: e.Broken, Online: e.Online, Cloud: e.Cloud, IconKey: e.iconKey, Type: e.Type,
+	r := Row{Name: e.Name, At: e.at, Kind: e.Kind, Dir: e.Dir, Hidden: e.Hidden, Broken: e.Broken, Online: e.Online, Cloud: e.Cloud, IconKey: e.iconKey, Type: e.Type,
 		Modified: e.Mod.Format("2006-01-02 15:04"), Tint: tintOf(e)}
 	if !e.Dir && !e.Broken {
 		r.Size = humanBytes(e.Size)
@@ -763,7 +795,7 @@ func (a *app) publishBands() {
 		for _, e := range n.rows[from:to] {
 			shares[tintOf(e)] += 1 / all
 		}
-		bands[b] = Band{Shares: shares, First: n.rows[from].Name}
+		bands[b] = Band{Shares: shares, First: n.rows[from].base()}
 	}
 	a.patch(Bands{Gen: n.gen, Bands: bands})
 }
@@ -845,7 +877,7 @@ func (a *app) typed(v Typed) {
 		return
 	}
 	from := slices.IndexFunc(n.rows, func(e entry) bool { return e.Name == n.cursor })
-	i := widget.FindTyped(v.Text, len(n.rows), from, func(i int) string { return n.rows[i].Name })
+	i := widget.FindTyped(v.Text, len(n.rows), from, func(i int) string { return n.rows[i].base() })
 	if i < 0 {
 		return
 	}
@@ -920,6 +952,11 @@ func (a *app) publishStatusOf(selected func() []entry) {
 		s.Left = plural(len(n.rows), "item")
 		if hidden := len(n.all) - len(n.rows); hidden > 0 && n.filter == "" {
 			s.Left += " (" + count(hidden) + " hidden)"
+		} else if n.filter != "" && a.deep() {
+			s.Left += " of " + count(len(a.tree.all)) + " here and below match “" + n.filter + "”"
+			if w := a.deepStatus(); w != "" {
+				s.Left += "  ·  " + w
+			}
 		} else if n.filter != "" {
 			s.Left += " of " + count(len(n.all)) + " match “" + n.filter + "”"
 		}
