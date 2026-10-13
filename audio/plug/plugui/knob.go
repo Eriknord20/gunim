@@ -77,6 +77,10 @@ type Knob struct {
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
 	Tooltip string
+	// shown is the modulation the knob last stepped with, and modded
+	// says control moved it then.
+	shown  plug.Modulation
+	modded bool
 }
 
 // NewKnob returns a knob for p, a parameter of h's, at its value in h.
@@ -100,11 +104,15 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 }
 
 // Step implements [anim.Animator]: a knob whose parameter control moves
-// draws every frame, to show it move.
+// asks for the next frame while the value heard or the depth changes,
+// to show it move, and rests while they stand still, as with the song
+// stopped.
 func (k *Knob) Step(dt time.Duration) bool {
 	moving := k.Group.Step(dt)
-	_, modulated := k.modulation()
-	return moving || modulated
+	m, modded := k.modulation()
+	changed := modded != k.modded || modded && m != k.shown
+	k.shown, k.modded = m, modded
+	return moving || changed
 }
 
 // NewKnobFunc returns a knob of what p describes, at v, turning it by

@@ -86,3 +86,26 @@ func TestAModulatedKnobDrawsEveryFrame(t *testing.T) {
 		w.Frame(time.Second / 60)
 	}
 }
+
+// A knob whose parameter control moves asks for frames while the value
+// heard changes, and rests while it stands still.
+func TestAModulatedKnobRestsWhileItsValueStandsStill(t *testing.T) {
+	h := &menuHost{host: host{values: map[uint32]float64{3: 100}}, mod: map[uint32]plug.Modulation{release.ID: {Depth: 0.2, Now: 120}}}
+	k := NewKnob(h, release)
+	if !k.Step(time.Second / 60) {
+		t.Fatal("a knob control moves asks for no frame as it first shows it")
+	}
+	for i := range 3 {
+		if k.Step(time.Second / 60) {
+			t.Fatalf("step %d: a knob whose value heard stands still asks for frames", i)
+		}
+	}
+	h.mod[release.ID] = plug.Modulation{Depth: 0.2, Now: 130}
+	if !k.Step(time.Second / 60) {
+		t.Fatal("a knob whose value heard moved asks for no frame")
+	}
+	delete(h.mod, release.ID)
+	if !k.Step(time.Second / 60) {
+		t.Fatal("a knob control lets go of asks for no frame to show it")
+	}
+}
