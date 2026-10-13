@@ -210,6 +210,14 @@ type Event struct {
 	// Value is an Expression's new value, as Expr counts it, or a
 	// Pedal's, from 0, up, to 1, down, with half pedal between.
 	Value float64
+	// Turn is a NoteOn's place among the notes of its lane, counted
+	// from 1 at the start of the music, for an instrument that changes
+	// note by note in turn, as a voice singing its vowels in turn. A
+	// host gives a note the same Turn however playing reaches it: from
+	// the start, after a seek, chased, or rendered from mid-song. Zero
+	// says the host counts none, as for a note played live, and the
+	// instrument counts for itself.
+	Turn int64
 }
 
 // EventKind is what an [Event] does.
@@ -323,9 +331,10 @@ type Upcoming struct {
 	Note int32
 	// Group is the lane it plays in, as an [Event]'s.
 	Group int32
-	// Pitch and Velocity are its NoteOn's.
+	// Pitch, Velocity and Turn are its NoteOn's.
 	Pitch    float64
 	Velocity float64
+	Turn     int64
 }
 
 // UpcomingKind is what an [Upcoming] tells.
