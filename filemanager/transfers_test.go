@@ -215,6 +215,9 @@ func TestTheMostRecentClipboardIsPasted(t *testing.T) {
 	if len(local.a.ops.away.paths) != 0 || len(local.a.ops.clip) != 1 {
 		t.Fatalf("the local window holds %v and %v away", local.a.ops.clip, local.a.ops.away.paths)
 	}
+	// The transfer ends on a goroutine of its own, and selects what came,
+	// in place of a selection made before it ends.
+	other.until("what came is selected", func() bool { return other.a.nav.sel["a.txt"] })
 
 	// A newer copy on the window's own file system pastes within it.
 	other.choose("b.txt")

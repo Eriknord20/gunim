@@ -290,6 +290,7 @@ func TestADragTooBigToFetchIsRefused(t *testing.T) {
 func TestADragOutWaitsForItsFilesWithoutHoldingTheWindow(t *testing.T) {
 	release := make(chan struct{})
 	h, _, _ := newFetchHarness(t, func(o *Options) { o.FS = gateFS{bareFS{LocalFS()}, release} })
+	open := openOnCleanup(t, release)
 	if err := os.WriteFile(filepath.Join(h.dir, "film.mkv"), make([]byte, 3*copyBuffer), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +309,10 @@ func TestADragOutWaitsForItsFilesWithoutHoldingTheWindow(t *testing.T) {
 		t.Fatal("the fetch is not on its way")
 	}
 	// It says how far the fetch has got, in words and on a bar.
-	h.until("the fetch says how big it is", func() bool { return f.total == 3*copyBuffer })
+	h.until("the fetch says how big it is", func() bool {
+		f, ok = h.dragFetchOf()
+		return ok && f.total == 3*copyBuffer
+	})
 	_, err := f.export()
 	var ee *gunim.ExportError
 	if !errors.As(err, &ee) || !ee.Wait {
@@ -319,7 +323,7 @@ func TestADragOutWaitsForItsFilesWithoutHoldingTheWindow(t *testing.T) {
 	if ee.Hint != want {
 		t.Fatalf("a drag waiting for its file says %+v, want %+v", ee.Hint, want)
 	}
-	close(release)
+	open()
 	out := h.dragOutAndWait()
 	if len(out) != 1 || filepath.Base(out[0]) != "film.mkv" {
 		t.Fatalf("handed out %v", out)
@@ -347,6 +351,7 @@ func TestALocalDragFetchesNothing(t *testing.T) {
 func TestEndingADragStopsItsFetch(t *testing.T) {
 	release := make(chan struct{})
 	h, base, _ := newFetchHarness(t, func(o *Options) { o.FS = gateFS{bareFS{LocalFS()}, release} })
+	open := openOnCleanup(t, release)
 	if err := os.WriteFile(filepath.Join(h.dir, "film.mkv"), make([]byte, 3*copyBuffer), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +364,7 @@ func TestEndingADragStopsItsFetch(t *testing.T) {
 	h.w.Input(input.PointerUp{Pos: h.point("film.mkv"), Button: input.ButtonPrimary})
 	// The end reaches the program, which stops the fetch where it waits.
 	h.frames(10)
-	close(release)
+	open()
 	h.until("the fetch stops", func() bool { return len(h.a.dnd.fetches) == 0 })
 	h.idle()
 	if got := filesIn(t, base); len(got) != 0 {
