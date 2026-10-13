@@ -29,8 +29,10 @@ type fakePlugin struct {
 	midi   map[[2]int]uint32
 	// state is what it saves, and latency and tail what it says;
 	// tells says it tells its parameters changed as its state is set.
-	state   []byte
-	tells   bool
+	state []byte
+	tells bool
+	// fails says its process fails, writing nothing.
+	fails   bool
 	latency int
 	tail    uint32
 
@@ -210,7 +212,11 @@ var fakeProcKind = &kind{iids: []uid{iidAudioProcessor}, other: fakeOther, make:
 			return ok()
 		}),
 		newCallback(func(this, data uintptr) uintptr {
-			fakeOf(this).process(ptr[processData](data))
+			f := fakeOf(this)
+			if f.fails {
+				return resultOf(resultFalse)
+			}
+			f.process(ptr[processData](data))
 			return ok()
 		}),
 		newCallback(func(this uintptr) uintptr { return uintptr(fakeOf(this).tail) }),

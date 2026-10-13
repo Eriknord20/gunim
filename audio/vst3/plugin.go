@@ -178,6 +178,8 @@ type Plugin struct {
 	latency  atomic.Int32
 	tail     atomic.Int64
 	restarts atomic.Int32
+	// failures counts the blocks the plugin failed to process.
+	failures atomic.Uint64
 
 	// edits are the parameters set, by the editor or Set, waiting for
 	// the processor, and outputs the processor's own and the host's,
@@ -620,7 +622,16 @@ func (p *Plugin) takeEdits() {
 func (p *Plugin) run(k int) {
 	p.outChanges.clear()
 	p.data.frames = int32(k)
-	callN(method(p.proc, mProcess), p.procArgs[:])
+	if result(callN(method(p.proc, mProcess), p.procArgs[:])) != resultOK {
+		// It made no sound: what its buffers hold is the block before.
+		p.failures.Add(1)
+		for i := range p.outs {
+			for _, ch := range p.outs[i].chans {
+				clear(ch[:k])
+			}
+		}
+		p.outChanges.clear()
+	}
 	p.ctx.contTime += int64(k)
 	if p.outChanges.n > 0 && p.ctrl != 0 {
 		for _, q := range p.outChanges.queues[:p.outChanges.n] {
@@ -634,6 +645,10 @@ func (p *Plugin) run(k int) {
 		}
 	}
 }
+
+// Failures counts the blocks the plugin failed to process, each played
+// as silence.
+func (p *Plugin) Failures() uint64 { return p.failures.Load() }
 
 // Value returns parameter id's value as last known, from 0 to 1: as set,
 // edited, or reported by the processor, as a meter's. It is 0 for a

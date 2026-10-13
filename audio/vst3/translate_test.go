@@ -409,3 +409,33 @@ func TestNoStateIsTheStateAPluginStartedWith(t *testing.T) {
 		t.Fatalf("redone, the plugin is at %q: %v", f.state, err)
 	}
 }
+
+// TestAFailedBlockIsSilence has a plugin fail to process a block after
+// one it played: the block comes out silent, its buffers' sound from
+// before played no more, and the failure is counted and told.
+func TestAFailedBlockIsSilence(t *testing.T) {
+	f := fakeSynth()
+	c := Class{ID: uid{8}, Name: "Fake", Category: "Audio Module Class", SubCategories: "Instrument|Synth"}
+	d, err := describe(c, func(cfg Config) (*Plugin, error) { return f.open(t, cfg) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := d.New(nil)
+	t.Cleanup(pl.Close)
+	pr := pl.Processor()
+	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	b := stereoBlock(64)
+	b.AuxOut = [][][]float32{{make([]float32, 64)}}
+	pr.Process(b)
+	if b.Out[1][10] != 2 || b.AuxOut[0][0][10] != 11 {
+		t.Fatalf("the block played %v and %v", b.Out[1][10], b.AuxOut[0][0][10])
+	}
+	f.fails = true
+	pr.Process(b)
+	if b.Out[0][10] != 0 || b.Out[1][63] != 0 || b.AuxOut[0][0][10] != 0 {
+		t.Fatalf("the failed block played %v, %v and %v", b.Out[0][10], b.Out[1][63], b.AuxOut[0][0][10])
+	}
+	if p := pl.(*plugged); p.Plugin().Failures() != 1 || p.Err() == nil {
+		t.Fatalf("%d failures counted, told as %v", p.Plugin().Failures(), p.Err())
+	}
+}

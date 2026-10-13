@@ -476,11 +476,18 @@ func (a *plugged) Close() {
 }
 
 // Err returns why the plugin would not load as its processor was
-// prepared, or its state would not read, or nil.
+// prepared, or its state would not read, or that it failed to process
+// blocks, played as silence; or nil.
 func (a *plugged) Err() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.err
+	if a.err != nil {
+		return a.err
+	}
+	if p := a.playing.Load(); p != nil && p.Failures() > 0 {
+		return fmt.Errorf("vst3: %s failed to process %d blocks, played as silence", p.Class.Name, p.Failures())
+	}
+	return nil
 }
 
 // Plugin returns the VST3 plugin playing, or nil before the processor
