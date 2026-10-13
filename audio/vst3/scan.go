@@ -15,9 +15,11 @@ import (
 type Bundle struct {
 	// Path is the .vst3 bundle or file, and Name its name.
 	Path, Name string
-	// Effects are what it makes, as its bundle lists them, read without
-	// loading it; nil where it lists none, for Open to say.
-	Effects []Class
+	// Effects and Instruments are what it makes, as its bundle lists
+	// them, read without loading it. Both are nil where it lists
+	// nothing, for Open to say; Listed says it lists what it makes.
+	Effects, Instruments []Class
+	Listed               bool
 }
 
 // Dirs returns where this platform keeps VST3 plugins.
@@ -56,8 +58,17 @@ func Scan(dirs ...string) []Bundle {
 				return filepath.SkipDir
 			}
 			seen[path] = true
-			out = append(out, Bundle{Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
-				Effects: moduleInfo(path)})
+			b := Bundle{Path: path, Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))}
+			classes, listed := moduleInfo(path)
+			b.Listed = listed
+			for _, c := range classes {
+				if c.Instrument() {
+					b.Instruments = append(b.Instruments, c)
+				} else {
+					b.Effects = append(b.Effects, c)
+				}
+			}
+			out = append(out, b)
 			if de.IsDir() {
 				return filepath.SkipDir
 			}
@@ -70,11 +81,12 @@ func Scan(dirs ...string) []Bundle {
 // trailingCommas are what JSON5 allows and JSON does not.
 var trailingCommas = regexp.MustCompile(`,(\s*[}\]])`)
 
-// moduleInfo reads the effects a bundle lists in its moduleinfo.json.
-func moduleInfo(path string) []Class {
+// moduleInfo reads the audio components, effects and instruments, a
+// bundle lists in its moduleinfo.json, and whether it has one to read.
+func moduleInfo(path string) ([]Class, bool) {
 	b, err := os.ReadFile(filepath.Join(path, "Contents", "Resources", "moduleinfo.json"))
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var info struct {
 		Factory struct{ Vendor string } `json:"Factory Info"`
@@ -84,7 +96,7 @@ func moduleInfo(path string) []Class {
 		}
 	}
 	if json.Unmarshal(trailingCommas.ReplaceAll(b, []byte("$1")), &info) != nil {
-		return nil
+		return nil, false
 	}
 	var out []Class
 	for _, c := range info.Classes {
@@ -98,9 +110,9 @@ func moduleInfo(path string) []Class {
 		if cl.Vendor == "" {
 			cl.Vendor = info.Factory.Vendor
 		}
-		if cl.Effect() {
+		if cl.Audio() {
 			out = append(out, cl)
 		}
 	}
-	return out
+	return out, true
 }

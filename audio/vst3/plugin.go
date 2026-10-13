@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -65,9 +67,12 @@ const (
 	modeOffline  = 2
 	sample32     = 0
 	mediaAudio   = 0
+	mediaEvent   = 1
 	dirInput     = 0
 	dirOutput    = 1
+	busMain      = 0
 	stereo       = 0x3
+	mono         = 1 << 19
 
 	ctxPlaying   = 1 << 1
 	ctxTempo     = 1 << 10
@@ -75,9 +80,15 @@ const (
 	ctxContTime  = 1 << 17
 	ctxMusicTime = 1 << 9
 
-	restartLatency = 1 << 3
+	restartParamValues = 1 << 2
+	restartLatency     = 1 << 3
 
-	paramBypass = 1 << 16
+	paramCanAutomate = 1 << 0
+	paramReadOnly    = 1 << 1
+	paramHidden      = 1 << 4
+	paramBypass      = 1 << 16
+
+	infiniteTail = math.MaxUint32
 )
 
 // Config is how a plugin runs.
@@ -86,6 +97,9 @@ type Config struct {
 	Rate int
 	// Block is the most frames processed at once; 0 means 1024.
 	Block int
+	// Channels is how many channels the main buses carry, in and out:
+	// 1 or 2; 0 means 2. Process, of interleaved frames, takes 2.
+	Channels int
 	// Offline runs the plugin as for an export, faster or slower than
 	// time, as it may take more care in.
 	Offline bool
@@ -101,11 +115,33 @@ type Param struct {
 	Default float64
 	// Bypass says it is the plugin's bypass.
 	Bypass bool
+	// Automatable says a host may change it as the sound plays,
+	// ReadOnly that the plugin reports it and a host never sets it, as
+	// a meter's, and Hidden that a host keeps it off its own views.
+	Automatable, ReadOnly, Hidden bool
 }
 
-// A Plugin is an audio effect, made from a module, that sound runs
-// through in stereo. Process runs on the audio's goroutine; the rest is
-// safe from any.
+// Bus is one of a plugin's audio buses: its main input or output, or
+// one beside them, as a sidechain input or an output for each drum.
+type Bus struct {
+	Name     string
+	Channels int
+	// Main says it is the main input or output; the rest are aux
+	// buses.
+	Main bool
+}
+
+// bus is a bus as processing feeds it: its channels' buffers, and their
+// pointers as the plugin reads them.
+type bus struct {
+	Bus
+	chans [][]float32
+	ptrs  []uintptr
+}
+
+// A Plugin is an effect or an instrument, made from a module, that
+// sound runs through or comes from. Process and ProcessBlock run on the
+// audio's goroutine; the rest is safe from any.
 type Plugin struct {
 	Class Class
 	cfg   Config
@@ -117,25 +153,45 @@ type Plugin struct {
 	single           bool
 	handler          *handler
 
-	ins, outs     []busBuffers
-	inPtr, outPtr []uintptr
-	data          processData
-	ctx           processContext
-	inChanges     *paramChanges
-	outChanges    *paramChanges
-	chans         [][]float32
+	// ins and outs are the audio buses, the main ones first where the
+	// plugin has them; inBufs and outBufs are their buffers as the
+	// plugin reads them.
+	ins, outs       []bus
+	inBufs, outBufs []busBuffers
+	// mainIn says ins[0] is the main input, where an instrument may
+	// have only aux inputs, or none.
+	mainIn bool
+	data   processData
+	ctx    processContext
+
+	inChanges  *paramChanges
+	outChanges *paramChanges
+	// events are the notes going in, for a plugin with an event input;
+	// notes says it has one.
+	events *eventList
+	notes  bool
+	// keys translates notes to what the plugin takes.
+	keys keyboard
 	// procArgs are the arguments of the call that processes, the same
 	// each time, kept with the plugin so the call makes nothing.
 	procArgs [2]uintptr
 	latency  atomic.Int32
+	tail     atomic.Int64
 	restarts atomic.Int32
+	// failures counts the blocks the plugin failed to process.
+	failures atomic.Uint64
 
 	// edits are the parameters set, by the editor or Set, waiting for
-	// the processor, and outputs the processor's own, waiting for the
-	// controller: neither side waits for the other.
+	// the processor, and outputs the processor's own and the host's,
+	// waiting for the controller: neither side waits for the other.
 	edits     *paramBox
 	outputs   *paramBox
 	editsMade atomic.Uint64
+	// values holds each parameter's value as last known, by its slot in
+	// edits: set, edited, or reported by the processor.
+	values []atomic.Uint64
+	// gestures counts the editor's gestures under way.
+	gestures atomic.Int32
 
 	closed bool
 	// active says the plugin is set up to process, as New leaves it.
@@ -147,30 +203,51 @@ type Plugin struct {
 	onEdit func(id uint32, v float64)
 }
 
-// New makes an effect of class c, set up as cfg says, ready to process.
+// New makes an effect or an instrument of class c, set up as cfg says,
+// ready to process.
 func (m *Module) New(c Class, cfg Config) (*Plugin, error) {
+	return start(c, cfg, func(p *Plugin) error { return p.create(m) })
+}
+
+// start makes a plugin of class c, set up as cfg says, with build, which
+// runs on the plugins' thread.
+func start(c Class, cfg Config, build func(p *Plugin) error) (*Plugin, error) {
 	if cfg.Block <= 0 {
 		cfg.Block = 1024
+	}
+	if cfg.Channels <= 0 {
+		cfg.Channels = 2
 	}
 	if cfg.Rate <= 0 {
 		return nil, errors.New("vst3: no sample rate")
 	}
+	if cfg.Channels > 2 {
+		return nil, fmt.Errorf("vst3: %d channels, of the 1 or 2 a plugin runs in", cfg.Channels)
+	}
 	p := &Plugin{Class: c, cfg: cfg, edits: newParamBox(nil), outputs: newParamBox(nil)}
 	var err error
-	onUI(func() { err = p.create(m) })
+	onUI(func() { err = build(p) })
 	if err != nil {
 		p.Close()
 		return nil, err
 	}
-	tick(p, p.flushOutputs)
+	tick(p, p.onTick)
 	return p, nil
 }
 
 func (p *Plugin) create(m *Module) error {
-	p.comp = m.create(p.Class.ID, iidComponent)
-	if p.comp == 0 {
+	comp := m.create(p.Class.ID, iidComponent)
+	if comp == 0 {
 		return fmt.Errorf("vst3: %s: the module made no component", p.Class.Name)
 	}
+	return p.build(comp, m)
+}
+
+// build sets up the component comp, of module m, with its controller,
+// its buses and its parameters, and starts it. A component that is its
+// own controller needs no module.
+func (p *Plugin) build(comp uintptr, m *Module) error {
+	p.comp = comp
 	if r := result(call(p.comp, mInitialize, theHost())); r != resultOK {
 		release(p.comp)
 		p.comp = 0
@@ -183,7 +260,7 @@ func (p *Plugin) create(m *Module) error {
 	// The controller: the component itself, or one of its own class.
 	if ctrl := query(p.comp, iidEditController); ctrl != 0 {
 		p.ctrl, p.single = ctrl, true
-	} else {
+	} else if m != nil {
 		var cid uid
 		if result(call(p.comp, mGetControllerClassID, uintptr(unsafe.Pointer(&cid)))) == resultOK && cid != (uid{}) {
 			if ctrl := m.create(cid, iidEditController); ctrl != 0 {
@@ -196,10 +273,8 @@ func (p *Plugin) create(m *Module) error {
 		}
 	}
 	if p.ctrl != 0 {
-		h := &handler{p: p}
-		keep(h, handlerKind, false)
-		p.handler = h
-		call(p.ctrl, mSetComponentHandler, uintptr(unsafe.Pointer(&h.object)))
+		p.handler = newHandler(p)
+		call(p.ctrl, mSetComponentHandler, uintptr(unsafe.Pointer(&p.handler.object)))
 		if !p.single {
 			p.compCP, p.ctrlCP = query(p.comp, iidConnectionPoint), query(p.ctrl, iidConnectionPoint)
 			if p.compCP != 0 && p.ctrlCP != 0 {
@@ -208,18 +283,18 @@ func (p *Plugin) create(m *Module) error {
 			}
 			// The controller learns the component's state.
 			if st, err := p.componentState(); err == nil {
-				s, sp := newStream(st)
+				_, sp := newStream(st)
 				call(p.ctrl, mSetComponentState, sp)
-				_ = s
 				drop(sp)
 			}
 		}
 	}
+	var ids []uint32
 	if p.ctrl != 0 {
 		// A slot for each parameter, each way, made now, so that
 		// processing makes none.
 		n := int(i32(call(p.ctrl, mGetParameterCount)))
-		ids := make([]uint32, 0, n)
+		ids = make([]uint32, 0, n)
 		for i := range n {
 			var info paramInfo
 			if result(call(p.ctrl, mGetParameterInfo, uintptr(i), uintptr(unsafe.Pointer(&info)))) == resultOK {
@@ -227,86 +302,134 @@ func (p *Plugin) create(m *Module) error {
 			}
 		}
 		p.edits, p.outputs = newParamBox(ids), newParamBox(ids)
+		p.values = make([]atomic.Uint64, len(p.edits.slots))
+		p.readValues()
 	}
+	// Room for a change of every parameter in a block, up to a bound.
+	p.inChanges, p.data.inParams = newChanges(max(64, min(len(ids), 1024)))
+	p.outChanges, p.data.outParams = newChanges(64)
+	p.events, p.data.inEvents = newEventList()
+	p.data.outEvents = theEvents()
 	if err := p.setupBuses(); err != nil {
 		return err
 	}
+	p.keys.learn(p)
 	return p.activate()
 }
 
-// setupBuses asks for stereo in and out on the main buses, turns them
-// on, and makes the buffers for every bus.
+// readValues reads each parameter's value from the controller, as it
+// starts and as its state is set. It runs on the plugins' thread.
+func (p *Plugin) readValues() {
+	for i := range p.edits.slots {
+		v := callFloatOut(p.ctrl, mGetParamNormalized, uintptr(p.edits.slots[i].id))
+		p.values[i].Store(math.Float64bits(v))
+	}
+}
+
+// setupBuses asks for the main buses in as many channels as cfg says,
+// and the aux buses as the plugin has them, turns every bus on, and
+// makes the buffers for each.
 func (p *Plugin) setupBuses() error {
-	count := func(dir int) int { return int(i32(call(p.comp, mGetBusCount, mediaAudio, uintptr(dir)))) }
-	nIn, nOut := count(dirInput), count(dirOutput)
+	count := func(media, dir int) int { return int(i32(call(p.comp, mGetBusCount, uintptr(media), uintptr(dir)))) }
+	nIn, nOut := count(mediaAudio, dirInput), count(mediaAudio, dirOutput)
 	if nOut == 0 {
 		return fmt.Errorf("vst3: %s: no audio out", p.Class.Name)
 	}
-	arr := func(dir, n int) []uint64 {
-		a := make([]uint64, max(n, 1))
+	want := uint64(stereo)
+	if p.cfg.Channels == 1 {
+		want = mono
+	}
+	infos := func(dir, n int) []busInfo {
+		out := make([]busInfo, n)
 		for i := range n {
+			call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&out[i])))
+		}
+		return out
+	}
+	inInfo, outInfo := infos(dirInput, nIn), infos(dirOutput, nOut)
+	p.mainIn = nIn > 0 && inInfo[0].busType == busMain
+	arr := func(dir int, info []busInfo, main bool) []uint64 {
+		a := make([]uint64, max(len(info), 1))
+		for i := range info {
 			call(p.proc, mGetBusArrangement, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&a[i])))
 		}
-		a[0] = stereo
+		if main {
+			a[0] = want
+		}
 		return a
 	}
-	ain, aout := arr(dirInput, nIn), arr(dirOutput, nOut)
+	ain, aout := arr(dirInput, inInfo, p.mainIn), arr(dirOutput, outInfo, true)
 	call(p.proc, mSetBusArrangements, uintptr(unsafe.Pointer(&ain[0])), uintptr(nIn),
 		uintptr(unsafe.Pointer(&aout[0])), uintptr(nOut))
-	buses := func(dir, n int) ([]busBuffers, []uintptr) {
-		bs := make([]busBuffers, max(n, 1))
-		ptrs := make([]uintptr, 0, 2*n+1)
-		for i := range n {
-			var info busInfo
-			call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&info)))
-			ch := int(info.channels)
-			if i == 0 {
-				ch = 2
-				call(p.comp, mActivateBus, mediaAudio, uintptr(dir), 0, 1)
+	// What the plugin took: it may keep its own arrangement.
+	buses := func(dir int, info []busInfo) []bus {
+		out := make([]bus, len(info))
+		for i := range info {
+			var a uint64
+			call(p.proc, mGetBusArrangement, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&a)))
+			ch := bits.OnesCount64(a)
+			if ch == 0 {
+				ch = int(info[i].channels)
 			}
-			bs[i].channels = int32(ch)
-			start := len(ptrs)
-			for range ch {
-				buf := make([]float32, p.cfg.Block)
-				p.chans = append(p.chans, buf)
-				ptrs = append(ptrs, uintptr(unsafe.Pointer(&buf[0])))
+			b := &out[i]
+			b.Name, b.Channels, b.Main = utf16String(info[i].name[:]), ch, info[i].busType == busMain
+			b.chans = make([][]float32, ch)
+			b.ptrs = make([]uintptr, ch+1)
+			for c := range ch {
+				b.chans[c] = make([]float32, p.cfg.Block)
+				b.ptrs[c] = uintptr(unsafe.Pointer(&b.chans[c][0]))
 			}
-			bs[i].buffers = uintptr(start) // fixed below, once ptrs stops moving
+			call(p.comp, mActivateBus, mediaAudio, uintptr(dir), uintptr(i), 1)
 		}
-		ptrs = append(ptrs, 0)
-		for i := range n {
-			bs[i].buffers = uintptr(unsafe.Pointer(&ptrs[bs[i].buffers]))
+		return out
+	}
+	p.ins, p.outs = buses(dirInput, inInfo), buses(dirOutput, outInfo)
+	if p.outs[0].Channels == 0 {
+		return fmt.Errorf("vst3: %s: its main output has no channels", p.Class.Name)
+	}
+	bufs := func(bs []bus) []busBuffers {
+		out := make([]busBuffers, max(len(bs), 1))
+		for i := range bs {
+			out[i] = busBuffers{channels: int32(bs[i].Channels), buffers: uintptr(unsafe.Pointer(&bs[i].ptrs[0]))}
 		}
-		return bs, ptrs
+		return out
 	}
-	if nIn > 0 {
-		p.ins, p.inPtr = buses(dirInput, nIn)
+	p.inBufs, p.outBufs = bufs(p.ins), bufs(p.outs)
+	// The notes, on the first event input.
+	p.notes = count(mediaEvent, dirInput) > 0
+	if p.notes {
+		call(p.comp, mActivateBus, mediaEvent, dirInput, 0, 1)
 	}
-	p.outs, p.outPtr = buses(dirOutput, nOut)
-	var main busInfo
-	call(p.comp, mGetBusInfo, mediaAudio, dirOutput, 0, uintptr(unsafe.Pointer(&main)))
-	if main.channels != 2 {
-		var a uint64
-		call(p.proc, mGetBusArrangement, dirOutput, 0, uintptr(unsafe.Pointer(&a)))
-		if a != stereo {
-			return fmt.Errorf("vst3: %s: plays no stereo", p.Class.Name)
-		}
-	}
-	p.inChanges, p.data.inParams = newChanges(64)
-	p.outChanges, p.data.outParams = newChanges(64)
-	p.data.inEvents, p.data.outEvents = theEvents(), theEvents()
 	p.data.sampleSize = sample32
 	p.data.numInputs, p.data.numOutputs = int32(nIn), int32(nOut)
+	p.data.inputs = 0
 	if nIn > 0 {
-		p.data.inputs = uintptr(unsafe.Pointer(&p.ins[0]))
+		p.data.inputs = uintptr(unsafe.Pointer(&p.inBufs[0]))
 	}
-	p.data.outputs = uintptr(unsafe.Pointer(&p.outs[0]))
+	p.data.outputs = uintptr(unsafe.Pointer(&p.outBufs[0]))
 	p.data.context = uintptr(unsafe.Pointer(&p.ctx))
 	p.procArgs = [2]uintptr{p.proc, uintptr(unsafe.Pointer(&p.data))}
 	p.ctx = processContext{state: ctxTempo | ctxTimeSig | ctxContTime | ctxMusicTime, rate: float64(p.cfg.Rate),
 		tempo: 120, sigNumerator: 4, sigDenominator: 4}
 	return nil
 }
+
+// Buses returns the plugin's audio buses, in and out, the main ones
+// first where it has them: an instrument's inputs may be aux buses
+// alone, or none.
+func (p *Plugin) Buses() (in, out []Bus) {
+	for _, b := range p.ins {
+		in = append(in, b.Bus)
+	}
+	for _, b := range p.outs {
+		out = append(out, b.Bus)
+	}
+	return in, out
+}
+
+// Notes says the plugin takes notes: it has an event input, as an
+// instrument has.
+func (p *Plugin) Notes() bool { return p.notes }
 
 // activate sets processing up, as cfg says, and starts it.
 func (p *Plugin) activate() error {
@@ -326,6 +449,7 @@ func (p *Plugin) activate() error {
 		return fmt.Errorf("vst3: %s: setActive failed (%d)", p.Class.Name, r)
 	}
 	p.latency.Store(int32(call(p.proc, mGetLatencySamples)))
+	p.readTail()
 	call(p.proc, mSetProcessing, 1)
 	p.active = true
 	return nil
@@ -354,6 +478,34 @@ func (p *Plugin) SetActive(on bool) error {
 	return err
 }
 
+// Configure sets the plugin up to run as cfg says, keeping its state:
+// another rate, block or channel count. Process must not run meanwhile.
+func (p *Plugin) Configure(cfg Config) error {
+	if cfg.Block <= 0 {
+		cfg.Block = 1024
+	}
+	if cfg.Channels <= 0 {
+		cfg.Channels = 2
+	}
+	if cfg.Rate <= 0 || cfg.Channels > 2 {
+		return fmt.Errorf("vst3: %s: no plugin runs at %d frames a second in %d channels", p.Class.Name, cfg.Rate, cfg.Channels)
+	}
+	if cfg == p.cfg || p.closed {
+		return nil
+	}
+	var err error
+	onUI(func() {
+		if p.active {
+			p.deactivate()
+		}
+		p.cfg = cfg
+		if err = p.setupBuses(); err == nil {
+			err = p.activate()
+		}
+	})
+	return err
+}
+
 // Latency is how many frames late the plugin's sound comes out.
 func (p *Plugin) Latency() int {
 	if p.restarts.Load()&restartLatency != 0 {
@@ -363,6 +515,22 @@ func (p *Plugin) Latency() int {
 		})
 	}
 	return int(p.latency.Load())
+}
+
+// Tail is how many frames of sound come out after the sound going in
+// stops, as a reverb's ringing, as the plugin last said: the package
+// asks it every few milliseconds. A tail without end is
+// [math.MaxInt32].
+func (p *Plugin) Tail() int { return int(p.tail.Load()) }
+
+// readTail asks the plugin its tail, on the plugins' thread.
+func (p *Plugin) readTail() {
+	t := uint32(call(p.proc, mGetTailSamples))
+	if t == infiniteTail || t > math.MaxInt32 {
+		p.tail.Store(math.MaxInt32)
+		return
+	}
+	p.tail.Store(int64(t))
 }
 
 // Reset clears what the plugin holds of the sound before, as its
@@ -375,6 +543,19 @@ func (p *Plugin) Reset() {
 		}
 	})
 	p.ctx.projectTime = 0
+	p.keys.reset()
+}
+
+// resetNow clears what the plugin holds of the sound before, on the
+// audio's goroutine, as VST3 lets processing be stopped and started
+// there: the notes sounding end in the next block, and the pedals lift.
+func (p *Plugin) resetNow() {
+	if p.closed || !p.active {
+		return
+	}
+	call(p.proc, mSetProcessing, 0)
+	call(p.proc, mSetProcessing, 1)
+	p.keys.reset()
 }
 
 // SetPosition tells the plugin where in the song the sound processed next is,
@@ -382,7 +563,8 @@ func (p *Plugin) Reset() {
 func (p *Plugin) SetPosition(frame int64) { p.ctx.projectTime = frame }
 
 // Process runs the stereo frames, interleaved, through the plugin, in
-// place.
+// place: through its main buses, and into each aux input too, as a
+// sidechain keys on the sound it changes.
 func (p *Plugin) Process(frames []float32) {
 	if p.closed || !p.active {
 		return
@@ -395,53 +577,103 @@ func (p *Plugin) Process(frames []float32) {
 	}
 }
 
-// block runs k frames through the plugin.
+// block runs k interleaved stereo frames through the plugin.
 func (p *Plugin) block(frames []float32, k int) {
-	// The main bus's channels: in first, out after, as setupBuses made
-	// them.
-	var inL, inR []float32
-	if len(p.ins) > 0 {
-		inL, inR = p.chans[0], p.chans[1]
-	}
-	first := 0
-	for _, b := range p.ins {
-		first += int(b.channels)
-	}
-	outL, outR := p.chans[first], p.chans[first+1]
-	if inL == nil {
-		inL, inR = outL, outR
-	}
-	for i := range k {
-		inL[i], inR[i] = frames[2*i], frames[2*i+1]
+	for i := range p.ins {
+		for c, ch := range p.ins[i].chans {
+			for f := range k {
+				ch[f] = frames[2*f+c%2]
+			}
+		}
 	}
 	p.inChanges.clear()
-	if p.edits.look() {
-		for i := range p.edits.slots {
-			if id, v, ok := p.edits.take(i); ok {
-				if q := p.inChanges.queue(id); q >= 0 {
-					p.inChanges.queues[q].add(0, v)
+	p.events.n = 0
+	p.takeEdits()
+	p.keys.lift(p)
+	p.ctx.state |= ctxPlaying
+	p.ctx.musicTime = float64(p.ctx.projectTime) / float64(p.cfg.Rate) * p.ctx.tempo / 60
+	p.ctx.barPosition = float64(int(p.ctx.musicTime/4) * 4)
+	p.run(k)
+	p.ctx.projectTime += int64(k)
+	out := p.outs[0].chans
+	for f := range k {
+		frames[2*f], frames[2*f+1] = out[0][f], out[1%len(out)][f]
+	}
+}
+
+// takeEdits passes the parameters set since the last block on to the
+// processor, at its first frame.
+func (p *Plugin) takeEdits() {
+	if !p.edits.look() {
+		return
+	}
+	for i := range p.edits.slots {
+		if id, v, ok := p.edits.take(i); ok {
+			p.values[i].Store(math.Float64bits(v))
+			if q := p.inChanges.queue(id); q >= 0 {
+				p.inChanges.queues[q].add(0, v)
+			}
+		}
+	}
+}
+
+// run processes k frames, the buffers, changes and events filled, and
+// passes the processor's changes on to the controller.
+func (p *Plugin) run(k int) {
+	p.outChanges.clear()
+	p.data.frames = int32(k)
+	if result(callN(method(p.proc, mProcess), p.procArgs[:])) != resultOK {
+		// It made no sound: what its buffers hold is the block before.
+		p.failures.Add(1)
+		for i := range p.outs {
+			for _, ch := range p.outs[i].chans {
+				clear(ch[:k])
+			}
+		}
+		p.outChanges.clear()
+	}
+	p.ctx.contTime += int64(k)
+	if p.outChanges.n > 0 && p.ctrl != 0 {
+		for _, q := range p.outChanges.queues[:p.outChanges.n] {
+			if q.n > 0 {
+				v := q.points[q.n-1].value
+				p.outputs.put(q.id, v)
+				if i, ok := p.edits.at[q.id]; ok {
+					p.values[i].Store(math.Float64bits(v))
 				}
 			}
 		}
 	}
-	p.outChanges.clear()
-	p.data.frames = int32(k)
-	p.ctx.state |= ctxPlaying
-	p.ctx.musicTime = float64(p.ctx.projectTime) / float64(p.cfg.Rate) * p.ctx.tempo / 60
-	p.ctx.barPosition = float64(int(p.ctx.musicTime/4) * 4)
-	callN(method(p.proc, mProcess), p.procArgs[:])
-	p.ctx.projectTime += int64(k)
-	p.ctx.contTime += int64(k)
-	for i := range k {
-		frames[2*i], frames[2*i+1] = outL[i], outR[i]
+}
+
+// Failures counts the blocks the plugin failed to process, each played
+// as silence.
+func (p *Plugin) Failures() uint64 { return p.failures.Load() }
+
+// Value returns parameter id's value as last known, from 0 to 1: as set,
+// edited, or reported by the processor, as a meter's. It is 0 for a
+// parameter the plugin does not list.
+func (p *Plugin) Value(id uint32) float64 {
+	if i, ok := p.edits.at[id]; ok {
+		return math.Float64frombits(p.values[i].Load())
 	}
-	if p.outChanges.n > 0 && p.ctrl != 0 {
-		for _, q := range p.outChanges.queues[:p.outChanges.n] {
-			if q.n > 0 {
-				p.outputs.put(q.id, q.points[q.n-1].value)
-			}
+	return 0
+}
+
+// Values returns every parameter's value now, by ID, from 0 to 1, as
+// the controller has them.
+func (p *Plugin) Values() map[uint32]float64 {
+	out := make(map[uint32]float64, len(p.edits.slots))
+	onUI(func() {
+		if p.ctrl == 0 {
+			return
 		}
-	}
+		for i := range p.edits.slots {
+			id := p.edits.slots[i].id
+			out[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
+		}
+	})
+	return out
 }
 
 // Flush passes the changes waiting for the processor on, as a plugin
@@ -468,15 +700,29 @@ func (p *Plugin) edited(id uint32, v float64) {
 }
 
 // Edits counts the changes made in the plugin's editor, so a host knows
-// its state changed.
+// its state changed: each parameter it changes, and each time it says
+// its state changed otherwise, as a sample loaded.
 func (p *Plugin) Edits() uint64 { return p.editsMade.Load() }
 
-// restart takes a plugin's request to be restarted, for what changed.
-func (p *Plugin) restart(flags int32) { p.restarts.Or(flags) }
+// Editing reports whether a gesture in the editor is under way, as a
+// knob held: a host that keeps the editor's changes keeps them once it
+// ends.
+func (p *Plugin) Editing() bool { return p.gestures.Load() > 0 }
 
-// flushOutputs passes the processor's changes to the controller, on the
-// plugins' thread.
-func (p *Plugin) flushOutputs() {
+// restart takes a plugin's request to be restarted, for what changed.
+func (p *Plugin) restart(flags int32) {
+	p.restarts.Or(flags)
+	if flags&restartParamValues != 0 {
+		p.editsMade.Add(1)
+	}
+}
+
+// onTick passes the processor's changes to the controller, and asks the
+// plugin its tail, on the plugins' thread.
+func (p *Plugin) onTick() {
+	if p.active {
+		p.readTail()
+	}
 	if !p.outputs.look() {
 		return
 	}
@@ -501,10 +747,24 @@ func (p *Plugin) Params() []Param {
 				continue
 			}
 			out = append(out, Param{ID: info.id, Title: utf16String(info.title[:]), Units: utf16String(info.units[:]),
-				Steps: int(info.steps), Default: info.def, Bypass: info.flags&paramBypass != 0})
+				Steps: int(info.steps), Default: info.def, Bypass: info.flags&paramBypass != 0,
+				Automatable: info.flags&paramCanAutomate != 0, ReadOnly: info.flags&paramReadOnly != 0,
+				Hidden: info.flags&paramHidden != 0})
 		}
 	})
 	return out
+}
+
+// Text returns parameter id's value v, from 0 to 1, as the plugin
+// writes it to show, as "-3.0 dB"; empty where it writes none.
+func (p *Plugin) Text(id uint32, v float64) string {
+	var s [128]uint16
+	onUI(func() {
+		if p.ctrl != 0 && !p.closed {
+			callFloatArg(p.ctrl, mGetParamStringByValue, uintptr(id), v, uintptr(unsafe.Pointer(&s[0])))
+		}
+	})
+	return utf16String(s[:])
 }
 
 // Set sets parameter id to v, from 0 to 1, in the controller and the
@@ -567,42 +827,57 @@ func (p *Plugin) State() ([]byte, error) {
 	return append(out, ctrl...), nil
 }
 
-// SetState sets the plugin's state, as State gave it.
-func (p *Plugin) SetState(b []byte) error {
-	bad := fmt.Errorf("vst3: %s: the state is no state of a plugin", p.Class.Name)
+// splitState returns the component's and the controller's parts of a
+// state as State gives it.
+func splitState(name string, b []byte) (comp, ctrl []byte, err error) {
+	bad := fmt.Errorf("vst3: %s: the state is no state of a plugin", name)
 	if len(b) < 8 || string(b[:4]) != stateMagic {
-		return bad
+		return nil, nil, bad
 	}
 	b = b[4:]
 	n := int(binary.LittleEndian.Uint32(b))
 	if len(b) < 4+n+4 {
-		return bad
+		return nil, nil, bad
 	}
-	comp := b[4 : 4+n]
+	comp = b[4 : 4+n]
 	b = b[4+n:]
 	m := int(binary.LittleEndian.Uint32(b))
 	if len(b) < 4+m {
-		return bad
+		return nil, nil, bad
 	}
-	ctrl := b[4 : 4+m]
-	var err error
+	return comp, b[4 : 4+m], nil
+}
+
+// SetState sets the plugin's state, as State gave it. The changes the
+// plugin tells as it takes the state are the host's own, so Edits
+// counts none of them.
+func (p *Plugin) SetState(b []byte) error {
+	comp, ctrl, err := splitState(p.Class.Name, b)
+	if err != nil {
+		return err
+	}
 	onUI(func() {
+		edits := p.editsMade.Load()
+		defer p.editsMade.Store(edits)
 		s, sp := newStream(append([]byte(nil), comp...))
 		defer drop(sp)
 		if r := result(call(p.comp, mSetState, sp)); r != resultOK {
 			err = fmt.Errorf("vst3: %s: setState failed (%d)", p.Class.Name, r)
 			return
 		}
-		if p.ctrl == 0 || p.single {
+		if p.ctrl == 0 {
 			return
 		}
-		s.pos = 0
-		call(p.ctrl, mSetComponentState, sp)
-		if len(ctrl) > 0 {
-			_, cp := newStream(append([]byte(nil), ctrl...))
-			call(p.ctrl, mCtrlSetState, cp)
-			drop(cp)
+		if !p.single {
+			s.pos = 0
+			call(p.ctrl, mSetComponentState, sp)
+			if len(ctrl) > 0 {
+				_, cp := newStream(append([]byte(nil), ctrl...))
+				call(p.ctrl, mCtrlSetState, cp)
+				drop(cp)
+			}
 		}
+		p.readValues()
 	})
 	return err
 }
@@ -641,11 +916,16 @@ func (p *Plugin) Close() {
 		}
 	})
 	if p.handler != nil {
-		drop(uintptr(unsafe.Pointer(&p.handler.object)))
+		p.handler.drop()
 	}
 	if p.inChanges != nil {
 		p.inChanges.free()
+	}
+	if p.outChanges != nil {
 		p.outChanges.free()
+	}
+	if p.events != nil {
+		p.events.free()
 	}
 }
 

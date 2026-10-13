@@ -175,10 +175,15 @@ so a recording lines up with what was playing. `Measure` plays a click
 and finds it in the recording, to tell how far the stamps are off.
 
 Package `audio/vst3` hosts VST3 plugins, in pure Go. It finds the
-plugins in the system's folders and loads one. It runs stereo sound
-through an effect in realtime or offline, and saves and restores its
-state. It shows the effect's own editor in a window, on Windows and
-Linux.
+effects and instruments in the system's folders and loads one. It runs
+sound through an effect in realtime or offline, plays notes on an
+instrument, with each note's own bend where the plugin takes VST3's
+note expression and the sustain pedal through the plugin's MIDI
+mapping, and carries sidechain inputs and extra outputs. It saves and
+restores a plugin's state, and shows its own editor in a window, on
+Windows and Linux. A VST3 plugin also runs behind `audio/plug`'s
+interfaces, so a host plays VST3 and Go plugins through the same
+code.
 
 Package `audio/plug` is a plugin format for effects and instruments
 written in Go. A plugin is a Go package compiled into the program, and
@@ -817,7 +822,7 @@ path data.
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
 | `gunim/audio/plug` | A plugin format for effects and instruments written in Go, with views drawn in gunim, and the plugins made in it |
-| `gunim/audio/vst3` | Hosts VST3 effects: their sound, state, parameters and editors |
+| `gunim/audio/vst3` | Hosts VST3 effects and instruments: their sound, notes, state, parameters and editors, also behind `audio/plug`'s interfaces |
 | `gunim/audio/midi` | MIDI ports in and out, with messages timed to leave and stamped as they arrive |
 | `gunim/audioui` | Meters and faders, a spectrum and a spectrogram, a waveform, and loudness readings for audio programs |
 | `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, light that adds, layers that clip and tilt, and 3D scenes |

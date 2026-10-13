@@ -91,3 +91,35 @@ type Holder interface {
 	// it ends.
 	Release(key int, u *gunim.UI)
 }
+
+// Editor is a plugin with an editor of its own, which it draws itself,
+// in a window of its own, as a VST3 plugin does. The one made for the
+// sound shows it: it changes the parameters and the state of the
+// plugin playing, itself. The host learns of the changes after: it
+// watches Edits, and once they stop moving and Editing reports no
+// gesture under way, it reads Values and [Plugin.State], to save them
+// and to undo them as one step. Its methods are safe from any goroutine
+// but the audio's.
+type Editor interface {
+	Plugin
+	// HasEditor reports whether the plugin has an editor to show here:
+	// false for one made for views alone, which plays nothing.
+	HasEditor() bool
+	// OpenEditor shows the editor, in a window titled title, or brings
+	// it to the front where it is open.
+	OpenEditor(title string) error
+	// CloseEditor closes the editor, where it is open.
+	CloseEditor()
+	// EditorOpen reports whether the editor is open: the user may close
+	// it.
+	EditorOpen() bool
+	// Edits counts the changes made in the editor: each parameter
+	// changed, and each change to the state otherwise, as a sample
+	// loaded.
+	Edits() uint64
+	// Editing reports whether a gesture in the editor is under way, as
+	// a knob held.
+	Editing() bool
+	// Values returns each parameter's value now, by ID.
+	Values() map[uint32]float64
+}
