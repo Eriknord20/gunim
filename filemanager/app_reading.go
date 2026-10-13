@@ -86,7 +86,7 @@ func (a *app) openReading(e entry) {
 	path := a.ps.Join(n.path, e.Name)
 	r := &a.reading
 	r.seq++
-	st := Reading{Seq: r.seq, Path: path, Name: e.Name, Shown: a.ps.Show(path), Loading: true}
+	st := Reading{Seq: r.seq, Path: path, Name: e.base(), Shown: a.ps.Show(path), Loading: true}
 	if !e.Dir {
 		st.Size = humanBytes(e.Size)
 	}

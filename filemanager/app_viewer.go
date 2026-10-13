@@ -123,7 +123,7 @@ func (a *app) showPicture(travel int) {
 	v.seq++
 	v.asked = [2]int{}
 	thumb, full := a.cachedThumb(path, e.Mod.UnixNano())
-	v.view = Viewing{Seq: v.seq, Travel: travel, Path: path, Name: e.Name, Index: v.at + 1, Count: len(v.pics),
+	v.view = Viewing{Seq: v.seq, Travel: travel, Path: path, Name: e.base(), Index: v.at + 1, Count: len(v.pics),
 		Thumb: thumb, W: full.X, H: full.Y, Loading: true}
 	if v.open {
 		a.send(a.c.Update(v.id, v.view))
