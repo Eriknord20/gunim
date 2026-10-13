@@ -186,7 +186,7 @@ func manyPreview(seq int, sel []entry) Preview {
 // downloaded, only when fetch says the user asked.
 func itemPreview(ctx context.Context, fsys FS, seq int, path string, e entry, fetch bool) Preview {
 	ps := fsys.Paths()
-	pv := Preview{Seq: seq, Title: e.Name, Type: e.Type, Path: path, Shown: ps.Show(path), Tint: tintOf(e), IconKey: e.iconKey, Dir: e.Dir}
+	pv := Preview{Seq: seq, Title: e.base(), Type: e.Type, Path: path, Shown: ps.Show(path), Tint: tintOf(e), IconKey: e.iconKey, Dir: e.Dir}
 	if !e.Dir {
 		size := humanBytes(e.Size)
 		if e.Size >= 1024 {
