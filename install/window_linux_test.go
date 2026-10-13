@@ -53,10 +53,12 @@ func (o *offscreen) frames(n int) {
 	}
 }
 
-// until draws frames until the scene is on page, or fails.
+// until draws frames until the scene is on page, or fails after 30
+// seconds. The work runs on goroutines of its own and syncs files to
+// the disk, which on a loaded machine takes seconds.
 func (o *offscreen) until(page string) {
 	o.t.Helper()
-	for range 600 {
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		if o.r.sc.Page == page {
 			o.frames(60)
 			return
