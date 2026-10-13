@@ -15,6 +15,66 @@
 // bend, and the sustain pedal and the mod wheel move the parameters the
 // plugin maps those MIDI controllers to.
 //
+// # ARA
+//
+// A plugin that speaks Celemony's ARA 2 (Audio Random Access), as
+// Melodyne does, sees each recording of a song whole, beyond the sound
+// passing through it. The host describes its song to the plugin as a
+// document of five kinds of object:
+//
+//   - a musical context: the tempo map, the bar signatures, the keys
+//     and the chords, which the plugin reads from the host;
+//   - region sequences: the tracks, each in a musical context;
+//   - audio sources: the recordings, each known by a persistent ID,
+//     whose samples the plugin reads whenever it likes;
+//   - audio modifications: the plugin's edits of a source, each known
+//     by a persistent ID, several to a source;
+//   - playback regions: a stretch of a modification, placed on the
+//     song's timeline in seconds, on a region sequence.
+//
+// [Class.ARA] says a class has an ARA factory, the "ARA Main Factory
+// Class" of the same name in its module, and [Module.ARAFactory]
+// returns it, initialized once for the program. [ARAFactory.NewDocument]
+// makes a document controller, the plugin's half of a document, for an
+// [ARAHost], the host's half: it reads a source's samples for the
+// plugin, on threads of the plugin's own, several at once, and never
+// the audio thread's.
+//
+// The document lives on the plugins' thread, the one that runs their
+// controllers and editors, as ARA asks of one thread for the whole
+// model; each method of [Document] runs its work there and waits.
+// [Document.Edit] makes a set of changes as one, between ARA's
+// beginEditing and endEditing: the [Edit] it hands its function adds,
+// updates and takes out objects, and restores them from archives.
+// [Document.Store] writes an archive of the whole document, or of the
+// objects a [StoreFilter] names, so a host may keep each recording's
+// edits apart. [Document.Poll] has the plugin tell what changed since
+// it last asked, ARA's notifyModelUpdates, and returns it as [Update]s:
+// an analysis's progress, the content of a source, a modification or a
+// region changed, and the plugin's requests of the host's transport
+// (play, stop, a new position, a cycle). A host polls every few tens of
+// milliseconds, outside an edit.
+//
+// [Document.NewPlugin] makes a plugin of the factory's class bound to
+// the document in the [Roles] given, before it first processes, as ARA
+// asks; [Plugin.ARA] returns its [Extension]. A playback renderer
+// renders the regions [Extension.SetRegions] hands it, at the times its
+// process calls give, in place of its input: setting them stops and
+// restarts the plugin's processing, so ProcessBlock must not run
+// meanwhile. An editor renderer adds the sound of editing, as a note
+// played as it is dragged, to its input, and takes its regions while it
+// processes. An editor view shows the plugin's editor ([Plugin.OpenEditor])
+// over the whole document, showing what [Extension.Select] picks.
+//
+// [FakeARA] is an ARA plugin written in Go, for the tests of a host
+// with none to hand: it analyses, renders, archives and takes edits as
+// a plugin does, and lists the rules of ARA's a host broke.
+//
+// ARA's structures are packed to the byte on x86, and naturally aligned
+// on ARM; the package writes and reads them field by field, as each
+// platform lays them out. The definitions follow Celemony's ARA_API
+// headers, Apache-2.0-licensed.
+//
 // The definitions follow Steinberg's VST3 interfaces, MIT-licensed, in
 // pluginterfaces.
 package vst3

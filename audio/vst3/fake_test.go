@@ -345,18 +345,26 @@ func utf16Of(s string) []uint16 {
 // open makes a plugin of the fake, set up as cfg says.
 func (f *fakePlugin) open(t *testing.T, cfg Config) (*Plugin, error) {
 	t.Helper()
+	f.makeObjects()
+	return start(f.class(), cfg, func(p *Plugin) error { return p.build(f.comp, nil) })
+}
+
+// makeObjects makes the fake's objects. They stay live: a plugin of
+// them may close after the test's own cleanups.
+func (f *fakePlugin) makeObjects() {
 	f.active = map[[3]int]bool{}
 	mk := func(k *kind) uintptr { return keep(&fakeObject{f: f}, k, false) }
 	f.comp, f.proc, f.ctrl, f.mm, f.ne = mk(fakeCompKind), mk(fakeProcKind), mk(fakeCtrlKind), mk(fakeMidiKind),
 		mk(fakeNoteExprKind)
-	// The objects stay live: a plugin of them may close after the test's
-	// own cleanups.
+}
+
+// class is the fake's class.
+func (f *fakePlugin) class() Class {
 	kind := "Fx"
 	if f.events {
 		kind = "Instrument|Synth"
 	}
-	c := Class{Name: "Fake", Category: "Audio Module Class", SubCategories: kind}
-	return start(c, cfg, func(p *Plugin) error { return p.build(f.comp, nil) })
+	return Class{Name: "Fake", Category: "Audio Module Class", SubCategories: kind}
 }
 
 // fakeSynth is a fake instrument: notes in, a stereo output, an aux

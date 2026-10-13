@@ -31,6 +31,9 @@ type Class struct {
 	// does, as "Fx|EQ" or "Instrument|Synth".
 	Name, Category, SubCategories string
 	Vendor, Version               string
+	// ARA says the module makes an ARA factory of the class's name, as
+	// Melodyne's does: the class binds to ARA documents.
+	ARA bool
 }
 
 // IDString writes the class's ID as hexadecimal, as a project keeps it.
@@ -166,7 +169,23 @@ func loadModule(path, bin string) (*Module, error) {
 		}
 		m.Classes = append(m.Classes, c)
 	}
+	markARA(m.Classes)
 	return m, nil
+}
+
+// markARA marks the audio classes of classes that an ARA factory of
+// their name pairs with.
+func markARA(classes []Class) {
+	for _, f := range classes {
+		if f.Category != araMainFactoryClass {
+			continue
+		}
+		for i := range classes {
+			if classes[i].Audio() && classes[i].Name == f.Name {
+				classes[i].ARA = true
+			}
+		}
+	}
 }
 
 // Effects returns the module's audio effects.
