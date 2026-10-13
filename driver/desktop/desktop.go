@@ -537,6 +537,12 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			return nil, fmt.Errorf("desktop: own popup: %w", err)
 		}
 	}
+	if p, ok := o.Parent.(*Window); ok && o.Kind == driver.KindNormal && o.Owned {
+		if err := ownWindow(w, p); err != nil {
+			_ = gw.Destroy()
+			return nil, fmt.Errorf("desktop: own window: %w", err)
+		}
+	}
 	w.noColor = o.NoColorManagement || colorOff
 	if p, ok := o.Parent.(*Window); ok {
 		w.noColor = w.noColor || p.noColor
@@ -577,11 +583,12 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			}
 		}
 	}
-	// A saved placement, for an ordinary window, takes the place of Size and Monitor
+	// A saved placement, for an ordinary window, takes the place of Size and Monitor, and of Anchor for one that
+	// belongs to its parent
 	var placed driver.Placement
 	var place bool
 	var bounds [4]int
-	if o.Place != nil && o.Kind == driver.KindNormal && o.Parent == nil {
+	if o.Place != nil && o.Kind == driver.KindNormal && (o.Parent == nil || o.Owned) {
 		placed, bounds, place = w.placeAt(*o.Place)
 	}
 	if o.Fixed {

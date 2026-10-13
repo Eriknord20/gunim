@@ -145,6 +145,10 @@ type Options struct {
 	Above bool
 	// Owned keeps a popup just above Parent, under any window in front of Parent, in place of above every window, as
 	// for a glow round Parent. Only Windows does so; elsewhere a popup stays as it is.
+	//
+	// An ordinary window that is Owned belongs to Parent, as a palette or a plugin's window does: it stays in front
+	// of Parent, Windows keeps it off the taskbar, and it opens at Place where that is set. Windows and X11 do so;
+	// macOS leaves it an ordinary window.
 	Owned bool
 	// Icons are the window's icon at several sizes, for the title bar
 	// and the taskbar to pick from. None leaves the system's own.
