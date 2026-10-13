@@ -170,7 +170,7 @@ func TestStereoizeAddsTheMiddleLateNotPanned(t *testing.T) {
 	}
 	for i := range in[0] {
 		r = r*6364136223846793005 + 1442695040888963407
-		v := float32(int32(r>>33)) / float32(1<<31) * 0.3
+		v := float32(int32(r>>32)) / float32(1<<31) * 0.3
 		in[0][i], in[1][i] = v, v
 	}
 	out, _ := through(t, in, set(float64(StereoizeID+3), 100))
