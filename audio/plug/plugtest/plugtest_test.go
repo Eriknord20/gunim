@@ -3,6 +3,7 @@ package plugtest
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim/audio/plug"
 )
@@ -247,4 +248,120 @@ func level(n int, v float32) []float32 {
 		s[i] = v
 	}
 	return s
+}
+
+// news is news of a note as an instrument heard it: the block's first
+// frame, and the note's landing counted from the start.
+type news struct {
+	block int
+	kind  plug.UpcomingKind
+	note  int32
+	lands int
+	pitch float64
+}
+
+// listener is an instrument that keeps the news it hears, and the frame
+// each NoteOn lands on, in room made before it plays.
+type listener struct {
+	recorder
+	news []news
+	ons  []heard
+}
+
+func (l *listener) Prepare(s plug.Setup) {
+	l.recorder.Prepare(s)
+	l.news = make([]news, 0, 64)
+	l.ons = make([]heard, 0, 64)
+}
+
+func (l *listener) Process(b *plug.Block) {
+	at := int(b.Position.Frame)
+	for _, u := range b.Upcoming {
+		lands := at + u.Frame
+		if u.Kind == plug.Removed {
+			lands = -1
+		}
+		l.news = append(l.news, news{at, u.Kind, u.Note, lands, u.Pitch})
+	}
+	for _, e := range b.Events {
+		if e.Kind == plug.NoteOn {
+			l.ons = append(l.ons, heard{at: at + e.Frame, kind: e.Kind, note: e.Note})
+		}
+	}
+	for _, ch := range b.Out {
+		clear(ch[:b.Frames])
+	}
+}
+
+func TestNewsReachesTheBlockItIsSentInAheadOfItsNote(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	notes := []plug.Event{
+		{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5},
+		// Within the window of the start, so its news comes in the first
+		// block.
+		{Frame: 70, Kind: plug.NoteOn, Note: 2, Pitch: 62, Velocity: 0.5},
+		// In the first block itself: no block before it tells of it.
+		{Frame: 30, Kind: plug.NoteOn, Note: 3, Pitch: 64, Velocity: 0.5},
+		{Frame: 400, Kind: plug.NoteOff, Note: 1},
+	}
+	ahead := Announce(s, 100, notes...)
+	if len(ahead) != 2 || ahead[0].At != 200 || ahead[1].At != 0 {
+		t.Fatalf("Announce gave %+v, want news of note 1 at 200 and note 2 at 0", ahead)
+	}
+	// An edit at frame 250 moves note 1 to 320 and a fifth up; another,
+	// at 260, takes back note 4, told of at 100.
+	ahead = append(ahead,
+		Ahead{At: 250, Upcoming: plug.Upcoming{Kind: plug.Moved, Frame: 320, Note: 1, Pitch: 67, Velocity: 0.5}},
+		Ahead{At: 100, Upcoming: plug.Upcoming{Kind: plug.Coming, Frame: 450, Note: 4, Pitch: 48, Velocity: 1}},
+		Ahead{At: 260, Upcoming: plug.Upcoming{Kind: plug.Removed, Frame: 450, Note: 4}})
+	notes[0].Frame = 320
+	l := &listener{}
+	Drive(t, &plug.Descriptor{Notes: true, LookAhead: time.Second}, l, s, 512, Ports{Events: notes, Upcoming: ahead})
+	want := []news{
+		{0, plug.Coming, 2, 70, 62},
+		{64, plug.Coming, 4, 450, 48},
+		{192, plug.Coming, 1, 300, 60},
+		{192, plug.Moved, 1, 320, 67},
+		{256, plug.Removed, 4, -1, 0},
+	}
+	if len(l.news) != len(want) {
+		t.Fatalf("the instrument heard %+v, want %+v", l.news, want)
+	}
+	for i := range want {
+		if l.news[i] != want[i] {
+			t.Errorf("news %d was heard as %+v, want %+v", i, l.news[i], want[i])
+		}
+	}
+	// Each note lands where its news said it would, last.
+	for _, on := range l.ons {
+		for i := len(l.news) - 1; i >= 0; i-- {
+			if n := l.news[i]; n.note == on.note {
+				if n.lands != on.at || n.block >= on.at {
+					t.Errorf("note %d landed at %d, as news heard in the block at %d put it at %d", on.note, on.at, n.block, n.lands)
+				}
+				break
+			}
+		}
+	}
+}
+
+func TestHearingNewsAllocatesNothing(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	s := plug.Setup{Rate: 48000, MaxBlock: 128, Channels: 2}
+	events := make([]plug.Event, 0, 64)
+	for i := range 32 {
+		events = append(events,
+			plug.Event{Frame: 200 + i*300, Kind: plug.NoteOn, Note: int32(i + 1), Pitch: 60, Velocity: 1},
+			plug.Event{Frame: 200 + i*300 + 299, Kind: plug.NoteOff, Note: int32(i + 1)})
+	}
+	ahead := Announce(s, 480, events...)
+	made := AllocsUnder(t, "plugtest.playBlocks", func() {
+		Drive(t, &plug.Descriptor{Notes: true, LookAhead: 10 * time.Millisecond}, &listener{}, s, 32*300+200,
+			Ports{Events: events, Upcoming: ahead})
+	})
+	if made != 0 {
+		t.Errorf("hearing news made %d things", made)
+	}
 }
