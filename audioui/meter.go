@@ -8,6 +8,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
@@ -125,17 +126,23 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 	ink, ground, over := widget.Ink.Get(th), Ground.Get(th), Over.Get(th)
 	top, bottom := r.Min.Y, r.Max.Y
 	yOf := func(db float32) float32 { return bottom - (bottom-top)*MeterAt(db) }
-	for ch := range 2 {
+	runs := topRuns(l.Top, "%.1f")
+	if runs[0].Advance+runs[1].Advance+labelGap > MeterW {
+		// Two long readouts side by side lose their tenths, to stay
+		// apart.
+		runs = topRuns(l.Top, "%.0f")
+	}
+	x0 := meterLabelX(r.Min.X, BarW/2, runs[0].Advance)
+	x1 := meterLabelX(r.Min.X, BarPitch+BarW/2, runs[1].Advance)
+	if x0+runs[0].Advance+labelGap > x1 {
+		x0, x1 = r.Min.X, r.Min.X+MeterW-runs[1].Advance
+	}
+	for ch, x := range []float32{x0, x1} {
 		c := Faded(ink, 0.7)
 		if l.Top[ch] > -1 {
 			c = over
 		}
-		words := "—"
-		if l.Top[ch] > -89 {
-			words = fmt.Sprintf("%.1f", l.Top[ch])
-		}
-		run := Shaped(words, 8, true, true)
-		run.Paint(p, geom.Pt(meterLabelX(r.Min.X, float32(ch)*BarPitch+BarW/2, run.Advance), top-34), c)
+		runs[ch].Paint(p, geom.Pt(x, top-34), c)
 	}
 	loud := "—"
 	if s, ok := l.ShortTerm(); ok {
@@ -161,6 +168,23 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 			p.RRect(geom.Rc(bx, yOf(l.Hold[ch])-1, BarW, 2), 1, paint.Solid(hc))
 		}
 	}
+}
+
+// labelGap is the least room between a meter's two peak readouts.
+const labelGap = 3
+
+// topRuns are the readouts of each channel's highest peak in top,
+// written by format, or a dash for none.
+func topRuns(top [2]float32, format string) [2]text.Run {
+	var out [2]text.Run
+	for ch := range 2 {
+		words := "—"
+		if top[ch] > -89 {
+			words = fmt.Sprintf(format, top[ch])
+		}
+		out[ch] = Shaped(words, 8, true, true)
+	}
+	return out
 }
 
 // meterLabelX is where a label w wide starts, centred mid along a meter
