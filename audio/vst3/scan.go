@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -110,9 +111,9 @@ func moduleInfo(path string) ([]Class, bool) {
 		if cl.Vendor == "" {
 			cl.Vendor = info.Factory.Vendor
 		}
-		if cl.Audio() {
-			out = append(out, cl)
-		}
+		out = append(out, cl)
 	}
+	markARA(out)
+	out = slices.DeleteFunc(out, func(c Class) bool { return !c.Audio() })
 	return out, true
 }

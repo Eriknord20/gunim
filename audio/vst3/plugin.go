@@ -201,6 +201,12 @@ type Plugin struct {
 	editorOpen atomic.Bool
 	// onEdit, set by a test, hears each change of the editor's.
 	onEdit func(id uint32, v float64)
+
+	// bind binds the component to an ARA document, once it is
+	// initialized and before it first processes; ara is what binding
+	// added, or nil.
+	bind func(comp uintptr) error
+	ara  *Extension
 }
 
 // New makes an effect or an instrument of class c, set up as cfg says,
@@ -252,6 +258,11 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 		release(p.comp)
 		p.comp = 0
 		return fmt.Errorf("vst3: %s: initialize failed (%d)", p.Class.Name, r)
+	}
+	if p.bind != nil {
+		if err := p.bind(p.comp); err != nil {
+			return err
+		}
 	}
 	p.proc = query(p.comp, iidAudioProcessor)
 	if p.proc == 0 {
@@ -889,6 +900,9 @@ func (p *Plugin) Close() {
 	}
 	p.closed = true
 	untick(p)
+	if p.ara != nil {
+		p.ara.unbind()
+	}
 	onUI(func() {
 		if p.ed != nil {
 			p.ed.close()

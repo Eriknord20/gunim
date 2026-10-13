@@ -3,6 +3,7 @@ package vst3
 import (
 	"encoding/binary"
 	"math"
+	"slices"
 	"sync"
 	"testing"
 	"unsafe"
@@ -38,6 +39,13 @@ type fakePlugin struct {
 
 	comp, proc, ctrl, mm, ne uintptr
 	handler                  uintptr
+	// ara is the fake's ARA side, where it has one, and araEntry and
+	// araEntry2 its entries.
+	ara                 *fakeARAPlugin
+	araExt              *fakeExt
+	araEntry, araEntry2 uintptr
+	// isActive says the host has it active.
+	isActive bool
 
 	mu         sync.Mutex
 	blocks     []fakeBlock
@@ -79,6 +87,10 @@ func (f *fakePlugin) other(id uid) uintptr {
 		if f.tuning {
 			p = f.ne
 		}
+	case iidARAPlugInEntry:
+		p = f.araEntry
+	case iidARAPlugInEntry2:
+		p = f.araEntry2
 	}
 	if p != 0 {
 		selfObject(p).refs.Add(1)
@@ -101,7 +113,14 @@ func arrangement(n int) uint64 {
 var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func() []uintptr {
 	return []uintptr{
 		newCallback(func(this, ctx uintptr) uintptr { return ok() }),
-		newCallback(func(this uintptr) uintptr { return ok() }),
+		newCallback(func(this uintptr) uintptr {
+			// Terminated, it lets go of its ARA extension, as a plugin
+			// destroyed does.
+			if x := fakeOf(this).araExt; x != nil {
+				x.d.exts = slices.DeleteFunc(x.d.exts, func(e *fakeExt) bool { return e == x })
+			}
+			return ok()
+		}),
 		newCallback(func(this, cid uintptr) uintptr { return resultOf(resultFalse) }),
 		newCallback(func(this, mode uintptr) uintptr { return ok() }),
 		newCallback(func(this, media, dir uintptr) uintptr {
@@ -142,7 +161,13 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 			f.mu.Unlock()
 			return ok()
 		}),
-		newCallback(func(this, state uintptr) uintptr { return ok() }),
+		newCallback(func(this, state uintptr) uintptr {
+			f := fakeOf(this)
+			f.mu.Lock()
+			f.isActive = state&0xff != 0
+			f.mu.Unlock()
+			return ok()
+		}),
 		newCallback(func(this, stream uintptr) uintptr {
 			f := fakeOf(this)
 			buf := make([]byte, 256)
@@ -263,6 +288,9 @@ func (f *fakePlugin) process(d *processData) {
 			}
 		}
 	}
+	if f.ara != nil {
+		f.ara.render(f, d)
+	}
 	for j := range int(i32(call(d.inEvents, 3))) {
 		var e vstEvent
 		call(d.inEvents, 4, uintptr(j), uintptr(unsafe.Pointer(&e)))
@@ -345,18 +373,29 @@ func utf16Of(s string) []uint16 {
 // open makes a plugin of the fake, set up as cfg says.
 func (f *fakePlugin) open(t *testing.T, cfg Config) (*Plugin, error) {
 	t.Helper()
+	f.makeObjects()
+	return start(f.class(), cfg, func(p *Plugin) error { return p.build(f.comp, nil) })
+}
+
+// makeObjects makes the fake's objects. They stay live: a plugin of
+// them may close after the test's own cleanups.
+func (f *fakePlugin) makeObjects() {
 	f.active = map[[3]int]bool{}
 	mk := func(k *kind) uintptr { return keep(&fakeObject{f: f}, k, false) }
 	f.comp, f.proc, f.ctrl, f.mm, f.ne = mk(fakeCompKind), mk(fakeProcKind), mk(fakeCtrlKind), mk(fakeMidiKind),
 		mk(fakeNoteExprKind)
-	// The objects stay live: a plugin of them may close after the test's
-	// own cleanups.
+	if f.ara != nil {
+		f.araEntry, f.araEntry2 = mk(fakeARAEntryKind), mk(fakeARAEntry2Kind)
+	}
+}
+
+// class is the fake's class.
+func (f *fakePlugin) class() Class {
 	kind := "Fx"
 	if f.events {
 		kind = "Instrument|Synth"
 	}
-	c := Class{Name: "Fake", Category: "Audio Module Class", SubCategories: kind}
-	return start(c, cfg, func(p *Plugin) error { return p.build(f.comp, nil) })
+	return Class{Name: "Fake", Category: "Audio Module Class", SubCategories: kind, ARA: f.ara != nil}
 }
 
 // fakeSynth is a fake instrument: notes in, a stereo output, an aux
