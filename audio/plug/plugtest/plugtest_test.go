@@ -248,3 +248,41 @@ func level(n int, v float32) []float32 {
 	}
 	return s
 }
+
+// ramp is a generator whose one control output counts the frames from
+// the start, and whose second holds the tempo it was given.
+var ramp = plug.Descriptor{
+	ID: "test.ramp", Name: "Ramp", Kind: "Generator|LFO",
+	ControlOut: []plug.ControlPort{{Name: "Frame", Max: 1e6}, {Name: "Tempo", Max: 999}},
+	New:        func(plug.Host) plug.Plugin { return nil },
+}
+
+type ramper struct {
+	recorder
+	sawSound bool
+}
+
+func (r *ramper) Process(b *plug.Block) {
+	if b.In != nil || b.Out != nil {
+		r.sawSound = true
+	}
+	frame, tempo := b.ControlOutput(0), b.ControlOutput(1)
+	for f := range b.Frames {
+		frame[f] = float32(b.Position.Frame + int64(f))
+		tempo[f] = float32(b.Position.Tempo)
+	}
+}
+
+func TestAGeneratorRunsWithoutSound(t *testing.T) {
+	r := &ramper{}
+	res := Drive(t, &ramp, r, plug.Setup{Rate: 48000, MaxBlock: 64}, 200, Ports{Tempo: 128})
+	if r.sawSound || res.Out != nil {
+		t.Errorf("the generator was given sound, or gave some: %v", res.Out)
+	}
+	for f := range 200 {
+		if res.ControlOut[0][f] != float32(f) || res.ControlOut[1][f] != 128 {
+			t.Fatalf("at frame %d the generator put out %v and %v, want %d and 128",
+				f, res.ControlOut[0][f], res.ControlOut[1][f], f)
+		}
+	}
+}

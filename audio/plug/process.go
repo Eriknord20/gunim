@@ -79,7 +79,8 @@ func (m *Meter) Get() float64 { return math.Float64frombits(m.bits.Load()) }
 type Block struct {
 	// In holds each channel's frames, and Out the channels to write.
 	// Out may be In, to process in place. An instrument's In is nil,
-	// and it writes every frame of Out.
+	// and it writes every frame of Out. A generator's In and Out are
+	// both nil, and it writes its control outputs alone.
 	In, Out [][]float32
 	// AuxIn holds each aux input's channels, by [Descriptor.AuxIn].
 	AuxIn [][][]float32
