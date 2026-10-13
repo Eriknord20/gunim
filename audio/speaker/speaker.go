@@ -13,8 +13,12 @@
 // rate, the samples' bits, and how far ahead the mixer works.
 //
 // Package audio/capture records the inputs of the ASIO driver the
-// speakers play through, where [Options].Record is set, and stamps what it records with
-// [Speaker.Heard].
+// speakers play through, where [Options].Record is set, and stamps
+// what it records with [Speaker.Heard].
+//
+// [Speaker.Anchor] ties the mixer's frames to the clock [time.Now]
+// reads, so a host sends MIDI for a frame to leave as it is heard, and
+// places MIDI that comes in on the frame heard as it arrived.
 package speaker
 
 import (
@@ -127,6 +131,8 @@ type Speaker struct {
 	bits   atomic.Int64
 	dither atomic.Bool
 	q      audio.Quantizer
+	// anchor ties the frames heard to the clock.
+	anchor dll
 	// reset asks the watch to open the output again, as an ASIO driver
 	// asks; changed tells of an output opened again.
 	reset   chan struct{}
@@ -289,6 +295,7 @@ func (s *Speaker) watch() {
 			}
 			s.mu.Unlock()
 		case <-t.C:
+			s.Anchor()
 			dry := s.dry.Swap(0)
 			if dry > 0 {
 				s.logf("ran dry %d times in %v", dry, every)
@@ -375,6 +382,7 @@ func (s *Speaker) reopenLocked() error {
 		s.problem = err
 		return err
 	}
+	s.anchor.reset()
 	s.out.Store(&outlet{out})
 	s.logf("opened again, at %d Hz, working %v ahead", out.rate(), s.Latency())
 	select {
@@ -547,6 +555,7 @@ func (s *Speaker) Close() error {
 			err = out.close()
 		}
 		s.mu.Unlock()
+		s.anchor.clear()
 		opened.Lock()
 		isOpened = false
 		opened.Unlock()
