@@ -396,3 +396,62 @@ func TestATransferOutOfAZipCarriesTheZip(t *testing.T) {
 		c.reply <- nil
 	}
 }
+
+// openCounter counts the files of its file system open.
+type openCounter struct {
+	FS
+	open *atomic.Int64
+}
+
+func (c openCounter) Open(p string) (io.ReadSeekCloser, error) {
+	f, err := c.FS.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	c.open.Add(1)
+	return &countedFile{ReadSeekCloser: f, open: c.open}, nil
+}
+
+type countedFile struct {
+	io.ReadSeekCloser
+	open *atomic.Int64
+}
+
+func (c *countedFile) Close() error {
+	c.open.Add(-1)
+	return c.ReadSeekCloser.Close()
+}
+
+// An archive's file is open only while a file of it is read, so on
+// Windows the archive can still be deleted or replaced while a window
+// shows what it holds.
+func TestAnArchivesFileIsClosedWhenNothingReadsIt(t *testing.T) {
+	root := t.TempDir()
+	zp := filepath.Join(root, "a.zip")
+	writeZip(t, zp, map[string]string{"x.txt": "x", "s.bin": "stored"})
+	var open atomic.Int64
+	fsys := withArchives(openCounter{LocalFS(), &open}, &zipKeys{})
+	dirNames(t, fsys, zp)
+	if _, err := fsys.Stat(filepath.Join(zp, "x.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if n := open.Load(); n != 0 {
+		t.Fatalf("listed, %d of its files stay open", n)
+	}
+	for _, name := range []string{"x.txt", "s.bin"} {
+		f, err := fsys.Open(filepath.Join(zp, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadAll(f); err != nil {
+			t.Fatal(err)
+		}
+		if n := open.Load(); n != 1 {
+			t.Fatalf("reading %s, %d files are open", name, n)
+		}
+		_ = f.Close()
+		if n := open.Load(); n != 0 {
+			t.Fatalf("%s closed, %d files stay open", name, n)
+		}
+	}
+}

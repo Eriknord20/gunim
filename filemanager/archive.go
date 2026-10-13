@@ -145,15 +145,16 @@ func (k *zipKeys) set(id, archive, pw string) {
 	k.m[id+"\x00"+archive] = pw
 }
 
-// heldZip is an archive held open: its file, the reader of its index,
-// and the folders that index makes.
+// heldZip is an archive held: the reader of its index, and the folders
+// that index makes. Its file is open only while something reads it, so
+// on Windows, where an open file cannot be deleted or replaced, the
+// archive can be, in the window and outside it.
 type heldZip struct {
 	path    string
 	size    int64
 	mod     time.Time
 	checked time.Time
-	file    io.ReadSeekCloser
-	ra      *seekReaderAt
+	ra      *lazyFile
 	zr      *zip.Reader
 	// nodes are what it holds by their path in it, '/' between folders,
 	// and fold the paths by their lower case, for a file system whose
@@ -162,10 +163,9 @@ type heldZip struct {
 	fold  map[string]string
 	// locked says a password protects some of what it holds.
 	locked bool
-	// users counts the files open out of it, and gone says it is no
-	// longer held, so its file closes once the last of them does.
+	// users counts the uses of it under way, and its file closes once
+	// the last of them ends.
 	users int
-	gone  bool
 }
 
 // zipNode is a file or a folder of an archive.
@@ -331,18 +331,14 @@ func (a *archives) release(h *heldZip) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	h.users--
-	if h.gone && h.users == 0 {
-		_ = h.file.Close()
+	if h.users == 0 {
+		h.ra.close()
 	}
 }
 
-// drop lets h go, closing its file once nothing reads it. a.mu is held.
+// drop lets h go. Its file closes once nothing reads it. a.mu is held.
 func (a *archives) drop(h *heldZip) {
 	a.held = slices.DeleteFunc(a.held, func(o *heldZip) bool { return o == h })
-	h.gone = true
-	if h.users == 0 {
-		_ = h.file.Close()
-	}
 }
 
 // forget lets go of the archive at p, and of what is known of whether p
@@ -365,17 +361,13 @@ func (a *archives) read(p string) (*heldZip, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := a.FS.Open(p)
-	if err != nil {
-		return nil, err
-	}
-	ra := &seekReaderAt{rs: f}
+	ra := &lazyFile{open: func() (io.ReadSeekCloser, error) { return a.FS.Open(p) }}
 	zr, err := zip.NewReader(ra, info.Size())
 	if err != nil {
-		_ = f.Close()
+		ra.close()
 		return nil, fmt.Errorf("%s cannot be read as a zip: %w", a.Paths().Show(p), err)
 	}
-	h := &heldZip{path: p, size: info.Size(), mod: info.ModTime(), checked: time.Now(), file: f, ra: ra, zr: zr,
+	h := &heldZip{path: p, size: info.Size(), mod: info.ModTime(), checked: time.Now(), ra: ra, zr: zr,
 		nodes: map[string]*zipNode{"": {dir: true, mod: info.ModTime()}}}
 	if a.foldsCase() {
 		h.fold = map[string]string{"": ""}
@@ -927,4 +919,37 @@ func (a *archives) under(archive, inner string) string {
 		return archive
 	}
 	return a.Paths().Join(append([]string{archive}, strings.Split(inner, "/")...)...)
+}
+
+// lazyFile reads an archive's file at an offset, opening it for the
+// first read, and holding it open until close.
+type lazyFile struct {
+	mu   sync.Mutex
+	open func() (io.ReadSeekCloser, error)
+	f    io.ReadSeekCloser
+	r    *seekReaderAt
+}
+
+// ReadAt implements [io.ReaderAt].
+func (l *lazyFile) ReadAt(p []byte, off int64) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		f, err := l.open()
+		if err != nil {
+			return 0, err
+		}
+		l.f, l.r = f, &seekReaderAt{rs: f}
+	}
+	return l.r.ReadAt(p, off)
+}
+
+// close closes the file, which the next read opens again.
+func (l *lazyFile) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f != nil {
+		_ = l.f.Close()
+		l.f, l.r = nil, nil
+	}
 }
