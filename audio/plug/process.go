@@ -80,7 +80,8 @@ func (m *Meter) Get() float64 { return math.Float64frombits(m.bits.Load()) }
 type Block struct {
 	// In holds each channel's frames, and Out the channels to write.
 	// Out may be In, to process in place. An instrument's In is nil,
-	// and it writes every frame of Out.
+	// and it writes every frame of Out. A generator's In and Out are
+	// both nil, and it writes its control outputs alone.
 	In, Out [][]float32
 	// AuxIn holds each aux input's channels, by [Descriptor.AuxIn].
 	AuxIn [][][]float32
@@ -252,6 +253,11 @@ type Position struct {
 	Playing bool
 	// Tempo is beats a minute, or zero where none is known.
 	Tempo float64
+	// Beat is where Frame falls in the music, in beats from the start
+	// of the track, as the host's tempo map counts them, so a plugin
+	// that follows the beat follows it alike however the tempo moved
+	// before: a tempo-synced LFO. It holds where Tempo is above zero.
+	Beat float64
 }
 
 // Upcoming is news of a note the host starts in a later block, for a

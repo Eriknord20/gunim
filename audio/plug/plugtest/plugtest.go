@@ -93,6 +93,10 @@ type Ports struct {
 	// Upcoming is news of notes, for a plugin that looks ahead, as
 	// [Announce] makes it.
 	Upcoming []Ahead
+	// Tempo is each block's [plug.Position.Tempo], in beats a minute:
+	// zero where none is known. Each block's [plug.Position.Beat]
+	// counts the beats at that tempo from the start.
+	Tempo float64
 }
 
 // Ahead is news of a note as [Drive] sends it: in the block holding
@@ -144,11 +148,17 @@ type Result struct {
 // events go to the blocks they fall in, in the order of their frames, and
 // its news to the blocks holding their At, in the order of At.
 // Drive fills every output with NaN before each block, so a frame the
-// processor leaves unwritten shows.
+// processor leaves unwritten shows. A generator, as
+// [plug.Descriptor.Generator] reports one, runs with In and Out nil,
+// and its Result's Out is nil too.
 func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, frames int, p Ports) Result {
 	t.Helper()
-	if frames <= 0 || s.MaxBlock <= 0 || s.Channels <= 0 {
+	generator := d.Generator()
+	if frames <= 0 || s.MaxBlock <= 0 || (s.Channels <= 0 && !generator) {
 		t.Fatalf("plugtest: Drive needs frames, MaxBlock and Channels above 0, has %d, %d and %d", frames, s.MaxBlock, s.Channels)
+	}
+	if generator && p.In != nil {
+		t.Fatalf("plugtest: Drive was given a main input for %s, a generator", d.ID)
 	}
 	if len(p.AuxIn) > len(d.AuxIn) || len(p.ControlIn) > len(d.ControlIn) {
 		t.Fatalf("plugtest: Drive was given %d aux and %d control inputs, for a plugin of %d and %d",
@@ -211,13 +221,17 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 		auxOut[i] = channels(n, s.MaxBlock)
 	}
 	out, controlOut := channels(s.Channels, s.MaxBlock), channels(len(d.ControlOut), s.MaxBlock)
+	if generator {
+		res.Out, out = nil, nil
+	}
 
 	// Every block is made before the first runs, so the running
 	// allocates nothing of its own.
 	var blocks []plug.Block
 	for at := 0; at < frames; at += s.MaxBlock {
 		n := min(s.MaxBlock, frames-at)
-		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Playing: true},
+		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Playing: true, Tempo: p.Tempo,
+			Beat: float64(at) * p.Tempo / 60 / s.Rate},
 			In: window(p.In, at, n), Out: window(out, 0, n), ControlIn: window(p.ControlIn, at, n),
 			ControlOut: window(controlOut, 0, n)}
 		for _, port := range p.AuxIn {
