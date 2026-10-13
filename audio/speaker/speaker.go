@@ -11,6 +11,14 @@
 //
 // [Speaker.Set] changes how they play while they play: the driver, the
 // rate, the samples' bits, and how far ahead the mixer works.
+//
+// Package audio/capture records the inputs of the ASIO driver the
+// speakers play through, where [Options].Record is set, and stamps
+// what it records with [Speaker.Heard].
+//
+// [Speaker.Anchor] ties the mixer's frames to the clock [time.Now]
+// reads, so a host sends MIDI for a frame to leave as it is heard, and
+// places MIDI that comes in on the frame heard as it arrived.
 package speaker
 
 import (
@@ -54,6 +62,11 @@ type Options struct {
 	// mixer is late to fill it, the speaker works further ahead, 10
 	// milliseconds at a time, as far as [MaxLatency].
 	Fixed bool
+	// Record opens the inputs of the ASIO driver too, for package
+	// audio/capture to record. A driver may then open a device of its
+	// own to record from, as FlexASIO and ASIO4ALL open Windows'
+	// microphone, so leave it unset to play alone.
+	Record bool
 }
 
 // rate returns the rate o asks for.
@@ -118,6 +131,8 @@ type Speaker struct {
 	bits   atomic.Int64
 	dither atomic.Bool
 	q      audio.Quantizer
+	// anchor ties the frames heard to the clock.
+	anchor dll
 	// reset asks the watch to open the output again, as an ASIO driver
 	// asks; changed tells of an output opened again.
 	reset   chan struct{}
@@ -248,6 +263,11 @@ func (s *Speaker) held() int64 {
 	return 0
 }
 
+// Heard returns the mixer's frame at the speakers now: how many of the
+// frames it mixed have been heard. Package audio/capture stamps what it
+// records with it.
+func (s *Speaker) Heard() int64 { return s.m.Heard() }
+
 // Latency returns how long a sound takes to be heard after it starts,
 // as the speaker works now.
 func (s *Speaker) Latency() time.Duration {
@@ -275,6 +295,7 @@ func (s *Speaker) watch() {
 			}
 			s.mu.Unlock()
 		case <-t.C:
+			s.Anchor()
 			dry := s.dry.Swap(0)
 			if dry > 0 {
 				s.logf("ran dry %d times in %v", dry, every)
@@ -320,8 +341,8 @@ func (s *Speaker) SetLatency(d time.Duration) {
 	s.logf("working %v ahead", s.Latency())
 }
 
-// Set changes how the speakers play. A change of driver or rate opens
-// the output again, with a moment's silence; the mixer's rate follows,
+// Set changes how the speakers play. A change of driver or rate, or of
+// Record while a driver plays, opens the output again, with a moment's silence; the mixer's rate follows,
 // and [Speaker.Changed] tells of it. A change of Latency or Fixed sets
 // how far ahead the mixer works from where it is.
 func (s *Speaker) Set(o Options) error {
@@ -335,7 +356,7 @@ func (s *Speaker) Set(o Options) error {
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
 	}
-	if o.Driver != prev.Driver || o.rate() != prev.rate() {
+	if o.Driver != prev.Driver || o.rate() != prev.rate() || (o.Driver != "" && o.Record != prev.Record) {
 		return s.reopenLocked()
 	}
 	return nil
@@ -361,6 +382,7 @@ func (s *Speaker) reopenLocked() error {
 		s.problem = err
 		return err
 	}
+	s.anchor.reset()
 	s.out.Store(&outlet{out})
 	s.logf("opened again, at %d Hz, working %v ahead", out.rate(), s.Latency())
 	select {
@@ -533,6 +555,7 @@ func (s *Speaker) Close() error {
 			err = out.close()
 		}
 		s.mu.Unlock()
+		s.anchor.clear()
 		opened.Lock()
 		isOpened = false
 		opened.Unlock()

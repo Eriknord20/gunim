@@ -166,6 +166,14 @@ writes 16 or 24-bit WAV, dithered, or 32-bit float, tagged. Its `Range` reads
 the loudness range, LRA, as EBU Tech 3342 defines it, and several
 sounds' readings pooled measure an album as one.
 
+Package `audio/capture` records the computer's inputs: a microphone, a
+guitar through an audio interface, a synth's output. It records through
+PulseAudio or PipeWire on Linux and WASAPI on Windows, and through the
+ASIO driver the speakers play through, in step with its buffers. Each
+block it records is stamped with the mixer frame heard as it came in,
+so a recording lines up with what was playing. `Measure` plays a click
+and finds it in the recording, to tell how far the stamps are off.
+
 Package `audio/vst3` hosts VST3 plugins, in pure Go. It finds the
 effects and instruments in the system's folders and loads one. It runs
 sound through an effect in realtime or offline, plays notes on an
@@ -195,6 +203,16 @@ through its ports in tests. The plugins themselves are packages beside
 it: `dynamics`, which has a sidechain input, `enhancer`, `eq`,
 `imager`, `maximizer`, `trim` and `xover`, a crossover the others split
 bands with.
+
+Package `audio/midi` sends and receives MIDI through the computer's
+ports: notes and the MIDI clock out to hardware synths, and notes in
+from a keyboard. It lists ports by name, and tells as they come and go.
+A message is sent with the time it is to leave, on the clock
+`time.Now` reads, and waits in the system until then, so a host
+schedules notes against its sound; a message that comes in carries the
+time it arrived. Sending makes nothing new, so a host sends from the
+goroutine that renders its sound. It speaks the ALSA sequencer on Linux
+and WinMM on Windows.
 
 Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings
@@ -800,10 +818,12 @@ path data.
 | `gunim/anim` | `Animated[T]`, springs, tweens, easings |
 | `gunim/audio` | A mixer, voices with animated volume and pan, clips, decoders for WAV, MP3, Ogg Vorbis and FLAC, and an analyzer for visuals |
 | `gunim/audio/speaker` | Plays a mixer through the speakers, with oto |
+| `gunim/audio/capture` | Records the computer's inputs, stamped in the speaker's frames, and measures the round trip |
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |
 | `gunim/audio/plug` | A plugin format for effects and instruments written in Go, with views drawn in gunim, and the plugins made in it |
 | `gunim/audio/vst3` | Hosts VST3 effects and instruments: their sound, notes, state, parameters and editors, also behind `audio/plug`'s interfaces |
+| `gunim/audio/midi` | MIDI ports in and out, with messages timed to leave and stamped as they arrive |
 | `gunim/audioui` | Meters and faders, a spectrum and a spectrogram, a waveform, and loudness readings for audio programs |
 | `gunim/paint` | The per-frame draw list: rounded rects, shadows, gradients, text, images, masks, light that adds, layers that clip and tilt, and 3D scenes |
 | `gunim/icon` | Lucide's icons as strokes, drawn as tinted masks; `icon/byname` looks them up by name |
