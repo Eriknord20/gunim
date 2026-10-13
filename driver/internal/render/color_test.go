@@ -128,3 +128,36 @@ func TestHalfFloats(t *testing.T) {
 		}
 	}
 }
+
+// leftHalf is a mask lit in the left half of each row.
+type leftHalf struct{}
+
+func (leftHalf) Coverage(w, h int) []byte {
+	pix := make([]byte, w*h)
+	for y := range h {
+		for x := range w / 2 {
+			pix[y*w+x] = 0xff
+		}
+	}
+	return pix
+}
+
+func (leftHalf) Settled() bool { return true }
+
+func TestAMaskOfOddWidthIsNotShearedOnAProfiledDisplay(t *testing.T) {
+	r, done := hiddenGL(t)
+	defer done()
+	if err := r.SetColor(icc.DisplayP3().LUT(icc.LUTSize)); err != nil {
+		t.Fatal(err)
+	}
+	// 14 pixels a row, not a multiple of 4: an upload that pads rows to 4 bytes shifts each row further.
+	pix := drawMask(r, leftHalf{}, geom.Rc(100, 100, 14, 14), color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
+	for y := 100; y < 114; y++ {
+		if got := pixelAt(pix, 101, y); got[0] < 0xf0 {
+			t.Errorf("row %d of the mask is %v at its left, want it lit", y-100, got)
+		}
+		if got := pixelAt(pix, 112, y); got[0] > 0x10 {
+			t.Errorf("row %d of the mask is %v at its right, want it dark", y-100, got)
+		}
+	}
+}

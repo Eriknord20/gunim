@@ -245,18 +245,42 @@ const (
 )
 
 // Position is where a block falls in the music.
+//
+// Its beats are quarter notes, whatever the meter calls a beat, as
+// package audio/tempo counts them. A host fills Beat, Tempo and EndTempo
+// from its tempo map, so a plugin finds the beat at every frame of the
+// block with [Position.BeatAt]:
+//
+//   - It measures Beat from the tempo map's tick 0, the start of the
+//     track, as [github.com/marrasen/gunim/audio/tempo.Map.QuartersAtFrame]
+//     gives it, Tempo as [github.com/marrasen/gunim/audio/tempo.Map.BPMAtFrame]
+//     does at Frame, and EndTempo as
+//     [github.com/marrasen/gunim/audio/tempo.Map.BPMReachingFrame] does at
+//     the frame after the block's last.
+//   - It splits a block at each tempo change, where the tempo steps to
+//     another or a ramp starts or ends, starting the next block on the
+//     first frame at or after the change, so a block holds one tempo, or
+//     one stretch of a ramp. A ramp runs linearly in time, as
+//     audio/tempo draws one, so Tempo and EndTempo tell the whole of it.
 type Position struct {
 	// Frame is the block's first frame, counted from the start of the
 	// track.
 	Frame int64
 	// Playing is set while the sound plays, and clear as it renders.
 	Playing bool
-	// Tempo is beats a minute, or zero where none is known.
+	// Tempo is quarter notes a minute at Frame, or zero where none is
+	// known.
 	Tempo float64
-	// Beat is where Frame falls in the music, in beats from the start
-	// of the track, as the host's tempo map counts them, so a plugin
-	// that follows the beat follows it alike however the tempo moved
-	// before: a tempo-synced LFO. It holds where Tempo is above zero.
+	// EndTempo is quarter notes a minute as the block ends, at the frame
+	// after its last, where the block falls on a ramp: the tempo runs
+	// from Tempo to EndTempo evenly in time. Zero holds the tempo at
+	// Tempo through the block.
+	EndTempo float64
+	// Beat is where Frame falls in the music, in quarter notes from the
+	// start of the track, as the host's tempo map counts them, so a
+	// plugin that follows the beat follows it alike however the tempo
+	// moved before: a tempo-synced LFO. It holds where Tempo is above
+	// zero.
 	Beat float64
 }
 
@@ -302,3 +326,20 @@ const (
 	// music: its NoteOn is called off.
 	Removed
 )
+
+// BeatAt returns where frame f of a block n frames long falls, in
+// quarter notes from the start of the track, at rate frames a second:
+// from Beat, as the tempo runs from Tempo to EndTempo across the block.
+// It holds where Tempo is above zero.
+func (p Position) BeatAt(f, n int, rate float64) float64 {
+	end := p.EndTempo
+	if end <= 0 {
+		end = p.Tempo
+	}
+	s := float64(f) / rate
+	k := 0.0
+	if n > 0 {
+		k = (end - p.Tempo) / (float64(n) / rate)
+	}
+	return p.Beat + (p.Tempo*s+k*s*s/2)/60
+}

@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -27,6 +28,8 @@ var (
 	KnobCapTop    = theme.Color("plug.knob.cap.top", color.NRGBA{R: 0x44, G: 0x4a, B: 0x5c, A: 0xff})
 	KnobCapBottom = theme.Color("plug.knob.cap.bottom", color.NRGBA{R: 0x22, G: 0x26, B: 0x31, A: 0xff})
 	KnobGroove    = theme.Color("plug.knob.groove", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x16})
+	// KnobRing is the ring of the control moving a knob's value.
+	KnobRing = theme.Color("plug.knob.ring", color.NRGBA{R: 0xff, G: 0xb3, B: 0x47, A: 0xff})
 )
 
 // KnobW and KnobH are how big a knob is: its cap, its name and its
@@ -42,12 +45,19 @@ const (
 // ten times finer with Shift; the wheel and the arrow keys step it; a
 // double click sets it back to its default. Each turn is one gesture,
 // one step to undo: of a parameter of the host's, or of whatever the
-// knob is bound to. A value that runs either side of zero fills its arc
+// knob is bound to. A right click on a host's parameter opens the
+// host's menu for it, where the host is a [plug.ParamMenuHost]; where
+// it is a [plug.ModulationHost], a ring outside the knob spans the
+// depth of the control moving the parameter, and a dot on the arc
+// shows its value as heard. A value that runs either side of zero fills its arc
 // from zero. It lights as the pointer comes over it, and its tooltip
 // says how to turn it. A second button pressed mid-turn ends the turn
 // where it got to.
 type Knob struct {
 	anim.Group
+	// h is the host whose parameter the knob turns, nil for a knob
+	// bound to something else.
+	h plug.Host
 	p plug.Param
 	// begin, set and end are a gesture on the value the knob turns.
 	begin func(u *gunim.UI)
@@ -71,10 +81,30 @@ type Knob struct {
 
 // NewKnob returns a knob for p, a parameter of h's, at its value in h.
 func NewKnob(h plug.Host, p plug.Param) *Knob {
-	return NewKnobFunc(p, h.Param(p.ID),
+	k := NewKnobFunc(p, h.Param(p.ID),
 		func(u *gunim.UI) { h.Begin(p.ID, u) },
 		func(v float64, u *gunim.UI) { h.Set(p.ID, v, u) },
 		func(u *gunim.UI) { h.End(p.ID, u) })
+	k.h = h
+	return k
+}
+
+// modulation is how control moves the knob's parameter, and false
+// where none does.
+func (k *Knob) modulation() (plug.Modulation, bool) {
+	mh, ok := k.h.(plug.ModulationHost)
+	if !ok {
+		return plug.Modulation{}, false
+	}
+	return mh.Modulation(k.p.ID)
+}
+
+// Step implements [anim.Animator]: a knob whose parameter control moves
+// draws every frame, to show it move.
+func (k *Knob) Step(dt time.Duration) bool {
+	moving := k.Group.Step(dt)
+	_, modulated := k.modulation()
+	return moving || modulated
 }
 
 // NewKnobFunc returns a knob of what p describes, at v, turning it by
@@ -186,6 +216,9 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		arc(zero, t, 5, audioui.Faded(accent, 0.25))
 	}
 	arc(zero, t, 3.5, accent)
+	if m, ok := k.modulation(); ok {
+		k.paintModulation(p, m, c, r, t, audioui.Mix(accent, KnobRing.Get(th), 0.7))
+	}
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
 		paint.Shadow{Offset: geom.Pt(0, 2), Blur: 4, Color: color.NRGBA{A: 0x90}})
@@ -200,6 +233,33 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		col = accent
 	}
 	val.Paint(p, geom.Pt((box.W-val.Advance)/2, c.Y+r+4+name.Height()), col)
+}
+
+// paintModulation draws how control moves the knob's value: a ring
+// outside the arc, of radius r about c, from the value, at t along it,
+// as far as the depth reaches, or all round where control sets the
+// value; and a dot on the arc at the value heard, all in ring.
+func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, t float64, ring color.NRGBA) {
+	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
+	out := r + 5
+	at := func(t float64, rad float32) geom.Point {
+		a := from + sweep*t
+		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
+	}
+	t0, t1, a := t, min(max(t+m.Depth, 0), 1), float32(0.85)
+	if m.Sets {
+		t0, t1, a = 0, 1, 0.35
+	}
+	if t1 < t0 {
+		t0, t1 = t1, t0
+	}
+	if n := int((t1 - t0) * 40); n > 0 {
+		for i := range n {
+			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, audioui.Faded(ring, a))
+		}
+	}
+	dot := at(k.p.Normal(m.Now), r)
+	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: audioui.Faded(ring, 0.6)})
 }
 
 func onOff(b bool) float32 {
@@ -220,8 +280,8 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 	u.Invalidate()
 }
 
-// step sets the knob to v as a gesture of its own.
-func (k *Knob) step(v float64, u *gunim.UI) {
+// stepTo sets the knob to v as a gesture of its own.
+func (k *Knob) stepTo(v float64, u *gunim.UI) {
 	if v = k.p.Clamp(v); v == k.v {
 		return
 	}
@@ -273,12 +333,15 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	switch e := e.(type) {
 	case input.PointerDown:
+		if e.Button == input.ButtonSecondary && !k.held {
+			return k.openMenu(e.Pos, u)
+		}
 		if e.Button != input.ButtonPrimary {
 			return false
 		}
 		k.tip.Hide(u)
 		if e.Clicks == 2 {
-			k.step(k.p.Default, u)
+			k.stepTo(k.p.Default, u)
 			return true
 		}
 		k.held, k.from, k.start = true, e.Pos, k.p.Normal(k.v)
@@ -306,7 +369,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Delta.Y > 0 {
 			d = -d
 		}
-		k.step(k.p.Plain(k.p.Normal(k.v)+d), u)
+		k.stepTo(k.p.Plain(k.p.Normal(k.v)+d), u)
 	case input.KeyPress:
 		d := k.stepSize()
 		if e.Mods.Has(input.ModShift) {
@@ -323,11 +386,26 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		default:
 			return false
 		}
-		k.step(k.p.Plain(k.p.Normal(k.v)+d), u)
+		k.stepTo(k.p.Plain(k.p.Normal(k.v)+d), u)
 	default:
 		return false
 	}
 	return true
+}
+
+// openMenu opens the host's menu for the knob's parameter, at pos in
+// the knob, and reports whether it opened one.
+func (k *Knob) openMenu(pos geom.Point, u *gunim.UI) bool {
+	mh, ok := k.h.(plug.ParamMenuHost)
+	if !ok {
+		return false
+	}
+	b, ok := u.Bounds(k)
+	if !ok {
+		return false
+	}
+	k.tip.Hide(u)
+	return mh.ParamMenu(k.p.ID, b.Min.Add(pos), u)
 }
 
 // Access implements [gunim.Accessible]: a slider, named as its
@@ -350,7 +428,7 @@ func (k *Knob) AccessAct(r access.Request, u *gunim.UI) bool {
 	if !r.SetValue || k.Locked {
 		return false
 	}
-	k.step(r.Value, u)
+	k.stepTo(r.Value, u)
 	return true
 }
 

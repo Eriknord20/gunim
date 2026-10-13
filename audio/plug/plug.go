@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/geom"
 )
 
 // Descriptor is what a plugin is, as the host lists it before making
@@ -172,8 +173,12 @@ const (
 )
 
 // Clamp returns v within the parameter's range, on a step where it has
-// steps.
+// steps. A NaN, as a file or a modulation may bring, is the Default,
+// and an infinity the end of the range it points to.
 func (p Param) Clamp(v float64) float64 {
+	if math.IsNaN(v) {
+		v = p.Default
+	}
 	v = min(max(v, p.Min), p.Max)
 	if p.Steps > 0 {
 		return p.Plain(p.Normal(v))
@@ -282,6 +287,36 @@ type Host interface {
 	// as a [Tracer], of the ReadOnly parameter id, and whether there is
 	// one: for a view to draw along the sound it hears.
 	Traced(id uint32, f int64) (v float32, ok bool)
+}
+
+// ParamMenuHost is a [Host] with a menu for a parameter, as a DAW's
+// "Automate" and "Modulate by". A right click on a control that turns
+// a parameter asks for it.
+type ParamMenuHost interface {
+	// ParamMenu opens the host's menu for parameter id, at pos in the
+	// window's logical pixels, and reports whether it opened one.
+	ParamMenu(id uint32, pos geom.Point, u *gunim.UI) bool
+}
+
+// Modulation is how control moves a parameter as it plays.
+type Modulation struct {
+	// Depth is how far the control wired to the parameter reaches from
+	// its value, along [Param.Normal], from -1 to 1.
+	Depth float64
+	// Now is the parameter's value as heard now.
+	Now float64
+	// Sets says control sets the value, as automation does, so the
+	// value the control turns stands aside.
+	Sets bool
+}
+
+// ModulationHost is a [Host] that says how control moves its
+// parameters, for a control to show the value as heard beside its own.
+// A view asks it each frame.
+type ModulationHost interface {
+	// Modulation returns how control moves parameter id, and false
+	// where no control does.
+	Modulation(id uint32) (Modulation, bool)
 }
 
 // Sound is a plugin's sound, as the host keeps it while it plays.

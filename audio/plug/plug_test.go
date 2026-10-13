@@ -8,6 +8,24 @@ import (
 	"time"
 )
 
+func TestClampTurnsNaNToTheDefaultAndInfinityToTheEnds(t *testing.T) {
+	for _, p := range []Param{
+		{Min: 0.3, Max: 1.5, Default: 0.8},
+		{Min: -24, Max: 24, Default: 6, Steps: 4},
+		{Min: 20, Max: 20000, Default: 440, Log: true},
+	} {
+		if got := p.Clamp(math.NaN()); got != p.Clamp(p.Default) {
+			t.Errorf("%+v: Clamp(NaN) = %g, want the default %g", p, got, p.Clamp(p.Default))
+		}
+		if got := p.Clamp(math.Inf(1)); got != p.Max {
+			t.Errorf("%+v: Clamp(+Inf) = %g, want %g", p, got, p.Max)
+		}
+		if got := p.Clamp(math.Inf(-1)); got != p.Min {
+			t.Errorf("%+v: Clamp(-Inf) = %g, want %g", p, got, p.Min)
+		}
+	}
+}
+
 func TestParamValuesStayInRangeAndOnSteps(t *testing.T) {
 	p := Param{Min: -24, Max: 24, Steps: 4}
 	for _, c := range []struct{ in, want float64 }{{-30, -24}, {30, 24}, {5, 0}, {7, 12}, {-13, -12}} {
