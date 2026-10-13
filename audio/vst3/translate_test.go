@@ -439,3 +439,70 @@ func TestAFailedBlockIsSilence(t *testing.T) {
 		t.Fatalf("%d failures counted, told as %v", p.Plugin().Failures(), p.Err())
 	}
 }
+
+// TestAPedalLiftsWhereItWentDown plays more groups than a plugin has
+// channels. Group 100 puts its pedal down; sixteen more groups each
+// play a note, the last sharing a channel. Group 100's pedal lifts on
+// the channel it went down on, and where another group sharing that
+// channel holds its own pedal down, the channel's stays down until
+// that one lifts too. A group done with its channel frees it for the
+// next.
+func TestAPedalLiftsWhereItWentDown(t *testing.T) {
+	f := fakeSynth()
+	for c := range channels {
+		f.midi[[2]int{c, ccPitchBend}] = uint32(3000 + c)
+	}
+	p, err := f.open(t, Config{Rate: 48000, Block: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	block := func(evs ...plug.Event) fakeBlock {
+		b := stereoBlock(64)
+		b.Events = evs
+		p.ProcessBlock(b)
+		return f.last(t)
+	}
+	got := block(plug.Event{Kind: plug.Pedal, Group: 100, Value: 1}, plug.Event{Kind: plug.NoteOn, Group: 100, Note: 1, Pitch: 60, Velocity: 1})
+	down := got.events[0].channel()
+	if !slices.Equal(got.changes[uint32(1000+down)], []point{{0, 1}}) {
+		t.Fatalf("group 100's pedal went down as %v", got.changes)
+	}
+	evs := make([]plug.Event, 0, 32)
+	for g := range int32(16) {
+		evs = append(evs, plug.Event{Frame: int(g), Kind: plug.NoteOn, Group: g, Note: 10 + g, Pitch: 48, Velocity: 1},
+			plug.Event{Frame: int(g), Kind: plug.Expression, Group: g, Note: 10 + g, Expr: plug.Bend, Value: 1})
+	}
+	got = block(evs...)
+	used := map[int16][]int32{}
+	for _, e := range got.events {
+		used[e.channel()] = append(used[e.channel()], e.i32(16))
+	}
+	if len(used) != channels || len(used[down]) != 1 {
+		t.Fatalf("sixteen groups more play on channels %v", used)
+	}
+	shared := used[down][0] - 10
+	// The group sharing group 100's channel holds its pedal down; group
+	// 100 lifts its own, and lets its note go.
+	got = block(plug.Event{Kind: plug.Pedal, Group: shared, Value: 1}, plug.Event{Frame: 5, Kind: plug.Pedal, Group: 100, Value: 0},
+		plug.Event{Frame: 6, Kind: plug.NoteOff, Group: 100, Note: 1})
+	if !slices.Equal(got.changes[uint32(1000+down)], []point{{0, 1}, {5, 1}}) {
+		t.Fatalf("with group %d holding it, channel %d's pedal moved as %v", shared, down, got.changes[uint32(1000+down)])
+	}
+	got = block(plug.Event{Kind: plug.Pedal, Group: shared, Value: 0})
+	if !slices.Equal(got.changes[uint32(1000+down)], []point{{0, 0}}) {
+		t.Fatalf("both lifted, channel %d's pedal moved as %v", down, got.changes[uint32(1000+down)])
+	}
+	// Group 100 is done with its channel; the shared group still plays
+	// there, so the channel left free is the one another group lets go.
+	other := int32(0)
+	if other == shared {
+		other = 1
+	}
+	block(plug.Event{Kind: plug.Expression, Group: other, Note: 10 + other, Expr: plug.Bend, Value: 0},
+		plug.Event{Frame: 1, Kind: plug.NoteOff, Group: other, Note: 10 + other})
+	got = block(plug.Event{Kind: plug.NoteOn, Group: 200, Note: 99, Pitch: 50, Velocity: 1})
+	if ch := got.events[0].channel(); len(used[ch]) != 1 || used[ch][0] != 10+other {
+		t.Fatalf("a new group plays on channel %d, of %v, not the one group %d let go", ch, used[ch], other)
+	}
+}

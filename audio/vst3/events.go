@@ -149,6 +149,7 @@ var theEvents = sync.OnceValue(func() uintptr {
 // sounding is a note the plugin plays, as the keyboard remembers it.
 type sounding struct {
 	id      int32
+	group   int32
 	channel int16
 	pitch   int16
 	tuning  float32
@@ -162,11 +163,10 @@ type sounding struct {
 // which holds while the plugin processes.
 type keyboard struct {
 	notes [maxNotes]sounding
-	// groups holds the group each channel plays, and claimed whether
-	// one does; next is the channel claimed next.
-	groups  [channels]int32
-	claimed [channels]bool
-	next    int
+	// groups are the groups playing, each on a channel, and next the
+	// channel to look at first for a group new.
+	groups [maxGroups]group
+	next   int
 	// cc holds the parameters the plugin moves by a MIDI controller,
 	// on each channel: the mod wheel, the pedal and the pitch bend.
 	cc [channels][ccMapped]uint32
@@ -217,6 +217,27 @@ func (k *keyboard) learn(p *Plugin) {
 	}
 }
 
+// group is a group of notes playing, on a channel: a channel is a
+// group's while its notes sound or its controllers stand moved, and a
+// group comes to a channel of its own where one is free, and else
+// shares the one fewest share.
+type group struct {
+	g    int32
+	ch   int16
+	used bool
+	// at holds where the group last moved its controllers: the mod
+	// wheel, the pedal and the pitch bend.
+	at [ccMapped]float64
+}
+
+// maxGroups is how many groups the keyboard tells apart at once: past
+// it, a group plays on the channel its number picks.
+const maxGroups = 64
+
+// rest is where each controller rests: the mod wheel and the pedal at
+// 0, the pitch bend in the middle.
+var rest = [ccMapped]float64{mapMod: 0, mapPedal: 0, mapBend: 0.5}
+
 // noteExpressionInfo is VST3's NoteExpressionTypeInfo, as the
 // interfaces lay it out.
 type noteExpressionInfo struct {
@@ -244,7 +265,7 @@ const BendRange = defaultBendRange
 // reset: they end at the next block's start, and the pedals lift.
 func (k *keyboard) reset() {
 	k.lifting = true
-	k.claimed = [channels]bool{}
+	k.groups = [maxGroups]group{}
 	k.next = 0
 }
 
@@ -262,7 +283,6 @@ func (k *keyboard) lift(p *Plugin) {
 			n.used = false
 		}
 	}
-	rest := [ccMapped]float64{mapMod: 0, mapPedal: 0, mapBend: 0.5}
 	for c := range channels {
 		for i := range ccMapped {
 			if k.moved[c][i] {
@@ -273,18 +293,63 @@ func (k *keyboard) lift(p *Plugin) {
 	}
 }
 
-// channel returns the channel of group g, claiming one for it, in turn,
-// where it has none.
-func (k *keyboard) channel(g int32) int16 {
-	for c := range channels {
-		if k.claimed[c] && k.groups[c] == g {
-			return int16(c)
+// channel returns group g's place among the groups, -1 past
+// maxGroups, and its channel: the one it has, or else a channel no
+// group has, the next in turn, or, with all 16 taken, the one fewest
+// groups share.
+func (k *keyboard) channel(g int32) (at int, ch int16) {
+	free := -1
+	for i := range k.groups {
+		if k.groups[i].used && k.groups[i].g == g {
+			return i, k.groups[i].ch
+		}
+		if free < 0 && !k.groups[i].used {
+			free = i
 		}
 	}
-	c := k.next
-	k.next = (k.next + 1) % channels
-	k.groups[c], k.claimed[c] = g, true
-	return int16(c)
+	var sharing [channels]int
+	for i := range k.groups {
+		if k.groups[i].used {
+			sharing[k.groups[i].ch]++
+		}
+	}
+	best := -1
+	for j := range channels {
+		c := (k.next + j) % channels
+		if best < 0 || sharing[c] < sharing[best] {
+			best = c
+		}
+	}
+	k.next = (best + 1) % channels
+	if free < 0 {
+		return -1, int16(uint32(g) % channels)
+	}
+	k.groups[free] = group{g: g, ch: int16(best), used: true, at: rest}
+	return free, int16(best)
+}
+
+// release lets group i's channel go where its notes sound no more and
+// its controllers rest.
+func (k *keyboard) release(i int) {
+	if i < 0 || !k.groups[i].used || k.groups[i].at != rest {
+		return
+	}
+	for j := range k.notes {
+		if k.notes[j].used && k.notes[j].group == k.groups[i].g {
+			return
+		}
+	}
+	k.groups[i].used = false
+}
+
+// groupOf returns group g's place among the groups, or -1.
+func (k *keyboard) groupOf(g int32) int {
+	for i := range k.groups {
+		if k.groups[i].used && k.groups[i].g == g {
+			return i
+		}
+	}
+	return -1
 }
 
 // find returns the note of ID id sounding, or nil.
@@ -305,7 +370,7 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 		key := math.Round(e.Pitch)
 		pitch := int16(min(max(key, 0), 127))
 		tuning := float32((e.Pitch - float64(pitch)) * 100)
-		ch := k.channel(e.Group)
+		_, ch := k.channel(e.Group)
 		n := k.find(e.Note)
 		for i := range k.notes {
 			if n != nil {
@@ -319,7 +384,7 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 			// Every place taken: the oldest kept goes.
 			n = &k.notes[0]
 		}
-		*n = sounding{id: e.Note, channel: ch, pitch: pitch, tuning: tuning, used: true}
+		*n = sounding{id: e.Note, group: e.Group, channel: ch, pitch: pitch, tuning: tuning, used: true}
 		p.events.add(noteOn(f, ch, pitch, tuning, float32(e.Velocity), e.Note))
 	case plug.NoteOff:
 		n := k.find(e.Note)
@@ -328,6 +393,7 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 		}
 		n.used = false
 		p.events.add(noteOff(f, n.channel, n.pitch, float32(e.Velocity), n.id, n.tuning))
+		k.release(k.groupOf(n.group))
 	case plug.Expression:
 		n := k.find(e.Note)
 		if n == nil {
@@ -341,25 +407,40 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 				p.events.add(noteExpression(f, noteExprTuning, n.id, min(max(0.5+semis/tuningSemitones, 0), 1)))
 				return
 			}
-			k.move(p, n.channel, mapBend, f, min(max(0.5+e.Value/(2*BendRange), 0), 1))
+			k.move(p, k.groupOf(n.group), n.channel, mapBend, f, min(max(0.5+e.Value/(2*BendRange), 0), 1))
 		case plug.Pressure:
 			p.events.add(polyPressure(f, n.channel, n.pitch, float32(min(max(e.Value, 0), 1)), n.id))
 		case plug.Mod:
-			k.move(p, n.channel, mapMod, f, min(max(e.Value, 0), 1))
+			k.move(p, k.groupOf(n.group), n.channel, mapMod, f, min(max(e.Value, 0), 1))
 		}
 	case plug.Pedal:
-		k.move(p, k.channel(e.Group), mapPedal, f, min(max(e.Value, 0), 1))
+		gi, ch := k.channel(e.Group)
+		k.move(p, gi, ch, mapPedal, f, min(max(e.Value, 0), 1))
+		k.release(gi)
 	}
 }
 
-// move moves controller i of channel ch to v, from frame f, where the
-// plugin maps it to a parameter.
-func (k *keyboard) move(p *Plugin, ch int16, i int, f int32, v float64) {
+// move moves controller i of group gi, on channel ch, to v, from frame
+// f, where the plugin maps it to a parameter. On a channel groups
+// share, the pedal and the mod wheel stand where the group that moved
+// them furthest has them, so a group lifting its pedal lifts none
+// another holds down; the pitch bend is the last group's to move it.
+func (k *keyboard) move(p *Plugin, gi int, ch int16, i int, f int32, v float64) {
+	if gi >= 0 {
+		k.groups[gi].at[i] = v
+		if i != mapBend {
+			for j := range k.groups {
+				if g := &k.groups[j]; g.used && g.ch == ch {
+					v = max(v, g.at[i])
+				}
+			}
+		}
+	}
 	id := k.cc[ch][i]
 	if id == unmapped {
 		return
 	}
-	k.moved[ch][i] = true
+	k.moved[ch][i] = v != rest[i]
 	p.change(id, f, v)
 }
 
