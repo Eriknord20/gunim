@@ -383,3 +383,29 @@ func TestEventsAreLaidOutAsVST3s(t *testing.T) {
 		t.Fatalf("a note expression's info is %d bytes, its value at %d", unsafe.Sizeof(info), unsafe.Offsetof(info.def))
 	}
 }
+
+// TestNoStateIsTheStateAPluginStartedWith edits a plugin whose state
+// holds more than its parameters, then sets no state, as an undo past
+// its first edit does: it is back at the state it started with.
+func TestNoStateIsTheStateAPluginStartedWith(t *testing.T) {
+	f := fakeSynth()
+	f.state = []byte("as made")
+	c := Class{ID: uid{9}, Name: "Fake", Category: "Audio Module Class", SubCategories: "Instrument|Synth"}
+	d, err := describe(c, func(cfg Config) (*Plugin, error) { return f.open(t, cfg) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := d.New(nil)
+	t.Cleanup(pl.Close)
+	pl.Processor().Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	f.mu.Lock()
+	f.state = []byte("edited")
+	f.mu.Unlock()
+	edited := pl.State()
+	if err := pl.SetState(nil); err != nil || string(f.state) != "as made" {
+		t.Fatalf("no state left the plugin at %q: %v", f.state, err)
+	}
+	if err := pl.SetState(edited); err != nil || string(f.state) != "edited" {
+		t.Fatalf("redone, the plugin is at %q: %v", f.state, err)
+	}
+}

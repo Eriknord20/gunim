@@ -392,10 +392,11 @@ type plugged struct {
 	playing atomic.Pointer[Plugin]
 
 	mu sync.Mutex
-	// state is the state given before the plugin is made, and given the
-	// state State last gave, or SetState last set.
-	state, given []byte
-	err          error
+	// state is the state given before the plugin is made, given the
+	// state State last gave, or SetState last set, and initial the
+	// state the plugin had as it was made.
+	state, given, initial []byte
+	err                   error
 }
 
 var (
@@ -428,7 +429,8 @@ func (a *plugged) State() []byte {
 // SetState implements [plug.Plugin]. The state State last gave, or
 // SetState last set, the plugin has already: setting it again sets
 // nothing, so a host that keeps the state an editor changed and hands
-// it back leaves the plugin playing on undisturbed.
+// it back leaves the plugin playing on undisturbed. No state sets the
+// state the plugin started with.
 func (a *plugged) SetState(b []byte) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -436,6 +438,12 @@ func (a *plugged) SetState(b []byte) error {
 	if p == nil {
 		a.state = bytes.Clone(b)
 		return nil
+	}
+	if len(b) == 0 {
+		// No state is the state it started with, as a Go plugin takes
+		// none as its defaults: an undo back past a plugin's first edit
+		// sets none.
+		b = a.initial
 	}
 	if len(b) == 0 || bytes.Equal(b, a.given) {
 		return nil
@@ -554,6 +562,9 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 	if err != nil {
 		a.err = err
 		return
+	}
+	if st, err := p.State(); err == nil {
+		a.initial, a.given = st, st
 	}
 	if len(a.state) > 0 {
 		if err := p.SetState(a.state); err != nil {
