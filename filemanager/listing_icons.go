@@ -344,7 +344,7 @@ func (t *iconTile) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	r, ok := t.iv.pg.view(t.i)
 	if ok && r.Name != t.name {
 		t.name = r.Name
-		t.label.Text = r.Name
+		t.label.Text = r.base()
 		t.hero.Tag = t.iv.pg.b.shell.Paths.Join(t.iv.dir, r.Name)
 		t.aspect.Jump(1)
 		t.pic.reset()
