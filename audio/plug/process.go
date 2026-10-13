@@ -247,4 +247,9 @@ type Position struct {
 	Playing bool
 	// Tempo is beats a minute, or zero where none is known.
 	Tempo float64
+	// Beat is where Frame falls in the music, in beats from the start
+	// of the track, as the host's tempo map counts them, so a plugin
+	// that follows the beat follows it alike however the tempo moved
+	// before: a tempo-synced LFO. It holds where Tempo is above zero.
+	Beat float64
 }

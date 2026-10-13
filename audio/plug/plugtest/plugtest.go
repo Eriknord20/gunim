@@ -91,7 +91,8 @@ type Ports struct {
 	// Events are notes, for a plugin that takes them.
 	Events []plug.Event
 	// Tempo is each block's [plug.Position.Tempo], in beats a minute:
-	// zero where none is known.
+	// zero where none is known. Each block's [plug.Position.Beat]
+	// counts the beats at that tempo from the start.
 	Tempo float64
 }
 
@@ -187,7 +188,8 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 	var blocks []plug.Block
 	for at := 0; at < frames; at += s.MaxBlock {
 		n := min(s.MaxBlock, frames-at)
-		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Playing: true, Tempo: p.Tempo},
+		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Playing: true, Tempo: p.Tempo,
+			Beat: float64(at) * p.Tempo / 60 / s.Rate},
 			In: window(p.In, at, n), Out: window(out, 0, n), ControlIn: window(p.ControlIn, at, n),
 			ControlOut: window(controlOut, 0, n)}
 		for _, port := range p.AuxIn {
