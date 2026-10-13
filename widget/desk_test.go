@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"image/color"
 	"testing"
 
 	"github.com/marrasen/gunim"
@@ -246,5 +247,50 @@ func TestOpeningAnOpenPanelRaisesIt(t *testing.T) {
 	}
 	if frontOf(st) != a {
 		t.Fatal("a press where a covers b brought b forward")
+	}
+}
+
+// spiller paints a bar above its own box, where a plugin's view laid out
+// in too little room may.
+type spiller struct{}
+
+func (spiller) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size { return c.Max }
+func (spiller) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, _ gunim.Children) {
+	p.RRect(geom.Rc(0, -30, 50, 20), 0, paint.Solid(color.NRGBA{R: 1, G: 2, B: 3, A: 0xff}))
+}
+
+func TestAPanelsContentStaysUnderItsBar(t *testing.T) {
+	w, run, _, _, b := stageDesk(t)
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, _ struct{}, u *gunim.UI) { b.SetContent(spiller{}, u) })
+	if err := w.Client().Patch("stage", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	clips := []geom.Rect{{Min: geom.Pt(-1e9, -1e9), Max: geom.Pt(1e9, 1e9)}}
+	found := false
+	for _, op := range w.Offscreen().Ops() {
+		switch o := op.(type) {
+		case *paint.LayerOp:
+			c := clips[len(clips)-1]
+			if o.Opts.Clip {
+				r := geom.Rect{Min: o.Transform.Apply(o.Opts.Bounds.Min), Max: o.Transform.Apply(o.Opts.Bounds.Max)}
+				c = geom.Rect{Min: geom.Pt(max(c.Min.X, r.Min.X), max(c.Min.Y, r.Min.Y)), Max: geom.Pt(min(c.Max.X, r.Max.X), min(c.Max.Y, r.Max.Y))}
+			}
+			clips = append(clips, c)
+		case *paint.LayerEndOp:
+			clips = clips[:len(clips)-1]
+		case *paint.RRectOp:
+			if o.Fill.Solid != (color.NRGBA{R: 1, G: 2, B: 3, A: 0xff}) {
+				continue
+			}
+			found = true
+			bottom := o.Transform.Apply(o.Rect.Max).Y
+			if c := clips[len(clips)-1]; bottom > c.Min.Y {
+				t.Fatalf("content painted up to y %v shows over the bar, clipped from y %v", bottom, c.Min.Y)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the content's bar was never painted")
 	}
 }

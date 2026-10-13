@@ -594,7 +594,9 @@ func (p *Panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 			continue
 		}
 		func() {
+			// Inside the card's round corners, and under the bar.
 			defer pt.Layer(paint.LayerOpts{Bounds: card, Opacity: 1, Clip: true, Radius: radius})()
+			defer pt.Layer(paint.LayerOpts{Bounds: geom.Rect{Min: geom.Pt(0, h), Max: box.Point()}, Opacity: 1, Clip: true})()
 			k.Paint(pt)
 		}()
 	}
