@@ -94,7 +94,8 @@ func (v *full) rest() bool {
 // targetItems are the targets, the one picked ticked.
 func (v *full) targetItems() []widget.MenuItem {
 	at := v.to()
-	items := []widget.MenuItem{{Label: "Match to", Caption: true}}
+	items := make([]widget.MenuItem, 0, 1+len(tonal.Targets))
+	items = append(items, widget.MenuItem{Label: "Match to", Caption: true})
 	for _, t := range tonal.Targets {
 		items = append(items, widget.MenuItem{Label: strings.ToUpper(t.Name[:1]) + t.Name[1:], Hint: t.Hint,
 			Checked: t.Short == at.Short})
