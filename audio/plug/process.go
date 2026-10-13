@@ -293,6 +293,8 @@ const (
 	// Velocity, as an edit moved or changed it.
 	Moved
 	// Removed takes back a note told of, as an edit took it out of the
-	// music: its NoteOn is called off.
+	// music: its NoteOn is called off. A plugin passes over a Removed
+	// for a note it never heard of: a host that took back its own news
+	// late sends one to be sure.
 	Removed
 )
