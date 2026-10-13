@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/plugtest"
@@ -262,5 +263,42 @@ func TestALibraryFindsPluginsAsPlugLooksThemUp(t *testing.T) {
 	d, ok := plug.Lookup(sampler.ID)
 	if !ok || d.Name != "Sampler Stereo" || !d.Instrument() {
 		t.Fatalf("looked up, the sampler is %+v, %v: %v", d, ok, lib.Err(sampler.ID))
+	}
+}
+
+// TestAnInstrumentsEditorOpensBehindPlug opens the editor of LSP's
+// sampler, made as package plug makes it, for a second: run with
+// VST3_EDITOR set.
+func TestAnInstrumentsEditorOpensBehindPlug(t *testing.T) {
+	if os.Getenv("VST3_EDITOR") == "" {
+		t.Skip("set VST3_EDITOR to show an editor")
+	}
+	m := lsp(t)
+	d := describeNamed(t, m, "Sampler Stereo")
+	pl := d.New(nil)
+	defer pl.Close()
+	ed := pl.(plug.Editor)
+	if ed.HasEditor() || ed.OpenEditor("x") == nil {
+		t.Fatal("one not yet prepared has an editor")
+	}
+	pl.Processor().Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
+	if !ed.HasEditor() {
+		t.Fatal("the sampler has no editor")
+	}
+	if err := ed.OpenEditor("gunim vst3 test: LSP Sampler"); err != nil {
+		t.Fatal(err)
+	}
+	b := &plug.Block{Frames: 512, Out: [][]float32{make([]float32, 512), make([]float32, 512)}}
+	for range 100 {
+		pl.Processor().Process(b)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !ed.EditorOpen() {
+		t.Fatal("the editor closed by itself")
+	}
+	t.Logf("%d edits, %d values", ed.Edits(), len(ed.Values()))
+	ed.CloseEditor()
+	if ed.EditorOpen() {
+		t.Fatal("the editor stayed open")
 	}
 }
