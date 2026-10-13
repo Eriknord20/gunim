@@ -335,3 +335,29 @@ func TestADueTimerWaitsForAWindowOutOfSight(t *testing.T) {
 		})
 	}
 }
+
+// A window stepped by Frame, as a test steps one, runs a timer after
+// the steps it waits for, however slowly the steps come: 150 ms of
+// steps, a sixtieth of a second each, each 40 ms apart on the wall
+// clock. Timed by the wall clock, the timer would run after the time
+// the steps make only once they caught up with it, which they never do.
+func TestATimerOfASteppedWindowRunsAfterItsSteps(t *testing.T) {
+	w := newTestWindow()
+	step := time.Second / 60
+	for range 3 {
+		time.Sleep(40 * time.Millisecond)
+		w.Frame(step)
+	}
+	ran := 0
+	w.ui.After(150*time.Millisecond, func(*UI) { ran++ })
+	for i := 1; i <= 12; i++ {
+		time.Sleep(40 * time.Millisecond)
+		w.Frame(step)
+		if i < 9 && ran != 0 {
+			t.Fatalf("after %d steps of %v, the timer of 150 ms ran", i, step)
+		}
+	}
+	if ran != 1 {
+		t.Fatalf("after 200 ms of steps, the timer of 150 ms ran %d times", ran)
+	}
+}
