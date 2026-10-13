@@ -220,6 +220,17 @@ func (g gateFS) Open(p string) (io.ReadSeekCloser, error) {
 	return &gated{ReadSeekCloser: f, release: g.release}, nil
 }
 
+// openOnCleanup returns a func that closes gate once, and closes it as
+// the test ends, if it has not: a test that fails before it opens the
+// gate leaves no read held there, which would hold the window's
+// goroutines, and its cleanup, until the run times out. Call it after
+// the harness is made, so its cleanup runs first.
+func openOnCleanup(t *testing.T, gate chan struct{}) func() {
+	open := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(open)
+	return open
+}
+
 type gated struct {
 	io.ReadSeekCloser
 	release chan struct{}
@@ -237,6 +248,7 @@ func (g *gated) Read(b []byte) (int, error) {
 func TestStoppingAFetchToOpenLeavesNothingBehind(t *testing.T) {
 	release := make(chan struct{})
 	h, base, l := newFetchHarness(t, func(o *Options) { o.FS = gateFS{bareFS{LocalFS()}, release} })
+	open := openOnCleanup(t, release)
 	if err := os.WriteFile(filepath.Join(h.dir, "film.mkv"), make([]byte, 3*copyBuffer), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +266,7 @@ func TestStoppingAFetchToOpenLeavesNothingBehind(t *testing.T) {
 	}
 	h.until("the part file is written", func() bool { return len(filesIn(t, base)) == 1 })
 	h.do(CancelOp{ID: id})
-	close(release)
+	open()
 	h.idle()
 	if got := filesIn(t, base); len(got) != 0 {
 		t.Fatalf("a stopped fetch left %v", got)

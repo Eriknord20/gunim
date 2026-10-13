@@ -164,6 +164,7 @@ func TestAnOlderLookupOfThePlacesIsDropped(t *testing.T) {
 			return []Place{{Name: "New", Path: "/"}}, nil
 		}
 	}, "a.txt")
+	open := openOnCleanup(t, release)
 	h.until("the first lookup answers", func() bool { return len(h.a.places) == 1 })
 	// One lookup at a time, on the window's own goroutine: the second
 	// begins once the first is waiting, so the one waiting is the older.
@@ -180,7 +181,7 @@ func TestAnOlderLookupOfThePlacesIsDropped(t *testing.T) {
 		return calls == 3 && len(h.a.places) == 1 && h.a.placesGen == 3
 	})
 	h.idle()
-	close(release)
+	open()
 	h.idle()
 	if h.a.places[0].Name != "New" {
 		t.Fatalf("the places are %+v, from the older lookup", h.a.places)

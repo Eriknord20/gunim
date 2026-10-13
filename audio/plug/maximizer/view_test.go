@@ -57,6 +57,19 @@ func click(t *testing.T, w *gunim.Window, run func(int), n gunim.Node, at ...geo
 	run(1)
 }
 
+// waitLearnt waits for the learning under way in p to end. Learning
+// reads the whole track on its own goroutine, which under -race and a
+// loaded machine takes seconds, so the wait is generous.
+func waitLearnt(t *testing.T, p *plugin) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if _, learning, _, _ := p.learnState(); !learning {
+			return
+		}
+	}
+	t.Fatal("the learning ran on for 2 minutes")
+}
+
 func panelOf(t *testing.T, p *plugin, h *host) *panel {
 	t.Helper()
 	pn, ok := p.View(plug.Panel, h).(*panel)
@@ -111,12 +124,12 @@ func TestLearnSetsTheGainAsOneStep(t *testing.T) {
 	h.values[TargetID] = -10
 	pn.Follow(TargetID, -10, nil)
 	click(t, w, run, pn.learn)
-	for range 1000 {
+	waitLearnt(t, p)
+	for range 60 {
 		run(1)
 		if !pn.learning {
 			break
 		}
-		time.Sleep(time.Millisecond)
 	}
 	if pn.learning || h.values[GainID] <= 0 || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Fatalf("learned, the gain is %v, by %v", h.values[GainID], h.log)

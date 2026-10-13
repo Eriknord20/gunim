@@ -57,12 +57,17 @@ func (w *Window) placementNow() (p driver.Placement, ok bool) {
 		return p, false
 	}
 	w.noteNormal()
+	p.Maximized = !w.FullScreen() && !w.gw.SystemFullScreen() && attrib(w.gw, glfw.Maximized)
+	if p.Maximized {
+		// Maximized before the maximize callback has run: a place noted
+		// at the maximized size may still be the last.
+		w.forgetMaximized()
+	}
 	if len(w.normals) == 0 {
 		return p, false
 	}
 	n := w.normals[len(w.normals)-1]
 	p.Bounds = geom.Rc(float32(n[0]), float32(n[1]), float32(n[2]), float32(n[3]))
-	p.Maximized = !w.FullScreen() && !w.gw.SystemFullScreen() && attrib(w.gw, glfw.Maximized)
 	return p, true
 }
 
@@ -89,7 +94,8 @@ func (w *Window) noteNormal() {
 // window maximized. On X11 the window manager may move and size the
 // window before it marks it maximized, so a move or a resize can be
 // noted at the maximized size just before the window says it is
-// maximized. It runs on the main thread, as the window maximizes.
+// maximized. It runs on the main thread, as the window maximizes, and
+// as the placement is read from a window that is maximized.
 func (w *Window) forgetMaximized() {
 	now, ok := bounds(w.gw)
 	if !ok {

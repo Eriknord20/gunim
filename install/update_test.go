@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -382,7 +383,10 @@ func TestAnOlderCopyLeavesANewerInstall(t *testing.T) {
 
 // Writers at once to one file, as an update and an installer, each
 // write through a file of their own: the file ends whole, as one of
-// them wrote it, with nothing left beside it.
+// them wrote it, with nothing left beside it but the program moved
+// aside. Where a running program is moved aside, as on Windows, one
+// writer can find studio.old held by another for a moment, and moves it
+// to a name of its own, which CleanOld takes away.
 func TestWritersAtOnceNeverMix(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "studio")
@@ -410,10 +414,13 @@ func TestWritersAtOnceNeverMix(t *testing.T) {
 	if !whole {
 		t.Fatalf("the file holds %d bytes mixed from the writers", len(got))
 	}
+	aside := leftovers(path, ".old")
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.Name() != "studio" && e.Name() != "studio.old" {
-			t.Errorf("a write left %s", e.Name())
+		n := e.Name()
+		kept := n == "studio" || n == "studio.old" || movesAside && slices.Contains(aside, filepath.Join(dir, n))
+		if !kept {
+			t.Errorf("a write left %s", n)
 		}
 	}
 }

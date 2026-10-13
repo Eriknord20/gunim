@@ -339,15 +339,26 @@ func TestMatchingToPinkNoiseReadsShowsHowFarAndStops(t *testing.T) {
 		t.Error("stopped, the EQ read on")
 	}
 	// Read through: matched, as one step, the button telling so a while.
-	src.gate = nil
+	// The gate stays closed, so every read passes; the stopped reading
+	// may still be on its way out, reading src.gate.
 	h.log = nil
 	clickOn(t, w, run, v.match)
-	for range 600 {
+	// The reading runs on its own goroutine, which under -race and a
+	// loaded machine takes seconds: wait for it, then for the view to
+	// see it.
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(time.Millisecond) {
+		if _, reading, _, _ := p.readState(); !reading {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reading ran on for 2 minutes")
+		}
+	}
+	for range 60 {
 		run(1)
 		if !v.listening {
 			break
 		}
-		time.Sleep(time.Millisecond)
 	}
 	if v.match.Label != matchedWords || len(p.Bands()) != len(autoShape) {
 		t.Fatalf("read through, the button says %q, and the bands are %v", v.match.Label, p.Bands())
@@ -515,12 +526,22 @@ func TestAutoReadsTheTrackAndShapesTheBands(t *testing.T) {
 	h.log = nil
 	withUI(t, w, run, func(u *gunim.UI) { v.changed(u) })
 	clickOn(t, w, run, v.match)
-	for range 600 {
+	// The reading runs on its own goroutine, which under -race and a
+	// loaded machine takes seconds: wait for it, then for the view to
+	// see it.
+	for deadline := time.Now().Add(2 * time.Minute); ; time.Sleep(time.Millisecond) {
+		if _, reading, _, _ := p.readState(); !reading {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the reading ran on for 2 minutes")
+		}
+	}
+	for range 60 {
 		run(1)
 		if !v.listening {
 			break
 		}
-		time.Sleep(time.Millisecond)
 	}
 	if v.listening || v.match.Label != matchedWords {
 		t.Fatalf("Auto still reads %v, and says %q", v.listening, v.match.Label)

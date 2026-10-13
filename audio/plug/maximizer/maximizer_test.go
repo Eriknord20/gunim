@@ -398,10 +398,14 @@ func TestLearnStopsAndANewTrackStopsIt(t *testing.T) {
 	if got, learning, _, _ := p.learnState(); learning || got != nil {
 		t.Fatal("stopped, the maximizer learned on")
 	}
-	src.gate = make(chan struct{})
+	// A source of its own, as the stopped learning may still be on its
+	// way out, reading src.gate.
+	held := quietMusic(2, 0.25)
+	held.gate = make(chan struct{})
+	p.SetDocument(memDoc{held})
 	p.startLearning(s, -14)
 	p.SetDocument(memDoc{quietMusic(2, 0.25)})
-	close(src.gate)
+	close(held.gate)
 	time.Sleep(200 * time.Millisecond)
 	if got, learning, _, _ := p.learnState(); learning || got != nil {
 		t.Fatal("a new track left the learning of the old going")

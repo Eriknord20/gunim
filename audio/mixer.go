@@ -175,7 +175,7 @@ func (m *Mixer) Play(src Source, o Options) *Voice {
 		loop:   o.Loop,
 		done:   make(chan struct{}),
 		turned: make(chan struct{}, 4),
-		src:    &voiceSource{src: src},
+		src:    newVoiceSource(src),
 		vol:    anim.NewFloat(vol),
 		pan:    anim.NewFloat(o.Pan),
 		gate:   anim.NewFloat(1),
@@ -523,8 +523,20 @@ type Voice struct {
 	ending   atomic.Bool
 }
 
-// voiceSource holds a source, so a turn to it is the swap of a pointer.
-type voiceSource struct{ src Source }
+// voiceSource holds a source, so a turn to it is the swap of a pointer,
+// and the source as a Seeker, where it is one. The mixer asks seek: a
+// type assertion on the audio goroutine can allocate, as the runtime
+// fills its cache of the assertion's answers.
+type voiceSource struct {
+	src  Source
+	seek Seeker
+}
+
+// newVoiceSource returns src, held for a voice.
+func newVoiceSource(src Source) *voiceSource {
+	s, _ := src.(Seeker)
+	return &voiceSource{src: src, seek: s}
+}
 
 // motionAsk is a volume or pan asked, and how to move there.
 type motionAsk struct {
@@ -622,7 +634,7 @@ func (v *Voice) take(played int64, rate int) {
 		}
 	}
 	if a := v.seekAsk.Swap(nil); a != nil {
-		if s, ok := v.src.src.(Seeker); ok {
+		if s := v.src.seek; s != nil {
 			if err := s.SeekFrame(a.f); err == nil {
 				v.at = a.f
 				v.ended = false
@@ -671,9 +683,12 @@ func (v *Voice) mix(dst, dry, buf []float32, dt time.Duration, played int64, rat
 			v.addMark(mark{mixed: played + int64(v.turns[i]), n: end - v.turns[i], gen: gen + i + 1})
 		}
 		v.gens.Store(int64(v.gen))
-		v.length.Store(lengthOf(v.src.src))
-		_, seeks := v.src.src.(Seeker)
-		v.canSeek.Store(seeks)
+		length := int64(-1)
+		if s := v.src.seek; s != nil {
+			length = s.Len()
+		}
+		v.length.Store(length)
+		v.canSeek.Store(v.src.seek != nil)
 		v.m.tell(v, false)
 	case v.at >= at:
 		v.addMark(mark{mixed: played, at: at, n: n, gen: gen})
@@ -750,7 +765,7 @@ func (v *Voice) fill(buf []float32) int {
 		if errors.Is(err, io.EOF) && v.loop && !restarted {
 			// A looping source with nothing in it ends, rather than
 			// start over without end.
-			if s, ok := v.src.src.(Seeker); ok && s.SeekFrame(0) == nil {
+			if s := v.src.seek; s != nil && s.SeekFrame(0) == nil {
 				v.at, restarted = 0, true
 				continue
 			}
@@ -949,7 +964,7 @@ func (v *Voice) Seek(d time.Duration) error {
 // of src from then. A later Then replaces a source still waiting, and
 // nil takes it away. Turned hears each turn.
 func (v *Voice) Then(src Source) {
-	v.thenAsk.Store(&voiceSource{src: src})
+	v.thenAsk.Store(newVoiceSource(src))
 }
 
 // Turned returns a channel that receives as the voice turns to the

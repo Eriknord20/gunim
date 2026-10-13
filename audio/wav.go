@@ -11,7 +11,10 @@ import (
 // wav decodes a WAV file of integer samples of 8 to 32 bits, or float
 // samples of 32.
 type wav struct {
-	r        io.ReadSeeker
+	r io.ReadSeeker
+	// reader is r, as the io.Reader io.ReadFull takes: converted once,
+	// as a conversion each read can allocate.
+	reader   io.Reader
 	channels int
 	sampleHz int
 	bits     int
@@ -38,7 +41,7 @@ func newWAV(r io.ReadSeeker) (*wav, error) {
 	if _, err := io.ReadFull(r, riff[:]); err != nil {
 		return nil, err
 	}
-	w := &wav{r: r}
+	w := &wav{r: r, reader: r}
 	pos := int64(12)
 	haveFmt := false
 	for {
@@ -109,7 +112,7 @@ func (w *wav) read(dst []float32) (int, error) {
 	frameBytes := bytesPer * w.channels
 	n := min(int64(len(dst)/2), w.frames-w.at, wavChunk)
 	b := w.buf[:int(n)*frameBytes]
-	got, err := io.ReadFull(w.r, b)
+	got, err := io.ReadFull(w.reader, b)
 	frames := got / frameBytes
 	for i := range frames {
 		f := b[i*frameBytes:]
