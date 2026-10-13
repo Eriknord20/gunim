@@ -2,6 +2,8 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -139,10 +141,17 @@ func keptOld(exe string) bool {
 }
 
 // passed ends the trial of version at self: the release ran long enough,
-// and the program before it goes.
+// and the program before it goes. The trial is taken away a few times
+// over, as on Windows a file another process reads for a moment, as a
+// copy starting does, cannot be.
 func passed(self, version string) {
 	if t, ok := readTrial(self); ok && t.Version == version {
-		_ = os.Remove(trialPath(self))
+		_ = persist(func() error {
+			if err := os.Remove(trialPath(self)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			return nil
+		})
 		CleanOld(self)
 	}
 }
