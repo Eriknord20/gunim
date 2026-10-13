@@ -86,3 +86,26 @@ func TestMeterAndPitchLabelsKeepToTheirWidth(t *testing.T) {
 }
 
 func itoa(w float32) string { return strconv.Itoa(int(w)) }
+
+// A meter's two peak readouts stay apart, however long, and inside its
+// width.
+func TestAMetersReadoutsStayApart(t *testing.T) {
+	for _, top := range [][2]float32{{-19.9, -23.6}, {-0.1, -88.8}, {-3.2, -4.1}, {-59.9, -60}} {
+		l := NewLevels()
+		l.Top = top
+		var p paint.Painter
+		PaintMeter(&p, nil, geom.Rc(10, 40, MeterW, 200), l)
+		var texts []geom.Rect
+		for _, op := range p.Ops() {
+			if o, ok := op.(*paint.TextOp); ok && o.Size == 8 && len(o.Glyphs) > 0 {
+				texts = append(texts, drawnSpan([]paint.Op{o})[0])
+			}
+		}
+		if len(texts) != 2 {
+			t.Fatalf("%v: the meter draws %d readouts", top, len(texts))
+		}
+		if texts[0].Max.X > texts[1].Min.X || texts[0].Min.X < 10-0.5 || texts[1].Max.X > 10+MeterW+0.5 {
+			t.Fatalf("%v: the readouts stand at %v and %v, in a meter from 10 to %v", top, texts[0], texts[1], 10+MeterW)
+		}
+	}
+}
