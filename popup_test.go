@@ -490,3 +490,31 @@ func TestAnInjectedClickOffAPopupGoesToTheWindow(t *testing.T) {
 		t.Fatalf("a press off the popup dismissed it %d times, want once", dismissed)
 	}
 }
+
+// A popup sits on top of other windows, so it can be seen, and be fading
+// out, after its window is covered: the window draws on while it is.
+func TestACoveredWindowDrawsWhileItsPopupIsInSight(t *testing.T) {
+	w, _, _, pop := openMenu(t, nil)
+	w.Input(driver.WindowCovered{Covered: true})
+	if !w.draws() {
+		t.Fatal("covered with its menu in sight, the window does not draw")
+	}
+	pop.Input(driver.WindowCovered{Covered: true})
+	if w.draws() {
+		t.Fatal("covered with its menu covered too, the window draws")
+	}
+	w.resumed = false
+	pop.Input(driver.WindowCovered{Covered: false})
+	if !w.draws() || !w.resumed {
+		t.Fatalf("its menu back in sight: draws %v, resumed %v; want it drawing, from where it held", w.draws(), w.resumed)
+	}
+	w.Input(driver.WindowShown{Shown: false})
+	if w.draws() {
+		t.Fatal("minimized with its menu in sight, the window draws")
+	}
+	w.Input(driver.WindowShown{Shown: true})
+	w.ui.closePopupNow(w.ui.popups[0])
+	if w.draws() {
+		t.Fatal("covered with its menu closed, the window draws")
+	}
+}
