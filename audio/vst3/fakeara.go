@@ -823,7 +823,7 @@ func (d *fakeDoc) restore(reader, filter uintptr) bool {
 			}
 		}
 	}
-	d.checkRestore(srcs, mods, doc && a.Doc != "")
+	d.checkRestore(srcs, mods, doc)
 	d.mu.Unlock()
 	// A restore tells of what it changed, as a plugin may.
 	for _, m := range changed {
