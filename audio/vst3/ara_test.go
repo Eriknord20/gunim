@@ -401,6 +401,37 @@ func TestArchivesStoreWholeOrByObjectAndRestoreUnderNewNames(t *testing.T) {
 	if fd.mods[m9.ref].gain != 0.25 || fd.mods[x.mod2.ref].gain != 1 {
 		t.Fatalf("gains %v and %v", fd.mods[m9.ref].gain, fd.mods[x.mod2.ref].gain)
 	}
+	// A document made afresh from the archive renders, offline, what the
+	// first rendered: the plugin reads the samples again, and waits for
+	// them.
+	_, d2 := fakeDocument(t, x.a, x.host)
+	defer d2.Close()
+	var r2 *PlaybackRegion
+	err = d2.Edit(func(e *Edit) {
+		mc := e.AddContext(ContextProps{Name: "Song", Content: Content{Tempo: []TempoEntry{{0, 0}, {0.5, 1}}}})
+		seq := e.AddSequence(SequenceProps{Name: "Vocal", Context: mc})
+		src := e.AddSource(SourceProps{Name: "one", ID: "media-1", Frames: 96000, Rate: 48000, Channels: 2})
+		m := e.AddModification(src, ModificationProps{Name: "one", ID: "take-1"})
+		r2 = e.AddRegion(m, RegionProps{Start: 0, Duration: 2, At: 1, Length: 2, Sequence: seq})
+		e.EnableAudio(src, true)
+		if err := e.Restore(whole, fakeArchiveID, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := bound(t, x.a, d2, PlaybackRenderer)
+	defer p.Close()
+	_ = p.ARA().SetRegions(r2)
+	out := render(p, 48100, 256)
+	want := [][]float32{make([]float32, 256), make([]float32, 256)}
+	x.host.ReadAudio(x.src, 100, want)
+	for i := range out[0] {
+		if out[0][i] != 0.25*want[0][i] {
+			t.Fatalf("restored, frame %d renders %v, want %v", i, out[0][i], 0.25*want[0][i])
+		}
+	}
 	// An archive of a form the plugin reads none of fails, and so does
 	// one it cannot read.
 	err = x.d.Edit(func(e *Edit) { _ = e.Restore(part, "someone.else", nil) })

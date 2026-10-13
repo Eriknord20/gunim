@@ -793,7 +793,9 @@ func (d *fakeDoc) restore(reader, filter uintptr) bool {
 	for _, s := range d.sources {
 		if n, ok := name(srcNames, s.id); ok {
 			if p, ok := a.Sources[n]; ok {
-				s.peak = p
+				// The analysis comes back; the samples it renders from
+				// are read again as the edit ends.
+				s.peak, s.requested = p, true
 			}
 		}
 	}
@@ -984,6 +986,10 @@ func (a *fakeARAPlugin) render(f *fakeInstance, d *processData) {
 		return
 	}
 	doc := x.d
+	if d.mode == modeOffline {
+		// Offline, it renders whole: it waits for the samples it reads.
+		doc.wg.Wait()
+	}
 	doc.mu.Lock()
 	defer doc.mu.Unlock()
 	for _, ref := range x.regions {
