@@ -79,7 +79,8 @@ var (
 // ARAFactory returns the ARA factory of class c, the module's class of
 // category "ARA Main Factory Class" named as c, speaking ARA 2.0 or
 // later, the latest both sides know. ARA is initialized while a
-// document of the factory is open.
+// document of the factory is open, and the module must stay loaded
+// meanwhile, as Load keeps it.
 func (m *Module) ARAFactory(c Class) (*ARAFactory, error) {
 	var f *ARAFactory
 	var err error
