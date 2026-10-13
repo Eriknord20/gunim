@@ -90,14 +90,14 @@ func makeEntry(fsys FS, dir string, info fs.FileInfo) entry {
 	name := info.Name()
 	e := entry{Name: name, Size: info.Size(), Mod: info.ModTime(), lower: strings.ToLower(name)}
 	e.Hidden = strings.HasPrefix(name, ".")
-	if h, ok := fsys.(HiddenReporter); ok && !e.Hidden {
+	if h, ok := optional[HiddenReporter](fsys); ok && !e.Hidden {
 		e.Hidden = h.Hidden(info)
 	}
 	switch {
 	case info.IsDir():
 		e.Kind, e.Dir, e.Size = KindFolder, true, 0
 		e.Type = "Folder"
-		if c, ok := fsys.(CloudReporter); ok {
+		if c, ok := optional[CloudReporter](fsys); ok {
 			e.Cloud = c.Cloud(dir, info)
 		}
 	case isLink(info):
@@ -121,12 +121,11 @@ func makeEntry(fsys FS, dir string, info fs.FileInfo) entry {
 		}
 	default:
 		e.Type = typeLabel(name)
-		switch r := fsys.(type) {
-		case CloudReporter:
-			e.Cloud = r.Cloud(dir, info)
+		if c, ok := optional[CloudReporter](fsys); ok {
+			e.Cloud = c.Cloud(dir, info)
 			e.Online = e.Cloud == CloudOnline
-		case OnlineReporter:
-			e.Online = r.OnlineOnly(info)
+		} else if o, ok := optional[OnlineReporter](fsys); ok {
+			e.Online = o.OnlineOnly(info)
 			if e.Online {
 				e.Cloud = CloudOnline
 			}

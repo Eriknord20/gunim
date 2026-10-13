@@ -47,12 +47,15 @@ var folderColumn = widget.GridColumn{Title: "Folder"}
 // listingArea is the main area: a deck of listing pages, one for each
 // folder gone into, the one showing on top.
 type listingArea struct {
-	b      *browser
-	deck   *deck
-	cur    *listingPage
-	path   string
-	widths []float32
-	view   ViewMode
+	b    *browser
+	deck *deck
+	cur  *listingPage
+	path string
+	// readOnly names the archive the folder showing is in, as its
+	// Listing does.
+	readOnly string
+	widths   []float32
+	view     ViewMode
 }
 
 func newListingArea(b *browser) *listingArea {
@@ -71,6 +74,7 @@ func (a *listingArea) grid() *widget.DataGrid {
 // folder, and on the page showing when it is the same one sorted,
 // filtered or read again.
 func (a *listingArea) setListing(l Listing, u *gunim.UI) {
+	a.readOnly = l.ReadOnly
 	if a.cur == nil || l.Path != a.path {
 		// The first folder takes the keyboard in a window of its own; in
 		// a pane, the program gives it when the user turns to the pane.

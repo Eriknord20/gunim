@@ -141,7 +141,7 @@ func createTemp(fsys FS, dir, pattern string) (io.WriteCloser, string, error) {
 // sameFile reports whether a and b describe the same item on fsys, and
 // false where fsys cannot tell.
 func sameFile(fsys FS, a, b fs.FileInfo) bool {
-	if s, ok := fsys.(SameFiler); ok {
+	if s, ok := optional[SameFiler](fsys); ok {
 		return s.SameFile(a, b)
 	}
 	return false
@@ -150,7 +150,7 @@ func sameFile(fsys FS, a, b fs.FileInfo) bool {
 // realPath returns path on fsys with the links along it followed, or
 // path as it is where they cannot be.
 func realPath(fsys FS, path string) string {
-	if l, ok := fsys.(Linker); ok {
+	if l, ok := optional[Linker](fsys); ok {
 		if p, err := l.EvalSymlinks(path); err == nil {
 			return p
 		}

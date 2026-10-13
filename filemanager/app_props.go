@@ -76,7 +76,7 @@ func readProps(fsys FS, paths []string) (p Props, count bool, err error) {
 		p.Size = sizeWords(info.Size())
 	}
 	p.Modified = fmtTime(info.ModTime())
-	if tr, ok := fsys.(TimesReporter); ok {
+	if tr, ok := optional[TimesReporter](fsys); ok {
 		if created, accessed, ok := tr.Times(info); ok {
 			if !created.IsZero() {
 				p.Created = fmtTime(created)
@@ -84,7 +84,7 @@ func readProps(fsys FS, paths []string) (p Props, count bool, err error) {
 			p.Accessed = fmtTime(accessed)
 		}
 	}
-	if at, ok := fsys.(Attributer); ok {
+	if at, ok := optional[Attributer](fsys); ok {
 		if ro, hidden, ok, err := at.Attrs(path); err != nil {
 			return p, false, err
 		} else if ok {
@@ -194,7 +194,7 @@ func (a *app) applyAttrs(path string, readOnly, hidden bool) {
 	fsys := a.fs
 	go func() {
 		err := errNoAttrs
-		if at, ok := fsys.(Attributer); ok {
+		if at, ok := optional[Attributer](fsys); ok {
 			err = at.SetAttrs(path, readOnly, hidden)
 		}
 		a.post(func() {

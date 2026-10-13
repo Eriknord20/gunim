@@ -31,8 +31,8 @@ func (a *app) showFS(fsys FS, dir string) {
 	a.tree.forget()
 	// The counts go on, so the answers of the old index are dropped.
 	a.search = searchState{gen: a.search.gen + 1, seq: a.search.seq}
-	a.opts.FS, a.fs, a.ps = fsys, fsys, fsys.Paths()
-	a.trash, _ = fsys.(Trasher)
+	a.opts.FS, a.fs, a.ps = unwrapFS(fsys), a.archived(fsys), fsys.Paths()
+	a.trash, _ = optional[Trasher](fsys)
 	a.thumbs.cache, a.thumbs.order, a.thumbs.bytes, a.thumbs.queue = map[thumbKey]thumbDone{}, nil, 0, nil
 	a.dnd.vols, a.dnd.volErrs = nil, nil
 	a.nav.path = ""
@@ -40,7 +40,7 @@ func (a *app) showFS(fsys FS, dir string) {
 
 	a.syncClip()
 
-	a.hub.shows(a, fsys.ID())
+	a.hub.shows(a, fsys)
 	a.shell.FS, a.shell.Paths, a.shell.NoTrash = fsys.ID(), a.ps, a.trash == nil
 	a.shell.Where, a.shell.Fetches = a.where(), a.fetches()
 	a.shell.OpenWith = a.openWithOn()

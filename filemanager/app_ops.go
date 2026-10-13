@@ -102,6 +102,9 @@ func (a *app) handleOps(in gunim.Intent) bool {
 }
 
 func (a *app) opsCommand(name string) bool {
+	if a.readOnlyHere(name) {
+		return true
+	}
 	here := a.nav.path
 	switch name {
 	case CmdCopy, CmdCut:

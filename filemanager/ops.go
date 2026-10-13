@@ -440,7 +440,7 @@ func (r *runner) copyDir(src, dst string, info fs.FileInfo, merge, top bool) err
 			return err
 		}
 	}
-	if st, ok := fsys.(Stamper); ok && !merge {
+	if st, ok := optional[Stamper](fsys); ok && !merge {
 		if err := st.Chtimes(dst, info.ModTime()); err != nil {
 			return fmt.Errorf("setting the time of %s: %w", dst, err)
 		}
@@ -453,7 +453,7 @@ var errNoLinks = errors.New("this file system has no links")
 
 // copyLink makes a link at dst on fsys to what the link src points to.
 func copyLink(fsys FS, src, dst string, replace bool) error {
-	l, ok := fsys.(Linker)
+	l, ok := optional[Linker](fsys)
 	if !ok {
 		return fmt.Errorf("copying the link %s: %w", src, errNoLinks)
 	}
@@ -532,7 +532,7 @@ func (r *runner) writeFile(in io.Reader, src, dst string, info fs.FileInfo) erro
 	if err := out.Close(); err != nil {
 		return errors.Join(fmt.Errorf("writing %s: %w", dst, err), fsys.Remove(part))
 	}
-	if st, ok := fsys.(Stamper); ok {
+	if st, ok := optional[Stamper](fsys); ok {
 		if err := st.Chmod(part, info.Mode().Perm()); err != nil {
 			return errors.Join(fmt.Errorf("setting the mode of %s: %w", dst, err), fsys.Remove(part))
 		}

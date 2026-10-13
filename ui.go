@@ -1150,14 +1150,14 @@ func (w *Window) wants() bool {
 }
 
 // draws reports whether the window draws its frames: while it is
-// hidden or covered it draws none, and its animations hold where they
-// are, unless it is closing, as a window leaving animates out, or a
-// shot waits on a frame.
+// hidden, or covered with none of its popups in sight, it draws none, and
+// its animations hold where they are, unless it is closing, as a window
+// leaving animates out, or a shot waits on a frame.
 func (w *Window) draws() bool {
 	if w.ui.away && !w.ui.goingAway {
 		return w.ui.shotsOwed.Load() > 0
 	}
-	return !w.hidden && !w.covered || w.ui.goingAway || w.ui.fadeMoving() || w.ui.shotsOwed.Load() > 0
+	return !w.hidden && (!w.covered || w.ui.popupInSight()) || w.ui.goingAway || w.ui.fadeMoving() || w.ui.shotsOwed.Load() > 0
 }
 
 // wait blocks until something happens, handles it, and reports whether
