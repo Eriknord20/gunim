@@ -181,7 +181,7 @@ func (r *runner) zipItem(zw *zipcrypt.Writer, p, rel string, info fs.FileInfo) e
 		_, err = zw.Create(h)
 		return err
 	case mode&fs.ModeSymlink != 0:
-		l, ok := fsys.(Linker)
+		l, ok := optional[Linker](fsys)
 		if !ok {
 			return nil
 		}

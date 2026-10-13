@@ -132,6 +132,10 @@ type Transfer struct {
 	// Password, when set with Zip, protects what the zip holds, as
 	// ZipFiles does with its password.
 	Password string
+	// From, when set, is the file system to read the items from: they
+	// are in an archive, which the file system of FromFS cannot open,
+	// and From can. A transfer from an archive never moves.
+	From FS
 }
 
 // app is the application half. Everything on it runs on the serve loop;
@@ -292,6 +296,7 @@ func launch(ctx context.Context, c gunim.Client, o Options, h *Hub) (*app, error
 // file manager of w, and starts it.
 func (a *app) join(h *Hub, w *Window) {
 	a.hub = joinHub(a, h)
+	a.fs = a.archived(a.fs)
 	a.win = w
 	w.a = a
 	a.publishClip()
@@ -307,10 +312,10 @@ func newApp(ctx context.Context, c screen, o Options) (*app, error) {
 	}
 	tr := o.trash
 	if tr == nil {
-		tr, _ = o.FS.(Trasher)
+		tr, _ = optional[Trasher](o.FS)
 	}
 	var err error
-	a := &app{ctx: ctx, c: c, done: make(chan func(), 256), stopped: make(chan struct{}), fs: o.FS, ps: o.FS.Paths(),
+	a := &app{ctx: ctx, c: c, done: make(chan func(), 256), stopped: make(chan struct{}), fs: withArchives(o.FS, nil), ps: o.FS.Paths(),
 		trash: tr, prefsPath: o.PrefsPath, opts: o}
 	a.nav.init()
 	a.ops.init()

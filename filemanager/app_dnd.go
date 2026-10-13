@@ -51,6 +51,9 @@ func (a *app) handleDnd(in gunim.Intent) bool {
 		case CmdOpenSystem:
 			a.openSystem()
 		case CmdDuplicate:
+			if a.readOnlyHere(v.Name) {
+				return true
+			}
 			if paths := a.selectedPaths(); len(paths) > 0 {
 				a.startOp(job{kind: OpCopy, srcs: paths, dest: a.nav.path}, "Duplicating "+a.what(paths))
 			}
@@ -77,6 +80,16 @@ func (a *app) dropFiles(v DropFiles) {
 	if !v.Away && v.To != a.fs.ID() {
 		a.fail("The window went to another file system before the drop, so nothing was dropped.")
 		return
+	}
+	if v.To == a.fs.ID() {
+		if at := a.archiveOf(v.Into, true); at != "" {
+			a.refuseArchive(at)
+			return
+		}
+	}
+	if !v.Copy && v.FS == a.fs.ID() && a.anyInArchive(v.Paths) {
+		// What an archive holds stays in it: a move out of it copies.
+		v.Copy = true
 	}
 	if v.FS != a.fs.ID() || v.To != a.fs.ID() {
 		if a.opts.Transfer == nil {
@@ -281,7 +294,7 @@ func (a *app) scriptDnd(verb, arg string) bool {
 // volumeName names the volume the folder at path on fsys is on: the file
 // system's own name for it, or for a file system of one volume its ID.
 func volumeName(fsys FS, path string) (string, error) {
-	if v, ok := fsys.(VolumeNamer); ok {
+	if v, ok := optional[VolumeNamer](fsys); ok {
 		name, err := v.Volume(path)
 		if !errors.Is(err, errors.ErrUnsupported) {
 			return name, err
@@ -298,7 +311,7 @@ func (a *app) systemOpen() (open func(path string) error, ok bool) {
 	if a.fs.ID() == "" {
 		return a.c.Open, true
 	}
-	if so, ok := a.fs.(SystemOpener); ok {
+	if so, ok := optional[SystemOpener](a.fs); ok {
 		return so.OpenInSystem, true
 	}
 	a.fail("Files here cannot open with this computer's programs.")
@@ -309,9 +322,13 @@ func (a *app) systemOpen() (open func(path string) error, ok bool) {
 // as systemOpen does for opening it.
 func (a *app) systemReveal() (reveal func(path string) error, ok bool) {
 	if a.fs.ID() == "" {
+		if at := a.nav.archive; at != "" {
+			// What an archive holds shows as the archive.
+			return func(string) error { return a.c.Reveal(at) }, true
+		}
 		return a.c.Reveal, true
 	}
-	if so, ok := a.fs.(SystemOpener); ok {
+	if so, ok := optional[SystemOpener](a.fs); ok {
 		return so.RevealInSystem, true
 	}
 	a.fail("Items here cannot show in this computer's file manager.")

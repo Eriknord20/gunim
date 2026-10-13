@@ -23,6 +23,16 @@ const (
 	localOpenWith   = "local.openwith"
 )
 
+// changes reports whether the command cmd of a context menu changes
+// what the folder showing holds, which in an archive it cannot.
+func changes(cmd string) bool {
+	switch cmd {
+	case CmdCut, CmdPaste, CmdPasteZip, CmdRename, CmdDuplicate, CmdZip, CmdExtract, CmdTrash, CmdDelete, CmdNewFolder:
+		return true
+	}
+	return false
+}
+
 // rowItems are the context menu of the items selected.
 var rowItems = []menuItem{
 	{"Open", "Enter", CmdOpen},
@@ -184,8 +194,10 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		if row < 0 {
 			b.listing.selectNone(u)
 			st = menuState{path: b.listing.path}
-			st.cmds = fill(m, emptyItems, func(cmd string) bool { return (cmd == CmdPaste || cmd == CmdPasteZip) && clipEmpty },
-				b.title.checked)
+			readOnly := b.listing.readOnly != ""
+			st.cmds = fill(m, emptyItems, func(cmd string) bool {
+				return (cmd == CmdPaste || cmd == CmdPasteZip) && clipEmpty || readOnly && changes(cmd)
+			}, b.title.checked)
 			b.paneHints(m, st.cmds)
 			return true
 		}
@@ -222,7 +234,11 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 			// Only for an archive it can open.
 			items = without(items, CmdExtract)
 		}
+		readOnly := b.listing.readOnly != ""
 		st.cmds = fill(m, items, func(cmd string) bool {
+			if readOnly && changes(cmd) {
+				return true
+			}
 			switch cmd {
 			case CmdOpenSystem:
 				// Folders elsewhere do not open with this computer's
