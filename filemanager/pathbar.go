@@ -26,8 +26,10 @@ type pathBar struct {
 	back, fwd, up *widget.IconButton
 	addr          *widget.AddressBar
 	filter        *filterField
-	row           *widget.Flex
-	path          string
+	// deep has the filter look in the folders under this one too.
+	deep *widget.IconButton
+	row  *widget.Flex
+	path string
 	// room is the browser's width, as it was laid out last.
 	room float32
 }
@@ -50,11 +52,16 @@ func newPathBar(b *browser) *pathBar {
 	p.filter.Placeholder = "Filter this folder"
 	p.filter.Icon, p.filter.Clearable = icon.Search, true
 	p.filter.OnChange = func(s string, u *gunim.UI) gunim.Intent { return FilterChanged{Text: s} }
+	p.deep = widget.NewIconButton(icon.ListTree, deepTip(false))
+	p.deep.KeepFocus = true
+	p.deep.OnClick = widget.Sends(Command{Name: CmdDeepFilter})
 	nav := func(b *widget.IconButton) gunim.Node { return widget.NewSized(b, navSize, navSize) }
+	filter := widget.Row(p.filter, nav(p.deep)).Grow(p.filter, 1)
+	filter.Cross, filter.Gap = widget.CrossCenter, smallGap
 	// The menus sit behind a button left of Back, drawn as the path bar's
 	// buttons are, on nothing of their own.
 	menus := &menuSlot{child: widget.NewThemed(widget.NewSized(b.title.bar, navSize+8, navSize), menuButtonTheme()), b: b}
-	p.row = widget.Row(menus, nav(p.back), nav(p.fwd), nav(p.up), p.addr, &filterBox{child: p.filter, bar: p}).Grow(p.addr, 1)
+	p.row = widget.Row(menus, nav(p.back), nav(p.fwd), nav(p.up), p.addr, &filterBox{child: filter, bar: p}).Grow(p.addr, 1)
 	p.row.Cross = widget.CrossCenter
 	p.row.Gap = smallGap
 	return p
@@ -91,7 +98,16 @@ func (m *menuSlot) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids guni
 	}
 }
 
-// filterBox gives the filter a share of the path bar: 220 wide, and
+// deepTip is what the button that has the filter look in the folders
+// under this one says, on or not.
+func deepTip(on bool) string {
+	if on {
+		return "Looking in the folders under this one too. Click to filter this folder alone."
+	}
+	return "Look in the folders under this one too"
+}
+
+// filterBox gives the filter and its button a share of the path bar: the filter 220 wide, and
 // narrower in a narrow browser, as a pane among others can be, so the
 // path keeps room. Where too little is left, it gives the path all of
 // it, and the filter hides.
@@ -107,7 +123,7 @@ func (f *filterBox) Children() []gunim.Node { return []gunim.Node{f.child} }
 // Layout implements [gunim.Node].
 func (f *filterBox) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	room := f.bar.room
-	w := min(max(room*0.25, 120), 220)
+	w := min(max(room*0.25, 120), 220) + navSize
 	if f.hidden = room > 0 && room < 560; f.hidden {
 		w = 0
 	}
@@ -146,6 +162,11 @@ func newNavButton(ic *icon.Icon, tooltip, cmd string) *widget.IconButton {
 // setListing shows the folder of l.
 func (p *pathBar) setListing(l Listing, u *gunim.UI) {
 	p.back.Disabled, p.fwd.Disabled, p.up.Disabled = !l.CanBack, !l.CanForward, !l.CanUp
+	p.deep.Active, p.deep.Tooltip = l.Deep, deepTip(l.Deep)
+	p.filter.Placeholder = "Filter this folder"
+	if l.Deep {
+		p.filter.Placeholder = "Filter here and below"
+	}
 	u.Invalidate()
 	if l.Path != p.path {
 		p.path = l.Path

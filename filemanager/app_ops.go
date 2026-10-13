@@ -175,14 +175,16 @@ func (a *app) opsCommand(name string) bool {
 		if len(es) != 1 {
 			return true
 		}
-		src := a.ps.Join(here, es[0].Name)
-		stem := utf8.RuneCountInString(es[0].Name)
-		if !es[0].Dir {
-			stem = utf8.RuneCountInString(strings.TrimSuffix(es[0].Name, filepath.Ext(es[0].Name)))
+		e := es[0]
+		src, old := a.ps.Join(here, e.Name), e.base()
+		stem := utf8.RuneCountInString(old)
+		if !e.Dir {
+			stem = utf8.RuneCountInString(strings.TrimSuffix(old, filepath.Ext(old)))
 		}
-		a.prompt(Prompt{Title: "Rename", Text: es[0].Name, OK: "Rename", Stem: stem}, func(name string) {
-			a.nav.pick = []string{name}
-			a.startOp(job{kind: OpRename, srcs: []string{src}, name: name}, "Renaming "+es[0].Name)
+		a.prompt(Prompt{Title: "Rename", Text: old, OK: "Rename", Stem: stem}, func(name string) {
+			// An item the filter found under the folder keeps its place there.
+			a.nav.pick = []string{e.Name[:e.at] + name}
+			a.startOp(job{kind: OpRename, srcs: []string{src}, name: name}, "Renaming "+old)
 		})
 	case CmdNewFolder:
 		if here == "" {

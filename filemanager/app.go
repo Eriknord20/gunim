@@ -175,6 +175,7 @@ type app struct {
 	viewer  viewerState
 	reading readingState
 	search  searchState
+	tree    deepState
 	places  []Place
 	favs    []Favourite
 	banner  int
@@ -328,6 +329,7 @@ func newApp(ctx context.Context, c screen, o Options) (*app, error) {
 	a.shell.Where, a.shell.Fetches = a.where(), a.fetches()
 	a.shell.OpenWith = a.openWithOn()
 	a.nav.sort, a.nav.desc = a.prefs.Sort, a.prefs.Desc
+	a.tree.on = a.prefs.DeepFilter
 	return a, nil
 }
 
@@ -576,6 +578,7 @@ func (a *app) stopAll() {
 	a.preview.stop()
 	a.viewer.stop()
 	a.search.stop()
+	a.tree.stop()
 	a.hub.leave(a)
 	close(a.stopped)
 	a.ops.wg.Wait()

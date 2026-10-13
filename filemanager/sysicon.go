@@ -78,6 +78,14 @@ func (a *app) systemIconsOn() bool {
 // keyIcons names the icons of the entries es of the folder dir, when the
 // window shows Windows' icons, and asks for those it has not sent.
 func (a *app) keyIcons(dir string, es []entry) {
+	a.nameIcons(dir, es)
+	a.sendIcons(es)
+}
+
+// nameIcons names the icons of the entries es of the folder dir, when the
+// window shows Windows' icons, asking for none: the tree under a folder
+// can hold a great many, and they are asked for as their rows show.
+func (a *app) nameIcons(dir string, es []entry) {
 	on := a.systemIconsOn()
 	for i := range es {
 		es[i].iconKey = ""
@@ -85,9 +93,10 @@ func (a *app) keyIcons(dir string, es []entry) {
 			es[i].iconKey = a.iconKey(dir, es[i])
 		}
 	}
-	if !on {
-		return
-	}
+}
+
+// sendIcons asks for the icons of es the window has not been sent.
+func (a *app) sendIcons(es []entry) {
 	for i := range es {
 		if k := es[i].iconKey; k != "" && !a.iconsSent[k] {
 			a.iconsSent[k] = true

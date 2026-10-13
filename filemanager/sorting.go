@@ -15,6 +15,9 @@ const (
 	SortSize
 	SortModified
 	SortType
+	// SortFolder sorts by the folder an item is in, for the items a
+	// filter found in the folders under the one showing.
+	SortFolder
 )
 
 // sortEntries sorts es by column, folders first, and by name within ties.
@@ -39,6 +42,8 @@ func sortEntries(es []entry, by SortBy, desc bool) {
 			c = a.Mod.Compare(b.Mod)
 		case SortType:
 			c = cmp.Compare(types[a.Type], types[b.Type])
+		case SortFolder:
+			c = naturalCompare(strings.ToLower(a.Name[:a.at]), strings.ToLower(b.Name[:b.at]))
 		case SortName:
 		}
 		if c == 0 {

@@ -90,6 +90,7 @@ var menus = []struct {
 		{"-", "", ""},
 		{"Edit path", "Ctrl+L", localEditPath},
 		{"Filter", "Ctrl+F", localFilter},
+		{"Filter subfolders too", "", CmdDeepFilter},
 	}},
 }
 
@@ -331,6 +332,7 @@ func (t *titleBar) setShell(s Shell, u *gunim.UI) {
 func (t *titleBar) setListing(l Listing, u *gunim.UI) {
 	t.folder = l.Title
 	t.retitle(u)
+	t.check(CmdDeepFilter, l.Deep)
 	for by, cmd := range []string{CmdSortName, CmdSortSize, CmdSortTime, CmdSortType} {
 		t.check(cmd, SortBy(by) == l.Sort)
 	}

@@ -12,8 +12,11 @@ import (
 
 // prefs are the settings the app keeps between runs.
 type prefs struct {
-	Favourites  []string
-	ShowHidden  bool
+	Favourites []string
+	ShowHidden bool
+	// DeepFilter says the filter looks in the folders under the one
+	// showing too.
+	DeepFilter  bool `json:",omitempty"`
 	HidePreview bool
 	// SystemIcons says whether items show the icons Windows does, there:
 	// unset, they do.
