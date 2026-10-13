@@ -506,3 +506,49 @@ func TestAPedalLiftsWhereItWentDown(t *testing.T) {
 		t.Fatalf("a new group plays on channel %d, of %v, not the one group %d let go", ch, used[ch], other)
 	}
 }
+
+// TestANoteStartsUnbent bends a note and moves the mod wheel of a plugin
+// that bends no note of its own, so both move the channel's, and lets
+// it go. With its group's pedal down, the group keeps the channel, and
+// its next note starts with the bend and the mod wheel at rest, at its
+// own frame, and the pedal still down. A note started while another
+// still sounds there leaves them as they stand. With the pedal up, the
+// group lets its channel go.
+func TestANoteStartsUnbent(t *testing.T) {
+	f := fakeSynth()
+	p, err := f.open(t, Config{Rate: 48000, Block: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	block := func(evs ...plug.Event) fakeBlock {
+		b := stereoBlock(64)
+		b.Events = evs
+		p.ProcessBlock(b)
+		return f.last(t)
+	}
+	block(plug.Event{Kind: plug.Pedal, Group: 3, Value: 1},
+		plug.Event{Kind: plug.NoteOn, Group: 3, Note: 1, Pitch: 60, Velocity: 1},
+		plug.Event{Frame: 1, Kind: plug.Expression, Group: 3, Note: 1, Expr: plug.Bend, Value: 2},
+		plug.Event{Frame: 1, Kind: plug.Expression, Group: 3, Note: 1, Expr: plug.Mod, Value: 0.8},
+		plug.Event{Frame: 2, Kind: plug.NoteOn, Group: 3, Note: 2, Pitch: 64, Velocity: 1})
+	got := block(plug.Event{Frame: 4, Kind: plug.NoteOn, Group: 3, Note: 3, Pitch: 67, Velocity: 1})
+	if len(got.changes) != 0 {
+		t.Fatalf("a note started beside two sounding moved %v", got.changes)
+	}
+	block(plug.Event{Kind: plug.NoteOff, Note: 1}, plug.Event{Kind: plug.NoteOff, Note: 2}, plug.Event{Kind: plug.NoteOff, Note: 3})
+	got = block(plug.Event{Frame: 7, Kind: plug.NoteOn, Group: 3, Note: 4, Pitch: 60, Velocity: 1})
+	if got.events[0].channel() != 0 || !slices.Equal(got.changes[900], []point{{7, 0.5}}) ||
+		!slices.Equal(got.changes[2000], []point{{7, 0}}) || len(got.changes) != 2 {
+		t.Fatalf("the next note started on channel %d with changes %v", got.events[0].channel(), got.changes)
+	}
+	if got = block(plug.Event{Frame: 9, Kind: plug.NoteOn, Group: 3, Note: 5, Pitch: 62, Velocity: 1}); len(got.changes) != 0 {
+		t.Fatalf("a note after it moved %v", got.changes)
+	}
+	block(plug.Event{Kind: plug.Expression, Group: 3, Note: 5, Expr: plug.Bend, Value: 1},
+		plug.Event{Frame: 1, Kind: plug.NoteOff, Note: 4}, plug.Event{Frame: 1, Kind: plug.NoteOff, Note: 5},
+		plug.Event{Frame: 4, Kind: plug.Pedal, Group: 3, Value: 0})
+	if p.keys.groupOf(3) != -1 {
+		t.Fatal("group 3 keeps its channel with its notes let go and its pedal up")
+	}
+}

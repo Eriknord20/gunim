@@ -329,9 +329,10 @@ func (k *keyboard) channel(g int32) (at int, ch int16) {
 }
 
 // release lets group i's channel go where its notes sound no more and
-// its controllers rest.
+// its pedal is up. A bend or a mod wheel it left moved rests as the
+// channel's next note starts.
 func (k *keyboard) release(i int) {
-	if i < 0 || !k.groups[i].used || k.groups[i].at != rest {
+	if i < 0 || !k.groups[i].used || k.groups[i].at[mapPedal] != rest[mapPedal] {
 		return
 	}
 	for j := range k.notes {
@@ -340,6 +341,35 @@ func (k *keyboard) release(i int) {
 		}
 	}
 	k.groups[i].used = false
+}
+
+// rest rests the pitch bend and the mod wheel of channel ch, from frame
+// f, where they stand moved and no note sounds on it: a note starting
+// there plays unbent, whatever the notes before it were bent to. The
+// pedal stays, as its group holds it.
+func (k *keyboard) rest(p *Plugin, ch int16, f int32) {
+	if !k.moved[ch][mapBend] && !k.moved[ch][mapMod] {
+		return
+	}
+	for j := range k.notes {
+		if k.notes[j].used && k.notes[j].channel == ch {
+			return
+		}
+	}
+	for _, i := range [...]int{mapBend, mapMod} {
+		if !k.moved[ch][i] {
+			continue
+		}
+		for j := range k.groups {
+			if g := &k.groups[j]; g.used && g.ch == ch {
+				g.at[i] = rest[i]
+			}
+		}
+		k.moved[ch][i] = false
+		if id := k.cc[ch][i]; id != unmapped {
+			p.change(id, f, rest[i])
+		}
+	}
 }
 
 // groupOf returns group g's place among the groups, or -1.
@@ -371,6 +401,7 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 		pitch := int16(min(max(key, 0), 127))
 		tuning := float32((e.Pitch - float64(pitch)) * 100)
 		_, ch := k.channel(e.Group)
+		k.rest(p, ch, f)
 		n := k.find(e.Note)
 		for i := range k.notes {
 			if n != nil {
