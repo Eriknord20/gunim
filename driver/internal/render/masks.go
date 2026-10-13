@@ -18,22 +18,32 @@ const settledMost = 256
 // mask queues a shape's coverage, tinted by the op's colour, through the greyscale glyph atlas.
 //
 // A settled shape is rasterized once per device size and kept; one still changing is rasterized every frame into
-// the scratch strip. Under a plain translation the mask snaps to whole device pixels. Under a scale or
-// rotation it keeps its resting size and the quad carries the transform, as glyphs do.
+// the scratch strip. Under an upright transform, a translation with or without a scale the same both ways, the mask
+// rasterizes at the size it shows at and snaps to whole device pixels, so a zoomed view stays sharp. Under a
+// rotation or skew it keeps its resting size and the quad carries the transform, as glyphs do.
 func (r *Renderer) mask(op *paint.MaskOp) {
 	if op.Shape == nil || op.Color.A == 0 && op.Gradient == nil {
 		return
 	}
 	t := op.Transform
 	size := op.Rect.Size()
+	k, upright := uprightScale(t)
+	if upright {
+		size = geom.Size{W: size.W * k, H: size.H * k}
+	}
 	w, h := int(math.Round(float64(size.W*r.scale))), int(math.Round(float64(size.H*r.scale)))
 	if w <= 0 || h <= 0 {
 		return
 	}
 	o := t.Apply(op.Rect.Min)
 	ox, oy := o.X*r.scale, o.Y*r.scale
-	if t.A == 1 && t.B == 0 && t.D == 0 && t.E == 1 {
+	if upright {
 		ox, oy = float32(math.Round(float64(ox))), float32(math.Round(float64(oy)))
+	}
+	// The quad's own transform: the op's without its translation, or under a scale, what rounding the size left.
+	lin := paint.Transform{A: t.A, B: t.B, D: t.D, E: t.E}
+	if upright && k != 1 {
+		lin = paint.Transform{A: size.W * r.scale / float32(w), E: size.H * r.scale / float32(h)}
 	}
 	if op.Shape.Settled() && max(w, h) > settledMost {
 		// A big mask has a texture of its own, so it neither overflows the atlas nor empties it of the text in
@@ -49,7 +59,7 @@ func (r *Renderer) mask(op *paint.MaskOp) {
 		l := r.maskLook(op, w, h)
 		l.radius = 4
 		r.quad(corners(geom.Rect{Max: geom.Pt(float32(w), float32(h))}, geom.Rect{Max: geom.Pt(1, 1)}),
-			paint.Transform{A: t.A, B: t.B, C: ox, D: t.D, E: t.E, F: oy}, 1, &l)
+			paint.Transform{A: lin.A, B: lin.B, C: ox, D: lin.D, E: lin.E, F: oy}, 1, &l)
 		return
 	}
 	var slot glyphSlot
@@ -85,7 +95,7 @@ func (r *Renderer) mask(op *paint.MaskOp) {
 		Max: geom.Pt(float32(slot.x+slot.w)/atlasSize, float32(slot.y+slot.h)/atlasSize),
 	}
 	l := r.maskLook(op, w, h)
-	r.quad(corners(q, uv), paint.Transform{A: t.A, B: t.B, C: ox, D: t.D, E: t.E, F: oy}, 1, &l)
+	r.quad(corners(q, uv), paint.Transform{A: lin.A, B: lin.B, C: ox, D: lin.D, E: lin.E, F: oy}, 1, &l)
 }
 
 // scratch copies a mask w by h pixels into the scratch strip for this frame alone and returns its place. A full
