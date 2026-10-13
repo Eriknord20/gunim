@@ -41,3 +41,56 @@ func TestAnOverhearerHearsInputOthersTake(t *testing.T) {
 		t.Fatalf("then heard %v, want the move at (5, 15) in the window's space", l.heard[1])
 	}
 }
+
+// grabber takes the primary press, keeping the pointer until the
+// release, and records what it overhears.
+type grabber struct{ listener }
+
+func (g *grabber) Handle(e input.Event, _ *UI) bool {
+	d, ok := e.(input.PointerDown)
+	return ok && d.Button == input.ButtonPrimary
+}
+
+// hider lays its child out and paints it only while show says.
+type hider struct{ show bool }
+
+func (h *hider) Layout(cs Constraints, _ Frame, kids Children) geom.Size {
+	for k := range kids.All {
+		k.Layout(Tight(geom.Sz(cs.Max.W, 10)))
+	}
+	return geom.Sz(cs.Max.W, 10)
+}
+
+func (h *hider) Paint(p *paint.Painter, _ Frame, _ geom.Size, kids Children) {
+	if !h.show {
+		return
+	}
+	for k := range kids.All {
+		k.Paint(p)
+	}
+}
+
+// A node holding the pointer hears a second button pressed while the
+// last frame left it undrawn, as a fader scrolled out of view mid-drag
+// is, and hears it once while drawn.
+func TestTheNodeHoldingThePointerHearsASecondButtonUndrawn(t *testing.T) {
+	for _, show := range []bool{true, false} {
+		w := newTestWindow()
+		h := &hider{show: true}
+		g := &grabber{}
+		w.ui.Insert(w.ui.Root(), h)
+		w.ui.Insert(h, g)
+		run(w, 1)
+		w.ui.handlePlatform(input.PointerDown{Pos: geom.Pt(5, 5), Button: input.ButtonPrimary, Clicks: 1})
+		h.show = show
+		run(w, 1)
+		g.heard = nil
+		w.ui.handlePlatform(input.PointerDown{Pos: geom.Pt(5, 300), Button: input.ButtonSecondary, Clicks: 1})
+		if len(g.heard) != 1 {
+			t.Fatalf("drawn %v, the node holding the pointer heard %v, want the second press once", show, g.heard)
+		}
+		if d, ok := g.heard[0].(input.PointerDown); !ok || d.Button != input.ButtonSecondary {
+			t.Fatalf("drawn %v, it heard %v", show, g.heard[0])
+		}
+	}
+}
