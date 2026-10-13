@@ -98,10 +98,11 @@ func (r *Renderer) newAtlas(unit uint32, internal int32, format uint32, channels
 //
 // A run under a plain translation snaps each glyph to the pixel grid,
 // to the nearest quarter pixel across and a whole pixel down, so text
-// at rest is sharp. Under a scale or rotation, such as a dialog growing
-// into place, the glyphs keep their resting size in the atlas and the
-// quads carry the transform; they soften while moving and sharpen when
-// the transform settles back to a translation.
+// at rest is sharp. A run under an upright scale, as a zoomed view
+// draws, does the same at the size it shows at: its glyphs rasterize
+// at that size, to the nearest quarter pixel, so text stays sharp at
+// any zoom. Under a rotation or a skew the glyphs keep their resting
+// size in the atlas and the quads carry the transform.
 //
 // Glyphs use the panel's subpixels only at rest, and straight on the
 // canvas or the window, whose pixels behind them are opaque.
@@ -112,8 +113,19 @@ func (r *Renderer) text(op *paint.TextOp) {
 	r.uses(0)
 	t := op.Transform
 	plain := t.A == 1 && t.B == 0 && t.D == 0 && t.E == 1
+	k, upright := uprightScale(t)
 	sizePx := op.Size * r.scale
-	if plain && !r.cull.Empty() && r.outside(r.textBox(op)) {
+	// Corners arrive in device pixels, placed by the glyph's own
+	// transform: the op's without its translation.
+	shape := paint.Transform{A: t.A, B: t.B, D: t.D, E: t.E}
+	if upright && k != 1 {
+		// The glyphs rasterize at the size they show at, and the quads
+		// carry what rounding that size left.
+		shown := sizePx * k
+		sizePx = max(float32(math.Round(float64(shown)*4))/4, 0.25)
+		shape.A, shape.E = shown/sizePx, shown/sizePx
+	}
+	if upright && !r.cull.Empty() && r.outside(r.textBox(op)) {
 		return
 	}
 	raster := text.Raster{Hint: r.textRendering.Hinting == text.HintingLight}
@@ -126,9 +138,6 @@ func (r *Renderer) text(op *paint.TextOp) {
 			l.radius = 2
 		}
 	}
-	// Corners arrive in device pixels, placed by the glyph's own
-	// transform: the op's without its translation.
-	shape := paint.Transform{A: t.A, B: t.B, D: t.D, E: t.E}
 	// A colour glyph keeps its own colours, and fades with the text.
 	colorLook := look{kind: kindGlyph, add: add, color0: [4]float32{1, 1, 1, float32(op.Color.A) / 255}, radius: 3}
 	if op.FadeTo > op.FadeFrom {
@@ -155,7 +164,7 @@ func (r *Renderer) text(op *paint.TextOp) {
 		o := t.Apply(gly.At)
 		ox, oy := o.X*r.scale, o.Y*r.scale
 		if face.IsColor(gly.ID) {
-			if plain {
+			if upright {
 				ox, oy = float32(math.Round(float64(ox))), float32(math.Round(float64(oy)))
 			}
 			key := glyphKey{face: faceID, id: gly.ID, size: int32(math.Round(float64(sizePx) * 64)), color: true}
@@ -168,7 +177,7 @@ func (r *Renderer) text(op *paint.TextOp) {
 			continue
 		}
 		var shift uint8
-		if plain {
+		if upright {
 			fx := float32(math.Floor(float64(ox)))
 			s := int(math.Round(float64(ox-fx) * subpixel))
 			if s == subpixel {
@@ -189,18 +198,25 @@ func (r *Renderer) text(op *paint.TextOp) {
 	}
 }
 
-// textBox returns a box in device pixels that holds a run under a plain translation, with room for any glyph.
+// textBox returns a box in device pixels that holds a run under an upright transform, with room for any glyph.
 func (r *Renderer) textBox(op *paint.TextOp) geom.Rect {
 	lo, hi := op.Glyphs[0].At, op.Glyphs[0].At
 	for _, g := range op.Glyphs[1:] {
 		lo = geom.Pt(min(lo.X, g.At.X), min(lo.Y, g.At.Y))
 		hi = geom.Pt(max(hi.X, g.At.X), max(hi.Y, g.At.Y))
 	}
-	pad, t := 2*op.Size, op.Transform
-	return geom.Rect{
-		Min: geom.Pt((lo.X+t.C-pad)*r.scale, (lo.Y+t.F-pad)*r.scale),
-		Max: geom.Pt((hi.X+t.C+pad)*r.scale, (hi.Y+t.F+pad)*r.scale),
+	pad, t := geom.Pt(2*op.Size, 2*op.Size), op.Transform
+	return geom.Rect{Min: t.Apply(lo.Sub(pad)).Mul(r.scale), Max: t.Apply(hi.Add(pad)).Mul(r.scale)}
+}
+
+// uprightScale reports the scale of t where t only scales, the same
+// both ways, and moves: a view zoomed, with no rotation or skew. A plain
+// translation is upright, at a scale of 1.
+func uprightScale(t paint.Transform) (float32, bool) {
+	if t.B != 0 || t.D != 0 || t.A != t.E || !(t.A > 0) {
+		return 0, false
 	}
+	return t.A, true
 }
 
 // rect returns the glyph's box, in device pixels from its origin.
