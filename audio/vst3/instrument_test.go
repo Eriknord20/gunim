@@ -249,7 +249,7 @@ func TestAnyInstrument(t *testing.T) {
 // its ID, loaded as it is first asked for, and an ID found nowhere stays
 // unknown, with the reason kept.
 func TestALibraryFindsPluginsAsPlugLooksThemUp(t *testing.T) {
-	lib := NewLibrary(t.TempDir())
+	lib := NewLibraryAt("", t.TempDir())
 	missing := "vst3." + strings.Repeat("0", 31) + "1"
 	if lib.Find(missing) || lib.Err(missing) == nil {
 		t.Fatalf("an ID of no plugin was found, or its reason lost: %v", lib.Err(missing))
@@ -258,7 +258,7 @@ func TestALibraryFindsPluginsAsPlugLooksThemUp(t *testing.T) {
 		t.Fatal("a Go plugin's ID was found as a VST3 plugin's")
 	}
 	m := lsp(t)
-	lib = NewLibrary(filepath.Dir(m.Path))
+	lib = NewLibraryAt("", filepath.Dir(m.Path))
 	var sampler Found
 	for _, f := range lib.Plugins() {
 		if f.Name == "Sampler Stereo" {
