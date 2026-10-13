@@ -2,12 +2,14 @@ package eq
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/plugui"
+	"github.com/marrasen/gunim/audio/plug/tonal"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
@@ -19,9 +21,11 @@ import (
 
 // full is the EQ as the plugin's pane shows it. Along the top: a switch
 // between the graph and the list of bands; the button that matches the
-// track to pink noise, with a bar of how far it has read the track and
-// a button to stop it, gliding in while it reads; and the knobs that
-// work on every band: the amount, the Q, the threshold, and the gain.
+// track to a target, pink noise or the slope music commonly takes, with
+// a bar of how far it has read the track, the menu beside it that picks
+// the target, and a button to stop it, gliding in while it reads; and
+// the knobs: the target's knee, where it has one, and those that work
+// on every band, the amount, the Q, the threshold, and the gain.
 // Under them, the graph with the band picked's row under it, or the
 // list of every band's row, crossfading as the switch turns.
 type full struct {
@@ -32,6 +36,7 @@ type full struct {
 	g      *graph
 	views  *widget.Segmented
 	match  *widget.Button
+	target *widget.MenuButton
 	stop   *widget.IconButton
 	knobs  []*plugui.Knob
 	row    *bandRow
@@ -62,15 +67,40 @@ type full struct {
 	matchAt, rowAt, barAt geom.Rect
 }
 
-// The match button's words, at rest, at rest where the bar is narrow,
-// and once done.
-const (
-	matchWords   = "Match to pink noise"
-	matchShort   = "Pink noise"
-	matchedWords = "Matched to pink noise"
-	matchTip     = "Read the whole track as it reaches the EQ, and shape the bands so it sounds as even as pink noise. " +
-		"The bands it makes take the place of these; Undo brings them back."
-)
+// matchWords are the match button's words at rest, matchShort its
+// words at rest where the bar is narrow, matchedWords its words once
+// done, and matchTip its tooltip: each for the target to.
+func matchWords(to tonal.Target) string   { return "Match to " + to.Name }
+func matchShort(to tonal.Target) string   { return to.Short }
+func matchedWords(to tonal.Target) string { return "Matched to " + to.Name }
+func matchTip(to tonal.Target) string {
+	return "Read the whole track as it reaches the EQ, and shape the bands so it sounds as even as " + to.Name +
+		". The bands it makes take the place of these; Undo brings them back."
+}
+
+// targetW is how wide the menu that picks the target stands.
+const targetW = 32
+
+// to is the target Auto brings the track to.
+func (v *full) to() tonal.Target {
+	return tonal.TargetAt(v.host.Param(TargetID)).At(v.host.Param(KneeID))
+}
+
+// rest says whether the match button's words are its words at rest.
+func (v *full) rest() bool {
+	return v.match.Label == matchWords(v.to()) || v.match.Label == matchShort(v.to())
+}
+
+// targetItems are the targets, the one picked ticked.
+func (v *full) targetItems() []widget.MenuItem {
+	at := v.to()
+	items := []widget.MenuItem{{Label: "Match to", Caption: true}}
+	for _, t := range tonal.Targets {
+		items = append(items, widget.MenuItem{Label: strings.ToUpper(t.Name[:1]) + t.Name[1:], Hint: t.Hint,
+			Checked: t.Short == at.Short})
+	}
+	return items
+}
 
 func newFull(p *plugin, h plug.Host) *full {
 	pn := newPanel(p, h)
@@ -89,10 +119,22 @@ func newFull(p *plugin, h plug.Host) *full {
 		u.Invalidate()
 		return nil
 	}
-	v.match = widget.NewButton(matchWords)
-	v.match.Tooltip = matchTip
+	v.match = widget.NewButton(matchWords(v.to()))
+	v.match.Tooltip = matchTip(v.to())
 	v.match.OnClick = func(u *gunim.UI) gunim.Intent {
 		v.listen(u)
+		return nil
+	}
+	v.target = widget.NewMenuButton("", v.targetItems())
+	v.target.Icon, v.target.Tooltip = icon.ChevronDown, "Pick what to match the track to"
+	v.target.OnPick = func(i int, u *gunim.UI) gunim.Intent {
+		// The caption first, then the targets.
+		if k := i - 1; k >= 0 && k < len(tonal.Targets) {
+			h.Begin(TargetID, u)
+			h.Set(TargetID, float64(k), u)
+			h.End(TargetID, u)
+			v.retarget(u)
+		}
 		return nil
 	}
 	v.stop = widget.NewIconButton(icon.Square, "Stop reading the track")
@@ -105,13 +147,15 @@ func newFull(p *plugin, h plug.Host) *full {
 		QID:         "Every bell, shelf and notch narrower, over 100%, or wider, under it; the cuts stay as they are",
 		ThresholdID: "Every dynamic band's threshold, moved up, so it turns down later, or down, so it turns down sooner",
 		GainID:      "The gain on the sound the EQ passes, to keep it as loud as it came",
+		KneeID:      "Where the music slope stops running level and starts to fall 6 dB an octave",
 	}
-	for _, id := range []uint32{AmountID, QID, ThresholdID, GainID} {
+	for _, id := range []uint32{KneeID, AmountID, QID, ThresholdID, GainID} {
 		prm, _ := Descriptor.Param(id)
 		k := plugui.NewKnob(h, prm)
 		k.Compact, k.Tooltip = true, tips[id]
 		v.knobs = append(v.knobs, k)
 	}
+	v.knobs[0].Disabled = !v.to().Kneed
 	v.row = newBandRow(v.g, false)
 	v.row.glass = true
 	v.list = newBandList(v.g)
@@ -137,10 +181,23 @@ func (v *full) matchable() {
 		return
 	}
 	v.match.Disabled = !v.p.canRead()
-	v.match.Tooltip = matchTip
+	v.target.Disabled = false
+	v.knobs[0].Disabled = !v.to().Kneed
+	v.match.Tooltip = matchTip(v.to())
 	if v.match.Disabled {
 		v.match.Tooltip = "The host gives the EQ no track to read"
 	}
+}
+
+// retarget words the match button and ticks the menu for the target as
+// it is set.
+func (v *full) retarget(u *gunim.UI) {
+	v.target.SetItems(v.targetItems())
+	if v.rest() || !v.listening && v.calm == nil {
+		v.match.Label = matchWords(v.to())
+	}
+	v.matchable()
+	u.Invalidate()
 }
 
 // listen starts reading the track, for Auto, and follows it.
@@ -153,7 +210,7 @@ func (v *full) listen(u *gunim.UI) {
 		v.calm = nil
 	}
 	v.listening, v.progress = true, 0
-	v.match.Active = true
+	v.match.Active, v.target.Disabled = true, true
 	v.stopIn.Animate(1, widget.Bounce.Get(u.Theme()))
 	v.p.startReading()
 	v.watchReading(u)
@@ -168,7 +225,7 @@ func (v *full) halt(u *gunim.UI) {
 	if v.stopPoll != nil {
 		v.stopPoll()
 	}
-	v.done(matchWords, u)
+	v.done(matchWords(v.to()), u)
 }
 
 // readPoll is how often Auto looks how far the reading has got, and
@@ -180,7 +237,7 @@ const (
 
 // watchReading looks how far the reading has got: while it reads, it
 // shows how far and looks again a moment later; once the track is read,
-// it shapes the bands to bring it to pink, as one step to undo.
+// it shapes the bands to bring it to the target, as one step to undo.
 func (v *full) watchReading(u *gunim.UI) {
 	if !v.listening {
 		return
@@ -200,26 +257,26 @@ func (v *full) watchReading(u *gunim.UI) {
 		v.match.Tooltip = "Could not read the track: " + err.Error()
 		v.done("Could not read the track", u)
 	case len(levels) == len(autoFreqs):
-		bands := autoBands(levels)
+		bands := autoBands(levels, v.to())
 		v.g.edit("Auto EQ", true, u, func() bool {
 			v.g.bands, v.g.sel = bands, 0
 			return true
 		})
 		u.Cue(gunim.CueSelect, v)
-		v.done(matchedWords, u)
+		v.done(matchedWords(v.to()), u)
 	default:
-		v.done(matchWords, u)
+		v.done(matchWords(v.to()), u)
 	}
 }
 
 // done ends the reading, the button saying words for a moment.
 func (v *full) done(words string, u *gunim.UI) {
-	v.listening, v.match.Active = false, false
+	v.listening, v.match.Active, v.target.Disabled = false, false, false
 	v.stopIn.Animate(0, widget.Settle.Get(u.Theme()))
 	v.match.Label = words
-	if words != matchWords {
+	if words != matchWords(v.to()) {
 		v.calm = u.After(tellFor, func(u *gunim.UI) {
-			v.match.Label, v.calm = matchWords, nil
+			v.match.Label, v.calm = matchWords(v.to()), nil
 			v.matchable()
 			u.Invalidate()
 		})
@@ -256,6 +313,9 @@ func (v *full) FollowDocument(u *gunim.UI) {
 // Follow implements [plug.Follower].
 func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
 	v.panel.Follow(id, val, u)
+	if id == TargetID {
+		v.retarget(u)
+	}
 	for _, k := range v.knobs {
 		if k.Param().ID == id {
 			k.Follow(val, u)
@@ -268,7 +328,7 @@ func (v *full) Children() []gunim.Node {
 	// The bar's glass before what stands on it, which the pointer reaches
 	// first.
 	// The tuner's card last, over the rest.
-	kids := []gunim.Node{v.panel, v.row, v.scroll, v.bar, v.views, v.match, v.stop}
+	kids := []gunim.Node{v.panel, v.row, v.scroll, v.bar, v.views, v.match, v.stop, v.target}
 	for _, k := range v.knobs {
 		kids = append(kids, k)
 	}
@@ -277,7 +337,7 @@ func (v *full) Children() []gunim.Node {
 
 // firstKnob is where the knobs start among the view's children; the
 // tuner's button and card follow them.
-const firstKnob = 7
+const firstKnob = 8
 
 // barH is how tall the things on the bar along the top are, barInset
 // how far in from the view's edges the bar stands, and barPadX and
@@ -309,11 +369,19 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	right := v.barAt.Max.X - barPadX
 	sw := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(220, 32)})
 	kids.At(4).Place(o.Add(geom.Pt(0, (barH-sw.H)/2)))
-	knobsW := float32(len(v.knobs)) * plugui.CompactW
-	for i := range v.knobs {
+	// The knee's knob, the first, only for a target with a knee: else it
+	// takes no room, out of the view.
+	from := 0
+	if !v.to().Kneed {
+		from = 1
+		kids.At(firstKnob).Layout(gunim.Tight(geom.Size{}))
+		kids.At(firstKnob).Place(geom.Pt(-1e4, -1e4))
+	}
+	knobsW := float32(len(v.knobs)-from) * plugui.CompactW
+	for i := from; i < len(v.knobs); i++ {
 		k := kids.At(firstKnob + i)
 		k.Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
-		k.Place(geom.Pt(right-knobsW+float32(i)*plugui.CompactW, o.Y))
+		k.Place(geom.Pt(right-knobsW+float32(i-from)*plugui.CompactW, o.Y))
 	}
 	x := right - knobsW - gap
 	stopIn := min(max(v.stopIn.Value(), 0), 1)
@@ -324,26 +392,31 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		kids.At(6).Layout(gunim.Tight(geom.Sz(32, 32)))
 	}
 	kids.At(6).Place(geom.Pt(x-32, o.Y+(barH-32)/2))
-	// The match button in the room between the switch, with the tuner's
-	// button after it, and the knobs: its words shorter where the room is
-	// short, and none of it where it has none.
-	room := x - stopW - (o.X + sw.W + gap + 32 + gap)
-	if v.match.Label == matchWords || v.match.Label == matchShort {
-		v.match.Label = matchWords
+	// The match button, and the menu of targets after it, in the room
+	// between the switch, with the tuner's button after it, and the
+	// knobs: its words shorter where the room is short, and none of it
+	// where it has none.
+	room := x - stopW - targetW - 4 - (o.X + sw.W + gap + 32 + gap)
+	if v.rest() {
+		v.match.Label = matchWords(v.to())
 		full := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(400, 32)})
 		v.narrow = full.W > room
 		if v.narrow {
-			v.match.Label = matchShort
+			v.match.Label = matchShort(v.to())
 		}
 	}
 	mw := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(400, 32)})
-	v.matchAt = geom.Rc(x-stopW-mw.W, o.Y+(barH-mw.H)/2, mw.W, mw.H)
+	tAt := geom.Pt(x-stopW-targetW, o.Y+(barH-32)/2)
+	v.matchAt = geom.Rc(tAt.X-4-mw.W, o.Y+(barH-mw.H)/2, mw.W, mw.H)
 	kids.At(5).Place(v.matchAt.Min)
+	kids.At(7).Layout(gunim.Tight(geom.Sz(targetW, 32)))
+	kids.At(7).Place(tAt)
 	if mw.W > room {
 		// No room: out of the view, where it is not drawn and the pointer
 		// does not reach it.
 		v.matchAt = geom.Rect{}
 		kids.At(5).Place(geom.Pt(-1e4, -1e4))
+		kids.At(7).Place(geom.Pt(-1e4, -1e4))
 	}
 	// The graph fills the view, under the bar too, the band picked's row
 	// over it, on glass, centred near its foot; the list comes over it,
@@ -419,10 +492,13 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	kids.At(4).Paint(p)
 	if v.matchAt.Size().W > 0 {
 		kids.At(5).Paint(p)
+		kids.At(7).Paint(p)
 	}
 	fade(6, min(max(v.stopIn.Value(), 0), 1), 0)
 	for i := range v.knobs {
-		kids.At(firstKnob + i).Paint(p)
+		if i > 0 || v.to().Kneed {
+			kids.At(firstKnob + i).Paint(p)
+		}
 	}
 	tb, tc := v.tunerAt()
 	fade(tb, listed, 0)

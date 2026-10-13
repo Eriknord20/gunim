@@ -3,7 +3,8 @@
 // state, and a graph to drag them about on. A bell or a shelf can be
 // dynamic, turning itself down as its band of the sound grows loud;
 // Amount scales every gain; and Auto shapes the bands so the whole
-// track, as it reaches the EQ, sounds as even as pink noise.
+// track, as it reaches the EQ, sounds as even as pink noise, or leans as
+// recorded music commonly does.
 package eq
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/tonal"
 )
 
 // BypassID is the ID of the bypass parameter: over 0.5 passes the
@@ -25,14 +27,18 @@ import (
 // bells and shelves lift and lower, and the dynamic bands turn down,
 // from none at 0 to twice as set at 200. QID scales every bell's,
 // shelf's and notch's Q, in percent; ThresholdID moves every dynamic
-// band's threshold, in decibels; and GainID is the gain the EQ puts
-// on the sound it passes, in decibels.
+// band's threshold, in decibels; GainID is the gain the EQ puts on
+// the sound it passes, in decibels; TargetID is the balance Auto brings
+// the track to, as its place in [tonal.Targets], and KneeID the knee of
+// a target that has one, in hertz.
 const (
 	BypassID    uint32 = 1
 	AmountID    uint32 = 2
 	QID         uint32 = 3
 	ThresholdID uint32 = 4
 	GainID      uint32 = 5
+	TargetID    uint32 = 6
+	KneeID      uint32 = 7
 )
 
 // bandTrace is where the IDs of the bands' traces start: band n's
@@ -76,6 +82,16 @@ var Descriptor = plug.Descriptor{
 		Min: -12, Max: 12, Default: 0,
 		Flags:  plug.Automatable,
 		Format: func(v float64) string { return fmt.Sprintf("%+.1f dB", v) },
+	}, {
+		ID: TargetID, Name: "Match to",
+		Min: 0, Max: float64(len(tonal.Targets) - 1), Default: 0, Steps: len(tonal.Targets) - 1,
+		Flags:  plug.Hidden,
+		Format: func(v float64) string { return tonal.TargetAt(v).Short },
+	}, {
+		ID: KneeID, Name: "Knee", Unit: "Hz",
+		Min: tonal.KneeLow, Max: tonal.KneeHigh, Default: tonal.Knee, Log: true,
+		Flags:  plug.Hidden,
+		Format: func(v float64) string { return fmt.Sprintf("%.0f Hz", v) },
 	}},
 	Patches: patches,
 	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },

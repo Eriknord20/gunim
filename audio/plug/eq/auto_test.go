@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/plug/tonal"
 )
 
 // levelsOf returns levels at autoFreqs, a pink level of -20 dB with
@@ -31,7 +32,7 @@ func fitError(bands []audio.Band, target []float64) float64 {
 }
 
 func TestAutoLeavesPinkAlone(t *testing.T) {
-	for _, b := range autoBands(levelsOf(func(float64) float64 { return 0 })) {
+	for _, b := range autoBands(levelsOf(func(float64) float64 { return 0 }), tonal.Pink) {
 		if math.Abs(float64(b.Gain)) > 0.05 {
 			t.Errorf("for pink noise, band %d at %g Hz is set to %+.1f dB", b.ID, b.Freq, b.Gain)
 		}
@@ -48,8 +49,8 @@ func TestAutoEvensABumpAndATilt(t *testing.T) {
 		"thin": func(f float64) float64 { return -4 * max(0, math.Log2(200/f)) / 3 },
 	} {
 		levels := levelsOf(shape)
-		bands := autoBands(levels)
-		target := autoTarget(levels)
+		bands := autoBands(levels, tonal.Pink)
+		target := autoTarget(levels, tonal.Pink)
 		if e := fitError(bands, target); e > 1 {
 			t.Errorf("for %s, the bands miss what it asks by as much as %.2f dB", name, e)
 		}
@@ -78,7 +79,7 @@ func TestAutoEvensABumpAndATilt(t *testing.T) {
 func TestAutoHoldsBackWhereTheTrackHasLittle(t *testing.T) {
 	// Next to nothing in the deep bass: the shelf lifts no further than
 	// autoMostLift.
-	bands := autoBands(levelsOf(func(f float64) float64 { return -40 * max(0, math.Log2(60/f)) }))
+	bands := autoBands(levelsOf(func(f float64) float64 { return -40 * max(0, math.Log2(60/f)) }), tonal.Pink)
 	if g := audio.Response(bands, 30); g > autoMostLift+0.5 {
 		t.Errorf("for a track with no deep bass, the EQ lifts 30 Hz by %+.1f dB", g)
 	}
@@ -92,5 +93,37 @@ func TestAutoHoldsBackWhereTheTrackHasLittle(t *testing.T) {
 	}
 	if len(bands) > maxBands {
 		t.Errorf("Auto makes %d bands, more than the %d an EQ has", len(bands), maxBands)
+	}
+}
+
+func TestAutoBringsATrackToItsTarget(t *testing.T) {
+	music := tonal.Music.At(tonal.Knee)
+	shaped := levelsOf(music.Level)
+	for _, b := range autoBands(shaped, music) {
+		if math.Abs(float64(b.Gain)) > 0.05 {
+			t.Errorf("for a track on the music slope, matched to it, band %d at %g Hz is set to %+.1f dB", b.ID, b.Freq,
+				b.Gain)
+		}
+	}
+	// Pink noise, matched to the music slope, leans down from the knee
+	// up and from the knee down; a track on the slope, matched to pink,
+	// leans the other way: the knee against an octave and a half either
+	// side.
+	bend := func(bands []audio.Band) float64 {
+		k := audio.Response(bands, tonal.Knee)
+		return k - (audio.Response(bands, tonal.Knee/3)+audio.Response(bands, tonal.Knee*3))/2
+	}
+	pinkToMusic := bend(autoBands(levelsOf(func(float64) float64 { return 0 }), music))
+	musicToPink := bend(autoBands(shaped, tonal.Pink))
+	if !(pinkToMusic > 3 && musicToPink < -3) {
+		t.Errorf("the knee against either side: pink matched to the music slope bends %+.1f dB, the slope matched "+
+			"to pink %+.1f dB; want 3 dB up and down", pinkToMusic, musicToPink)
+	}
+	// The knee moved up, the slope runs level further: pink matched to
+	// it lifts 1 kHz more.
+	low, high := autoBands(levelsOf(func(float64) float64 { return 0 }), tonal.Music.At(300)),
+		autoBands(levelsOf(func(float64) float64 { return 0 }), tonal.Music.At(1500))
+	if d := audio.Response(high, 1000) - audio.Response(low, 1000); !(d > 2) {
+		t.Errorf("with the knee at 1.5 kHz, 1 kHz is lifted %+.1f dB more than with it at 300 Hz, want 2", d)
 	}
 }

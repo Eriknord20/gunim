@@ -14,6 +14,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/plugui"
+	"github.com/marrasen/gunim/audio/plug/tonal"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -329,7 +330,7 @@ func TestMatchingToPinkNoiseReadsShowsHowFarAndStops(t *testing.T) {
 	clickOn(t, w, run, v.stop)
 	close(src.gate)
 	run(30)
-	if v.listening || v.stopIn.Value() > 0.01 || v.match.Label != matchWords {
+	if v.listening || v.stopIn.Value() > 0.01 || v.match.Label != matchWords(tonal.Pink) {
 		t.Fatalf("stopped, the button reads on %v, says %q, the stop button in %v", v.listening, v.match.Label, v.stopIn.Value())
 	}
 	// Long enough for the reading to have run through, had it not
@@ -360,14 +361,14 @@ func TestMatchingToPinkNoiseReadsShowsHowFarAndStops(t *testing.T) {
 			break
 		}
 	}
-	if v.match.Label != matchedWords || len(p.Bands()) != len(autoShape) {
+	if v.match.Label != matchedWords(tonal.Pink) || len(p.Bands()) != len(autoShape) {
 		t.Fatalf("read through, the button says %q, and the bands are %v", v.match.Label, p.Bands())
 	}
 	if want := []string{"edit Auto EQ", "changed", "end edit"}; !slices.Equal(h.log, want) {
 		t.Errorf("matching sent %v, want one step", h.log)
 	}
 	run(int(tellFor/(time.Second/60)) + 5)
-	if v.match.Label != matchWords {
+	if v.match.Label != matchWords(tonal.Pink) {
 		t.Errorf("a while after, the button still says %q", v.match.Label)
 	}
 }
@@ -543,7 +544,7 @@ func TestAutoReadsTheTrackAndShapesTheBands(t *testing.T) {
 			break
 		}
 	}
-	if v.listening || v.match.Label != matchedWords {
+	if v.listening || v.match.Label != matchedWords(tonal.Pink) {
 		t.Fatalf("Auto still reads %v, and says %q", v.listening, v.match.Label)
 	}
 	if low, high := audio.Response(p.Bands(), 100), audio.Response(p.Bands(), 8000); high > low-6 {
@@ -738,7 +739,7 @@ func TestTheTopControlsStandOnGlassOverTheGraph(t *testing.T) {
 	if graph.Min != (geom.Point{}) || !graph.Contains(bar.Min) || !graph.Contains(bar.Max.Sub(geom.Pt(1, 1))) {
 		t.Fatalf("the graph is %v and the bar %v: the graph not under the bar", graph, bar)
 	}
-	for _, n := range []gunim.Node{v.views, v.match, v.knobs[0], v.knobs[3]} {
+	for _, n := range []gunim.Node{v.views, v.match, v.knobs[1], v.knobs[4]} {
 		if b := boundsIn(t, w, run, n); !bar.Contains(b.Min) || !bar.Contains(b.Max.Sub(geom.Pt(1, 1))) {
 			t.Errorf("a control along the top, %v, is off the bar, %v", b, bar)
 		}
@@ -861,7 +862,7 @@ func TestTheMatchButtonSaysLessWhereTheBarIsNarrow(t *testing.T) {
 		w      float32
 		words  string
 		hidden bool
-	}{{1200, matchWords, false}, {560, matchShort, false}, {380, matchShort, true}} {
+	}{{1200, matchWords(tonal.Pink), false}, {560, matchShort(tonal.Pink), false}, {380, matchShort(tonal.Pink), true}} {
 		p, h := newEQ(t)
 		v, ok := p.View(plug.Full, h).(*full)
 		if !ok {
@@ -878,5 +879,47 @@ func TestTheMatchButtonSaysLessWhereTheBarIsNarrow(t *testing.T) {
 		if !c.hidden && match.Min.X < views.Max.X+gap+32 {
 			t.Errorf("%v wide, the match button at %v runs into the switch at %v and the tuner after it", c.w, match, views)
 		}
+	}
+}
+
+func TestTheMenuBesideTheMatchButtonPicksTheTarget(t *testing.T) {
+	p, h := newEQ(t)
+	v, ok := p.View(plug.Full, h).(*full)
+	if !ok {
+		t.Fatal("the full view is of another type")
+	}
+	w, run := stage(t, geom.Sz(1200, 500), v)
+	run(10)
+	if v.match.Label != matchWords(tonal.Pink) || !v.target.Items()[1].Checked || !v.knobs[0].Disabled {
+		t.Fatalf("at first, the button says %q, the menu ticks %v, and the knee is greyed %v", v.match.Label,
+			v.target.Items(), v.knobs[0].Disabled)
+	}
+	if b := boundsIn(t, w, run, v.knobs[0]); b.Size().W != 0 {
+		t.Errorf("for pink, the knee's knob takes room on the bar, %v", b)
+	}
+	// The caption, then pink, then the music slope.
+	withUI(t, w, run, func(u *gunim.UI) { v.target.OnPick(2, u) })
+	bar := boundsIn(t, w, run, v.bar)
+	if b := boundsIn(t, w, run, v.knobs[0]); b.Size().W == 0 || !bar.Contains(b.Min) {
+		t.Errorf("for the music slope, the knee's knob is at %v, not on the bar, %v", b, bar)
+	}
+	if h.values[TargetID] != 1 || v.match.Label != matchWords(tonal.Music) || !v.target.Items()[2].Checked ||
+		v.target.Items()[1].Checked || v.knobs[0].Disabled {
+		t.Errorf("the music slope picked, the target is %v, the button says %q, the menu ticks %v, and the knee "+
+			"is greyed %v", h.values[TargetID], v.match.Label, v.target.Items(), v.knobs[0].Disabled)
+	}
+	if v.knobs[0].Param().ID != KneeID || v.to().Knee != tonal.Knee {
+		t.Errorf("the first knob is %v, and the target's knee %v", v.knobs[0].Param().Name, v.to().Knee)
+	}
+	h.values[KneeID] = 800
+	if v.to().Knee != 800 {
+		t.Errorf("the knee set to 800 Hz, the target's is %v", v.to().Knee)
+	}
+	// Set back by the host, as by Undo.
+	h.values[TargetID] = 0
+	withUI(t, w, run, func(u *gunim.UI) { v.Follow(TargetID, 0, u) })
+	if v.match.Label != matchWords(tonal.Pink) || !v.target.Items()[1].Checked || !v.knobs[0].Disabled {
+		t.Errorf("set back to pink, the button says %q, the menu ticks %v, and the knee is greyed %v", v.match.Label,
+			v.target.Items(), v.knobs[0].Disabled)
 	}
 }
