@@ -97,3 +97,38 @@ func mono(frames []float32) {
 		frames[i] = (frames[i] + frames[i+1]) / 2
 	}
 }
+
+// read reads one channel's samples of t from src into channel ch of
+// dst, frames of chans interleaved channels, one sample a frame. An
+// integer sample is divided by full scale, 2^(bits-1), so a sample
+// write wrote reads back as the float it was given, within range.
+func read(dst []float32, src []byte, ch, chans int, t sampleType) {
+	n := len(dst) / chans
+	bytes, bits := t.size()
+	if t == float32LSB {
+		for i := range n {
+			dst[i*chans+ch] = math.Float32frombits(binary.LittleEndian.Uint32(src[4*i:]))
+		}
+		return
+	}
+	if t == float64LSB {
+		for i := range n {
+			dst[i*chans+ch] = float32(math.Float64frombits(binary.LittleEndian.Uint64(src[8*i:])))
+		}
+		return
+	}
+	scale := float32(1 / math.Ldexp(1, bits-1))
+	for i := range n {
+		at := src[bytes*i:]
+		var x int32
+		switch bytes {
+		case 2:
+			x = int32(int16(binary.LittleEndian.Uint16(at)))
+		case 3:
+			x = int32(uint32(at[0])|uint32(at[1])<<8|uint32(at[2])<<16) << 8 >> 8
+		case 4:
+			x = int32(binary.LittleEndian.Uint32(at))
+		}
+		dst[i*chans+ch] = float32(x) * scale
+	}
+}

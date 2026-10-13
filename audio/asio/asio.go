@@ -8,6 +8,9 @@
 // driver's interface, in Go. It is for 64-bit Windows; elsewhere
 // [Drivers] lists none and [Open] returns [ErrUnsupported].
 //
+// ASIO plays and records together: [Config.Record] takes the driver's
+// inputs in step with the buffers it plays, sample for sample.
+//
 // A process plays through one driver at a time:
 //
 //	d, err := asio.Open(asio.Config{Name: drivers[0].Name, Rate: 44100,
@@ -47,6 +50,21 @@ type Config struct {
 	// thread of its own, each time it takes a buffer, so it must be
 	// quick and return at once.
 	Fill func(frames []float32)
+	// Record, where set, records the driver's inputs, up to
+	// [MaxInputs] of them: each time the driver takes a buffer, it is
+	// called with what came in over the same period, just before Fill.
+	// in holds frames of channels interleaved float32 samples from -1
+	// to 1, the inputs in order. A sound in the input buffer of one
+	// call was at the inputs [Info].InputLatency frames before the
+	// call, and the first frame Fill fills then is heard
+	// [Info].Latency frames after it. Record runs on the driver's
+	// thread, as Fill does, so it must be as quick.
+	Record func(in []float32, channels int)
+	// Recording, where set, says whether Record wants the inputs now.
+	// The driver's thread asks it each buffer, before it reads them:
+	// where it returns false the inputs are left unread and Record
+	// uncalled. It must be as quick as Record.
+	Recording func() bool
 	// Reset, where set, is called once, on a goroutine of its own, as
 	// the driver asks to be opened again: after its rate, buffer size
 	// or latency changes, as in its control panel. Close the device and
@@ -58,6 +76,10 @@ type Config struct {
 	// as the driver takes a buffer.
 	Log func(format string, args ...any)
 }
+
+// MaxInputs is how many of a driver's inputs [Config.Record] records
+// at most: the first ones.
+const MaxInputs = 64
 
 // ErrUnsupported is returned by [Open] on a system without ASIO.
 var ErrUnsupported = errors.New("asio: ASIO plays on 64-bit Windows")
