@@ -4,14 +4,16 @@ import (
 	"math"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/plug/tonal"
 )
 
 // Auto: the bands that bring the whole track, as it reaches the EQ, to
-// the balance of pink noise, which has as much power in each octave as
-// in any other, as a mix's long-term spectrum leans toward. The host
-// measures the track's power in sixth-octave bands, where pink noise
-// reads level; the EQ lifts where the track falls under its average
-// and lowers where it rises over, with a low shelf, six bells starting
+// the balance of a target: pink noise, which has as much power in each
+// octave as in any other, as a mix's long-term spectrum leans toward,
+// or brown noise, darker. The host measures the track's power in
+// sixth-octave bands, where pink noise reads level; the EQ lifts where
+// the track, against the target, falls under its average and lowers
+// where it rises over, with a low shelf, six bells starting
 // an octave apart and a high shelf: their gains fitted to the
 // difference, and each bell's frequency too, within half an octave of
 // where it starts.
@@ -66,19 +68,21 @@ func autoWeight(f float64) float64 {
 }
 
 // autoTarget returns how far to lift each of autoFreqs, in decibels,
-// to bring levels, measured there, to pink: their weighted average less
-// each, smoothed over a third of an octave either way, no further than
-// autoMostLift up and autoMostCut down.
-func autoTarget(levels []float64) []float64 {
+// to bring levels, measured there, to to: their weighted average, each
+// against to, less each, smoothed over a third of an octave either way,
+// no further than autoMostLift up and autoMostCut down.
+func autoTarget(levels []float64, to tonal.Target) []float64 {
 	var sum, weights float64
+	against := make([]float64, len(levels))
 	for i, l := range levels {
+		against[i] = l - to.Level(autoFreqs[i])
 		w := autoWeight(autoFreqs[i])
-		sum += w * l
+		sum += w * against[i]
 		weights += w
 	}
 	mean := sum / weights
 	raw := make([]float64, len(levels))
-	for i, l := range levels {
+	for i, l := range against {
 		raw[i] = mean - l
 	}
 	out := make([]float64, len(raw))
@@ -102,11 +106,11 @@ func abs(v int) int {
 }
 
 // autoBands returns the bands that bring levels, measured at autoFreqs,
-// to pink: autoShape, fitted, by weighted least squares, to the lift
+// to to: autoShape, fitted, by weighted least squares, to the lift
 // autoTarget asks over the bands' true curves, a few steps of
 // Gauss-Newton: the gains, and the bells' frequencies.
-func autoBands(levels []float64) []audio.Band {
-	target := autoTarget(levels)
+func autoBands(levels []float64, to tonal.Target) []audio.Band {
+	target := autoTarget(levels, to)
 	bands := make([]audio.Band, len(autoShape))
 	copy(bands, autoShape)
 	// The parameters: each band's gain, then each bell's frequency, in
