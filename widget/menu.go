@@ -1687,7 +1687,9 @@ func (t *tipper) wait(u *gunim.UI) {
 
 func (t *tipper) show(u *gunim.UI) {
 	t.stop = nil
-	if t.popup != nil || t.text == "" {
+	// The owner may have left the tree while the delay ran, as a button
+	// on a panel closed while it was held.
+	if t.popup != nil || t.text == "" || u.Presence(t.owner) == gunim.Exiting {
 		return
 	}
 	// Below the pointer, clear of it, or above it where the screen runs

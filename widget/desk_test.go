@@ -294,3 +294,26 @@ func TestAPanelsContentStaysUnderItsBar(t *testing.T) {
 		t.Fatal("the content's bar was never painted")
 	}
 }
+
+// A panel closed while its cross is held and the pointer has slid off
+// it leaves no tooltip waiting to open from the cross gone.
+func TestAPanelClosedWhileItsCrossIsHeldOpensNoTooltip(t *testing.T) {
+	w, run, st, _, b := stageDesk(t)
+	r := b.shutRect(b.Shown().Size(), nil).Add(b.Shown().Min)
+	down(w, r.Center(), input.ButtonPrimary)
+	run(1)
+	for i := 1; i <= 4; i++ {
+		w.Input(input.PointerMove{Pos: r.Center().Add(geom.Pt(0, float32(12*i)))})
+		run(1)
+	}
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, _ struct{}, u *gunim.UI) { st.desk.Close(b, u) })
+	if err := w.Client().Patch("stage", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(120)
+	w.Input(input.PointerUp{Pos: r.Center().Add(geom.Pt(0, 48)), Button: input.ButtonPrimary})
+	run(10)
+	if st.desk.IsOpen(b) {
+		t.Fatal("the panel is still open")
+	}
+}
