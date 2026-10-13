@@ -173,7 +173,7 @@ func describe(c Class, open func(cfg Config) (*Plugin, error)) (plug.Descriptor,
 		// The value it starts at, which may be other than the default
 		// it gives, as a preset loaded as it starts sets it.
 		prm := plug.Param{ID: q.ID, Name: q.Title, Unit: q.Units, Min: 0, Max: 1, Default: min(max(p.Value(q.ID), 0), 1),
-			Steps: max(q.Steps, 0), Format: cl.formatter(q.ID, q.Units)}
+			Steps: max(q.Steps, 0), Format: cl.formatter(q.ID, q.Units, q.Steps > 0)}
 		if prm.Name == "" {
 			prm.Name = fmt.Sprintf("Parameter %d", q.ID)
 		}
@@ -337,8 +337,10 @@ type textKey struct {
 const maxTexts = 4096
 
 // formatter returns the Format of parameter id: as a plugin of the
-// class playing writes it, or as a number of units where none plays.
-func (cl *plugClass) formatter(id uint32, units string) func(v float64) string {
+// class playing writes it, after its units where it is smooth, or as a
+// number of units where none plays. A value of a parameter of steps,
+// as a list's, is its name alone.
+func (cl *plugClass) formatter(id uint32, units string, stepped bool) func(v float64) string {
 	return func(v float64) string {
 		cl.mu.Lock()
 		s, ok := cl.texts[textKey{id, v}]
@@ -352,7 +354,7 @@ func (cl *plugClass) formatter(id uint32, units string) func(v float64) string {
 		}
 		if p != nil {
 			if s = p.Text(id, v); s != "" {
-				if units != "" && !strings.HasSuffix(s, units) {
+				if units != "" && !stepped && !strings.HasSuffix(s, units) {
 					s += " " + units
 				}
 				cl.mu.Lock()

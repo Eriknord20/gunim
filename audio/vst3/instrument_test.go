@@ -96,6 +96,12 @@ func TestAnInstrumentPlaysAndBendsANote(t *testing.T) {
 	if !pl.(*plugged).Plugin().Bends() {
 		t.Error("the synth bends notes of their own, and the host thinks not")
 	}
+	// A value is written as the synth playing writes it.
+	if prm, ok := d.Param(0); !ok || prm.Text(0.5) == "0.50 sec" || prm.Text(0.5) == "" {
+		t.Errorf("the release time at 0.5 is written %q", prm.Text(0.5))
+	} else {
+		t.Logf("the release time at 0.5 is written %q", prm.Text(0.5))
+	}
 	for c, ch := range res.Out {
 		for i, v := range ch {
 			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
@@ -224,6 +230,9 @@ func TestAnyInstrument(t *testing.T) {
 	}
 	p := pl.(*plugged).Plugin()
 	t.Logf("level %.4f, latency %d, tail %d, bends notes %v, editor %v", first, p.Latency(), p.Tail(), p.Bends(), p.HasEditor())
+	for _, prm := range d.Params[:min(len(d.Params), 3)] {
+		t.Logf("%s starts at %.3f, written %q", prm.Name, prm.Default, prm.Text(prm.Default))
+	}
 	again := d.New(nil)
 	defer again.Close()
 	if err := again.SetState(pl.State()); err != nil {
