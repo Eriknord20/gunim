@@ -19,7 +19,7 @@ func TestRoundedSoundComesThroughExactly(t *testing.T) {
 	for _, typ := range []sampleType{int16LSB, int24LSB, int32LSB, int32LSB16, int32LSB18, int32LSB20, int32LSB24} {
 		bytes, bits := typ.size()
 		dst := make([]byte, bytes*len(steps))
-		write(dst, frames, 0, typ)
+		write(dst, frames, 0, 2, typ)
 		for i, k := range steps {
 			var got int32
 			switch bytes {
@@ -42,11 +42,11 @@ func TestRoundedSoundComesThroughExactly(t *testing.T) {
 func TestFullScaleHolds(t *testing.T) {
 	frames := []float32{1.5, -1.5}
 	dst := make([]byte, 2)
-	write(dst, frames, 0, int16LSB)
+	write(dst, frames, 0, 2, int16LSB)
 	if got := int16(binary.LittleEndian.Uint16(dst)); got != 32767 {
 		t.Errorf("1.5 came out %d, want 32767", got)
 	}
-	write(dst, frames, 1, int16LSB)
+	write(dst, frames, 1, 2, int16LSB)
 	if got := int16(binary.LittleEndian.Uint16(dst)); got != -32768 {
 		t.Errorf("-1.5 came out %d, want -32768", got)
 	}
@@ -57,12 +57,12 @@ func TestFullScaleHolds(t *testing.T) {
 func TestFloatsComeThroughAsTheyAre(t *testing.T) {
 	frames := []float32{0.123456789, -0.5, 1, -1}
 	d32 := make([]byte, 8)
-	write(d32, frames, 1, float32LSB)
+	write(d32, frames, 1, 2, float32LSB)
 	if got := math.Float32frombits(binary.LittleEndian.Uint32(d32[4:])); got != -1 {
 		t.Errorf("float32: got %v, want -1", got)
 	}
 	d64 := make([]byte, 16)
-	write(d64, frames, 0, float64LSB)
+	write(d64, frames, 0, 2, float64LSB)
 	if got := math.Float64frombits(binary.LittleEndian.Uint64(d64)); got != float64(float32(0.123456789)) {
 		t.Errorf("float64: got %v", got)
 	}
@@ -81,7 +81,7 @@ func TestMonoAverages(t *testing.T) {
 func TestNaNIsSilence(t *testing.T) {
 	nan := float32(math.NaN())
 	dst := make([]byte, 4)
-	write(dst, []float32{nan, nan}, 0, int32LSB)
+	write(dst, []float32{nan, nan}, 0, 2, int32LSB)
 	if got := int32(binary.LittleEndian.Uint32(dst)); got != 0 {
 		t.Errorf("NaN came out %d", got)
 	}
@@ -99,7 +99,7 @@ func TestInputsReadBackWhatWasWritten(t *testing.T) {
 	for _, typ := range []sampleType{int16LSB, int24LSB, int32LSB, float32LSB, float64LSB, int32LSB16, int32LSB18, int32LSB20, int32LSB24} {
 		bytes, _ := typ.size()
 		src := make([]byte, bytes*len(steps))
-		write(src, frames, 0, typ)
+		write(src, frames, 0, 2, typ)
 		dst := make([]float32, 3*len(steps))
 		for i := range dst {
 			dst[i] = 9
@@ -111,6 +111,33 @@ func TestInputsReadBackWhatWasWritten(t *testing.T) {
 			}
 			if dst[3*i] != 9 || dst[3*i+2] != 9 {
 				t.Errorf("type %d: frame %d wrote past its channel: %v", typ, i, dst[3*i:3*i+3])
+			}
+		}
+	}
+}
+
+// TestWriteTakesItsChannelOfMany writes each channel of six, as many
+// outputs take them, each as a sample type of its own, and reads each
+// back as its own channel's sound.
+func TestWriteTakesItsChannelOfMany(t *testing.T) {
+	const chans, n = 6, 5
+	types := []sampleType{float32LSB, int16LSB, int24LSB, int32LSB, float64LSB, int32LSB24}
+	frames := make([]float32, chans*n)
+	for i := range n {
+		for ch := range chans {
+			// A step of 16 bits, so every type holds it exactly.
+			frames[i*chans+ch] = float32(100*ch+i) / 32768
+		}
+	}
+	for ch, typ := range types {
+		bytes, _ := typ.size()
+		dst := make([]byte, bytes*n)
+		write(dst, frames, ch, chans, typ)
+		got := make([]float32, n)
+		read(got, dst, 0, 1, typ)
+		for i, v := range got {
+			if want := frames[i*chans+ch]; v != want {
+				t.Errorf("channel %d, type %d: frame %d came out %v, want %v", ch, typ, i, v, want)
 			}
 		}
 	}

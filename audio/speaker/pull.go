@@ -43,6 +43,9 @@ type ringOutput struct {
 	tap atomic.Pointer[duplex.Tap]
 	// records says the driver was opened with its inputs.
 	records bool
+	// chans is how many channels a frame of the ring holds: the
+	// mixer's two, then those Options.Aux fills.
+	chans int
 	// target is how many frames the ring is kept at.
 	target atomic.Int64
 	// primed says the ring has reached its target once, so a buffer the
@@ -59,8 +62,14 @@ type ringOutput struct {
 }
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
-	r := &ringOutput{s: s, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
-	c := asio.Config{Name: o.Driver, Rate: o.rate(), Fill: r.take, Reset: s.askReset, Log: s.logf}
+	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	c := asio.Config{Name: o.Driver, Rate: o.rate(), Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
+	if len(o.Outputs) > 2 {
+		r.chans = len(o.Outputs)
+		c.FillN = r.takeN
+	} else {
+		c.Fill = r.take
+	}
 	if o.Record {
 		c.Record, c.Recording = r.record, r.recording
 		r.records = true
@@ -70,7 +79,7 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 		return nil, err
 	}
 	r.dev, r.info = dev, dev.Info()
-	r.q.Store(newRing(int(audio.FramesAt(MaxLatency, r.info.Rate)) + 2*r.info.Buffer + 4096))
+	r.q.Store(newRing(int(audio.FramesAt(MaxLatency, r.info.Rate))+2*r.info.Buffer+4096, r.chans))
 	return r, nil
 }
 
@@ -96,14 +105,24 @@ func (r *ringOutput) take(frames []float32) {
 	if q != nil && !r.paused.Load() {
 		n = q.pop(frames)
 	}
-	clear(frames[2*n:])
-	if q != nil && n < len(frames)/2 && r.primed.Load() && !r.paused.Load() {
+	clear(frames[r.chans*n:])
+	if q != nil && n < len(frames)/r.chans && r.primed.Load() && !r.paused.Load() {
 		r.s.ranDry()
 	}
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
+}
+
+// takeN fills frames of all the channels the device plays, as take
+// does.
+func (r *ringOutput) takeN(frames []float32, channels int) {
+	if channels != r.chans {
+		clear(frames)
+		return
+	}
+	r.take(frames)
 }
 
 // record hands the driver's inputs on, as the device takes a buffer,
@@ -132,8 +151,16 @@ func (r *ringOutput) feed() {
 	defer close(r.done)
 	t := time.NewTicker(2 * time.Millisecond)
 	defer t.Stop()
-	buf := make([]float32, 2*max(1, int(audio.FramesAt(chunk, r.info.Rate))))
+	most := max(1, int(audio.FramesAt(chunk, r.info.Rate)))
+	buf := make([]float32, 2*most)
 	q := r.q.Load()
+	// Past the mixer's pair, aux holds what Options.Aux fills, and wide
+	// the two together, a frame at a time, as the ring takes them.
+	var aux, wide []float32
+	if r.chans > 2 {
+		aux = make([]float32, (r.chans-2)*most)
+		wide = make([]float32, r.chans*most)
+	}
 	for {
 		tick := t.C
 		if r.paused.Load() {
@@ -159,10 +186,31 @@ func (r *ringOutput) feed() {
 			if n <= 0 {
 				break
 			}
+			// The mixer frame of the first: the feed alone reads it.
+			at := r.base.Load() + q.w.Load()
 			frames := buf[:2*n]
 			r.s.pull(frames)
-			q.push(frames)
+			if r.chans == 2 {
+				q.push(frames)
+				continue
+			}
+			a := aux[:int64(r.chans-2)*n]
+			r.s.pullAux(a, r.chans-2, at)
+			w := wide[:int64(r.chans)*n]
+			interleave(w, frames, a, r.chans)
+			q.push(w)
 		}
+	}
+}
+
+// interleave writes frames of chans channels into dst: main's pair
+// first, then aux's chans-2.
+func interleave(dst, main, aux []float32, chans int) {
+	k := chans - 2
+	for i := range len(main) / 2 {
+		f := dst[i*chans : (i+1)*chans]
+		f[0], f[1] = main[2*i], main[2*i+1]
+		copy(f[2:], aux[i*k:(i+1)*k])
 	}
 }
 
@@ -187,6 +235,7 @@ func (r *ringOutput) latency() time.Duration {
 
 func (r *ringOutput) fill(st *State) {
 	st.Driver = r.info.Driver
+	st.Aux = r.chans - 2
 	info := r.info
 	st.ASIO = &info
 }

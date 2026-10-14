@@ -22,5 +22,9 @@ func (*Device) ControlPanel() error { return ErrUnsupported }
 // it returns [ErrUnsupported].
 func ControlPanel(string) error { return ErrUnsupported }
 
+// Channels lists the names of the driver's inputs and outputs; on
+// this system it returns [ErrUnsupported].
+func Channels(string) (inputs, outputs []string, err error) { return nil, nil, ErrUnsupported }
+
 // Close stops the driver and lets it go.
 func (*Device) Close() error { return nil }

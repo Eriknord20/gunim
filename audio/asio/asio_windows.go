@@ -78,6 +78,14 @@ type channelInfo struct {
 	name     [32]byte
 }
 
+// An outSlot is an output a device plays on: output out of the
+// driver, which takes samples of typ, plays channel ch of the frames
+// Fill or FillN fills, or silence where ch is -1.
+type outSlot struct {
+	out, ch int
+	typ     sampleType
+}
+
 // callbacks are the functions the driver calls.
 type callbacks struct {
 	bufferSwitch, sampleRateDidChange, asioMessage, bufferSwitchTimeInfo uintptr
@@ -92,7 +100,7 @@ var (
 	// package variables they stay where they are.
 	cbOnce sync.Once
 	cbs    callbacks
-	infos  [2 + MaxInputs]bufferInfo
+	infos  [MaxOutputs + MaxInputs]bufferInfo
 )
 
 var (
@@ -139,11 +147,11 @@ func Drivers() ([]Driver, error) {
 // A Device is an open ASIO driver, playing. Its methods are safe from
 // any goroutine.
 type Device struct {
-	t    *sta
-	obj  uintptr
-	info Info
-	typ  sampleType
-	fill func([]float32)
+	t     *sta
+	obj   uintptr
+	info  Info
+	fill  func([]float32)
+	fillN func([]float32, int)
 	// record hears the inputs, ins of them, read as inTypes say into
 	// inBuf, where Config.Record is set.
 	record    func([]float32, int)
@@ -153,10 +161,15 @@ type Device struct {
 	inBuf     []float32
 	reset     func()
 	log       func(string, ...any)
-	// outs is how many channels play: two, or one for a driver of one
-	// output. buf is the frames Fill fills.
-	outs int
-	buf  []float32
+	// outs are the outputs played, the first of infos, and chans how
+	// many channels a frame of buf holds, as Fill or FillN fills it.
+	// mono averages Fill's pair onto the one output played.
+	outs  []outSlot
+	chans int
+	mono  bool
+	buf   []float32
+	// inNames names all the driver's inputs, for Channels.
+	inNames []string
 	// ready is the driver's outputReady, where it has one, which it
 	// wants called once a buffer is filled.
 	ready uintptr
@@ -170,8 +183,8 @@ type Device struct {
 
 // Open opens the driver c names and starts it playing.
 func Open(c Config) (*Device, error) {
-	if c.Fill == nil {
-		return nil, errors.New("asio: Config.Fill is nil")
+	if c.Fill == nil && c.FillN == nil {
+		return nil, errors.New("asio: Config.Fill and FillN are nil")
 	}
 	openMu.Lock()
 	defer openMu.Unlock()
@@ -186,7 +199,7 @@ func Open(c Config) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Device{t: t, fill: c.Fill, record: c.Record, recording: c.Recording, reset: c.Reset, log: c.Log}
+	d := &Device{t: t, fill: c.Fill, fillN: c.FillN, record: c.Record, recording: c.Recording, reset: c.Reset, log: c.Log}
 	cbOnce.Do(makeCallbacks)
 	done := t.start(func() { err = d.open(clsid, c) })
 	if !waitFor(done, openWait) {
@@ -263,6 +276,55 @@ func ControlPanel(name string) error {
 	return err
 }
 
+// Channels lists the names of the inputs and outputs of the driver
+// named, in order: an output's index in outputs is the one
+// [Config.Outputs] takes. While a device plays through the driver it
+// tells what the driver told as it opened; while none plays it loads
+// the driver on a thread of its own, without starting it, and lets it
+// go. It returns [ErrOpen] while a device plays through another driver.
+func Channels(name string) (inputs, outputs []string, err error) {
+	openMu.Lock()
+	defer openMu.Unlock()
+	if d := playing.Load(); d != nil {
+		if d.info.Driver != name {
+			return nil, nil, ErrOpen
+		}
+		return slices.Clone(d.inNames), slices.Clone(d.info.OutputNames), nil
+	}
+	clsid, err := clsidOf(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	t, err := newSTA()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer t.stop()
+	t.run(func() {
+		d := &Device{}
+		if hr, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(&clsid)), 0, windows.CLSCTX_INPROC_SERVER,
+			uintptr(unsafe.Pointer(&clsid)), uintptr(unsafe.Pointer(&d.obj))); hr != 0 {
+			err = fmt.Errorf("asio: loading %s: %w", name, windows.Errno(hr))
+			return
+		}
+		defer d.call(mRelease)
+		hwnd, _, _ := procGetDesktopWindow.Call()
+		if d.call(mInit, hwnd) == 0 {
+			err = &Error{Op: "starting " + name, Message: d.refused()}
+			return
+		}
+		var ins, outs int32
+		if r := d.call(mGetChannels, uintptr(unsafe.Pointer(&ins)), uintptr(unsafe.Pointer(&outs))); r != codeOK {
+			err = d.fail("counting the channels", r)
+			return
+		}
+		inInfos, _ := d.channels(int(ins), true)
+		outInfos, _ := d.channels(int(outs), false)
+		inputs, outputs = namesOf(inInfos), namesOf(outInfos)
+	})
+	return inputs, outputs, err
+}
+
 // refused says why the driver refused to start: as it says, or, where
 // it says nothing, what is likely.
 func (d *Device) refused() string {
@@ -304,20 +366,25 @@ func (d *Device) open(clsid windows.GUID, c Config) error {
 		return d.fail("reading the buffer sizes", r)
 	}
 	size := fitBuffer(c.Buffer, int(lo), int(hi), int(pref), int(gran))
-	ci := channelInfo{channel: 0, isInput: 0}
-	if r := d.call(mGetChannelInfo, uintptr(unsafe.Pointer(&ci))); r != codeOK {
+	// A driver that tells of fewer outputs than it counts plays on
+	// those it tells of.
+	outInfos, r := d.channels(int(outs), false)
+	if len(outInfos) == 0 {
 		return d.fail("reading the first output", r)
 	}
-	d.typ = ci.typ
-	bytes, bits := d.typ.size()
-	if bytes == 0 {
-		return fmt.Errorf("asio: %s takes samples of type %d, which this package plays none of", c.Name, d.typ)
+	outNames := namesOf(outInfos)
+	played, err := d.outputs(c, outInfos)
+	if err != nil {
+		return err
 	}
-	d.outs = min(int(outs), 2)
-	names := d.inputs(int(ins))
+	inInfos, _ := d.channels(int(ins), true)
+	d.inNames = namesOf(inInfos)
+	names := d.inputs(inInfos)
+	first := d.outs[0].typ
+	_, bits := first.size()
 	// A driver may send messages as it makes its buffers.
 	playing.Store(d)
-	r := d.makeBuffers(size)
+	r = d.makeBuffers(size)
 	if r != codeOK && d.ins > 0 {
 		d.logf("asio: %s made no buffers for its inputs (%v); playing without them", c.Name, d.fail("making the buffers", r))
 		d.ins, d.inTypes, names = 0, nil, nil
@@ -330,18 +397,19 @@ func (d *Device) open(clsid windows.GUID, c Config) error {
 	d.inBuf = make([]float32, d.ins*size)
 	var inLat, outLat int32
 	_ = d.call(mGetLatencies, uintptr(unsafe.Pointer(&inLat)), uintptr(unsafe.Pointer(&outLat)))
-	d.buf = make([]float32, 2*size)
+	d.buf = make([]float32, d.chans*size)
 	if d.call(mOutputReady) == codeOK {
 		d.ready = method(d.obj, mOutputReady)
 	}
-	for ch := range d.outs {
+	for i, o := range d.outs {
+		bytes, _ := o.typ.size()
 		for half := range 2 {
-			clear(unsafe.Slice(ptr[byte](infos[ch].buffers[half]), size*bytes))
+			clear(unsafe.Slice(ptr[byte](infos[i].buffers[half]), size*bytes))
 		}
 	}
 	d.info = Info{Driver: c.Name, Rate: int(math.Round(rate)), Buffer: size, MinBuffer: int(lo), MaxBuffer: int(hi),
-		PreferredBuffer: int(pref), Latency: int(outLat), Bits: bits, Float: d.typ.float(), Outputs: int(outs),
-		Inputs: int(ins), Recorded: d.ins, InputNames: names, InputLatency: int(inLat)}
+		PreferredBuffer: int(pref), Latency: int(outLat), Bits: bits, Float: first.float(), Outputs: int(outs),
+		OutputNames: outNames, Played: played, Inputs: int(ins), Recorded: d.ins, InputNames: names, InputLatency: int(inLat)}
 	if r := d.call(mStart); r != codeOK {
 		return d.fail("starting to play", r)
 	}
@@ -350,41 +418,100 @@ func (d *Device) open(clsid windows.GUID, c Config) error {
 	return nil
 }
 
-// inputs readies the first of the driver's ins inputs to record, as
-// many as Record wants and the package reads, and returns their names.
-// It runs on the device's thread.
-func (d *Device) inputs(ins int) []string {
+// channels returns what the driver says of its first n inputs, or
+// outputs, as many as it answers for, and its answer to the first it
+// did not. It runs on the device's thread.
+func (d *Device) channels(n int, input bool) (told []channelInfo, code int32) {
+	in := int32(0)
+	if input {
+		in = 1
+	}
+	out := make([]channelInfo, 0, n)
+	for ch := range n {
+		ci := channelInfo{channel: int32(ch), isInput: in}
+		if r := d.call(mGetChannelInfo, uintptr(unsafe.Pointer(&ci))); r != codeOK {
+			return out, r
+		}
+		out = append(out, ci)
+	}
+	return out, codeOK
+}
+
+// namesOf returns what the driver calls each of chans.
+func namesOf(chans []channelInfo) []string {
+	names := make([]string, len(chans))
+	for i, ci := range chans {
+		n := 0
+		for n < len(ci.name) && ci.name[n] != 0 {
+			n++
+		}
+		names[i] = strings.TrimSpace(string(ci.name[:n]))
+	}
+	return names
+}
+
+// outputs readies the outputs c asks to play on, of those the driver
+// told of, and returns the output each channel plays on, as
+// Info.Played tells it. It runs on the device's thread.
+func (d *Device) outputs(c Config, outInfos []channelInfo) ([]int, error) {
+	played := layout(c.Outputs, len(outInfos))
+	d.chans = 2
+	if d.fillN != nil {
+		d.chans = len(played)
+	}
+	d.mono = d.fillN == nil && len(played) == 1
+	for ch, o := range played {
+		if o < 0 {
+			if ch < len(c.Outputs) {
+				d.logf("asio: %s has no output %d to play channel %d on, or plays it already", c.Name, c.Outputs[ch], ch)
+			}
+			continue
+		}
+		typ := outInfos[o].typ
+		if bytes, _ := typ.size(); bytes == 0 {
+			return nil, fmt.Errorf("asio: %s takes samples of type %d on output %d, which this package plays none of", c.Name, typ, o)
+		}
+		if ch >= d.chans {
+			// Past Fill's pair: it plays silence, as the buffers
+			// are cleared.
+			ch = -1
+		}
+		d.outs = append(d.outs, outSlot{out: o, ch: ch, typ: typ})
+	}
+	if len(d.outs) == 0 {
+		return nil, fmt.Errorf("asio: %s has none of the outputs %v", c.Name, c.Outputs)
+	}
+	return played, nil
+}
+
+// inputs readies the first of the driver's inputs to record, as many as
+// Record wants and the package reads, and returns their names. It runs
+// on the device's thread.
+func (d *Device) inputs(inInfos []channelInfo) []string {
 	if d.record == nil {
 		return nil
 	}
 	var names []string
-	for ch := range min(ins, MaxInputs) {
-		ci := channelInfo{channel: int32(ch), isInput: 1}
-		if r := d.call(mGetChannelInfo, uintptr(unsafe.Pointer(&ci))); r != codeOK {
-			break
-		}
+	all := namesOf(inInfos)
+	for ch, ci := range inInfos[:min(len(inInfos), MaxInputs)] {
 		if bytes, _ := ci.typ.size(); bytes == 0 {
 			d.logf("asio: input %d gives samples of type %d, which this package reads none of", ch, ci.typ)
 			break
 		}
 		d.inTypes = append(d.inTypes, ci.typ)
-		n := 0
-		for n < len(ci.name) && ci.name[n] != 0 {
-			n++
-		}
-		names = append(names, strings.TrimSpace(string(ci.name[:n])))
+		names = append(names, all[ch])
 	}
 	d.ins = len(names)
 	return names
 }
 
-// makeBuffers asks the driver for the buffers of its first outputs and
-// of the inputs it records, size frames each, and returns its answer.
-// It runs on the device's thread.
+// makeBuffers asks the driver for the buffers of the outputs it plays
+// and of the inputs it records, size frames each, and returns its
+// answer. It runs on the device's thread.
 func (d *Device) makeBuffers(size int) int32 {
 	n := 0
-	for ch := range d.outs {
-		infos[n] = bufferInfo{channel: int32(ch)}
+	for _, o := range d.outs {
+		infos[n] = bufferInfo{channel: int32(o.out)}
 		n++
 	}
 	for ch := range d.ins {
@@ -543,19 +670,25 @@ func (d *Device) switchTo(half int32) {
 		in := d.inBuf[:n*d.ins]
 		for ch, typ := range d.inTypes {
 			bytes, _ := typ.size()
-			read(in, unsafe.Slice(ptr[byte](infos[d.outs+ch].buffers[half]), n*bytes), ch, d.ins, typ)
+			read(in, unsafe.Slice(ptr[byte](infos[len(d.outs)+ch].buffers[half]), n*bytes), ch, d.ins, typ)
 		}
 		d.record(in, d.ins)
 	}
-	frames := d.buf[:2*n]
-	d.fill(frames)
-	if d.outs == 1 {
+	frames := d.buf[:d.chans*n]
+	if d.fillN != nil {
+		d.fillN(frames, d.chans)
+	} else {
+		d.fill(frames)
+	}
+	if d.mono {
 		mono(frames)
 	}
-	bytes, _ := d.typ.size()
-	for ch := range d.outs {
-		dst := unsafe.Slice(ptr[byte](infos[ch].buffers[half]), n*bytes)
-		write(dst, frames, ch, d.typ)
+	for i, o := range d.outs {
+		if o.ch < 0 {
+			continue
+		}
+		bytes, _ := o.typ.size()
+		write(unsafe.Slice(ptr[byte](infos[i].buffers[half]), n*bytes), frames, o.ch, d.chans, o.typ)
 	}
 	if d.ready != 0 {
 		_, _, _ = syscall.SyscallN(d.ready, d.obj)
