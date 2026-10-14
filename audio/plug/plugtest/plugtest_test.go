@@ -409,3 +409,13 @@ func TestAGeneratorRunsWithoutSound(t *testing.T) {
 		}
 	}
 }
+
+// TestAnnounceTellsANotesTurn checks that the news Announce makes of a
+// note carries the Turn its NoteOn does, as a host's news does.
+func TestAnnounceTellsANotesTurn(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, Turn: 7})
+	if len(ahead) != 1 || ahead[0].Turn != 7 {
+		t.Fatalf("Announce gave %+v, want news of note 1 with turn 7", ahead)
+	}
+}
