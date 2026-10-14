@@ -28,6 +28,7 @@ func RegisterViews(w *gunim.Window) {
 	registerRowsLeft(w)
 	registerDnd(w)
 	registerProps(w)
+	registerUsage(w)
 }
 
 // root is the window's root: the background, with the views stacked on
@@ -305,7 +306,21 @@ func (b *browser) Handle(e input.Event, u *gunim.UI) bool {
 
 // focusListing gives the keyboard to the grid showing.
 func (b *browser) focusListing(u *gunim.UI) {
-	if b.listing.cur != nil {
-		u.Focus(b.listing.cur.focusNode())
+	if n := b.focusNode(u); n != nil {
+		u.Focus(n)
 	}
+}
+
+// focusNode is the node that takes the keyboard in the browser: the
+// listing, or the Disk usage page over it while that shows.
+func (b *browser) focusNode(u *gunim.UI) gunim.Node {
+	if b.shell.Usage != "" {
+		if pg, ok := u.Mounted(b.shell.Usage).(*usagePage); ok && !pg.closing {
+			return pg.list
+		}
+	}
+	if b.listing.cur == nil {
+		return nil
+	}
+	return b.listing.cur.focusNode()
 }

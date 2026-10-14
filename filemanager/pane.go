@@ -111,14 +111,14 @@ func (w *Window) Owns(from gunim.ID) bool {
 
 // FocusIn returns the node that takes the keyboard in the pane whose
 // host's ID is id, in the window of u, or nil while the pane shows in no
-// window there: its listing. A program that moves the keyboard from pane
+// window there: its listing, or the Disk usage page over it. A program that moves the keyboard from pane
 // to pane focuses it. It must be called on the UI goroutine.
 func FocusIn(u *gunim.UI, id string) gunim.Node {
 	b, ok := u.Mounted(gunim.ID(id + "/" + string(browserID))).(*browser)
-	if !ok || b.listing.cur == nil {
+	if !ok {
 		return nil
 	}
-	return b.listing.cur.focusNode()
+	return b.focusNode(u)
 }
 
 // Run runs the command cmd in the pane whose host's ID is id, in the
@@ -274,6 +274,9 @@ func (a *app) republish() {
 	a.held = nil
 	a.preview.subject = ""
 	a.showPreview()
+	if a.usage.open {
+		a.mountUsage(false)
+	}
 	if len(a.ops.dialogs) > 0 {
 		a.mountDialog(a.ops.dialogs[0])
 	}
@@ -383,6 +386,9 @@ func (v viewIDs) dialog(n int) gunim.ID {
 
 // reading is the ID of the nth text viewer.
 func (v viewIDs) reading(n int) gunim.ID { return gunim.ID(v.prefix + "reading-" + strconv.Itoa(n)) }
+
+// usage is the ID of the nth Disk usage page.
+func (v viewIDs) usage(n int) gunim.ID { return gunim.ID(v.prefix + "usage-" + strconv.Itoa(n)) }
 
 // viewer is the ID of the nth picture viewer.
 func (v viewIDs) viewer(n int) gunim.ID { return gunim.ID(v.prefix + "viewer-" + strconv.Itoa(n)) }

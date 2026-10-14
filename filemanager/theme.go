@@ -65,6 +65,7 @@ func lightTheme() theme.Theme {
 	for name, c := range lightFavColors {
 		entries = append(entries, theme.Set(favColors[name], c))
 	}
+	entries = append(entries, usageLight...)
 	return widget.Light().With(entries...).With(
 		theme.Set(SidebarFill, color.NRGBA{R: 0xe9, G: 0xec, B: 0xf2, A: 0xff}),
 		theme.Set(SidebarHot, color.NRGBA{A: 0x0c}),

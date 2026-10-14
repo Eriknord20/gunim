@@ -92,6 +92,9 @@ type Shell struct {
 	// changes on this computer: ask, always upload it, or never; empty
 	// asks.
 	UploadEdited string
+	// Usage is the ID of the Disk usage page showing over the browser,
+	// which the keyboard goes to in place of the listing; "" for none.
+	Usage gunim.ID
 }
 
 // Crumb is one folder of the path bar.
