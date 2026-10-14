@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"strings"
 	"sync"
@@ -155,7 +156,7 @@ func describe(c Class, open func(cfg Config) (*Plugin, error)) (plug.Descriptor,
 	if kind == "" {
 		kind = "Fx"
 	}
-	cl := &plugClass{open: open}
+	cl := &plugClass{open: open, class: c}
 	d := plug.Descriptor{ID: PlugID(c), Name: c.Name, Vendor: c.Vendor, Version: c.Version, Kind: kind,
 		Notes: p.Notes() || c.Instrument()}
 	ins, outs := p.Buses()
@@ -343,6 +344,8 @@ func RegisterID(id string, bundles []Bundle) (plug.Descriptor, error) {
 type plugClass struct {
 	// open makes a plugin of the class, to sound.
 	open func(cfg Config) (*Plugin, error)
+	// class is the class, for its presets.
+	class Class
 
 	mu    sync.Mutex
 	live  []*plugged
@@ -421,9 +424,11 @@ type plugged struct {
 }
 
 var (
-	_ plug.Plugin   = (*plugged)(nil)
-	_ plug.Editor   = (*plugged)(nil)
-	_ plug.Reporter = (*plugProc)(nil)
+	_ plug.Plugin       = (*plugged)(nil)
+	_ plug.Editor       = (*plugged)(nil)
+	_ plug.Embedder     = (*plugged)(nil)
+	_ plug.PresetLister = (*plugged)(nil)
+	_ plug.Reporter     = (*plugProc)(nil)
 )
 
 // Processor implements [plug.Plugin].
@@ -532,6 +537,47 @@ func (a *plugged) OpenEditor(title string) error {
 		return errNotPlaying
 	}
 	return p.OpenEditor(title)
+}
+
+// Presets implements [plug.PresetLister]: the class's preset files.
+func (a *plugged) Presets() []plug.Preset { return ClassPresets(a.cl.class) }
+
+// PresetOf implements [plug.PresetLister]: a preset file names no state
+// it is cheap to know again, so none.
+func (a *plugged) PresetOf([]byte) (plug.Preset, bool) { return plug.Preset{}, false }
+
+// Class returns the VST3 class the plugin is of.
+func (a *plugged) Class() Class { return a.cl.class }
+
+// EmbedEditor implements [plug.Embedder].
+func (a *plugged) EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, err error) {
+	p := a.playing.Load()
+	if p == nil {
+		return 0, 0, errNotPlaying
+	}
+	return p.EmbedEditor(parent, sized)
+}
+
+// EditorEmbedded implements [plug.Embedder].
+func (a *plugged) EditorEmbedded() bool {
+	p := a.playing.Load()
+	return p != nil && p.EditorEmbedded()
+}
+
+// EditorSize implements [plug.Embedder].
+func (a *plugged) EditorSize() (w, h int, ok bool) {
+	if p := a.playing.Load(); p != nil {
+		return p.EditorSize()
+	}
+	return 0, 0, false
+}
+
+// PlaceEditor implements [plug.Embedder].
+func (a *plugged) PlaceEditor(r image.Rectangle) (w, h int) {
+	if p := a.playing.Load(); p != nil {
+		return p.PlaceEditor(r)
+	}
+	return 0, 0
 }
 
 // CloseEditor implements [plug.Editor].
