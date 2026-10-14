@@ -81,7 +81,7 @@ func TestDiskUsageAddsUpWhatAFolderHolds(t *testing.T) {
 			t.Errorf("%s, of %d bytes, comes after %s, of %d", it.Key, it.Size, u.Items[i-1].Key, u.Items[i-1].Size)
 		}
 	}
-	var exts []string
+	exts := make([]string, 0, len(u.Types))
 	for _, ty := range u.Types {
 		exts = append(exts, ty.Ext)
 	}
@@ -136,7 +136,8 @@ func TestDiskUsageLeavesOtherDrivesAndCountsWhatCannotBeRead(t *testing.T) {
 
 func TestDiskUsageSendsSmallItemsTogetherAndAllOfAFolderOpen(t *testing.T) {
 	root := t.TempDir()
-	spec := []string{"big/" + strings.Repeat("x", 200)}
+	spec := make([]string, 0, 51)
+	spec = append(spec, "big/"+strings.Repeat("x", 200))
 	for i := range 50 {
 		spec = append(spec, "many/f"+string(rune('a'+i%26))+string(rune('a'+i/26))+".txt")
 	}
@@ -193,7 +194,7 @@ func itemOf(u Usage, key string) (UsageItem, bool) {
 
 // keysOf are the keys of items.
 func keysOf(items []UsageItem) []string {
-	var out []string
+	out := make([]string, 0, len(items))
 	for _, it := range items {
 		out = append(out, it.Key)
 	}
