@@ -211,3 +211,26 @@ func TestAFadingWindowKeepsItsSize(t *testing.T) {
 		t.Fatalf("halfway out, the window is drawn at scale %v, want its own size", l.Transform.A)
 	}
 }
+
+// A window the system takes a while to show starts coming in once its
+// first frame is on the screen, not as that frame was drawn: shown late,
+// it is not most of the way in already.
+func TestAWindowShownLateArrivesFromTheStart(t *testing.T) {
+	w := newProbeWindow(t)
+	d := w.mustOffscreen(t)
+	w.ui.arriving, w.ui.arrivedAt = true, time.Time{}
+	if err := w.Client().Mount(Root, "panel", "panel", panelState{}, "jobs"); err != nil {
+		t.Fatal(err)
+	}
+	go w.loop()
+	defer w.Close()
+	waitFor(t, func() bool { return w.Stats().Frames >= 1 }, "the first frame")
+	// The system shows the first frame a good while after it was drawn.
+	time.Sleep(ArriveTime / 2)
+	d.Tick()
+	waitFor(t, func() bool { return w.Stats().Frames >= 2 }, "the second frame")
+	l, ok := d.Ops()[0].(*paint.LayerOp)
+	if !ok || l.Opts.Opacity > 0.4 {
+		t.Fatalf("shown late, the second frame starts with %#v, want it barely in", d.Ops()[0])
+	}
+}
