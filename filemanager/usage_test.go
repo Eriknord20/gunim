@@ -256,15 +256,62 @@ func TestDiskUsageOpensOnTheFolderSelectedAndShowsAnItemInTheFiles(t *testing.T)
 	if !h.exists("work/report.txt") || len(h.a.ops.dialogs) > 0 {
 		t.Fatal("Delete on the page went to the files behind it")
 	}
-	seq := h.a.usage.seq
-	h.do(UsageAct{Seq: seq, Key: "deep/notes.md", Act: UsageShow})
-	h.until("the folder of the item shows, with it selected", func() bool {
-		return h.a.nav.path == filepath.Join(h.dir, "work", "deep") && slices.Equal(h.selected(), []string{"notes.md"})
-	})
-	if h.a.usage.open || h.a.usage.scan != nil {
-		t.Error("the page stayed open, or kept what it read")
+	// Show in Files opens the item's folder in another window, or tab,
+	// with it selected, and the page stays.
+	opened := make(chan Options, 1)
+	h.a.hub.open = func(o Options) error { opened <- o; return nil }
+	h.do(UsageAct{Seq: h.a.usage.seq, Key: "deep/notes.md", Act: UsageShow})
+	select {
+	case o := <-opened:
+		if o.Dir != filepath.Join(h.dir, "work", "deep") || o.Select != "notes.md" {
+			t.Errorf("Show in Files opened %s with %q selected", o.Dir, o.Select)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Show in Files opened nothing")
 	}
-	h.until("the page has gone", func() bool { return h.usagePage() == nil })
+	if !h.a.usage.open || h.usagePage() == nil {
+		t.Error("Show in Files closed the page")
+	}
+}
+
+func TestDiskUsageDeletesItemsAndCountsThemGone(t *testing.T) {
+	h := newUsageHarness(t, "big.bin", "sub/small.txt", "keep.txt")
+	if err := os.WriteFile(filepath.Join(h.dir, "big.bin"), make([]byte, 5000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.do(Command{Name: CmdUsage})
+	h.until("the page has read the folder", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	pg := h.usagePage()
+	// Down to the largest, and Delete moves it to the trash.
+	h.press(input.KeyDown, 0)
+	if pg.sel != "big.bin" {
+		t.Fatalf("Down selected %q", pg.sel)
+	}
+	h.press(input.KeyDelete, 0)
+	h.until("big.bin went to the trash, and the page counts it gone", func() bool {
+		_, shown := itemOf(pg.state, "big.bin")
+		return !h.exists("big.bin") && !shown && pg.state.Total.Files == 2
+	})
+	if pg.state.Total.Size != int64(len("sub/small.txt")+len("keep.txt")) {
+		t.Errorf("the folder adds up to %d bytes", pg.state.Total.Size)
+	}
+	// Shift+Delete asks first, and deletes for good.
+	pg.sel = "sub"
+	h.press(input.KeyDelete, input.ModShift)
+	h.until("the page asks", func() bool { return len(h.a.ops.dialogs) > 0 })
+	c, ok := h.a.ops.dialogs[0].state.(Confirm)
+	if !ok {
+		t.Fatalf("the page asked %#v", h.a.ops.dialogs[0].state)
+	}
+	h.answer(Confirmed{Token: c.Token, OK: true})
+	h.until("sub is gone, from the disk and the page", func() bool {
+		_, shown := itemOf(pg.state, "sub")
+		return !h.exists("sub") && !shown && pg.state.Total.Files == 1 && pg.state.Total.Folders == 0
+	})
+	// The folder read itself is not for deleting from here.
+	if items, _ := pg.menuItems(""); slices.ContainsFunc(items, func(it widget.MenuItem) bool { return it.Label == "Delete permanently" }) {
+		t.Error("the folder read offers to delete itself")
+	}
 }
 
 func TestDiskUsageClosesOnEscapeAndOpensOnTheFolderShowing(t *testing.T) {
@@ -461,5 +508,43 @@ func TestDiskUsageOffersToFreeUpSpaceOnlyWhereItCan(t *testing.T) {
 	pg := h.usagePage()
 	if items, _ := pg.menuItems("docs"); pg.state.CanKeep || slices.ContainsFunc(items, func(it widget.MenuItem) bool { return it.Label == "Free up space" }) {
 		t.Error("a machine that cannot keep items on its device offers to free up space")
+	}
+}
+
+func TestDiskUsageScrollsADeepBoxClickedToTheMiddleOfTheTree(t *testing.T) {
+	spec := make([]string, 0, 80)
+	for i := range 70 {
+		spec = append(spec, fmt.Sprintf("f%02d.txt", i))
+	}
+	spec = append(spec, "z/a/b/c/d/deep.txt")
+	h := newUsageHarness(t, spec...)
+	// The deep file the largest, so its folders come first, and its row
+	// lands far down once the many files of each folder open above it.
+	for i, name := range []string{"z/a/b/c/d/deep.txt", "z/x.bin", "z/a/x.bin", "z/a/b/x.bin", "z/a/b/c/x.bin"} {
+		if err := os.WriteFile(filepath.Join(h.dir, filepath.FromSlash(name)), make([]byte, 4000-i*10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.do(Command{Name: CmdUsage})
+	h.until("the page has read the folder", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	pg := h.usagePage()
+	h.ui(func(_ *browser, u *gunim.UI) { pg.pickBox("z/a/b/c/d/deep.txt", u) })
+	h.frames(90)
+	l := pg.list
+	i, ok := l.at["z/a/b/c/d/deep.txt"]
+	if !ok {
+		t.Fatal("the deep file has no row")
+	}
+	view := l.box.H - usageTitlesH - 4
+	mid := float32(i)*usageRowH + usageRowH/2 - l.list.Offset()
+	if mid < view/2-usageRowH || mid > view/2+usageRowH {
+		t.Errorf("the row, %d down, is at %.0f in a tree %.0f high, not in the middle", i, mid, view)
+	}
+	// A click on a row leaves the tree where it is.
+	off := l.list.Offset()
+	h.ui(func(_ *browser, u *gunim.UI) { pg.pickRow(string(l.keys[0]), u) })
+	h.frames(30)
+	if l.list.Offset() != off {
+		t.Errorf("a click on a row scrolled the tree from %.0f to %.0f", off, l.list.Offset())
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -44,6 +45,12 @@ type usageList struct {
 	// items do.
 	menuKey  string
 	menuActs []string
+	// aim is the row the tree scrolls to, to the middle with aimCenter,
+	// as it is laid out until aimUntil; th is the theme it was laid out in.
+	aim       string
+	aimCenter bool
+	aimUntil  time.Time
+	th        *theme.Live
 	// hot is the row under the pointer, and ring says the keyboard came
 	// by Tab, so a ring shows round the tree.
 	hot     string
@@ -63,7 +70,7 @@ func newUsageList(pg *usagePage) *usageList {
 		if _, ok := pg.item(key); !ok {
 			return false
 		}
-		pg.pick(key, u)
+		pg.pickRow(key, u)
 		items, acts := pg.menuItems(key)
 		l.menuKey, l.menuActs = key, acts
 		l.menu.SetItems(items)
@@ -85,8 +92,46 @@ func (l *usageList) update(was Usage, u *gunim.UI) {
 		if _, ok := l.at[key]; !ok {
 			key = st.Focus
 		}
-		l.list.ScrollToKey(widget.Key(key), u)
+		l.aimAt(key, true, u)
 	}
+}
+
+// aimFor is how long the tree keeps the row it scrolls to in its place,
+// while the rows above it, just opened, grow to their heights.
+const aimFor = 700 * time.Millisecond
+
+// aimAt scrolls the tree to the row of key: to the middle with center,
+// and otherwise only as far as brings it into view, a row clear of the
+// fades at the ends. The scroll is worked out as the tree is laid out,
+// again and again for a moment, as rows that just opened above it grow.
+func (l *usageList) aimAt(key string, center bool, u *gunim.UI) {
+	l.aim, l.aimCenter, l.aimUntil = key, center, time.Now().Add(aimFor)
+	u.Invalidate()
+}
+
+// aimNow scrolls to the row aimed at, in a view h high, and reports
+// whether it should go on doing so next frame.
+func (l *usageList) aimNow(h float32) bool {
+	i, ok := l.at[l.aim]
+	if !ok || time.Now().After(l.aimUntil) {
+		l.aim = ""
+		return false
+	}
+	top := float32(i) * usageRowH
+	off := l.list.Offset()
+	var y float32
+	switch margin := min(float32(usageRowH), max(0, (h-usageRowH)/2)); {
+	case l.aimCenter:
+		y = top + usageRowH/2 - h/2
+	case top < off+margin:
+		y = top - margin
+	case top+usageRowH > off+h-margin:
+		y = top + usageRowH + margin - h
+	default:
+		return true
+	}
+	l.list.ScrollTo(max(0, y), widget.Quick.Get(l.th))
+	return true
 }
 
 // rebuild makes the rows from the items and the folders open.
@@ -155,18 +200,10 @@ func (l *usageList) toggle(key string, u *gunim.UI) {
 	u.Invalidate()
 }
 
-// reveal opens the folders the item of key is in, and scrolls its row
-// into view.
-func (l *usageList) reveal(key string, u *gunim.UI) { l.open(key, true, u) }
-
 // show opens the folders the item of key is in here alone, with no word
 // to the application, whose items for them it has already, and scrolls
-// its row into view.
-func (l *usageList) show(key string, u *gunim.UI) { l.open(key, false, u) }
-
-// open opens the folders the item of key is in, telling the application
-// with tell, and scrolls its row into view.
-func (l *usageList) open(key string, tell bool, u *gunim.UI) {
+// its row to the middle of the tree.
+func (l *usageList) show(key string, u *gunim.UI) {
 	pg := l.pg
 	i, ok := pg.index[key]
 	if !ok {
@@ -177,16 +214,13 @@ func (l *usageList) open(key string, tell bool, u *gunim.UI) {
 		k := pg.state.Items[p].Key
 		if !pg.open[k] {
 			pg.open[k] = true
-			if tell {
-				u.Send(pg, UsageOpened{Seq: pg.state.Seq, Key: k, Open: true})
-			}
 			opened = true
 		}
 	}
 	if opened {
 		l.rebuild(u)
 	}
-	l.list.ScrollToKey(widget.Key(key), u)
+	l.aimAt(key, true, u)
 }
 
 // move moves the selection by n rows.
@@ -296,10 +330,16 @@ func (l *usageList) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 // Layout implements [gunim.Node]: the column titles, then the rows.
-func (l *usageList) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+func (l *usageList) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	l.box = c.Max
-	kids.At(0).Layout(gunim.Tight(geom.Sz(c.Max.W, max(0, c.Max.H-usageTitlesH-4))))
+	l.th = f.Theme
+	h := max(0, c.Max.H-usageTitlesH-4)
+	kids.At(0).Layout(gunim.Tight(geom.Sz(c.Max.W, h)))
 	kids.At(0).Place(geom.Pt(0, usageTitlesH))
+	if l.aim != "" && l.aimNow(h) {
+		// Again next frame, with the rows' heights as they are then.
+		f.UI().Invalidate()
+	}
 	return c.Max
 }
 
@@ -597,7 +637,8 @@ func (r *usageRow) Handle(e input.Event, u *gunim.UI) bool {
 		case e.Clicks == 2 && it.Dir && it.Rest == 0:
 			pg.focusOn(r.key, u)
 		default:
-			pg.pick(r.key, u)
+			// Where it is: a click scrolls nothing.
+			pg.pickRow(r.key, u)
 		}
 		u.Focus(r.l)
 		return true

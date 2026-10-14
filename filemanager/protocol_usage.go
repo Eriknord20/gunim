@@ -118,6 +118,9 @@ type Usage struct {
 	Cloud   bool
 	Measure Measure
 	Colour  ColourBy
+	// Trash says the file system has a trash, which UsageTrash moves items
+	// to.
+	Trash bool
 	// CanKeep says the file system can tell a cloud provider which items
 	// to keep on this device, so the page offers to free up space.
 	CanKeep bool
@@ -161,8 +164,9 @@ type UsageAct struct {
 
 // The acts of [UsageAct].
 const (
-	// UsageShow shows the item in the folder's listing, selected, and
-	// closes the page.
+	// UsageShow shows the item selected in its folder in another window,
+	// or another tab where the program opens them so, and leaves the page
+	// as it is.
 	UsageShow = "show"
 	// UsageOpen opens a file with its program.
 	UsageOpen = "open"
@@ -176,6 +180,11 @@ const (
 	// can.
 	UsageFree = "free"
 	UsageKeep = "keep"
+	// UsageTrash moves the item to the trash, or where there is none
+	// deletes it after asking, and UsageDelete deletes it for good after
+	// asking. The page counts it gone once it is.
+	UsageTrash  = "trash"
+	UsageDelete = "delete"
 )
 
 // UsageClosed says page Seq closed.

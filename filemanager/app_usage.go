@@ -226,6 +226,7 @@ func (a *app) usageState() Usage {
 	u.Free, u.Space = s.free, s.space
 	u.Measure, u.Colour = s.measure, s.colour
 	u.CanKeep = s.scan.keeper != nil
+	u.Trash = a.trash != nil
 	u.Note, u.NoteErr = s.note, s.noteErr
 	if !u.Cloud {
 		u.Measure = MeasureAll
@@ -288,16 +289,21 @@ func (a *app) usageAct(key, act string) {
 		if rest || key == "" {
 			dir, name = path, ""
 		}
-		a.closeUsage(true)
-		a.navigate(dir, 0, true)
-		if name != "" {
-			a.nav.pick = []string{name}
-		}
+		a.openWindowOn(dir, name)
 	case UsageOpen:
 		if rest {
 			return
 		}
 		a.openFiles([]string{path})
+	case UsageTrash, UsageDelete:
+		if s.scan.reading() {
+			s.note, s.noteErr = "Wait until the folder is read to delete from it.", true
+			a.publishUsage()
+			return
+		}
+		if !rest && key != "" {
+			a.usageRemove(key, path, act == UsageDelete)
+		}
 	case UsageFree, UsageKeep:
 		if !rest {
 			a.keepOnDevice(key, path, act == UsageKeep)
@@ -382,4 +388,32 @@ func (a *app) closeUsage(unmount bool) {
 		a.send(a.c.Unmount(s.id))
 	}
 	a.patch(FocusListing{})
+}
+
+// usageRemove moves the item of key, at path, to the trash, or deletes
+// it for good with forGood or where there is no trash, after asking, as
+// the window's own Delete keys do. Once it is gone, the page counts it
+// gone: what a folder holds and the drive's room, read again only where
+// asked.
+func (a *app) usageRemove(key, path string, forGood bool) {
+	s := &a.usage
+	seq, scan := s.seq, s.scan
+	gone := func() {
+		if seq != s.seq || !s.open {
+			return
+		}
+		scan.remove(key)
+		a.publishUsage()
+	}
+	paths := []string{path}
+	if !forGood && a.trash != nil {
+		a.startOp(job{kind: OpTrash, srcs: paths, worked: gone}, "Moving "+a.what(paths)+" to the trash")
+		return
+	}
+	body := "It will not go to the trash, and this cannot be undone."
+	if !forGood {
+		body = "There is no trash here, so it cannot come back."
+	}
+	a.confirm(Confirm{Title: "Delete " + a.what(paths) + " for good?", Body: body, OK: "Delete"},
+		func() { a.startOp(job{kind: OpDelete, srcs: paths, worked: gone}, "Deleting "+a.what(paths)) })
 }

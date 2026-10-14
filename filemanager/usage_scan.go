@@ -442,6 +442,72 @@ func (s *scanner) snapshot(focus string, open map[string]bool, m Measure) (u Usa
 	return u
 }
 
+// reading reports whether the scan still reads.
+func (s *scanner) reading() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.done
+}
+
+// remove takes the item of key out of the tree, as gone from the disk,
+// with what it holds, and takes off its folders what it took up.
+func (s *scanner) remove(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.find(key)
+	if n == nil || n.parent == nil {
+		return
+	}
+	p := n.parent
+	p.d.kids = slices.DeleteFunc(p.d.kids, func(k *unode) bool { return k == n })
+	p.d.dirs = slices.DeleteFunc(p.d.dirs, func(k *unode) bool { return k == n })
+	p.d.top = [3][]*unode{}
+	online, local, pinned := n.clouds()
+	files, folders, pending := int32(1), int32(0), int32(0)
+	var tints [tintCount]int64
+	if n.d != nil {
+		files, folders, pending, tints = n.d.files, 1+n.d.folders, n.d.pending, n.d.tints
+	} else {
+		tints[n.tint] = n.size
+	}
+	// What its types took, file by file.
+	var kept int
+	var walk func(n *unode)
+	walk = func(n *unode) {
+		kept++
+		if n.d == nil {
+			if t := s.types[typeExt(n.name)]; t != nil && !n.odd {
+				on, _, _ := n.clouds()
+				t.size -= n.size
+				t.online -= on
+				t.files--
+				if t.files <= 0 {
+					delete(s.types, typeExt(n.name))
+				}
+			}
+			return
+		}
+		for _, k := range n.d.kids {
+			walk(k)
+		}
+	}
+	walk(n)
+	s.kept -= kept
+	for q := p; q != nil; q = q.parent {
+		q.size -= n.size
+		q.d.online -= online
+		q.d.local -= local
+		q.d.pinned -= pinned
+		q.d.files -= files
+		q.d.folders -= folders
+		q.d.pending -= pending
+		for t, b := range tints {
+			q.d.tints[t] -= b
+		}
+	}
+	s.gen++
+}
+
 // mark takes it that the cloud provider keeps the item of key, and all
 // under it, on this device with keep, or online only without, as it will
 // once it has downloaded them or freed their space. Items in no cloud
