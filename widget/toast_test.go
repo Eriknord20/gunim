@@ -217,3 +217,52 @@ func TestAToastThatAsksStaysTakesNoKeyboardAndAnswersWithItsTickBox(t *testing.T
 		t.Fatalf("after Close, %d toasts show", n)
 	}
 }
+
+func TestAnErrorToastStaysUntilClosedAndItsTextCopies(t *testing.T) {
+	w, h, wait := newToastStage(t)
+	type do struct{ fn func(u *gunim.UI) }
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, d do, u *gunim.UI) { d.fn(u) })
+	on := func(fn func(u *gunim.UI)) {
+		if err := w.Client().Patch("stage", do{fn}); err != nil {
+			t.Fatal(err)
+		}
+		wait(time.Second / 60)
+	}
+	on(func(u *gunim.UI) {
+		h.t.Show(Toast{Title: "Could not open", Body: "song.mrd: permission denied", Kind: ToastError}, u)
+	})
+	// Well past the life of a toast that only tells.
+	wait(3 * time.Second)
+	if n := h.t.Len(); n != 1 {
+		t.Fatalf("%d toasts showing after an error had its time, want 1", n)
+	}
+	card := h.t.cards[0]
+	var body, closer geom.Rect
+	on(func(u *gunim.UI) {
+		body, _ = u.Bounds(card.body)
+		closer, _ = u.Bounds(card.close)
+	})
+	if closer.Empty() {
+		t.Fatal("the error drew no close button")
+	}
+	// A triple click on the body selects it all, and Ctrl+C copies it;
+	// the toast stays.
+	at := body.Center()
+	for i := 1; i <= 3; i++ {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: i, Time: time.Now()})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	}
+	w.Input(input.KeyPress{Key: input.KeyC, Mods: input.ModControl})
+	wait(100 * time.Millisecond)
+	if got, err := w.Offscreen().Clipboard(); err != nil || got != "song.mrd: permission denied" {
+		t.Fatalf("Ctrl+C copied %q, %v", got, err)
+	}
+	if n := h.t.Len(); n != 1 {
+		t.Fatalf("after clicks on its text, %d toasts showing, want 1", n)
+	}
+	click(w, closer.Center().X, closer.Center().Y)
+	wait(100 * time.Millisecond)
+	if n := h.t.Len(); n != 0 {
+		t.Fatalf("after its close button, %d toasts showing, want 0", n)
+	}
+}

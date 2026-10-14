@@ -37,7 +37,10 @@ func TestAToastsKindShowsItsIconInItsColour(t *testing.T) {
 		{ToastError, icon.CircleAlert, ToastErrorInk.Default()},
 	} {
 		_, masks := showToast(t, Toast{Title: "Saved", Kind: c.kind}, 60)
-		ms := masks()
+		ms, closes := withoutClose(t, masks())
+		if want := c.kind == ToastError; closes != want {
+			t.Fatalf("kind %d drew a close button %v, want %v", c.kind, closes, want)
+		}
 		if len(ms) != 1 || strokeOf(t, ms[0]).Icon != c.ic {
 			t.Fatalf("kind %d drew %d icons, want %s", c.kind, len(ms), c.ic.Name)
 		}
@@ -64,7 +67,7 @@ func TestAPlainToastShowsNoIconUnlessGivenOne(t *testing.T) {
 		t.Fatalf("a plain toast with an icon drew %d, want the icon in the ink", len(ms))
 	}
 	_, masks = showToast(t, Toast{Title: "Gone", Kind: ToastError, Icon: icon.Trash2}, 60)
-	if ms := masks(); len(ms) != 1 || strokeOf(t, ms[0]).Icon != icon.Trash2 || ms[0].Color != ToastErrorInk.Default() {
+	if ms, _ := withoutClose(t, masks()); len(ms) != 1 || strokeOf(t, ms[0]).Icon != icon.Trash2 || ms[0].Color != ToastErrorInk.Default() {
 		t.Fatalf("an error toast with an icon drew %d, want the icon in the error colour", len(ms))
 	}
 }
@@ -83,6 +86,22 @@ func TestAToastsIconDrawsOnAsItArrives(t *testing.T) {
 	if s := strokeOf(t, masks()[0]); !s.Settled() {
 		t.Fatalf("a second in, the icon is drawn %v of the way, want whole", s.Progress)
 	}
+}
+
+// withoutClose returns ms without the cross of a close button, and
+// whether there was one.
+func withoutClose(t *testing.T, ms []*paint.MaskOp) ([]*paint.MaskOp, bool) {
+	t.Helper()
+	var out []*paint.MaskOp
+	closes := false
+	for _, m := range ms {
+		if strokeOf(t, m).Icon == icon.X {
+			closes = true
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, closes
 }
 
 // lastOps holds the ops of the last window showToast ran.
@@ -104,9 +123,11 @@ func firstTextX(t *testing.T, ops []paint.Op) float32 {
 func TestAToastsIconSitsBesideTheTitlesFirstLine(t *testing.T) {
 	long := "The copy of the folder could not finish, for the disk it was going to has no room left on it at all"
 	_, masks := showToast(t, Toast{Title: long, Kind: ToastError}, 60)
-	short := masks()[0]
+	ms, _ := withoutClose(t, masks())
+	short := ms[0]
 	_, masks = showToast(t, Toast{Title: "Saved", Kind: ToastError}, 60)
-	one := masks()[0]
+	ms, _ = withoutClose(t, masks())
+	one := ms[0]
 	top := func(m *paint.MaskOp) float32 { return m.Transform.F + m.Rect.Min.Y }
 	if a, b := top(short), top(one); a != b {
 		t.Fatalf("beside a wrapped title the icon's top is at %v, beside one line at %v, want the same", a, b)

@@ -41,6 +41,9 @@ const toastBodyLines = 3
 // Toast is a short notice: a title, and a line or two under it. A body
 // longer than three lines ends in an ellipsis, and shows whole while the
 // pointer rests on the toast.
+//
+// An error toast stays until its close button is clicked, and its text
+// can be selected and copied, so it can be read in full and reported.
 type Toast struct {
 	Title string
 	Body  string
@@ -93,7 +96,8 @@ const (
 	ToastSuccess
 	// ToastWarning shows icon.TriangleAlert in [ToastWarningInk].
 	ToastWarning
-	// ToastError shows icon.CircleAlert in [ToastErrorInk].
+	// ToastError shows icon.CircleAlert in [ToastErrorInk]. It stays
+	// until its close button is clicked.
 	ToastError
 )
 
@@ -156,7 +160,8 @@ type Toasts struct {
 func NewToasts() *Toasts { return &Toasts{} }
 
 // Show adds a toast to the stack. One with the key of a toast showing
-// takes its place. A toast that asks stays until it is answered.
+// takes its place. A toast that asks stays until it is answered, and an
+// error until it is closed.
 func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	if to.Key != "" {
 		// The new toast takes the old one's place, and sounds once, as it arrives.
@@ -174,7 +179,7 @@ func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	t.cards = append(t.cards, c)
 	t.skip = 0
 	u.Insert(t, c)
-	if !c.asks() {
+	if !c.stays() {
 		t.expire(c, u)
 	}
 	u.Cue(gunim.CueOpen, t)
@@ -452,7 +457,7 @@ type toastCard struct {
 	// mark is the kind's icon before the title, or nil.
 	mark *Icon
 	// key is the toast's key. A toast that asks has buttons, a close
-	// button, and check, its tick box, or nil.
+	// button, and check, its tick box, or nil. An error has a close button.
 	key     string
 	buttons *Flex
 	close   *IconButton
@@ -490,6 +495,13 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 	c.key = to.Key
 	if len(to.Buttons) > 0 {
 		c.ask(to)
+	} else if to.Kind == ToastError {
+		c.closer(nil)
+	}
+	if to.Kind == ToastError {
+		// An error is read with care, and reported: its text can be selected and copied.
+		c.title.Selectable = true
+		c.body.Selectable = true
 	}
 	ic, ink := to.Kind.look()
 	if to.Icon != nil {
@@ -531,12 +543,23 @@ func (c *toastCard) ask(to Toast) {
 	c.buttons = Row(kids...)
 	c.buttons.Justify = JustifyEnd
 	c.buttons.Gap = Gap
+	dismiss := to.OnDismiss
+	c.closer(func(u *gunim.UI) gunim.Intent {
+		if dismiss == nil {
+			return nil
+		}
+		return dismiss(checked(), u)
+	})
+}
+
+// closer gives the card a close button, which runs then, if not nil,
+// and takes the card away. It does not take the keyboard when clicked.
+func (c *toastCard) closer(then func(u *gunim.UI) gunim.Intent) {
 	c.close = NewIconButton(icon.X, "Close")
 	c.close.KeepFocus = true
-	dismiss := to.OnDismiss
 	c.close.OnClick = func(u *gunim.UI) gunim.Intent {
-		if dismiss != nil {
-			send(u, c, dismiss(checked(), u))
+		if then != nil {
+			send(u, c, then(u))
 		}
 		c.owner.dismiss(c, u)
 		return nil
@@ -545,6 +568,10 @@ func (c *toastCard) ask(to Toast) {
 
 // asks reports whether the card is of a toast that asks.
 func (c *toastCard) asks() bool { return c.buttons != nil }
+
+// stays reports whether the card stays until it is closed: a toast that
+// asks, or an error.
+func (c *toastCard) stays() bool { return c.close != nil }
 
 // corner is the link or the button at the right of the title, or nil.
 func (c *toastCard) corner() gunim.Node {
@@ -698,7 +725,7 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 }
 
 // Handle implements [gunim.Handler]: the pointer resting keeps the
-// toast, and a click dismisses it, unless it asks.
+// toast, and a click dismisses it, unless it stays until closed.
 func (c *toastCard) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerEnter:
@@ -712,7 +739,7 @@ func (c *toastCard) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerDown:
 		c.click.Press(e, 0)
 	case input.PointerUp:
-		if c.click.Release(e, over(e.Pos, c.size)) && !c.asks() {
+		if c.click.Release(e, over(e.Pos, c.size)) && !c.stays() {
 			c.owner.dismiss(c, u)
 		}
 	default:
