@@ -49,6 +49,12 @@ func TestTabReachesEveryPartOfTheWindowAndTheSidebarOpensAPlace(t *testing.T) {
 	h.until("the favourite shows and the folder is back", func() bool {
 		return h.b.side.favs.Len() == 1 && len(h.shown()) == 1 && h.shown()[0] == "work"
 	})
+	// The preview of work comes a moment after it is selected, and its
+	// page takes the place of the one before, links and all: a link Tab
+	// stopped at before it came would go with the page.
+	h.until("the preview shows work", func() bool {
+		return h.b.preview.cur != nil && h.b.preview.seq == h.a.preview.seq
+	})
 	h.frames(30)
 
 	b := h.b
