@@ -321,7 +321,8 @@ func TestADragWithAltChangesTheWidthAndTheWheelNothing(t *testing.T) {
 	g := v.graph
 	from := g.dotAt(g.dots[1])
 	w.Input(input.PointerMove{Pos: from})
-	if w.Input(input.Scroll{Pos: from, Notches: geom.Pt(0, 1)}); p.Bands()[0].Q != 1 {
+	w.Input(input.Scroll{Pos: from, Notches: geom.Pt(0, 1)})
+	if p.Bands()[0].Q != 1 {
 		t.Fatalf("the wheel took the Q to %v", p.Bands()[0].Q)
 	}
 	// Up with Alt narrows the bell, and leaves where it is alone.

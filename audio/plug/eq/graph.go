@@ -606,16 +606,14 @@ func widthName(b *audio.Band, i int) string {
 }
 
 // widen narrows band b by notches, or for a cut steepens it by a step
-// for each whole notch, and reports whether it changed.
-func widen(b *audio.Band, notches float32) bool {
-	was := *b
+// for each whole notch.
+func widen(b *audio.Band, notches float32) {
 	if isCut(b.Kind) {
 		step := 12 * int(math.Round(float64(notches)))
 		b.Slope = max(12, min(max(b.Slope, 12)+step, 48))
 	} else {
 		b.Q = clampQ(float64(b.Q) * math.Pow(1.15, float64(notches)))
 	}
-	return *b != was
 }
 
 // widenPx is how far up a drag with Alt goes for a notch of widen.
