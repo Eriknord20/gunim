@@ -134,6 +134,7 @@ var structs = []any{
 	(*audioui.Gram)(nil),
 	(*audioui.GramScan)(nil),
 	(*audioui.GramTiles)(nil),
+	(*audioui.LEDs)(nil),
 	(*audioui.Levels)(nil),
 	(*audioui.Loudness)(nil),
 	(*audioui.Samples)(nil),

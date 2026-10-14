@@ -49,9 +49,9 @@ func TestAMeterOfLightsLightsUpToItsLevel(t *testing.T) {
 	}
 	l := NewLevels()
 	l.Take(sine(800, 1000, 0.5), rate, time.Second/60)
-	quiet, loud := count(l), 0
+	quiet := count(l)
 	l.Take(sine(800, 1000, 1), rate, time.Second/60)
-	loud = count(l)
+	loud := count(l)
 	if quiet == 0 || loud <= quiet {
 		t.Fatalf("a sine at 0.5 lights %d lights, and at 1 %d", quiet, loud)
 	}
