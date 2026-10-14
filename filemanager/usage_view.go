@@ -62,7 +62,7 @@ func registerUsage(w *gunim.Window) {
 const (
 	usageMargin = 16
 	usageHeadH  = 52
-	usageSumH   = 92
+	usageSumH   = 100
 	usageFootH  = 30
 	usageGap    = 10
 )
@@ -672,7 +672,8 @@ func (s *usageSummary) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ g
 	if room < 120 {
 		return
 	}
-	drive := st.Space > 0
+	// The drive's bar beside the other, where there is room for both.
+	drive := st.Space > 0 && room >= 560
 	barW := room
 	if drive {
 		barW = room*0.58 - pad
@@ -760,8 +761,11 @@ func (s *usageSummary) bar(p *paint.Painter, th *theme.Live, r geom.Rect, title 
 		words := pt.label + " " + humanBytes(pt.bytes)
 		run := t.run(face, words, small)
 		if x+run.Advance+16 > r.Max.X && x > r.Min.X {
-			// On a line of its own.
+			// On a line of its own, where there is one.
 			x, y = r.Min.X, y+run.Height()+4
+			if y+run.Height() > r.Max.Y+10 {
+				break
+			}
 		}
 		dot := run.Height() * 0.6
 		p.RRect(geom.Rc(x, y+(run.Height()-dot)/2, dot, dot), dot/2, paint.Solid(pt.ink.Get(th)))

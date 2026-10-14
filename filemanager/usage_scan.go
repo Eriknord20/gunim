@@ -24,24 +24,26 @@ const (
 )
 
 // unode is one item of the tree a disk usage scan reads: a file, or a
-// folder, which d holds the rest of. Its sizes are its own for a file,
-// and all under it for a folder.
+// folder, which d holds the rest of. Its size is its own for a file, and
+// all under it for a folder. A drive holds millions of files, so a file
+// keeps no more than it needs: what a cloud provider has of it follows
+// from its cloud state.
 type unode struct {
 	name   string
 	parent *unode
 	d      *udir
 	size   int64
-	online int64
-	local  int64
-	pinned int64
 	tint   Tint
 	cloud  CloudState
 }
 
 // udir is what a folder of the tree has beyond a file.
 type udir struct {
-	kids           []*unode
-	files, folders int32
+	kids []*unode
+	// online, local and pinned are the bytes under it a cloud provider
+	// keeps online only, has on this device, and always keeps here.
+	online, local, pinned int64
+	files, folders        int32
 	// pending counts the folders under it, itself too, not yet read.
 	pending int32
 	// err says why it could not be read, and skipped why it was not.
@@ -223,15 +225,6 @@ func (s *scanner) readDir(ctx context.Context, j scanJob) ([]*unode, []scanJob, 
 			case s.online != nil && s.online.OnlineOnly(info):
 				n.cloud = CloudOnline
 			}
-			switch n.cloud {
-			case CloudOnline:
-				n.online = n.size
-			case CloudLocal:
-				n.local = n.size
-			case CloudPinned:
-				n.pinned = n.size
-			case CloudNone, CloudFolder:
-			}
 		}
 		kids = append(kids, n)
 	}
@@ -281,9 +274,10 @@ func (s *scanner) take(j scanJob, kids []*unode, sub []scanJob, err error) {
 		}
 		files++
 		size += k.size
-		online += k.online
-		local += k.local
-		pinned += k.pinned
+		on, lo, pin := k.clouds()
+		online += on
+		local += lo
+		pinned += pin
 		tints[k.tint] += k.size
 		if k.cloud != CloudNone {
 			s.sawCloud = true
@@ -295,16 +289,16 @@ func (s *scanner) take(j scanJob, kids []*unode, sub []scanJob, err error) {
 			s.types[ext] = t
 		}
 		t.size += k.size
-		t.online += k.online
+		t.online += on
 		t.files++
 	}
 	// Each folder under it waits to be read, and it has been.
 	pending := int32(len(sub)) - 1
 	for p := n; p != nil; p = p.parent {
 		p.size += size
-		p.online += online
-		p.local += local
-		p.pinned += pinned
+		p.d.online += online
+		p.d.local += local
+		p.d.pinned += pinned
 		p.d.files += files
 		p.d.folders += folders
 		p.d.pending += pending
@@ -328,13 +322,32 @@ func typeExt(name string) string {
 // tintOfName is the group the file name's colour comes from.
 func tintOfName(name string) Tint { return tintOf(entry{Name: name}) }
 
+// clouds are the bytes of n a cloud provider keeps online only, has on
+// this device, and always keeps here.
+func (n *unode) clouds() (online, local, pinned int64) {
+	if n.d != nil {
+		return n.d.online, n.d.local, n.d.pinned
+	}
+	switch n.cloud {
+	case CloudOnline:
+		return n.size, 0, 0
+	case CloudLocal:
+		return 0, n.size, 0
+	case CloudPinned:
+		return 0, 0, n.size
+	case CloudNone, CloudFolder:
+	}
+	return 0, 0, 0
+}
+
 // measure is what m sizes n by.
 func (n *unode) measure(m Measure) int64 {
+	online, _, _ := n.clouds()
 	switch m {
 	case MeasureDevice:
-		return n.size - n.online
+		return n.size - online
 	case MeasureOnline:
-		return n.online
+		return online
 	case MeasureAll:
 	}
 	return n.size
@@ -422,8 +435,9 @@ func (s *scanner) crumbs(key string) []Crumb {
 
 // item is how Disk usage shows n, of key, in the folder of index parent.
 func (s *scanner) item(n *unode, key string, parent int32) UsageItem {
-	it := UsageItem{Key: key, Name: n.name, Parent: parent, Size: n.size, Online: n.online, Local: n.local,
-		Pinned: n.pinned, Tint: n.tint, Cloud: n.cloud}
+	online, local, pinned := n.clouds()
+	it := UsageItem{Key: key, Name: n.name, Parent: parent, Size: n.size, Online: online, Local: local,
+		Pinned: pinned, Tint: n.tint, Cloud: n.cloud}
 	if n.d == nil {
 		it.Files = 1
 		return it
@@ -550,9 +564,10 @@ func (s *scanner) rest(kids []*unode, key string, parent int32) UsageItem {
 	it := UsageItem{Key: key + "\x00rest", Parent: parent, Rest: len(kids), Tint: TintOther}
 	for _, k := range kids {
 		it.Size += k.size
-		it.Online += k.online
-		it.Local += k.local
-		it.Pinned += k.pinned
+		on, lo, pin := k.clouds()
+		it.Online += on
+		it.Local += lo
+		it.Pinned += pin
 		if k.d != nil {
 			it.Files += int(k.d.files)
 			it.Folders += 1 + int(k.d.folders)
