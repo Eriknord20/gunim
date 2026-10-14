@@ -191,8 +191,10 @@ var ErrLost = errors.New("capture: the input went away")
 // counts it gone.
 const lost = 2 * time.Second
 
-// ErrBusy is returned by [Open] for an ASIO driver's inputs that
-// another stream records.
+// ErrBusy was returned by [Open] for an ASIO driver's inputs that
+// another stream recorded. Streams share them now, and none returns it.
+//
+// Deprecated: Open no longer returns it.
 var ErrBusy = errors.New("capture: another stream records these inputs")
 
 // A Stream records an input. Its methods are safe from any goroutine,
