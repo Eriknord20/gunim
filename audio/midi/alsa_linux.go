@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -428,9 +429,15 @@ func sysList(out bool) ([]sysPort, error) {
 
 // portName names a port as a person knows it: by the port's name where
 // that starts with its client's, as a USB keyboard's does, and by both
-// otherwise.
+// otherwise. ALSA pads some names with spaces, as PipeWire's
+// "input           ", and those are let go, as aconnect's own listing
+// is read.
 func portName(client, port string) string {
-	if len(port) >= len(client) && port[:len(client)] == client {
+	client, port = strings.TrimSpace(client), strings.TrimSpace(port)
+	switch {
+	case port == "":
+		return client
+	case client == "" || strings.HasPrefix(port, client):
 		return port
 	}
 	return client + ": " + port
