@@ -220,7 +220,10 @@ func TestAnchoringMakesNothing(t *testing.T) {
 
 // TestASpeakersAnchorFollowsItsDriver plays through a fake ASIO driver
 // that takes a buffer each buffer's time, and checks the frame heard
-// now is placed now.
+// now is placed now: within 20 ms, and two ticks of the clock more.
+// Windows reads [time.Now] from a clock that ticks each 15.6 ms, so
+// there the fake takes its buffers in bursts, and the anchor learns
+// from times a tick old.
 func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
 	m := audio.NewMixer()
@@ -238,8 +241,9 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 		time.Sleep(time.Until(start.Add(time.Duration(k) * period)))
 	}
 	now := time.Now()
-	if off := a.TimeOf(s.Heard()).Sub(now).Abs(); off > 20*time.Millisecond {
-		t.Errorf("the frame heard now is placed %v from now, want within 20 ms", off)
+	want := 20*time.Millisecond + 2*clockTick()
+	if off := a.TimeOf(s.Heard()).Sub(now).Abs(); off > want {
+		t.Errorf("the frame heard now is placed %v from now, want within %v", off, want)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -247,4 +251,19 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 	if a := s.Anchor(); a != (Anchor{}) {
 		t.Errorf("a closed speaker's anchor is %+v, want the zero Anchor", a)
 	}
+}
+
+// clockTick returns how far [time.Now] steps when it moves: tens of
+// nanoseconds on Linux, 15.6 ms on Windows.
+func clockTick() time.Duration {
+	var tick time.Duration
+	for range 3 {
+		was := time.Now()
+		now := was
+		for now.Sub(was) == 0 {
+			now = time.Now()
+		}
+		tick = max(tick, now.Sub(was))
+	}
+	return tick
 }
