@@ -162,6 +162,19 @@ func araFactoryAt(p uintptr, c Class, m *Module) (*ARAFactory, error) {
 	return f, nil
 }
 
+// forgetARAFactories forgets the factories of m as it closes. Loaded
+// again, the module may lie where it lay, its factory at the address
+// it had: that must read as a new factory, of the new module.
+func forgetARAFactories(m *Module) {
+	araMu.Lock()
+	defer araMu.Unlock()
+	for p, f := range araFactories {
+		if f.module == m {
+			delete(araFactories, p)
+		}
+	}
+}
+
 // open initializes the factory as its first document opens. It runs on
 // the plugins' thread.
 func (f *ARAFactory) open() {

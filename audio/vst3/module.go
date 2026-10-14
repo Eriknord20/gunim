@@ -232,6 +232,7 @@ func (m *Module) Close() error {
 		err = m.lib.close()
 		m.lib = library{}
 	})
+	forgetARAFactories(m)
 	return err
 }
 
