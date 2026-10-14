@@ -29,6 +29,9 @@ var (
 	Spread = theme.Color("audio.spread", rgb(0x5c, 0xb8, 0xff))
 	// Short is the colour of the short-term loudness's curve.
 	Short = theme.Color("audio.short", rgb(0xff, 0x6a, 0xd5))
+	// Safe is the colour of a meter's lights well below full scale,
+	// before they turn Near, then Over.
+	Safe = theme.Color("audio.safe", rgb(0xa8, 0xe0, 0x6b))
 )
 
 // Light sets the audio pieces' tokens for a light theme, to add to one, as
@@ -42,6 +45,7 @@ var Light = []theme.Entry{
 	theme.Set(Over, rgb(0xc8, 0x2c, 0x22)),
 	theme.Set(Spread, rgb(0x1f, 0x66, 0xc8)),
 	theme.Set(Short, rgb(0xb0, 0x24, 0x8c)),
+	theme.Set(Safe, rgb(0x3f, 0x8f, 0x1c)),
 }
 
 func rgb(r, g, b uint8) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: 0xff} }
