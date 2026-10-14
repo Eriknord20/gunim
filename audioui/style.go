@@ -3,6 +3,7 @@ package audioui
 import (
 	"image/color"
 	"math"
+	"sync"
 
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
@@ -68,8 +69,11 @@ func Segment(p *paint.Painter, a, b geom.Point, width float32, c color.NRGBA) {
 }
 
 // runs holds text shaped already, for pieces that paint every frame.
-// It is reached from the UI goroutine alone.
-var runs = map[runKey]text.Run{}
+// Every window paints on a goroutine of its own, so a lock guards it.
+var (
+	runsMu sync.Mutex
+	runs   = map[runKey]text.Run{}
+)
 
 type runKey struct {
 	s    string
@@ -80,21 +84,26 @@ type runKey struct {
 
 // Shaped is s shaped at size, kept for the next frame: in the
 // monospaced face where mono says, for figures that change, so they
-// hold still. Call it from the UI goroutine alone.
+// hold still. It is safe to call from any window's goroutine.
 func Shaped(s string, size float32, bold, mono bool) text.Run {
 	k := runKey{s, size, bold, mono}
-	if r, ok := runs[k]; ok {
+	runsMu.Lock()
+	r, ok := runs[k]
+	runsMu.Unlock()
+	if ok {
 		return r
-	}
-	if len(runs) > 4000 {
-		clear(runs)
 	}
 	face := text.GoSans(bold, false)
 	if mono {
 		face = text.GoMono(bold, false)
 	}
-	r := face.Shape(s, size)
+	r = face.Shape(s, size)
+	runsMu.Lock()
+	if len(runs) > 4000 {
+		clear(runs)
+	}
 	runs[k] = r
+	runsMu.Unlock()
 	return r
 }
 
