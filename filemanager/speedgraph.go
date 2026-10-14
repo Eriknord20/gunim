@@ -24,7 +24,7 @@ const (
 	speedSpan  = 50
 )
 
-// cheerFor is how long a finished operation stays in the panel, showing
+// cheerFor is how long a finished operation's card stays, showing
 // it went well.
 const cheerFor = 1300 * time.Millisecond
 
@@ -162,44 +162,11 @@ func registerSpeed(w *gunim.Window) {
 	gunim.RegisterPatch(w, "browser", func(b *browser, d OpDone, u *gunim.UI) { b.ops.done(d, u) })
 }
 
-// speed adds a sample to an operation's graph.
-func (p *opsPanel) speed(s OpSpeed, u *gunim.UI) {
-	if r, ok := widget.RowOf[*opRow](p.list, widget.Key(strconv.Itoa(s.ID))); ok {
-		r.graph.SetRunning(true)
-		r.graph.Add(s.Rate)
-		r.samples++
-		u.Invalidate()
-	}
-}
-
-// done shows an operation ended: one that went well cheers.
-func (p *opsPanel) done(d OpDone, u *gunim.UI) {
-	r, ok := widget.RowOf[*opRow](p.list, widget.Key(strconv.Itoa(d.ID)))
-	if !ok {
-		return
-	}
-	r.graph.SetRunning(false)
-	if d.OK {
-		r.bar.Indeterminate = false
-		r.bar.SetValue(1, u)
-		r.detail.Text = "Done"
-		r.badge.cheer(u)
-	}
-	u.Invalidate()
-}
-
-// newSpeedGraph returns the graph of an operation's speed.
-func newSpeedGraph() *widget.LiveGraph {
-	g := widget.NewLiveGraph(speedEvery, speedSpan)
-	g.Label = func(v float64) string { return humanBytes(int64(v)) + "/s" }
-	return g
-}
-
-// doneBadge holds an operation's Cancel button, and once the operation
-// has gone well, a check mark that draws itself in its place.
+// doneBadge holds an operation's buttons, and once the operation has
+// gone well, a check mark that draws itself in their place.
 type doneBadge struct {
 	anim.Group
-	cancel *widget.Button
+	child gunim.Node
 	// pop grows the disc behind the check, stroke draws the check, and
 	// since counts the seconds from the cheer.
 	pop, stroke *anim.Float
@@ -207,8 +174,8 @@ type doneBadge struct {
 	cheering    bool
 }
 
-func newDoneBadge(cancel *widget.Button) *doneBadge {
-	b := &doneBadge{cancel: cancel, pop: anim.NewFloat(0), stroke: anim.NewFloat(0)}
+func newDoneBadge(child gunim.Node) *doneBadge {
+	b := &doneBadge{child: child, pop: anim.NewFloat(0), stroke: anim.NewFloat(0)}
 	b.Add(b.pop, b.stroke)
 	return b
 }
@@ -219,7 +186,6 @@ func (b *doneBadge) cheer(u *gunim.UI) {
 		return
 	}
 	b.cheering = true
-	b.cancel.OnClick = widget.Sends(nil)
 	b.pop.Animate(1, widget.Bounce.Get(u.Theme()))
 	b.stroke.Animate(1, anim.Tween{Duration: 420 * time.Millisecond, Ease: anim.EaseInOut})
 	u.Invalidate()
@@ -245,7 +211,7 @@ func (b *doneBadge) Step(dt time.Duration) bool {
 }
 
 // Children implements [gunim.Composite].
-func (b *doneBadge) Children() []gunim.Node { return []gunim.Node{b.cancel} }
+func (b *doneBadge) Children() []gunim.Node { return []gunim.Node{b.child} }
 
 // Layout implements [gunim.Node].
 func (b *doneBadge) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
@@ -307,57 +273,6 @@ func drawTrail(p *paint.Painter, pts []geom.Point, share, width float32, c color
 func dist(a, b geom.Point) float32 {
 	d := b.Sub(a)
 	return float32(math.Hypot(float64(d.X), float64(d.Y)))
-}
-
-// glowBar is an operation's progress bar, which glows as the operation
-// cheers.
-type glowBar struct {
-	bar   *widget.ProgressBar
-	badge *doneBadge
-}
-
-// Children implements [gunim.Composite].
-func (g *glowBar) Children() []gunim.Node { return []gunim.Node{g.bar} }
-
-// Layout implements [gunim.Node].
-func (g *glowBar) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	kid := kids.At(0)
-	s := kid.Layout(c)
-	kid.Place(geom.Point{})
-	return s
-}
-
-// Paint implements [gunim.Node].
-func (g *glowBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	if glow := g.badge.glow(); glow > 0.01 {
-		c := Success.Get(f.Theme)
-		halo := c
-		halo.A = uint8(0xb0 * glow)
-		c.A = uint8(0xff * glow)
-		p.ShadowRRect(geom.Rect{Max: box.Point()}, box.H/2, paint.Solid(c), paint.Shadow{Blur: 12 * glow, Color: halo})
-	}
-	kids.At(0).Paint(p)
-}
-
-// paintCheer sweeps a band of light across an operation's card as it
-// cheers.
-func paintCheer(p *paint.Painter, th *theme.Live, b *doneBadge, box geom.Size) {
-	if !b.cheering || b.since >= 0.9 {
-		return
-	}
-	t := float32(b.since / 0.9)
-	c := Success.Get(th)
-	edge := c
-	edge.A = 0
-	c.A = 0x38
-	w := box.W * 0.35
-	x := -w + (box.W+w)*t
-	defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: 1, Clip: true,
-		Radius: widget.CardRadius.Get(th)})()
-	half := &paint.Gradient{From: geom.Pt(x, 0), To: geom.Pt(x+w/2, 0), Start: edge, End: c}
-	p.RRect(geom.Rc(x, 0, w/2, box.H), 0, paint.Fill{Gradient: half})
-	back := &paint.Gradient{From: geom.Pt(x+w/2, 0), To: geom.Pt(x+w, 0), Start: c, End: edge}
-	p.RRect(geom.Rc(x+w/2, 0, w/2, box.H), 0, paint.Fill{Gradient: back})
 }
 
 // makeBig makes a file of size bytes at path, without writing them.

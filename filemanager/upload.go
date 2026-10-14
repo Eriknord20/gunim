@@ -396,7 +396,8 @@ func (a *app) startUpload(k copyKey, dst string) {
 	held := func() {
 		a.post(func() {
 			if r, ok := a.ops.running[id]; ok && r.visible {
-				a.patch(OpTick{ID: id, Unknown: true, Detail: "Waiting for a program to let go of " + filepath.Base(e.local) + "…"})
+				a.patch(OpTick{ID: id, OpProgress: OpProgress{Unknown: true,
+					Waiting: "Waiting for a program to let go of " + filepath.Base(e.local) + "…"}})
 			}
 		})
 	}

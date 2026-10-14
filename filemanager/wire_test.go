@@ -45,8 +45,10 @@ func TestWire(t *testing.T) {
 		FavouriteEdited{Token: 3, OK: true, Name: "Job", Color: "blue", Icon: "code"},
 		FavouritesReordered{Favourites: []FavouriteAt{{Path: "/a"}, {FS: "box", Path: "/b"}}},
 		Unpin{FS: "box", Path: "/a"},
-		Ops{Ops: []OpView{{ID: 1, Title: "Copying", Done: 0.5, Detail: "1 of 2"}}},
-		OpTick{ID: 1, Done: 0.75},
+		Ops{Ops: []OpView{{ID: 1, Title: "Copying", Kind: OpMove, From: "Photos", CanPause: true,
+			OpProgress: OpProgress{Done: 0.5, Items: 1, ItemsTotal: 2, Bytes: 5, BytesTotal: 10, File: "a.txt", Speed: 2, Left: 3}}}},
+		OpTick{ID: 1, OpProgress: OpProgress{Done: 0.75, Paused: true, Waiting: "Waiting"}},
+		PauseOp{ID: 1, Resume: true},
 		Notice{Title: "Copied", Undo: 1},
 		CancelOp{ID: 1},
 		UndoOp{ID: 1},
@@ -66,7 +68,7 @@ func TestWire(t *testing.T) {
 			At: []int{0, 1, 2}}}, Status: "3 items"},
 		PalettePicked{Key: "cmd:hidden", Ctrl: true},
 		OpenPalette{Query: ">sort"},
-		OpSpeed{ID: 1, Rate: 1 << 20, Left: 3.5, File: "/a/big.bin"},
+		OpSpeed{ID: 1, Rate: 1 << 20, Done: 0.25},
 		OpDone{ID: 1, OK: true},
 	)
 	if err != nil {

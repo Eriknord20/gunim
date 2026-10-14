@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -132,6 +133,44 @@ type env struct {
 	reportEvery time.Duration
 	// limit, when above zero, holds a copy to that many bytes a second.
 	limit float64
+	// pause, when set, holds the operation while it is paused.
+	pause *pauseGate
+}
+
+// pauseGate holds an operation while it is paused.
+type pauseGate struct {
+	mu sync.Mutex
+	// held is open while the operation is paused, and closed to carry on.
+	held chan struct{}
+}
+
+// set pauses, or with on false carries on.
+func (g *pauseGate) set(on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch {
+	case on && g.held == nil:
+		g.held = make(chan struct{})
+	case !on && g.held != nil:
+		close(g.held)
+		g.held = nil
+	}
+}
+
+// wait waits while the operation is paused, or until ctx ends, and
+// reports whether it waited.
+func (g *pauseGate) wait(ctx context.Context) bool {
+	g.mu.Lock()
+	held := g.held
+	g.mu.Unlock()
+	if held == nil {
+		return false
+	}
+	select {
+	case <-held:
+	case <-ctx.Done():
+	}
+	return true
 }
 
 // runner runs one job.
@@ -180,6 +219,10 @@ func runJob(ctx context.Context, j job, e env) (record, error) {
 
 // tell reports progress, at most every reportEvery unless now is set.
 func (r *runner) tell(now bool) {
+	if r.env.pause != nil && r.env.pause.wait(r.ctx) {
+		// The pace starts again from here.
+		r.paceStart, r.paced = time.Time{}, 0
+	}
 	if r.env.report == nil {
 		return
 	}

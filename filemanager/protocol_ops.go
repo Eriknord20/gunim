@@ -5,15 +5,37 @@ import "github.com/marrasen/gunim"
 // dialogID is the ID every dialog is mounted as, one at a time.
 const dialogID gunim.ID = "dialog"
 
-// OpView is one running file operation, as the progress panel shows it.
+// OpView is one running file operation, as its card in the corner
+// shows it.
 type OpView struct {
 	ID    int
 	Title string
+	Kind  OpKind
+	// From names the folder the items come from, where that is known.
+	From string
+	// CanPause says the operation can be paused.
+	CanPause bool
+	OpProgress
+}
+
+// OpProgress is how far an operation has got.
+type OpProgress struct {
 	// Done is how far it has got, from 0 to 1, and Unknown is set while
 	// it is still counting what there is to do.
 	Done    float32
 	Unknown bool
-	Detail  string
+	// Waiting, when set, says what the operation waits for.
+	Waiting string
+	// Bytes of BytesTotal and Items of ItemsTotal are done; a total of
+	// zero is not known.
+	Bytes, BytesTotal int64
+	Items, ItemsTotal int
+	// File is the name of the item it is on.
+	File string
+	// Speed is the speed to show, in bytes a second, which changes once
+	// a second at most, and Left the seconds left; zero where unknown.
+	Speed, Left float64
+	Paused      bool
 }
 
 // Ops is the running file operations.
@@ -23,10 +45,8 @@ type Ops struct {
 
 // OpTick is a patch: one operation moved along.
 type OpTick struct {
-	ID      int
-	Done    float32
-	Unknown bool
-	Detail  string
+	ID int
+	OpProgress
 }
 
 // Notice is a patch that shows a toast. Undo, when not zero, is the
@@ -64,6 +84,12 @@ type NoticeGone struct {
 // CancelOp asks to stop a running operation.
 type CancelOp struct {
 	ID int
+}
+
+// PauseOp pauses a running operation, or with Resume carries it on.
+type PauseOp struct {
+	ID     int
+	Resume bool
 }
 
 // UndoOp asks to reverse a finished operation.
@@ -166,6 +192,7 @@ func init() {
 	gunim.RegisterType[NoticeAnswered]("files.notice-answered")
 	gunim.RegisterType[NoticeGone]("files.notice-gone")
 	gunim.RegisterType[CancelOp]("files.cancel-op")
+	gunim.RegisterType[PauseOp]("files.pause-op")
 	gunim.RegisterType[UndoOp]("files.undo-op")
 	gunim.RegisterType[ClashAsk]("files.clash")
 	gunim.RegisterType[ClashAnswered]("files.clash-answered")
