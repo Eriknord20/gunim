@@ -47,7 +47,9 @@ func (a Anchor) FrameAt(t time.Time) int64 {
 // The time of a frame heard within a second moves earlier by 5% of
 // the time passed at most, so notes a host sent for later frames leave
 // after those it sent for earlier ones. After a leap, as when the sound ran dry or the speakers
-// reopened, the anchor comes back to the frames heard at that pace.
+// reopened, the anchor comes back to the frames heard at that pace. A
+// moment the system is busy, as the steps come late and then at once,
+// leaves it.
 func (s *Speaker) Anchor() Anchor {
 	out := s.out.Load()
 	if out == nil {
@@ -55,8 +57,11 @@ func (s *Speaker) Anchor() Anchor {
 	}
 	s.anchor.mu.Lock()
 	defer s.anchor.mu.Unlock()
-	return s.anchor.sample(s.m.Heard(), time.Now(), out.rate())
+	return s.anchor.sample(s.m.Heard(), clock(), out.rate())
 }
+
+// clock is the clock Anchor reads; a test puts one of its own here.
+var clock = time.Now
 
 // The loop's bandwidths: wide as it starts, to find the line, then
 // narrowing over settle to keep to it through the steps.
@@ -94,6 +99,12 @@ type dll struct {
 	started float64 // when it started
 	spread  float64 // the mean distance of a step from the line, ns
 	n       int     // the steps it learned from since it started
+	// The last step seen, the soonest it can have come, and when it
+	// was seen; late says it landed far later than the line.
+	step     int64
+	stepFrom float64
+	stepSeen float64
+	late     bool
 	// The anchor handed out last, at handed.
 	out    Anchor
 	outAt  float64
@@ -125,10 +136,38 @@ func (d *dll) sample(h int64, t time.Time, rate int) Anchor {
 func (d *dll) learn(h int64, edge, gap float64) {
 	predicted := d.at + float64(h-d.frame)*d.period
 	e := edge - predicted
-	if math.Abs(e) > max(float64(jump), gap, 4*d.spread) {
+	far := max(float64(jump), gap, 4*d.spread)
+	if e < -far {
 		d.restart(h, edge, d.rate)
 		return
 	}
+	// Where the system is busy a moment, a step comes late, and those
+	// that came due meanwhile follow at once; steps never come early.
+	// A step came late where it came alone in a gap far longer than
+	// its frames take, or surely came twice their time after the last;
+	// it caught up where it came sooner after the last than half that.
+	// The loop learns from neither. A step far later than the line may
+	// be either, or the sound stalled: the loop moves to it once the
+	// next keeps to its pace. A step the loop doesn't learn from is
+	// taken to have come when it was seen, the latest it can have.
+	from, seen := edge-gap/2, edge+gap/2
+	took := float64(h-d.step) * d.period
+	held := gap > 4*took || from-d.stepSeen > 2*took
+	soon := seen-d.stepFrom < took/2
+	d.step, d.stepFrom, d.stepSeen = h, seen, seen
+	switch {
+	case held || soon:
+		d.late = false
+		return
+	case e > far:
+		if d.late {
+			d.restart(h, edge, d.rate)
+			return
+		}
+		d.late = true
+		return
+	}
+	d.stepFrom, d.late = from, false
 	d.spread += (math.Abs(e) - d.spread) / 20
 	bw := keepBandwidth
 	if since := edge - d.started; since < float64(settle) {
@@ -146,6 +185,7 @@ func (d *dll) learn(h int64, edge, gap float64) {
 
 func (d *dll) restart(h int64, at float64, rate int) {
 	d.rate, d.frame, d.at, d.edge, d.started, d.n = rate, h, at, at, at, 1
+	d.step, d.stepFrom, d.stepSeen, d.late = h, at, at, false
 	d.period = 1e9 / float64(rate)
 }
 
