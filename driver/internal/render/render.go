@@ -26,7 +26,6 @@ const (
 	glColorBufferBit     = 0x4000
 	glLinear             = 0x2601
 	glLinearMipmapLinear = 0x2703
-	glTextureBaseLevel   = 0x813C
 	glTextureMaxLevel    = 0x813D
 	glUnsignedShort      = 0x1403
 	glR8                 = 0x8229
