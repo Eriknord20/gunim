@@ -534,8 +534,37 @@ func (w *Window) position(o driver.Options) error {
 		if err != nil {
 			return err
 		}
+		if attrib(p.gw, glfw.Iconified) && len(p.normals) > 0 {
+			// A minimized window sits far off the screen on Windows: from where it goes back to
+			n := p.normals[len(p.normals)-1]
+			px, py = n[0], n[1]
+		}
 		f := p.coordsPerLogical()
-		return w.gw.SetPos(px+int(o.Anchor.Min.X*f), py+int(o.Anchor.Min.Y*f))
+		x, y := px+int(o.Anchor.Min.X*f), py+int(o.Anchor.Min.Y*f)
+		ww, wh, err := w.gw.GetSize()
+		if err != nil {
+			return w.gw.SetPos(x, y)
+		}
+		// Beside a parent off the screen, or near its edge, it would open where no one sees it
+		var frame geom.Insets
+		if !o.Chromeless {
+			if l, t, r, b, err := w.gw.GetFrameSize(); err == nil {
+				frame = geom.Insets{Top: float32(t), Right: float32(r), Bottom: float32(b), Left: float32(l)}
+			}
+		}
+		fit, ok := driver.FitPlacement(driver.Placement{Bounds: geom.Rc(float32(x), float32(y), float32(ww), float32(wh))}, monitors(), frame)
+		if !ok {
+			return w.gw.SetPos(x, y)
+		}
+		b := [4]int{roundInt(fit.Bounds.Min.X), roundInt(fit.Bounds.Min.Y), max(1, roundInt(fit.Bounds.Size().W)), max(1, roundInt(fit.Bounds.Size().H))}
+		if b != [4]int{x, y, ww, wh} {
+			w.debugf("opened beside its parent at %d,%d, moved onto a screen at %v", x, y, b)
+		}
+		if b[2] == ww && b[3] == wh {
+			return w.gw.SetPos(b[0], b[1])
+		}
+		w.applyBounds(b)
+		return nil
 	}
 	if o.Monitor == nil {
 		return nil

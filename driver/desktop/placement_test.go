@@ -148,3 +148,48 @@ func TestAChromelessWindowOpensInTheMiddle(t *testing.T) {
 	}
 	t.Errorf("the window's middle is at %v, want the work area's, %v", got, want)
 }
+
+// A window opened beside a parent near the screen's edge opens on the
+// screen, not past its edge where no one sees it.
+func TestAWindowBesideItsParentOpensOnTheScreen(t *testing.T) {
+	if display == nil {
+		t.Skip("no display")
+	}
+	var work geom.Rect
+	for _, m := range display.Monitors() {
+		if m.Primary {
+			work = m.WorkArea
+		}
+	}
+	if work.Size().W < 400 || work.Size().H < 300 {
+		t.Skip("no primary monitor with room for the window")
+	}
+	parent, err := display.NewWindow(driver.Options{
+		Title: "gunim parent test", Place: &driver.Placement{Bounds: geom.Rc(work.Max.X-200, work.Max.Y-150, 160, 120)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	w, err := display.NewWindow(driver.Options{
+		Title: "gunim beside test", Size: geom.Sz(320, 200), Parent: parent, Anchor: geom.Rc(400, 400, 0, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	r, _ := w.(driver.PlacementReader)
+	var p driver.Placement
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var ok bool
+		p, ok = r.Placement()
+		if ok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if p.Bounds.Min.X > work.Max.X-40 || p.Bounds.Min.Y > work.Max.Y-20 {
+		t.Errorf("Placement = %v, off the work area %v", p.Bounds, work)
+	}
+}
