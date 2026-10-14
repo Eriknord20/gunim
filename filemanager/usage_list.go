@@ -3,6 +3,7 @@ package filemanager
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 
 	"github.com/marrasen/gunim"
@@ -25,6 +26,8 @@ const (
 	usageShareW  = 120
 	usageFilesW  = 76
 	usagePad     = 12
+	// usageNameW is the least room the names keep beside the columns.
+	usageNameW = 180
 )
 
 // usageList is the tree of Disk usage: the folder in focus, and the
@@ -154,7 +157,16 @@ func (l *usageList) toggle(key string, u *gunim.UI) {
 
 // reveal opens the folders the item of key is in, and scrolls its row
 // into view.
-func (l *usageList) reveal(key string, u *gunim.UI) {
+func (l *usageList) reveal(key string, u *gunim.UI) { l.open(key, true, u) }
+
+// show opens the folders the item of key is in here alone, with no word
+// to the application, whose items for them it has already, and scrolls
+// its row into view.
+func (l *usageList) show(key string, u *gunim.UI) { l.open(key, false, u) }
+
+// open opens the folders the item of key is in, telling the application
+// with tell, and scrolls its row into view.
+func (l *usageList) open(key string, tell bool, u *gunim.UI) {
 	pg := l.pg
 	i, ok := pg.index[key]
 	if !ok {
@@ -165,7 +177,9 @@ func (l *usageList) reveal(key string, u *gunim.UI) {
 		k := pg.state.Items[p].Key
 		if !pg.open[k] {
 			pg.open[k] = true
-			u.Send(pg, UsageOpened{Seq: pg.state.Seq, Key: k, Open: true})
+			if tell {
+				u.Send(pg, UsageOpened{Seq: pg.state.Seq, Key: k, Open: true})
+			}
 			opened = true
 		}
 	}
@@ -188,6 +202,22 @@ func (l *usageList) move(n int, u *gunim.UI) {
 		i = min(max(i+n, 0), len(l.keys)-1)
 	}
 	l.pg.pick(string(l.keys[i]), u)
+}
+
+// openMenu opens the context menu of the row selected, under it, as the
+// Menu key asks.
+func (l *usageList) openMenu(u *gunim.UI) {
+	row, ok := l.list.Row(widget.Key(l.pg.sel))
+	if !ok {
+		return
+	}
+	r, ok := u.Bounds(row)
+	m, mok := u.Bounds(l.menu)
+	if !ok || !mok {
+		return
+	}
+	l.hot = l.pg.sel
+	l.menu.Open(geom.Pt(r.Min.X-m.Min.X+usagePad+40, r.Max.Y-m.Min.Y), u)
 }
 
 // Children implements [gunim.Composite].
@@ -216,7 +246,8 @@ func (l *usageList) Handle(e input.Event, u *gunim.UI) bool {
 		u.Invalidate()
 		return true
 	case input.KeyPress:
-		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
+		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) ||
+			e.Mods.Has(input.ModShift) && e.Key != input.KeyF10 {
 			return false
 		}
 		page := max(1, int(l.box.H/usageRowH)-1)
@@ -251,6 +282,11 @@ func (l *usageList) Handle(e input.Event, u *gunim.UI) bool {
 			if it.Dir && it.Rest == 0 {
 				pg.focusOn(it.Key, u)
 			}
+		case input.KeyMenu, input.KeyF10:
+			if e.Key == input.KeyF10 && !e.Mods.Has(input.ModShift) {
+				return false
+			}
+			l.openMenu(u)
 		default:
 			return false
 		}
@@ -299,7 +335,20 @@ func (l *usageList) columns() []usageColumn {
 	} else {
 		cols = append(cols, usageColumn{colSize, "Size", usageColW, true})
 	}
-	return append(cols, usageColumn{colShare, "Share", usageShareW, false})
+	cols = append(cols, usageColumn{colShare, "Share", usageShareW, false})
+	// Narrow, the columns that matter least give way to the names.
+	room := l.box.W - usagePad - usageNameW
+	for _, drop := range []int{colFreed, colFiles, colOnline, colDevice, colSize, colShare} {
+		total := float32(0)
+		for _, c := range cols {
+			total += c.w
+		}
+		if total <= room {
+			break
+		}
+		cols = slices.DeleteFunc(cols, func(c usageColumn) bool { return c.kind == drop && !c.main })
+	}
+	return cols
 }
 
 // Paint implements [gunim.Node]: the card, the column titles, and the
@@ -543,10 +592,10 @@ func (r *usageRow) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		left := float32(usagePad) + float32(r.l.depth(r.key))*usageIndent
 		switch {
-		case e.Clicks == 2 && it.Dir && it.Rest == 0:
-			pg.focusOn(r.key, u)
 		case r.l.opens(it) && e.Pos.X >= left-4 && e.Pos.X < left+22:
 			r.l.toggle(r.key, u)
+		case e.Clicks == 2 && it.Dir && it.Rest == 0:
+			pg.focusOn(r.key, u)
 		default:
 			pg.pick(r.key, u)
 		}

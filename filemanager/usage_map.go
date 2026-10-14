@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"image/color"
+	"math"
 	"strings"
 
 	"github.com/marrasen/gunim"
@@ -68,7 +69,7 @@ func newUsageMap(pg *usagePage) *usageMap {
 			return false
 		}
 		key := pg.state.Items[i].Key
-		pg.pick(key, u)
+		pg.pickBox(key, u)
 		items, acts := pg.menuItems(key)
 		m.menuKey, m.menuActs = key, acts
 		m.menu.SetItems(items)
@@ -207,12 +208,7 @@ func (m *usageMap) lit(it UsageItem) bool {
 	}
 	ext := typeExt(it.Name)
 	if pg.ext == othersKey {
-		for _, t := range pg.state.Types {
-			if !t.Others && t.Ext == ext {
-				return false
-			}
-		}
-		return true
+		return !pg.others[ext]
 	}
 	return ext == pg.ext
 }
@@ -255,7 +251,7 @@ func (m *usageMap) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			continue
 		}
 		inner := m.pg.kids[i]
-		radius := min(5, r.Size().W/4, r.Size().H/4)
+		radius := min(UsageRadius.Get(th), r.Size().W/4, r.Size().H/4)
 		if b.depth == 0 {
 			continue
 		}
@@ -281,11 +277,11 @@ func (m *usageMap) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	// The box under the pointer, and the one selected, over the rest.
 	if hot >= 0 && hot < len(m.boxes) && m.boxes[hot].depth > 0 {
 		r := m.drawnRect(hot)
-		p.RRect(r, min(5, r.Size().W/4, r.Size().H/4), paint.Solid(UsageHot.Get(th)))
+		p.RRect(r, min(UsageRadius.Get(th), r.Size().W/4, r.Size().H/4), paint.Solid(UsageHot.Get(th)))
 	}
 	if sel >= 0 && sel < len(m.boxes) && m.boxes[sel].depth > 0 {
 		r := m.drawnRect(sel)
-		p.RRectStroke(r.Inset(geom.Uniform(-1)), min(6, r.Size().W/4+1, r.Size().H/4+1), paint.Fill{},
+		p.RRectStroke(r.Inset(geom.Uniform(-1)), min(UsageRadius.Get(th)+1, r.Size().W/4+1, r.Size().H/4+1), paint.Fill{},
 			paint.Stroke{Width: 2, Color: widget.Accent.Get(th)})
 	}
 }
@@ -333,8 +329,8 @@ func (m *usageMap) paintLeaf(p *paint.Painter, th *theme.Live, r geom.Rect, radi
 		return
 	}
 	ink := UsageInk.Get(th)
-	if light(fills[0].c) {
-		ink = UsageInkDark.Get(th)
+	if dark := UsageInkDark.Get(th); contrast(fills[0].c, dark) > contrast(fills[0].c, ink) {
+		ink = dark
 	}
 	if !lit {
 		ink.A /= 3
@@ -345,7 +341,7 @@ func (m *usageMap) paintLeaf(p *paint.Painter, th *theme.Live, r geom.Rect, radi
 	y := r.Min.Y + 5
 	m.texts.draw(p, th, fc, name, small, geom.Pt(r.Min.X+6, y), ink, r.Size().W-12)
 	if r.Size().H >= 40 {
-		ink.A = ink.A * 3 / 4
+		ink.A = uint8(int(ink.A) * 3 / 4)
 		m.texts.draw(p, th, fc, humanBytes(pg.sizeOf(it)), small, geom.Pt(r.Min.X+6, y+run.Height()+1), ink, r.Size().W-12)
 	}
 }
@@ -406,9 +402,23 @@ func mix(a, b color.NRGBA, t float32) color.NRGBA {
 	return color.NRGBA{R: l(a.R, b.R), G: l(a.G, b.G), B: l(a.B, b.B), A: l(a.A, b.A)}
 }
 
-// light reports whether c is light enough for dark text on it.
-func light(c color.NRGBA) bool {
-	return 0.299*float32(c.R)+0.587*float32(c.G)+0.114*float32(c.B) > 165
+// contrast is how far apart a and b stand, as the ratio of their
+// luminances that WCAG reads.
+func contrast(a, b color.NRGBA) float64 {
+	la, lb := luminance(a), luminance(b)
+	return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+}
+
+// luminance is the relative luminance of c, as WCAG defines it.
+func luminance(c color.NRGBA) float64 {
+	lin := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.R) + 0.7152*lin(c.G) + 0.0722*lin(c.B)
 }
 
 // Handle implements [gunim.Handler]: the pointer lights the box under it,
@@ -421,6 +431,8 @@ func (m *usageMap) Handle(e input.Event, u *gunim.UI) bool {
 		m.setHot(m.boxAt(e.Pos), u)
 	case input.PointerLeave:
 		m.setHot(-1, u)
+		// A new layout forgets the box under the pointer, not the item.
+		m.pg.setHot("", u)
 	case input.PointerDown:
 		if e.Button != input.ButtonPrimary {
 			return false
@@ -442,7 +454,7 @@ func (m *usageMap) Handle(e input.Event, u *gunim.UI) bool {
 			return true
 		}
 		if m.boxes[i].depth > 0 {
-			pg.pick(it.Key, u)
+			pg.pickBox(it.Key, u)
 		}
 		return true
 	case input.PointerUp:

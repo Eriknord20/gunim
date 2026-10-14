@@ -38,6 +38,10 @@ var (
 	UsageEdge = theme.Color("files.usage.edge", color.NRGBA{R: 0x12, G: 0x14, B: 0x19, A: 0xff})
 	// UsageHot lights the box under the pointer.
 	UsageHot = theme.Color("files.usage.hot", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x40})
+	// UsageTotalText is the size of the total, at the top left, and
+	// UsageRadius the round of a box's corners.
+	UsageTotalText = theme.Length("files.usage.total", 26)
+	UsageRadius    = theme.Length("files.usage.radius", 5)
 	// UsageInk is the text on a dark box, in either theme.
 	UsageInk = theme.Foreground("files.usage.ink", color.NRGBA{R: 0xf4, G: 0xf6, B: 0xfa, A: 0xff})
 )
@@ -98,8 +102,11 @@ type usagePage struct {
 	picked   bool
 	// open are the folders open in the tree, by key.
 	open map[string]bool
-	// cloud says the ways to look at what is in the cloud show.
-	cloud bool
+	// cloud says the ways to look at what is in the cloud show, and
+	// others are the types listed one by one, which the row of the others
+	// leaves out.
+	cloud  bool
+	others map[string]bool
 	// texts are the words drawn, shaped.
 	texts texts
 }
@@ -111,7 +118,7 @@ func newUsagePage() *usagePage {
 	pg.back.OnClick = func(u *gunim.UI) gunim.Intent { pg.close(u); return nil }
 	pg.title = widget.NewLabel("Disk usage")
 	pg.title.Face, pg.title.Size, pg.title.MaxLines = widget.BoldFont, TitleText, 1
-	pg.crumbs = &usageCrumbs{pg: pg}
+	pg.crumbs = &usageCrumbs{pg: pg, hot: -1}
 	pg.measure = widget.NewSegmented("All files", "On this device", "Online only")
 	pg.measure.Fit = true
 	pg.measure.Tooltip = "What the boxes and the tree are sized by"
@@ -150,8 +157,8 @@ func (pg *usagePage) set(s Usage, u *gunim.UI) {
 	was := pg.state
 	pg.state = s
 	first := was.Seq == 0
-	if s.Seq != was.Seq {
-		// Another folder, or the same read again: what was picked goes.
+	if s.Root != was.Root {
+		// Another folder: what was picked goes.
 		pg.sel, pg.hot, pg.ext, pg.picked = "", "", "", false
 		clear(pg.open)
 	}
@@ -190,8 +197,14 @@ func (pg *usagePage) set(s Usage, u *gunim.UI) {
 	pg.list.update(was, u)
 	pg.types.update(u)
 	pg.tmap.update(was, u)
-	if first {
+	if first && s.Take {
 		u.Focus(pg.list)
+	}
+	pg.others = map[string]bool{}
+	for _, t := range s.Types {
+		if !t.Others {
+			pg.others[t.Ext] = true
+		}
 	}
 	u.Invalidate()
 }
@@ -213,6 +226,15 @@ func (pg *usagePage) sizeOf(it UsageItem) int64 { return measureOf(it, pg.state.
 func (pg *usagePage) pick(key string, u *gunim.UI) {
 	pg.sel = key
 	pg.list.reveal(key, u)
+	u.Invalidate()
+}
+
+// pickBox selects the item of key, as a click on its box does: the tree
+// opens the folders on its way only to show it, so the boxes, which have
+// its folders' items already, keep their detail.
+func (pg *usagePage) pickBox(key string, u *gunim.UI) {
+	pg.sel = key
+	pg.list.show(key, u)
 	u.Invalidate()
 }
 
@@ -375,7 +397,7 @@ func (pg *usagePage) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	switch e := e.(type) {
 	case input.KeyPress:
-		ctrl, alt, shift := e.Mods.Has(input.ModControl), e.Mods.Has(input.ModAlt), e.Mods.Has(input.ModShift)
+		alt := e.Mods.Has(input.ModAlt)
 		switch {
 		case e.Key == input.KeyEscape && e.Mods == 0:
 			pg.close(u)
@@ -383,13 +405,50 @@ func (pg *usagePage) Handle(e input.Event, u *gunim.UI) bool {
 			pg.up(u)
 		case e.Key == input.KeyF5 && e.Mods == 0:
 			u.Send(pg, UsageAct{Seq: pg.state.Seq, Act: UsageRead})
-		case ctrl && (alt || shift), ctrl && e.Key == input.KeyW, e.Key == input.KeyF10:
-			// The program's round the page, and closing the window.
-			return false
+		default:
+			// The browser's keys act on the files behind the page, which
+			// do not show; the rest, as Tab and the program's own, go on.
+			return browserKey(e)
+		}
+		return true
+	case input.HistoryStep:
+		// The mouse's Back button comes back out of a folder.
+		if !e.Forward {
+			pg.up(u)
 		}
 		return true
 	case input.PointerDown, input.PointerUp, input.PointerMove, input.Scroll:
 		// Nothing under the page hears the pointer.
+		return true
+	}
+	return false
+}
+
+// browserKey reports whether the browser acts on the files with key e:
+// see [browser.Handle], and the keys of [dndView.keys].
+func browserKey(e input.KeyPress) bool {
+	ctrl, alt, shift := e.Mods.Has(input.ModControl), e.Mods.Has(input.ModAlt), e.Mods.Has(input.ModShift)
+	switch {
+	case ctrl && shift:
+		return e.Key == input.KeyN || e.Key == input.KeyC
+	case ctrl && !alt:
+		switch e.Key {
+		case input.KeyA, input.KeyC, input.KeyX, input.KeyV, input.KeyZ, input.KeyH, input.KeyD, input.KeyR,
+			input.Key1, input.Key2, input.KeyL, input.KeyF, input.KeyP:
+			return true
+		}
+		return false
+	case alt:
+		switch e.Key {
+		case input.KeyLeft, input.KeyRight, input.KeyHome, input.KeyEnter, input.KeyKPEnter:
+			return true
+		}
+		return false
+	case shift && e.Key == input.KeyF10:
+		return true
+	}
+	switch e.Key {
+	case input.KeyDelete, input.KeyF2, input.KeySpace, input.KeyBackspace, input.KeyMenu:
 		return true
 	}
 	return false
@@ -413,10 +472,20 @@ func (pg *usagePage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			k.Place(geom.Pt(right, (usageHeadH-s.H)/2))
 		}
 	}
+	// Narrow, the title gives its room to the controls, which share
+	// what is left beside the crumbs.
+	title := "Disk usage"
+	if pg.state.Cloud && box.W < 900 {
+		title = ""
+	}
+	if pg.title.Text != title {
+		pg.title.Text = title
+	}
+	controls := max(0, (right-usageMargin-38-120)/2-usageGap)
 	for k := range kids.All {
 		switch k.Node() {
 		case gunim.Node(pg.colour), gunim.Node(pg.measure):
-			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(0, w/3), 36)})
+			s := k.Layout(gunim.Constraints{Max: geom.Sz(min(w/3, controls), 36)})
 			right -= s.W + usageGap
 			k.Place(geom.Pt(right, (usageHeadH-s.H)/2))
 		}
@@ -643,7 +712,7 @@ func (s *usageSummary) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ g
 	p.RRect(card, widget.CardRadius.Get(th), paint.Solid(widget.CardFill.Get(th)))
 	const pad = 16
 	// The total, how many files, and how the reading went.
-	big := t.run(bold, humanBytes(tot.Size), 26)
+	big := t.run(bold, humanBytes(tot.Size), UsageTotalText.Get(th))
 	y := float32(12)
 	big.Paint(p, geom.Pt(pad, y), widget.Ink.Get(th))
 	y += big.Height() + 2

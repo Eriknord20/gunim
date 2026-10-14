@@ -118,6 +118,10 @@ type Usage struct {
 	Cloud   bool
 	Measure Measure
 	Colour  ColourBy
+	// Take says the page takes the keyboard as it shows, as it does when
+	// the user opens it, and not when it moves with a pane to another
+	// window.
+	Take bool
 }
 
 // UsageFocus asks for the boxes of page Seq to show the folder Key.

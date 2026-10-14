@@ -144,6 +144,7 @@ func (a *app) openUsage(root string) {
 			a.post(func() {
 				if seq == a.usage.seq {
 					a.usage.free, a.usage.space = free, total
+					a.publishUsage()
 				}
 			})
 		}()
@@ -152,8 +153,12 @@ func (a *app) openUsage(root string) {
 		s.open = true
 		s.opened++
 		s.id = a.ids.usage(s.opened)
+		a.shell.Usage = s.id
+		a.publishShell()
 		s.last = a.usageState()
+		s.last.Take = len(a.ops.dialogs) == 0
 		a.mountUsage(true)
+		s.last.Take = false
 		return
 	}
 	a.publishUsage()
@@ -163,8 +168,13 @@ func (a *app) openUsage(root string) {
 // and with focus gives it the keyboard.
 func (a *app) mountUsage(focus bool) {
 	a.send(a.c.Mount(a.ids.browser(), a.usage.id, "usage", a.usage.last))
-	if focus && len(a.ops.dialogs) == 0 {
-		a.send(a.c.Focus(a.usage.id))
+	if len(a.ops.dialogs) > 0 {
+		// The dialog goes over it again, as it asks what matters more.
+		if focus {
+			a.send(a.c.Unmount(a.ops.dialogs[0].id))
+			a.mountDialog(a.ops.dialogs[0])
+		}
+		return
 	}
 }
 
@@ -237,10 +247,15 @@ func (a *app) usageAct(key, act string) {
 	key, _, rest := strings.Cut(key, "\x00")
 	switch act {
 	case UsageRead:
+		// The folder in focus and those open stay, where they still are.
+		focus, folders := s.focus, s.folders
 		a.openUsage(s.root)
+		s.focus, s.folders = focus, folders
+		a.publishUsage()
 		return
 	case UsageStop:
 		s.stop()
+		a.publishUsage()
 		return
 	}
 	path := s.root
@@ -276,6 +291,8 @@ func (a *app) closeUsage(unmount bool) {
 	s.open = false
 	s.stop()
 	s.scan, s.folders, s.last = nil, nil, Usage{}
+	a.shell.Usage = ""
+	a.publishShell()
 	if unmount {
 		a.send(a.c.Unmount(s.id))
 	}

@@ -35,11 +35,19 @@ type unode struct {
 	size   int64
 	tint   Tint
 	cloud  CloudState
+	// odd marks a link, or an item that could not be read: a file of no
+	// size and of no type.
+	odd bool
 }
 
 // udir is what a folder of the tree has beyond a file.
 type udir struct {
 	kids []*unode
+	// dirs are the folders among kids, and top the largest files among
+	// them by each measure, largest first, once asked for: a folder's
+	// files do not change once it is read.
+	dirs []*unode
+	top  [3][]*unode
 	// online, local and pinned are the bytes under it a cloud provider
 	// keeps online only, has on this device, and always keeps here.
 	online, local, pinned int64
@@ -118,18 +126,26 @@ func newScanner(fsys FS, root string) *scanner {
 	} else if o, ok := optional[OnlineReporter](fsys); ok {
 		s.online, s.hasCloud = o, true
 	}
-	s.tree = &unode{name: s.ps.Base(root), d: &udir{pending: 1}}
+	name := s.ps.Base(root)
+	if strings.Trim(name, `/\`) == "" {
+		// A drive or a share: named by its whole path.
+		name = ""
+	}
+	s.tree = &unode{name: name, d: &udir{pending: 1}}
+	s.start = time.Now()
 	s.queue = []scanJob{{n: s.tree, path: root}}
 	return s
 }
 
 // run reads the tree until it is read or ctx ends, and then calls done.
 func (s *scanner) run(ctx context.Context, done func()) {
-	s.mu.Lock()
-	s.start = time.Now()
-	s.mu.Unlock()
 	stop := context.AfterFunc(ctx, func() {
 		s.mu.Lock()
+		// Said at once, though a reader may wait on a server a while yet.
+		if !s.done && s.stopped == "" {
+			s.stopped = "Stopped before the end"
+			s.took = time.Since(s.start)
+		}
 		s.wake.Broadcast()
 		s.mu.Unlock()
 	})
@@ -141,7 +157,9 @@ func (s *scanner) run(ctx context.Context, done func()) {
 	stop()
 	s.mu.Lock()
 	s.done = true
-	s.took = time.Since(s.start)
+	if s.stopped == "" || s.took == 0 {
+		s.took = time.Since(s.start)
+	}
 	if ctx.Err() != nil && s.stopped == "" {
 		s.stopped = "Stopped before the end"
 	}
@@ -202,7 +220,8 @@ func (s *scanner) readDir(ctx context.Context, j scanJob) ([]*unode, []scanJob, 
 		n := &unode{name: d.Name(), parent: j.n}
 		switch {
 		case err != nil:
-			// Counted as a file of no size; the folder says the error.
+			// Counted as a file of no size.
+			n.odd = true
 		case info.IsDir() && !isLink(info):
 			n.d = &udir{}
 			path := s.ps.Join(j.path, n.name)
@@ -216,6 +235,7 @@ func (s *scanner) readDir(ctx context.Context, j scanJob) ([]*unode, []scanJob, 
 			}
 		case isLink(info):
 			// A link takes next to no room, and is not followed.
+			n.odd = true
 		default:
 			n.size = info.Size()
 			n.tint = tintOfName(n.name)
@@ -259,7 +279,11 @@ func (s *scanner) take(j scanJob, kids []*unode, sub []scanJob, err error) {
 	}
 	if s.kept+len(kids) > scanMostKept {
 		kids = kids[:max(0, scanMostKept-s.kept)]
-		sub = slices.DeleteFunc(sub, func(j scanJob) bool { return !slices.Contains(kids, j.n) })
+		keep := make(map[*unode]bool, len(kids))
+		for _, k := range kids {
+			keep[k] = true
+		}
+		sub = slices.DeleteFunc(sub, func(j scanJob) bool { return !keep[j.n] })
 		s.stopped = "Stopped at " + count(scanMostKept) + " items"
 	}
 	s.kept += len(kids)
@@ -270,6 +294,7 @@ func (s *scanner) take(j scanJob, kids []*unode, sub []scanJob, err error) {
 	for _, k := range kids {
 		if k.d != nil {
 			folders++
+			n.d.dirs = append(n.d.dirs, k)
 			continue
 		}
 		files++
@@ -281,6 +306,9 @@ func (s *scanner) take(j scanJob, kids []*unode, sub []scanJob, err error) {
 		tints[k.tint] += k.size
 		if k.cloud != CloudNone {
 			s.sawCloud = true
+		}
+		if k.odd {
+			continue
 		}
 		ext := typeExt(k.name)
 		t := s.types[ext]
@@ -387,10 +415,12 @@ const (
 func (s *scanner) snapshot(focus string, open map[string]bool, m Measure) (u Usage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	u.Reading, u.Stopped, u.Errs, u.FirstErr = !s.done, s.stopped, s.errs, s.first
+	// Stopped, it reads no more, though a reader may not have come back.
+	over := s.done || s.stopped != ""
+	u.Reading, u.Stopped, u.Errs, u.FirstErr = !over, s.stopped, s.errs, s.first
 	u.Cloud = s.sawCloud
 	took := s.took
-	if !s.done {
+	if !over {
 		took = time.Since(s.start)
 	}
 	u.Took = tookWords(took)
@@ -444,7 +474,7 @@ func (s *scanner) item(n *unode, key string, parent int32) UsageItem {
 	}
 	it.Dir = true
 	it.Files, it.Folders = int(n.d.files), int(n.d.folders)
-	it.Reading = n.d.pending > 0 && !s.done
+	it.Reading = n.d.pending > 0 && !s.done && s.stopped == ""
 	it.Err, it.Skipped = n.d.err, n.d.skipped
 	it.Tint = TintFolder
 	best := int64(0)
@@ -469,7 +499,7 @@ func (s *scanner) prune(f *unode, key string, open map[string]bool, m Measure) [
 	// sends one by one, largest first, and the rest together.
 	type opening struct {
 		kids []*unode
-		rest []*unode
+		rest int
 	}
 	opened := map[*unode]*opening{}
 	sent := 1
@@ -479,13 +509,10 @@ func (s *scanner) prune(f *unode, key string, open map[string]bool, m Measure) [
 		if n.d == nil || len(n.d.kids) == 0 || opened[n] != nil {
 			return
 		}
-		kids := slices.Clone(n.d.kids)
-		slices.SortStableFunc(kids, func(a, b *unode) int {
-			if c := cmp.Compare(b.measure(m), a.measure(m)); c != 0 {
-				return c
-			}
-			return strings.Compare(a.name, b.name)
-		})
+		// Only the largest files can be sent, and all the folders may be:
+		// a folder can hold millions of files.
+		kids := slices.Concat(topFiles(n, m), n.d.dirs)
+		slices.SortStableFunc(kids, func(a, b *unode) int { return larger(a, b, m) })
 		// The largest, and the folders that could not be read or were
 		// not, which take no room but have something to say.
 		o := &opening{}
@@ -493,13 +520,12 @@ func (s *scanner) prune(f *unode, key string, open map[string]bool, m Measure) [
 			notable := k.d != nil && (k.d.err != "" || k.d.skipped != "")
 			if len(o.kids) < usageMostKids && (all || notable || k.measure(m) >= least) {
 				o.kids = append(o.kids, k)
-			} else {
-				o.rest = append(o.rest, k)
 			}
 		}
+		o.rest = len(n.d.kids) - len(o.kids)
 		opened[n] = o
 		sent += len(o.kids)
-		if len(o.rest) > 0 {
+		if o.rest > 0 {
 			sent++
 		}
 		for _, k := range o.kids {
@@ -550,33 +576,92 @@ func (s *scanner) prune(f *unode, key string, open map[string]bool, m Measure) [
 			}
 			walk(kid, kk, at)
 		}
-		if len(o.rest) > 0 {
-			out = append(out, s.rest(o.rest, k, at))
+		if o.rest > 0 {
+			out = append(out, s.rest(n, o.kids, o.rest, k, at))
 		}
 	}
 	walk(f, key, -1)
 	return out
 }
 
-// rest is the items of the folder of key, at parent, too small to send,
-// as one.
-func (s *scanner) rest(kids []*unode, key string, parent int32) UsageItem {
-	it := UsageItem{Key: key + "\x00rest", Parent: parent, Rest: len(kids), Tint: TintOther}
-	for _, k := range kids {
-		it.Size += k.size
+// rest is the n items of folder f, of key, at parent, too small to send,
+// as one: all f holds but the items sent.
+func (s *scanner) rest(f *unode, sent []*unode, n int, key string, parent int32) UsageItem {
+	it := UsageItem{Key: key + "\x00rest", Parent: parent, Rest: n, Tint: TintOther, Size: f.size,
+		Online: f.d.online, Local: f.d.local, Pinned: f.d.pinned, Files: int(f.d.files), Folders: int(f.d.folders)}
+	for _, k := range sent {
+		it.Size -= k.size
 		on, lo, pin := k.clouds()
-		it.Online += on
-		it.Local += lo
-		it.Pinned += pin
+		it.Online -= on
+		it.Local -= lo
+		it.Pinned -= pin
 		if k.d != nil {
-			it.Files += int(k.d.files)
-			it.Folders += 1 + int(k.d.folders)
+			it.Files -= int(k.d.files)
+			it.Folders -= 1 + int(k.d.folders)
 		} else {
-			it.Files++
+			it.Files--
 		}
 	}
-	it.Name = plural(len(kids), "smaller item")
+	it.Name = plural(n, "smaller item")
 	return it
+}
+
+// larger orders a before b where m sizes it larger, or by name where the
+// two are the same size.
+func larger(a, b *unode, m Measure) int {
+	if c := cmp.Compare(b.measure(m), a.measure(m)); c != 0 {
+		return c
+	}
+	return strings.Compare(a.name, b.name)
+}
+
+// topFiles are the usageMostKids largest files of folder n by m, largest
+// first, found once and kept.
+func topFiles(n *unode, m Measure) []*unode {
+	if top := n.d.top[m]; top != nil || len(n.d.kids) == len(n.d.dirs) {
+		return top
+	}
+	// The least of the largest found so far on top.
+	h := &fileHeap{m: m}
+	for _, k := range n.d.kids {
+		if k.d != nil {
+			continue
+		}
+		if len(h.ns) < usageMostKids {
+			heap.Push(h, k)
+		} else if larger(k, h.ns[0], m) < 0 {
+			h.ns[0] = k
+			heap.Fix(h, 0)
+		}
+	}
+	top := h.ns
+	slices.SortFunc(top, func(a, b *unode) int { return larger(a, b, m) })
+	n.d.top[m] = top
+	return top
+}
+
+// fileHeap holds files, the smallest by m on top.
+type fileHeap struct {
+	ns []*unode
+	m  Measure
+}
+
+func (h *fileHeap) Len() int           { return len(h.ns) }
+func (h *fileHeap) Less(i, j int) bool { return larger(h.ns[i], h.ns[j], h.m) > 0 }
+func (h *fileHeap) Swap(i, j int)      { h.ns[i], h.ns[j] = h.ns[j], h.ns[i] }
+
+// Push implements [heap.Interface].
+func (h *fileHeap) Push(x any) {
+	if n, ok := x.(*unode); ok {
+		h.ns = append(h.ns, n)
+	}
+}
+
+// Pop implements [heap.Interface].
+func (h *fileHeap) Pop() any {
+	n := h.ns[len(h.ns)-1]
+	h.ns = h.ns[:len(h.ns)-1]
+	return n
 }
 
 // typesBy are the types found, largest by m first, the smallest put

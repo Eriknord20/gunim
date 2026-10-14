@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/input"
@@ -301,5 +302,69 @@ func TestDiskUsageTreeWorksFromTheKeyboard(t *testing.T) {
 	h.until("the boxes show the folder read again", func() bool { return pg.state.Focus == "" })
 	if pg.sel != "big" {
 		t.Errorf("back out, %q is selected, want big, the folder come out of", pg.sel)
+	}
+}
+
+// stuckFS is the computer's own files, whose folder named stuck takes
+// until let closes to read, whatever its context says.
+type stuckFS struct {
+	FS
+	let chan struct{}
+}
+
+func (s stuckFS) ReadDir(ctx context.Context, dir string) ([]fs.DirEntry, error) {
+	if filepath.Base(dir) == "stuck" {
+		<-s.let
+	}
+	return s.FS.ReadDir(ctx, dir)
+}
+
+func TestDiskUsageSaysItStoppedThoughAReadHangs(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "stuck/a.txt", "b.txt")
+	let := make(chan struct{})
+	defer close(let)
+	s := newScanner(stuckFS{LocalFS(), let}, root)
+	if u := s.snapshot("", nil, MeasureAll); u.Took != "0.0 s" {
+		t.Errorf("before it starts, the reading has taken %s", u.Took)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.run(ctx, func() {})
+	deadline := time.Now().Add(5 * time.Second)
+	for s.snapshot("", nil, MeasureAll).Total.Files == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("b.txt was never read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	for s.snapshot("", nil, MeasureAll).Reading {
+		if time.Now().After(deadline) {
+			t.Fatal("stopped, the page still says it is reading while a folder hangs")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if u := s.snapshot("", nil, MeasureAll); u.Stopped == "" {
+		t.Error("stopped, the page does not say so")
+	}
+}
+
+func TestDiskUsageKeepsTheKeysOfTheFilesFromThem(t *testing.T) {
+	h := newUsageHarness(t, "a.txt")
+	h.do(Command{Name: CmdUsage})
+	h.until("the page shows", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	for _, k := range []struct {
+		key  input.Key
+		mods input.Mods
+	}{{input.KeyN, input.ModControl | input.ModShift}, {input.KeyC, input.ModControl}, {input.KeySpace, 0},
+		{input.KeyMenu, 0}, {input.KeyF2, 0}, {input.KeyEnter, input.ModAlt}} {
+		h.press(k.key, k.mods)
+	}
+	h.frames(10)
+	if len(h.a.ops.dialogs) > 0 || h.a.viewer.open || h.a.reading.open {
+		t.Error("a key on the page acted on the files behind it")
+	}
+	if h.usagePage() == nil || !h.a.usage.open {
+		t.Error("the page closed")
 	}
 }
