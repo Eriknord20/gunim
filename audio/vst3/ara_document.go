@@ -903,8 +903,12 @@ func (d *Document) Analyse(src *AudioSource) {
 		for i, t := range d.f.Analyzes {
 			types[i] = int32(t)
 		}
+		// Pinned, so on the heap: on the stack, a callback of the
+		// plugin's could move it before the plugin reads it.
+		var pin runtime.Pinner
+		pin.Pin(&types[0])
+		defer pin.Unpin()
 		d.dc.call(dcRequestAudioSourceContentAnalysis, src.ref, uintptr(len(types)), uintptr(unsafe.Pointer(&types[0])))
-		runtime.KeepAlive(types)
 	})
 }
 
