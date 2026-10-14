@@ -58,3 +58,36 @@ func TestOrderKeepsTheCrossoversApart(t *testing.T) {
 		t.Errorf("crossovers at 900, 300 and 5000 Hz are put at %v", got)
 	}
 }
+
+func TestASplitterHoldsNoSubnormalsInTheSilenceAfterSound(t *testing.T) {
+	var s Splitter
+	s.Set([3]float64{120, 1000, 6000}, 48000)
+	for i := range 48000 {
+		s.Split(math.Sin(2 * math.Pi * 440 * float64(i) / 48000))
+	}
+	// Left alone, the sections decay in silence to subnormals and stick
+	// there, many times slower to work.
+	for range 48000 * 10 {
+		s.Split(0)
+	}
+	check := func(f lr4) {
+		t.Helper()
+		for _, q := range f {
+			if subnormal(q.z1) || subnormal(q.z2) {
+				t.Fatalf("after ten seconds of silence, a section holds %g, %g", q.z1, q.z2)
+			}
+		}
+	}
+	for i := range s.lo {
+		check(s.lo[i])
+		check(s.hi[i])
+	}
+	for _, a := range s.ap {
+		check(a.lo)
+		check(a.hi)
+	}
+}
+
+// subnormal reports whether v is a subnormal number: under the least
+// normal one, and not zero.
+func subnormal(v float64) bool { return v != 0 && math.Abs(v) < 0x1p-1022 }
