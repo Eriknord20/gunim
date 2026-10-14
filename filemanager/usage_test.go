@@ -274,3 +274,32 @@ func TestDiskUsageClosesOnEscapeAndOpensOnTheFolderShowing(t *testing.T) {
 	h.press(input.KeyEscape, 0)
 	h.until("the page has closed", func() bool { return !h.a.usage.open })
 }
+
+func TestDiskUsageTreeWorksFromTheKeyboard(t *testing.T) {
+	h := newUsageHarness(t, "big/a.bin", "big/sub/b.bin", "small.txt")
+	if err := os.WriteFile(filepath.Join(h.dir, "big", "a.bin"), make([]byte, 4000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.do(Command{Name: CmdUsage})
+	h.until("the page has read the folder", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	pg := h.usagePage()
+	// Down from the folder read goes to its largest item, and Right opens it.
+	h.press(input.KeyDown, 0)
+	if pg.sel != "big" {
+		t.Fatalf("Down selected %q, want big", pg.sel)
+	}
+	h.press(input.KeyRight, 0)
+	h.until("the tree opened big", func() bool { return h.a.usage.folders["big"] && pg.open["big"] })
+	h.until("big's items show in the tree", func() bool { _, ok := pg.list.at["big/a.bin"]; return ok })
+	// Enter shows it in the boxes, and Backspace comes back out.
+	h.press(input.KeyEnter, 0)
+	h.until("the boxes show big", func() bool { return pg.state.Focus == "big" })
+	if len(pg.state.Crumbs) != 2 || pg.state.Items[0].Key != "big" {
+		t.Errorf("in big, the crumbs are %v and the first item %q", pg.state.Crumbs, pg.state.Items[0].Key)
+	}
+	h.press(input.KeyBackspace, 0)
+	h.until("the boxes show the folder read again", func() bool { return pg.state.Focus == "" })
+	if pg.sel != "big" {
+		t.Errorf("back out, %q is selected, want big, the folder come out of", pg.sel)
+	}
+}
