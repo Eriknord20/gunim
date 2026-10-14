@@ -413,6 +413,27 @@ func (e *eqInsert) Process(frames []float32) {
 			b.filter(part, b.mix*e.mix)
 		}
 	}
+	for _, b := range e.bands {
+		b.flush()
+	}
+}
+
+// eqTiny is the level under which a band's state rounds to zero: some
+// 600 decibels under full scale.
+const eqTiny = 1e-30
+
+// flush rounds to zero what the band's sections hold under eqTiny. Left
+// alone, each decays in silence to a subnormal number and sticks there,
+// and sums on subnormals run many times slower, for as long as the
+// silence lasts.
+func (b *liveBand) flush() {
+	for k := range b.state {
+		for i, v := range b.state[k] {
+			if math.Abs(v) < eqTiny {
+				b.state[k][i] = 0
+			}
+		}
+	}
 }
 
 // filter filters frames through the band, mixed in by wet.

@@ -29,12 +29,26 @@ type biquad struct {
 	z1, z2             float64
 }
 
+// run filters x. What the section holds rounds to zero under tiny:
+// left alone, it decays in silence to a subnormal number and sticks
+// there, and sums on subnormals run many times slower, for as long as
+// the silence lasts.
 func (q *biquad) run(x float64) float64 {
 	y := q.b0*x + q.z1
 	q.z1 = q.b1*x - q.a1*y + q.z2
 	q.z2 = q.b2*x - q.a2*y
+	if math.Abs(q.z1) < tiny {
+		q.z1 = 0
+	}
+	if math.Abs(q.z2) < tiny {
+		q.z2 = 0
+	}
 	return y
 }
+
+// tiny is the level under which a section's state rounds to zero: some
+// 600 decibels under full scale.
+const tiny = 1e-30
 
 // setPass sets the section to pass the pitches under hz, or, high, over
 // it, Butterworth, as Robert Bristow-Johnson's cookbook has it; its

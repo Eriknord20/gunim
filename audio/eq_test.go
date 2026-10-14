@@ -404,3 +404,28 @@ func TestTheThresholdShiftMovesEveryDynamicBand(t *testing.T) {
 		}
 	}
 }
+
+func TestAnEQHoldsNoSubnormalsInTheSilenceAfterSound(t *testing.T) {
+	eq := NewEQ()
+	eq.Set([]Band{{ID: 1, Kind: Bell, Freq: 200, Gain: 9, Q: 4, On: true}, {ID: 2, Kind: LowCut, Freq: 40, Q: 0.7, On: true}})
+	in := eq.Insert()
+	at := 0
+	for range 200 {
+		in.Process(sine(block, 200, 0.5, at))
+		at += block
+	}
+	// Ten seconds of silence: left alone, the sections decay to
+	// subnormals and stick there, many times slower to work.
+	for range 48000 * 10 / block {
+		in.Process(make([]float32, 2*block))
+	}
+	for _, b := range in.(*eqInsert).bands {
+		for k, st := range b.state {
+			for _, v := range st {
+				if v != 0 && math.Abs(v) < 0x1p-1022 {
+					t.Fatalf("after ten seconds of silence, section %d holds %g", k, v)
+				}
+			}
+		}
+	}
+}
