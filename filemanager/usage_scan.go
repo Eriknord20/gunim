@@ -124,7 +124,9 @@ func newScanner(fsys FS, root string) *scanner {
 	if s.vols != nil {
 		s.vol, _ = s.vols.Volume(root)
 	}
-	s.keeper, _ = optional[CloudKeeper](fsys)
+	if k, ok := optional[CloudKeeper](fsys); ok && k.CanKeepOnDevice() {
+		s.keeper = k
+	}
 	if c, ok := optional[CloudReporter](fsys); ok {
 		s.cloud, s.hasCloud = c, true
 	} else if o, ok := optional[OnlineReporter](fsys); ok {
