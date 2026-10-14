@@ -208,3 +208,39 @@ func TestTheARATestPluginRendersAndRestoresItsDocument(t *testing.T) {
 		t.Fatalf("the plugin asserted %d times", n)
 	}
 }
+
+func TestAnARAFactoryIsOfTheModuleLoadedAgainAfterShutdown(t *testing.T) {
+	factory := func() *ARAFactory {
+		m := araTestPlugin(t)
+		for _, c := range m.Effects() {
+			if c.ARA {
+				f, err := m.ARAFactory(c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if f.module != m {
+					t.Fatal("the factory is of a module closed")
+				}
+				return f
+			}
+		}
+		t.Fatal("no class has ARA")
+		return nil
+	}
+	factory()
+	if err := Shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	f := factory()
+	// The module loaded again makes the factory's instances.
+	d, err := f.NewDocument("Again", &sineHost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	p, err := d.NewPlugin(Config{Rate: 48000, Block: 512}, PlaybackRenderer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+}

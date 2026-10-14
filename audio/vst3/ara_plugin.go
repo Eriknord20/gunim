@@ -296,12 +296,16 @@ func (x *Extension) Hide(sequences ...*RegionSequence) error {
 				refs = append(refs, q.ref)
 			}
 		}
+		// Pinned, so on the heap: on the stack, a callback of the
+		// plugin's could move it before the plugin reads it.
 		var at uintptr
 		if len(refs) > 0 {
+			var pin runtime.Pinner
+			pin.Pin(&refs[0])
+			defer pin.Unpin()
 			at = uintptr(unsafe.Pointer(&refs[0]))
 		}
 		x.ev.call(1, uintptr(len(refs)), at)
-		runtime.KeepAlive(refs)
 	})
 	return nil
 }

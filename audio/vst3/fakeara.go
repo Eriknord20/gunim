@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sync"
 	"unsafe"
@@ -362,7 +363,15 @@ func (d *fakeDoc) startAnalysis(s *fakeSource) {
 		defer d.wg.Done()
 		n := int(s.frames)
 		samples := make([][]float32, s.channels)
+		// The host reads where bufs lies, as a number. Go would keep so
+		// small a list on this goroutine's stack, which moves as the
+		// host's code, run on it, grows it; pinned, it lies on the heap.
 		bufs := make([]uintptr, s.channels)
+		var pin runtime.Pinner
+		if len(bufs) > 0 {
+			pin.Pin(&bufs[0])
+		}
+		defer pin.Unpin()
 		var d64 [][]float64
 		for c := range samples {
 			samples[c] = make([]float32, n)
