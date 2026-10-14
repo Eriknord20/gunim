@@ -221,17 +221,25 @@ func (pg *usagePage) item(key string) (UsageItem, bool) {
 // sizeOf is what the page sizes it by.
 func (pg *usagePage) sizeOf(it UsageItem) int64 { return measureOf(it, pg.state.Measure) }
 
-// pick selects the item of key, in the tree and in the boxes, opening
-// the folders on its way in the tree.
+// pick selects the item of key, as a key in the tree does, and scrolls
+// the tree only as far as brings its row into view.
 func (pg *usagePage) pick(key string, u *gunim.UI) {
 	pg.sel = key
-	pg.list.reveal(key, u)
+	pg.list.aimAt(key, false, u)
+	u.Invalidate()
+}
+
+// pickRow selects the item of key, as a click on its row does, and leaves
+// the tree where it is.
+func (pg *usagePage) pickRow(key string, u *gunim.UI) {
+	pg.sel = key
 	u.Invalidate()
 }
 
 // pickBox selects the item of key, as a click on its box does: the tree
 // opens the folders on its way only to show it, so the boxes, which have
-// its folders' items already, keep their detail.
+// its folders' items already, keep their detail. Its row scrolls to the
+// middle of the tree, clear of the fades at its ends.
 func (pg *usagePage) pickBox(key string, u *gunim.UI) {
 	pg.sel = key
 	pg.list.show(key, u)
@@ -323,9 +331,12 @@ func (pg *usagePage) menuItems(key string) (items []widget.MenuItem, acts []stri
 	if !ok {
 		return nil, nil
 	}
+	// brk draws a line above the next item, and off dims those added.
+	brk, off := false, false
 	add := func(label, act string) {
-		items = append(items, widget.MenuItem{Label: label})
+		items = append(items, widget.MenuItem{Label: label, Break: brk, Disabled: off})
 		acts = append(acts, act)
+		brk = false
 	}
 	if it.Dir && it.Rest == 0 && key != pg.state.Focus {
 		add("Go into", "into")
@@ -351,7 +362,36 @@ func (pg *usagePage) menuItems(key string) (items []widget.MenuItem, acts []stri
 	} else {
 		add("Show the folder in Files", UsageShow)
 	}
+	if pg.removable(it) {
+		// Not while the folder is read: a folder still being read could
+		// gain items after it went.
+		brk, off = true, pg.state.Reading
+		if pg.state.Trash {
+			add("Move to trash", UsageTrash)
+			items[len(items)-1].Hint = "Delete"
+		}
+		add("Delete permanently", UsageDelete)
+		items[len(items)-1].Hint = "Shift+Delete"
+	}
 	return items, acts
+}
+
+// removable reports whether it can be deleted from the page: an item
+// under the folder read, not the folder itself nor small items together.
+func (pg *usagePage) removable(it UsageItem) bool { return it.Rest == 0 && it.Key != "" }
+
+// remove moves the item selected to the trash, or deletes it for good
+// with forGood, as Delete and Shift+Delete ask.
+func (pg *usagePage) remove(forGood bool, u *gunim.UI) {
+	it, ok := pg.item(pg.sel)
+	if !ok || !pg.removable(it) {
+		return
+	}
+	act := UsageTrash
+	if forGood {
+		act = UsageDelete
+	}
+	pg.act(it.Key, act, u)
 }
 
 // menuPicked does what item i of the context menu of key asks.
@@ -414,6 +454,8 @@ func (pg *usagePage) Handle(e input.Event, u *gunim.UI) bool {
 			pg.up(u)
 		case e.Key == input.KeyF5 && e.Mods == 0:
 			u.Send(pg, UsageAct{Seq: pg.state.Seq, Act: UsageRead})
+		case e.Key == input.KeyDelete && (e.Mods == 0 || e.Mods == input.ModShift):
+			pg.remove(e.Mods == input.ModShift, u)
 		default:
 			// The browser's keys act on the files behind the page, which
 			// do not show; the rest, as Tab and the program's own, go on.

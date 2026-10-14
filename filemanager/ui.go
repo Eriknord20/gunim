@@ -137,6 +137,16 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 	} else {
 		b.main.SetShare(b.previewShare(), nil)
 	}
+	if (s.Usage != "") != (was.Usage != "") && b.shown {
+		// Over the Disk usage page, so what it does, as move an item to
+		// the trash, says so where it can be seen and undone; back under
+		// the dialogs once it goes.
+		at := 1
+		if s.Usage != "" {
+			at = 2
+		}
+		u.InsertAt(b, at, b.toasts)
+	}
 	b.title.setShell(s, u)
 	b.path.setShell(s, u)
 	b.side.fs, b.side.ps = s.FS, s.Paths
@@ -144,7 +154,8 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 	b.shown = true
 }
 
-// Children implements [gunim.Composite].
+// Children implements [gunim.Composite]. While the Disk usage page shows,
+// in the layer, the toasts move over it: see setShell.
 func (b *browser) Children() []gunim.Node { return []gunim.Node{b.page, b.toasts, b.layer} }
 
 // Slot implements [gunim.Slotted]: the dialogs mounted under the browser
@@ -165,7 +176,17 @@ func (b *browser) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children
 		// Laid out, with no UI to glide with: it moves at once.
 		b.main.SetShare(b.previewShare(), nil)
 	}
-	page, toasts, layer := kids.At(0), kids.At(1), kids.At(2)
+	var page, toasts, layer gunim.Child
+	for k := range kids.All {
+		switch k.Node() {
+		case b.page:
+			page = k
+		case b.toasts:
+			toasts = k
+		default:
+			layer = k
+		}
+	}
 	page.Layout(gunim.Tight(c.Max))
 	page.Place(geom.Point{})
 	ts := toasts.Layout(gunim.Loose(geom.Sz(c.Max.W-32, c.Max.H)))

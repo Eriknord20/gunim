@@ -452,7 +452,11 @@ func (a *app) touched(j job) {
 
 // openWindow opens another window on dir, or another pane, where the
 // pane's host opens them.
-func (a *app) openWindow(dir string) {
+func (a *app) openWindow(dir string) { a.openWindowOn(dir, "") }
+
+// openWindowOn opens another window on dir, or another pane, with the
+// item named sel selected, where sel is not empty.
+func (a *app) openWindowOn(dir, sel string) {
 	open := a.hub.open
 	if a.pane != nil && a.pane.host.Open != nil {
 		open = a.pane.host.Open
@@ -462,7 +466,7 @@ func (a *app) openWindow(dir string) {
 		return
 	}
 	o := a.opts
-	o.Dir, o.Select, o.Script = dir, "", ""
+	o.Dir, o.Select, o.Script = dir, sel, ""
 	go func() {
 		if err := open(o); err != nil {
 			a.post(func() { a.fail("Opening a new window: " + err.Error()) })
