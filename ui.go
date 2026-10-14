@@ -1242,6 +1242,12 @@ func (w *Window) wait() bool {
 		}
 		w.inFlight = false
 		w.shown = f.Shown
+		if w.ui.arriving && w.ui.arrivedAt.IsZero() {
+			w.ui.arrivedAt = w.shown
+			if w.shown.IsZero() {
+				w.ui.arrivedAt = time.Now()
+			}
+		}
 		if took := time.Since(w.sent); took > slowFrame {
 			pointerf("the last frame took %.0f ms to reach the screen", float64(took.Microseconds())/1000)
 		}
@@ -1466,7 +1472,8 @@ type UI struct {
 	// [WindowOptions.Instant] asks otherwise.
 	animated bool
 	// arriving says the window is coming in as it opens, and arrivedAt
-	// is the frame it began in.
+	// is when it began: as its first frame reached the screen, or, for
+	// a window stepped by [Window.Frame], its first frame.
 	arriving  bool
 	arrivedAt time.Time
 	// fadeOut says the window is fading out, or out, as Client.Fade
@@ -2408,10 +2415,16 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 		// as it opens, or going as it leaves.
 		gone := float32(0)
 		if u.arriving {
-			if u.arrivedAt.IsZero() {
+			// The window comes in once its first frame, drawn all gone,
+			// is on the screen: the system may take a while to show it,
+			// and a window shown late would be most of the way in.
+			if u.arrivedAt.IsZero() && u.stepped {
 				u.arrivedAt = now
 			}
-			k := min(float32(now.Sub(u.arrivedAt))/float32(ArriveTime), 1)
+			k := float32(0)
+			if !u.arrivedAt.IsZero() {
+				k = min(float32(now.Sub(u.arrivedAt))/float32(ArriveTime), 1)
+			}
 			u.arriving = k < 1
 			u.animating = true
 			// Eased out: quick to show, settling into place.
