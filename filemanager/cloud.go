@@ -7,8 +7,11 @@ import (
 
 // CloudKeeper is a file system that tells a cloud provider which items
 // to keep on this device, as Windows' Explorer does for OneDrive. Disk
-// usage offers it for items in a cloud provider's folder.
+// usage offers it for items in a cloud provider's folder, while
+// CanKeepOnDevice says it can: a file system of another machine can only
+// where that machine answers.
 type CloudKeeper interface {
+	CanKeepOnDevice() bool
 	// KeepOnDevice has the provider always keep the item at path on this
 	// device with keep, and all a folder holds, downloading what is
 	// online only; without keep it lets the provider free their space,

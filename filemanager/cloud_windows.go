@@ -94,6 +94,10 @@ const (
 		fileAttributeUnpinned
 )
 
+// CanKeepOnDevice implements [CloudKeeper]: Windows' own files always
+// can.
+func (localFS) CanKeepOnDevice() bool { return true }
+
 // KeepOnDevice implements [CloudKeeper], as Explorer's Always keep on this
 // device and Free up space do: it marks the item pinned or unpinned, and
 // all a folder holds, and the cloud provider downloads or frees them.

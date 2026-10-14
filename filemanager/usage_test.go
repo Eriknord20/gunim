@@ -378,6 +378,8 @@ type keeperFS struct {
 	asked chan string
 }
 
+func (k keeperFS) CanKeepOnDevice() bool { return true }
+
 func (k keeperFS) KeepOnDevice(_ context.Context, path string, keep bool) error {
 	k.asked <- fmt.Sprintf("%s %v", filepath.Base(path), keep)
 	if filepath.Base(path) == "nope" {
@@ -443,5 +445,21 @@ func TestDiskUsageFreesUpSpaceAndKeepsOnTheDevice(t *testing.T) {
 	})
 	if n, _ := itemOf(pg.state, "nope"); n.Local == 0 {
 		t.Error("a folder the provider would not free shows as freed")
+	}
+}
+
+// unkeptFS is keeperFS on a machine that cannot keep items on its device.
+type unkeptFS struct{ keeperFS }
+
+func (unkeptFS) CanKeepOnDevice() bool { return false }
+
+func TestDiskUsageOffersToFreeUpSpaceOnlyWhereItCan(t *testing.T) {
+	h := newHarnessWith(t, func(o *Options) { o.FS = unkeptFS{keeperFS{usageFS{LocalFS()}, nil}} }, "docs/loc-a.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.do(Command{Name: CmdUsage})
+	h.until("the page has read the folder", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	pg := h.usagePage()
+	if items, _ := pg.menuItems("docs"); pg.state.CanKeep || slices.ContainsFunc(items, func(it widget.MenuItem) bool { return it.Label == "Free up space" }) {
+		t.Error("a machine that cannot keep items on its device offers to free up space")
 	}
 }
