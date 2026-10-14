@@ -441,6 +441,20 @@ func (w *Window) SetPos(xpos, ypos int) error {
 	return nil
 }
 
+// SetBounds moves the window's client area to xpos, ypos and sizes it width×height at once, in screen coordinates,
+// so the window does not show a frame between the two.
+func (w *Window) SetBounds(xpos, ypos, width, height int) error {
+	if !_glfw.initialized {
+		return NotInitialized
+	}
+	if w.monitor != nil {
+		return nil
+	}
+	w.videoMode.Width = width
+	w.videoMode.Height = height
+	return w.platformSetWindowBounds(xpos, ypos, width, height)
+}
+
 func (w *Window) GetSize() (width, height int, err error) {
 	if !_glfw.initialized {
 		return 0, 0, NotInitialized

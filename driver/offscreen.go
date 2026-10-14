@@ -340,6 +340,24 @@ func (w *OffscreenWindow) Resize(size geom.Size) {
 	w.size = size
 }
 
+// OffscreenHandle is the handle an offscreen window hands out as its
+// system's window, for a test of a child window put in it.
+const OffscreenHandle = 0x0ff5c4ee
+
+// NativeHandle implements [NativeWindow]: a pretend handle,
+// [OffscreenHandle].
+func (w *OffscreenWindow) NativeHandle() (uintptr, error) { return OffscreenHandle, nil }
+
+// Reshape implements [Reshaper]: the window grows on its pretend screen by by, in logical pixels, with no monitor
+// to keep it on.
+func (w *OffscreenWindow) Reshape(by geom.Insets) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.origin = w.origin.Sub(geom.Pt(by.Left, by.Top).Mul(w.scale))
+	w.size = geom.Sz(max(w.size.W+by.Left+by.Right, 1), max(w.size.H+by.Top+by.Bottom, 1))
+	return nil
+}
+
 // Place implements [Placer] by taking the size, at the window's zoom, and keeping the anchor.
 func (w *OffscreenWindow) Place(anchor geom.Rect, size geom.Size) error {
 	w.mu.Lock()

@@ -1277,6 +1277,13 @@ func (w *Window) platformGetWindowPos() (xpos, ypos int, err error) {
 	return xpos, ypos, nil
 }
 
+func (w *Window) platformSetWindowBounds(xpos, ypos, width, height int) error {
+	if err := w.platformSetWindowSize(width, height); err != nil {
+		return err
+	}
+	return w.platformSetWindowPos(xpos, ypos)
+}
+
 func (w *Window) platformSetWindowPos(xpos, ypos int) error {
 	pool := cocoa.NSAutoreleasePool_new()
 	defer pool.Release()

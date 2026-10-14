@@ -263,7 +263,9 @@ func newPresenter(g gl.Context, hwnd windows.HWND) (*presenter, error) {
 		uintptr(unsafe.Pointer(&p.dcomp))); failed(hr) {
 		return nil, fmt.Errorf("desktop: DCompositionCreateDevice: HRESULT %#x", uint32(hr))
 	}
-	if hr := call(p.dcomp, dcompDeviceCreateTargetHwnd, uintptr(hwnd), 1, uintptr(unsafe.Pointer(&p.target))); failed(hr) {
+	// The frames show behind the window's children, so a child window
+	// of the system's put in it, as a plugin's editor, shows over them.
+	if hr := call(p.dcomp, dcompDeviceCreateTargetHwnd, uintptr(hwnd), 0, uintptr(unsafe.Pointer(&p.target))); failed(hr) {
 		return nil, fmt.Errorf("desktop: CreateTargetForHwnd: HRESULT %#x", uint32(hr))
 	}
 	if hr := call(p.dcomp, dcompDeviceCreateVisual, uintptr(unsafe.Pointer(&p.visual))); failed(hr) {
