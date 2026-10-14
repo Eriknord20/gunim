@@ -11,6 +11,10 @@
 // ASIO plays and records together: [Config.Record] takes the driver's
 // inputs in step with the buffers it plays, sample for sample.
 //
+// A device plays on the driver's first two outputs, or on those
+// [Config.Outputs] names: with [Config.FillN], on as many as it names,
+// all in step. [Channels] lists a driver's inputs and outputs by name.
+//
 // A process plays through one driver at a time:
 //
 //	d, err := asio.Open(asio.Config{Name: drivers[0].Name, Rate: 44100,
@@ -48,8 +52,20 @@ type Config struct {
 	// Fill fills frames, stereo frames of interleaved float32 samples
 	// from -1 to 1, with what plays next. The driver calls it on a
 	// thread of its own, each time it takes a buffer, so it must be
-	// quick and return at once.
+	// quick and return at once. The pair plays on the first two
+	// outputs Outputs names; one more named plays silence, and where it
+	// names one alone, the pair is averaged onto it.
 	Fill func(frames []float32)
+	// FillN, where set, fills in place of Fill: frames of channels
+	// interleaved samples, one for each output Outputs names, in its
+	// order, or two where it names none. It runs as Fill does.
+	FillN func(frames []float32, channels int)
+	// Outputs are the driver's outputs to play on, by their index from
+	// 0, as [Channels] lists them, up to [MaxOutputs] of them. Nil plays
+	// on the first two, or on the one of a driver of one. An output the
+	// driver lacks, or one named twice, plays nothing: its channel is
+	// filled and dropped, and [Info].Played tells it.
+	Outputs []int
 	// Record, where set, records the driver's inputs, up to
 	// [MaxInputs] of them: each time the driver takes a buffer, it is
 	// called with what came in over the same period, just before Fill.
@@ -81,10 +97,15 @@ type Config struct {
 // at most: the first ones.
 const MaxInputs = 64
 
+// MaxOutputs is how many of a driver's outputs a device plays on at
+// most.
+const MaxOutputs = 64
+
 // ErrUnsupported is returned by [Open] on a system without ASIO.
 var ErrUnsupported = errors.New("asio: ASIO plays on 64-bit Windows")
 
-// ErrOpen is returned by [Open] while another driver is open.
+// ErrOpen is returned by [Open] and [ControlPanel] while a driver is
+// open, and by [Channels] while another driver is.
 var ErrOpen = errors.New("asio: a driver is open already")
 
 // ErrNotAnswering is returned by [Open] and [Device.Close] for a driver

@@ -51,16 +51,17 @@ func (t sampleType) size() (bytes, bits int) {
 // float says t holds floating point samples.
 func (t sampleType) float() bool { return t == float32LSB || t == float64LSB }
 
-// write writes channel ch of frames, interleaved stereo, into dst as
-// samples of t, one a frame. An integer sample is the float times full
-// scale, 2^(bits-1), rounded and held within range: a sound already
-// rounded to as many bits, or fewer, comes through exactly.
-func write(dst []byte, frames []float32, ch int, t sampleType) {
-	n := len(frames) / 2
+// write writes channel ch of frames, chans interleaved channels a
+// frame, into dst as samples of t, one a frame. An integer sample is
+// the float times full scale, 2^(bits-1), rounded and held within
+// range: a sound already rounded to as many bits, or fewer, comes
+// through exactly.
+func write(dst []byte, frames []float32, ch, chans int, t sampleType) {
+	n := len(frames) / chans
 	bytes, bits := t.size()
 	if t.float() {
 		for i := range n {
-			s := frames[2*i+ch]
+			s := frames[i*chans+ch]
 			if t == float32LSB {
 				binary.LittleEndian.PutUint32(dst[4*i:], math.Float32bits(s))
 			} else {
@@ -71,7 +72,7 @@ func write(dst []byte, frames []float32, ch int, t sampleType) {
 	}
 	scale := math.Ldexp(1, bits-1)
 	for i := range n {
-		v := math.Round(float64(frames[2*i+ch]) * scale)
+		v := math.Round(float64(frames[i*chans+ch]) * scale)
 		v = max(-scale, min(v, scale-1))
 		if v != v {
 			// Not a number: silence.

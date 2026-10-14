@@ -5,7 +5,7 @@ import "testing"
 // TestRingKeepsOrderAcrossItsEnd writes and reads past the ring's end,
 // and reads every frame back in order.
 func TestRingKeepsOrderAcrossItsEnd(t *testing.T) {
-	q := newRing(5)
+	q := newRing(5, 2)
 	next, want := float32(0), float32(0)
 	for range 20 {
 		in := make([]float32, 2*3)

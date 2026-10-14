@@ -41,11 +41,16 @@ func (f *fakeDriver) open(c asio.Config) (pullDevice, error) {
 // take takes one buffer from the speaker, as the driver does.
 func (f *fakeDriver) take() []float32 {
 	f.mu.Lock()
-	fill, record, recording := f.cfg.Fill, f.cfg.Record, f.cfg.Recording
-	n, ins := f.info.Buffer, f.info.Recorded
+	fill, fillN, record, recording := f.cfg.Fill, f.cfg.FillN, f.cfg.Record, f.cfg.Recording
+	n, ins, outs := f.info.Buffer, f.info.Recorded, len(f.cfg.Outputs)
 	f.mu.Unlock()
 	if record != nil && ins > 0 && (recording == nil || recording()) {
 		record(make([]float32, n*ins), ins)
+	}
+	if fillN != nil {
+		frames := make([]float32, outs*n)
+		fillN(frames, outs)
+		return frames
 	}
 	frames := make([]float32, 2*n)
 	fill(frames)

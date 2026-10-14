@@ -12,6 +12,10 @@
 // [Speaker.Set] changes how they play while they play: the driver, the
 // rate, the samples' bits, and how far ahead the mixer works.
 //
+// Through an ASIO driver, [Options].Outputs picks the driver's outputs
+// to play on, and [Options].Aux fills those past the mixer's two, in
+// step with it.
+//
 // Package audio/capture records the inputs of the ASIO driver the
 // speakers play through, where [Options].Record is set, and stamps
 // what it records with [Speaker.Heard].
@@ -25,6 +29,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,6 +72,23 @@ type Options struct {
 	// own to record from, as FlexASIO and ASIO4ALL open Windows'
 	// microphone, so leave it unset to play alone.
 	Record bool
+	// Outputs are the outputs of the ASIO driver to play on, by their
+	// index from 0, as [asio.Channels] lists them; nil plays on its
+	// first two. The mixer plays on the first two named, or on the one
+	// named alone. Those named past two play what Aux fills, in step
+	// with the mixer, at the same latency. The system's own sound plays
+	// the mixer's two alone: [State].Aux tells how many more play.
+	Outputs []int
+	// Aux, where set, fills the channels past the mixer's two, where
+	// Outputs names more than two: dst holds frames of channels
+	// interleaved samples, cleared, one for each output past the first
+	// two named, in order. at is the mixer frame of dst's first frame,
+	// as [audio.Mixer.Mixed] counts them: the speaker calls Aux on the
+	// goroutine that reads the mixer, right after it mixed those same
+	// frames, with each [audio.Mixer.Mix] call it makes. It must be as
+	// quick as a voice's Read, and must not allocate. Bits and Dither round the mixer's pair alone, and
+	// the fades of Suspend and Resume fade it alone.
+	Aux func(dst []float32, channels int, at int64)
 }
 
 // rate returns the rate o asks for.
@@ -131,6 +153,8 @@ type Speaker struct {
 	bits   atomic.Int64
 	dither atomic.Bool
 	q      audio.Quantizer
+	// aux is Options.Aux, set by Set while the sound plays.
+	aux atomic.Pointer[auxFunc]
 	// anchor ties the frames heard to the clock.
 	anchor dll
 	// reset asks the watch to open the output again, as an ASIO driver
@@ -141,6 +165,27 @@ type Speaker struct {
 	done    chan struct{}
 	closing sync.Once
 	debug   bool
+}
+
+// auxFunc is Options.Aux's type.
+type auxFunc = func(dst []float32, channels int, at int64)
+
+// setAux sets the function that fills the channels past the mixer's.
+func (s *Speaker) setAux(f auxFunc) {
+	if f == nil {
+		s.aux.Store(nil)
+		return
+	}
+	s.aux.Store(&f)
+}
+
+// pullAux fills dst, frames of channels past the mixer's two from
+// mixer frame at, as Options.Aux says: with silence, where it is unset.
+func (s *Speaker) pullAux(dst []float32, channels int, at int64) {
+	clear(dst)
+	if f := s.aux.Load(); f != nil {
+		(*f)(dst, channels, at)
+	}
 }
 
 // An output is where the speaker's sound goes: the system's own sound,
@@ -186,6 +231,7 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 		quit: make(chan struct{}), done: make(chan struct{}), debug: os.Getenv("GUNIM_DEBUG_AUDIO") != ""}
 	s.bits.Store(int64(o.Bits))
 	s.dither.Store(o.Dither)
+	s.setAux(o.Aux)
 	s.q.Ready()
 	s.fixed.Store(o.Fixed)
 	s.ahead.Store(int64(o.latency()))
@@ -342,7 +388,8 @@ func (s *Speaker) SetLatency(d time.Duration) {
 }
 
 // Set changes how the speakers play. A change of driver or rate, or of
-// Record while a driver plays, opens the output again, with a moment's silence; the mixer's rate follows,
+// Record or Outputs while a driver plays, opens the output again, with
+// a moment's silence; the mixer's rate follows,
 // and [Speaker.Changed] tells of it. A change of Latency or Fixed sets
 // how far ahead the mixer works from where it is.
 func (s *Speaker) Set(o Options) error {
@@ -352,11 +399,13 @@ func (s *Speaker) Set(o Options) error {
 	s.o = o
 	s.bits.Store(int64(o.Bits))
 	s.dither.Store(o.Dither)
+	s.setAux(o.Aux)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
 	}
-	if o.Driver != prev.Driver || o.rate() != prev.rate() || (o.Driver != "" && o.Record != prev.Record) {
+	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
+		(o.Driver != "" && (o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil
@@ -419,8 +468,13 @@ type State struct {
 	// Dropouts counts the times the sound ran dry since the speakers
 	// opened.
 	Dropouts int64
-	// ASIO is what the driver says of itself, while one plays.
+	// ASIO is what the driver says of itself, while one plays; its
+	// Played tells the output each channel plays on.
 	ASIO *asio.Info
+	// Aux is how many channels play past the mixer's two, which
+	// [Options].Aux fills: as many as Options.Outputs names past two,
+	// while an ASIO driver plays; none through the system's own sound.
+	Aux int
 	// Problem is why the output asked for plays otherwise, or not at
 	// all.
 	Problem error

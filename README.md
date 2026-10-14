@@ -168,6 +168,12 @@ and tagged. The meter's `Range` reads the loudness range, LRA, as EBU
 Tech 3342 defines it, and several sounds' readings pooled measure an
 album as one.
 
+Through an ASIO driver, the speakers play on any of its outputs, not
+just the first two: `Options.Outputs` picks them, the mixer plays on
+the first two picked, and `Options.Aux` fills the rest, such as a
+monitor mix on outputs 3 and 4, in step with the mixer. `asio.Channels`
+lists a driver's inputs and outputs by name.
+
 Package `audio/capture` records the computer's inputs: a microphone, a
 guitar through an audio interface, a synth's output. It records through
 PulseAudio or PipeWire on Linux and WASAPI on Windows, and through the

@@ -1,6 +1,9 @@
 package asio
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestFitBuffer(t *testing.T) {
 	for _, c := range []struct{ want, lo, hi, pref, gran, out int }{
@@ -15,6 +18,45 @@ func TestFitBuffer(t *testing.T) {
 	} {
 		if got := fitBuffer(c.want, c.lo, c.hi, c.pref, c.gran); got != c.out {
 			t.Errorf("fitBuffer(%d, %d, %d, %d, %d) = %d, want %d", c.want, c.lo, c.hi, c.pref, c.gran, got, c.out)
+		}
+	}
+}
+
+// TestLayoutPlaysWhatTheDriverHas lays out the channels of the sound
+// on a driver's outputs: the first two, or one, where none are named;
+// those named, in their order; and nowhere for one the driver lacks or
+// that is named twice.
+func TestLayoutPlaysWhatTheDriverHas(t *testing.T) {
+	for _, c := range []struct {
+		want []int
+		outs int
+		out  []int
+	}{
+		{nil, 8, []int{0, 1}},
+		{nil, 1, []int{0}},
+		{[]int{2, 3}, 8, []int{2, 3}},
+		{[]int{0, 1, 4, 5}, 8, []int{0, 1, 4, 5}},
+		{[]int{0, 1, 2, 3}, 2, []int{0, 1, -1, -1}},
+		{[]int{3, 3, -1, 2}, 4, []int{3, -1, -1, 2}},
+		{[]int{}, 4, []int{}},
+	} {
+		if got := layout(c.want, c.outs); !slices.Equal(got, c.out) {
+			t.Errorf("layout(%v, %d) = %v, want %v", c.want, c.outs, got, c.out)
+		}
+	}
+}
+
+// TestLayoutPlaysMaxOutputsAtMost names more outputs than a device
+// plays, and finds those past MaxOutputs playing nowhere.
+func TestLayoutPlaysMaxOutputsAtMost(t *testing.T) {
+	want := make([]int, MaxOutputs+3)
+	for i := range want {
+		want[i] = i
+	}
+	got := layout(want, len(want))
+	for i, o := range got {
+		if (i < MaxOutputs) != (o == i) || (i >= MaxOutputs && o != -1) {
+			t.Fatalf("channel %d plays on %d", i, o)
 		}
 	}
 }
