@@ -75,13 +75,16 @@ type utype struct {
 // tree. Everything on it is the scanner's lock's, but the fields set
 // before it starts.
 type scanner struct {
-	fsys     FS
-	ps       PathStyle
-	root     string
-	vols     VolumeNamer
-	vol      string
-	cloud    CloudReporter
-	online   OnlineReporter
+	fsys   FS
+	ps     PathStyle
+	root   string
+	vols   VolumeNamer
+	vol    string
+	cloud  CloudReporter
+	online OnlineReporter
+	// keeper tells the cloud provider what to keep on this device, where
+	// the file system can.
+	keeper   CloudKeeper
 	hasCloud bool
 
 	mu    sync.Mutex
@@ -121,6 +124,7 @@ func newScanner(fsys FS, root string) *scanner {
 	if s.vols != nil {
 		s.vol, _ = s.vols.Volume(root)
 	}
+	s.keeper, _ = optional[CloudKeeper](fsys)
 	if c, ok := optional[CloudReporter](fsys); ok {
 		s.cloud, s.hasCloud = c, true
 	} else if o, ok := optional[OnlineReporter](fsys); ok {
@@ -434,6 +438,65 @@ func (s *scanner) snapshot(focus string, open map[string]bool, m Measure) (u Usa
 	u.Types = s.typesBy(m)
 	u.Items = s.prune(f, focus, open, m)
 	return u
+}
+
+// mark takes it that the cloud provider keeps the item of key, and all
+// under it, on this device with keep, or online only without, as it will
+// once it has downloaded them or freed their space. Items in no cloud
+// stay as they are.
+func (s *scanner) mark(key string, keep bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.find(key)
+	if n == nil {
+		return
+	}
+	// Kept, what is online only stays so until it has downloaded, as
+	// Windows says of it.
+	to := CloudOnline
+	if keep {
+		to = CloudPinned
+	}
+	var walk func(n *unode) (online, local, pinned int64)
+	walk = func(n *unode) (online, local, pinned int64) {
+		if n.d == nil {
+			switch n.cloud {
+			case CloudLocal, CloudPinned:
+			case CloudOnline:
+				if keep {
+					return 0, 0, 0
+				}
+			case CloudNone, CloudFolder:
+				return 0, 0, 0
+			}
+			on0, lo0, pin0 := n.clouds()
+			n.cloud = to
+			on1, lo1, pin1 := n.clouds()
+			if t := s.types[typeExt(n.name)]; t != nil && !n.odd {
+				t.online += on1 - on0
+			}
+			return on1 - on0, lo1 - lo0, pin1 - pin0
+		}
+		for _, k := range n.d.kids {
+			on, lo, pin := walk(k)
+			online, local, pinned = online+on, local+lo, pinned+pin
+		}
+		n.d.online += online
+		n.d.local += local
+		n.d.pinned += pinned
+		if online != 0 {
+			// Its files' order by what is online, or here, has changed.
+			n.d.top = [3][]*unode{}
+		}
+		return online, local, pinned
+	}
+	on, lo, pin := walk(n)
+	for p := n.parent; p != nil; p = p.parent {
+		p.d.online += on
+		p.d.local += lo
+		p.d.pinned += pin
+	}
+	s.gen++
 }
 
 // tookWords says how long d is, as people read it.

@@ -35,6 +35,20 @@ type usageState struct {
 	free, space uint64
 	// last is the state sent last, which a pane coming to a window shows.
 	last Usage
+	// note says what came of the last act, and noteErr that it failed.
+	note    string
+	noteErr bool
+	// acting stops the cloud provider being told what to keep, while it
+	// is, as when the page closes.
+	acting context.CancelFunc
+}
+
+// stopActing stops telling the cloud provider what to keep.
+func (s *usageState) stopActing() {
+	if s.acting != nil {
+		s.acting()
+		s.acting = nil
+	}
 }
 
 // stop stops the reading.
@@ -106,7 +120,11 @@ func (a *app) openUsage(root string) {
 	s.stop()
 	s.seq++
 	s.gen = 0
+	if root != s.root {
+		s.stopActing()
+	}
 	s.root, s.focus, s.folders = root, "", map[string]bool{}
+	s.note, s.noteErr = "", false
 	s.free, s.space = 0, 0
 	fsys := a.fs
 	if a.nav.archive == "" {
@@ -207,6 +225,8 @@ func (a *app) usageState() Usage {
 	u.Where = a.shell.Where
 	u.Free, u.Space = s.free, s.space
 	u.Measure, u.Colour = s.measure, s.colour
+	u.CanKeep = s.scan.keeper != nil
+	u.Note, u.NoteErr = s.note, s.noteErr
 	if !u.Cloud {
 		u.Measure = MeasureAll
 	}
@@ -278,7 +298,71 @@ func (a *app) usageAct(key, act string) {
 			return
 		}
 		a.openFiles([]string{path})
+	case UsageFree, UsageKeep:
+		if !rest {
+			a.keepOnDevice(key, path, act == UsageKeep)
+		}
 	}
+}
+
+// keepOnDevice has the cloud provider keep the item of key, at path, on
+// this device with keep, or free its space without, in the background,
+// and says so on the page. One at a time: two at once would mark the same
+// files both ways.
+func (a *app) keepOnDevice(key, path string, keep bool) {
+	s := &a.usage
+	k := s.scan.keeper
+	if k == nil {
+		return
+	}
+	if s.acting != nil {
+		s.note, s.noteErr = "Wait for the cloud provider to be told of the last one first.", true
+		a.publishUsage()
+		return
+	}
+	name := a.ps.Show(path)
+	what := "Freeing up the space of " + name
+	if keep {
+		what = "Keeping " + name + " on this device"
+	}
+	s.note, s.noteErr = what+"…", false
+	a.publishUsage()
+	ctx, cancel := context.WithCancel(a.ctx)
+	s.acting = cancel
+	seq, scan := s.seq, s.scan
+	go func() {
+		err := k.KeepOnDevice(ctx, path, keep)
+		a.post(func() {
+			stopped := ctx.Err() != nil
+			cancel()
+			if err != nil && !stopped {
+				// Told the log whatever the page shows now.
+				a.logLine(what, err.Error())
+			}
+			if seq != s.seq || !s.open || stopped {
+				return
+			}
+			s.acting = nil
+			switch {
+			case err != nil:
+				s.note, s.noteErr = "Could not free up all the space of "+name+": "+err.Error(), true
+				if keep {
+					s.note = "Could not keep all of " + name + " on this device: " + err.Error()
+				}
+				// Some were marked: what each is now, read again.
+				note := s.note
+				a.usageAct("", UsageRead)
+				s.note, s.noteErr = note, true
+			case keep:
+				scan.mark(key, true)
+				s.note, s.noteErr = "Kept "+name+" on this device. The cloud provider downloads what is online only in its own time.", false
+			default:
+				scan.mark(key, false)
+				s.note, s.noteErr = "Freed up the space of "+name+". The cloud provider takes the files off this device in its own time.", false
+			}
+			a.publishUsage()
+		})
+	}()
 }
 
 // closeUsage closes the page, and drops what it read. unmount takes it
@@ -290,6 +374,7 @@ func (a *app) closeUsage(unmount bool) {
 	}
 	s.open = false
 	s.stop()
+	s.stopActing()
 	s.scan, s.folders, s.last = nil, nil, Usage{}
 	a.shell.Usage = ""
 	a.publishShell()

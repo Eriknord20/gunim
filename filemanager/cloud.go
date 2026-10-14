@@ -1,6 +1,21 @@
 package filemanager
 
-import "io/fs"
+import (
+	"context"
+	"io/fs"
+)
+
+// CloudKeeper is a file system that tells a cloud provider which items
+// to keep on this device, as Windows' Explorer does for OneDrive. Disk
+// usage offers it for items in a cloud provider's folder.
+type CloudKeeper interface {
+	// KeepOnDevice has the provider always keep the item at path on this
+	// device with keep, and all a folder holds, downloading what is
+	// online only; without keep it lets the provider free their space,
+	// keeping them online only. The provider does either in its own
+	// time.
+	KeepOnDevice(ctx context.Context, path string, keep bool) error
+}
 
 // CloudState is how a cloud provider, such as OneDrive, keeps an item,
 // as Windows' Explorer shows it beside the name.

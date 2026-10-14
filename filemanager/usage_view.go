@@ -333,6 +333,15 @@ func (pg *usagePage) menuItems(key string) (items []widget.MenuItem, acts []stri
 	if pg.state.Focus != "" {
 		add("Go up", "up")
 	}
+	inCloud := it.Online+it.Local+it.Pinned > 0
+	if it.Rest == 0 && pg.state.CanKeep && inCloud {
+		if it.Local+it.Pinned > 0 {
+			add("Free up space", UsageFree)
+		}
+		if it.Online+it.Local > 0 {
+			add("Always keep on this device", UsageKeep)
+		}
+	}
 	if it.Rest == 0 {
 		add("Show in Files", UsageShow)
 		if !it.Dir {
@@ -864,6 +873,27 @@ func (ft *usageFoot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		key = pg.sel
 	}
 	it, ok := pg.item(key)
+	if note := pg.state.Note; note != "" {
+		// What came of the last thing asked, with the facts of the item
+		// under the pointer beside it.
+		ink := Success.Get(th)
+		if pg.state.NoteErr {
+			ink = ErrorInk.Get(th)
+		}
+		facts := ""
+		if ok {
+			facts = describeUsage(it, pg.state.Cloud)
+		}
+		frun := pg.texts.run(face, facts, small)
+		right := float32(0)
+		if facts != "" && frun.Advance < box.W/2 {
+			right = pg.texts.draw(p, th, face, facts, small, geom.Pt(box.W-frun.Advance, (box.H-frun.Height())/2),
+				Faint.Get(th), box.W)
+		}
+		run := pg.texts.run(face, note, small)
+		pg.texts.draw(p, th, face, note, small, geom.Pt(0, (box.H-run.Height())/2), ink, box.W-right-24)
+		return
+	}
 	if !ok {
 		words := "Click a box to find it in the tree. Double-click a folder to go into it, and Backspace to come back out."
 		run := pg.texts.run(face, words, small)

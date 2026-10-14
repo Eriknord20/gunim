@@ -3,6 +3,7 @@ package filemanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/widget"
 )
 
 // scanAll scans root on fsys to the end.
@@ -366,5 +368,80 @@ func TestDiskUsageKeepsTheKeysOfTheFilesFromThem(t *testing.T) {
 	}
 	if h.usagePage() == nil || !h.a.usage.open {
 		t.Error("the page closed")
+	}
+}
+
+// keeperFS is usageFS that remembers what it was asked to keep on this
+// device or free, and fails for an item named nope.
+type keeperFS struct {
+	usageFS
+	asked chan string
+}
+
+func (k keeperFS) KeepOnDevice(_ context.Context, path string, keep bool) error {
+	k.asked <- fmt.Sprintf("%s %v", filepath.Base(path), keep)
+	if filepath.Base(path) == "nope" {
+		return errors.New("the provider said no")
+	}
+	return nil
+}
+
+func TestDiskUsageFreesUpSpaceAndKeepsOnTheDevice(t *testing.T) {
+	asked := make(chan string, 8)
+	h := newHarnessWith(t, func(o *Options) { o.FS = keeperFS{usageFS{LocalFS()}, asked} },
+		"docs/loc-a.txt", "docs/pin-b.txt", "docs/on-c.txt", "nope/loc-d.txt", "plain.txt", "loc-e.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.do(Command{Name: CmdUsage})
+	h.until("the page has read the folder", func() bool { pg := h.usagePage(); return pg != nil && !pg.state.Reading })
+	pg := h.usagePage()
+	if !pg.state.CanKeep {
+		t.Fatal("the page does not offer to free up space")
+	}
+	items, _ := pg.menuItems("docs")
+	labels := make([]string, 0, len(items))
+	for _, it := range items {
+		labels = append(labels, it.Label)
+	}
+	if !slices.Contains(labels, "Free up space") || !slices.Contains(labels, "Always keep on this device") {
+		t.Errorf("docs's menu is %v", labels)
+	}
+	if items, _ := pg.menuItems("plain.txt"); slices.ContainsFunc(items, func(it widget.MenuItem) bool { return it.Label == "Free up space" }) {
+		t.Error("a file in no cloud offers to free up its space")
+	}
+	before := pg.state.Total
+	h.do(UsageAct{Seq: pg.state.Seq, Key: "docs", Act: UsageFree})
+	if got := <-asked; got != "docs false" {
+		t.Errorf("the file system was asked %q", got)
+	}
+	h.until("the page says the space was freed", func() bool { return strings.HasPrefix(pg.state.Note, "Freed up") })
+	docs, _ := itemOf(pg.state, "docs")
+	if docs.Local != 0 || docs.Pinned != 0 || docs.Online != docs.Size {
+		t.Errorf("freed, docs has %d bytes here, %d kept, %d online of %d", docs.Local, docs.Pinned, docs.Online, docs.Size)
+	}
+	if tot := pg.state.Total; tot.Online != before.Online+before.Local+before.Pinned-int64(len("nope/loc-d.txt")+len("loc-e.txt")) {
+		t.Errorf("the total online went from %d to %d", before.Online, tot.Online)
+	}
+	// Kept, a file on this device is pinned; one online only stays so
+	// until it has downloaded.
+	h.do(UsageAct{Seq: pg.state.Seq, Key: "loc-e.txt", Act: UsageKeep})
+	<-asked
+	h.until("the page says the file is kept", func() bool { return strings.HasPrefix(pg.state.Note, "Kept") })
+	if e, _ := itemOf(pg.state, "loc-e.txt"); e.Cloud != CloudPinned {
+		t.Errorf("kept, the file's state is %v", e.Cloud)
+	}
+	h.do(UsageAct{Seq: pg.state.Seq, Key: "docs", Act: UsageKeep})
+	<-asked
+	h.until("the page says docs is kept", func() bool { return strings.HasPrefix(pg.state.Note, "Kept") && pg.state.Note != "" })
+	if c, _ := itemOf(pg.state, "docs/on-c.txt"); c.Cloud != CloudOnline {
+		t.Errorf("kept but not downloaded, an online file's state is %v", c.Cloud)
+	}
+	h.do(UsageAct{Seq: pg.state.Seq, Key: "nope", Act: UsageFree})
+	<-asked
+	h.until("the page says it failed, and has read the folder again", func() bool {
+		pg = h.usagePage()
+		return pg != nil && pg.state.NoteErr && !pg.state.Reading
+	})
+	if n, _ := itemOf(pg.state, "nope"); n.Local == 0 {
+		t.Error("a folder the provider would not free shows as freed")
 	}
 }

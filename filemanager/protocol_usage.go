@@ -118,6 +118,13 @@ type Usage struct {
 	Cloud   bool
 	Measure Measure
 	Colour  ColourBy
+	// CanKeep says the file system can tell a cloud provider which items
+	// to keep on this device, so the page offers to free up space.
+	CanKeep bool
+	// Note says what came of the last thing the page was asked to do, and
+	// NoteErr that it failed.
+	Note    string
+	NoteErr bool
 	// Take says the page takes the keyboard as it shows, as it does when
 	// the user opens it, and not when it moves with a pane to another
 	// window.
@@ -163,6 +170,12 @@ const (
 	UsageRead = "read"
 	// UsageStop stops reading; Key is ignored.
 	UsageStop = "stop"
+	// UsageFree has the cloud provider free the space of the item, and
+	// all a folder holds, keeping them online only, and UsageKeep has it
+	// always keep them on this device. [Usage.CanKeep] says whether they
+	// can.
+	UsageFree = "free"
+	UsageKeep = "keep"
 )
 
 // UsageClosed says page Seq closed.
