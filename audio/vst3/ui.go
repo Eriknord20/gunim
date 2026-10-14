@@ -10,7 +10,14 @@ import (
 // the package's own, locked, which also runs what plugins ask to be run
 // there.
 
-var uiOnce sync.Once
+// uiMu is held to read while work is given the thread, and to write as
+// the thread starts or stops; uiExited closes as the thread running
+// ends, where uiRunning says one runs.
+var (
+	uiMu      sync.RWMutex
+	uiRunning bool
+	uiExited  chan struct{}
+)
 
 // uiWork is what the thread is asked to do.
 var uiWork = make(chan func(), 64)
@@ -22,13 +29,16 @@ var (
 	tickers   = map[any]func(){}
 )
 
-// onUI runs f on the plugins' thread and waits for it.
+// onUI runs f on the plugins' thread, starting it where none runs, and
+// waits for it.
 func onUI(f func()) {
-	uiOnce.Do(func() {
-		ready := make(chan struct{})
-		go uiLoop(ready)
-		<-ready
-	})
+	uiMu.RLock()
+	for !uiRunning {
+		uiMu.RUnlock()
+		startUI()
+		uiMu.RLock()
+	}
+	defer uiMu.RUnlock()
 	done := make(chan struct{})
 	uiWork <- func() {
 		defer close(done)
@@ -67,7 +77,36 @@ func runTickers() {
 	}
 }
 
-func uiLoop(ready chan struct{}) {
+// startUI starts the plugins' thread, where none runs.
+func startUI() {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	if uiRunning {
+		return
+	}
+	ready, exited := make(chan struct{}), make(chan struct{})
+	go uiLoop(ready, exited)
+	<-ready
+	uiRunning, uiExited = true, exited
+}
+
+// stopUI ends the plugins' thread, once the work given it is done, and
+// waits for it to; the next work starts another.
+func stopUI() {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	if !uiRunning {
+		return
+	}
+	uiWork <- quitUI
+	wake()
+	<-uiExited
+	uiRunning = false
+}
+
+// uiLoop runs the thread, locked, which ends with it.
+func uiLoop(ready, exited chan struct{}) {
+	defer close(exited)
 	runtime.LockOSThread()
 	uiRun(ready)
 }
