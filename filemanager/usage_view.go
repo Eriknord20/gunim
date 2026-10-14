@@ -38,7 +38,7 @@ var (
 	UsageEdge = theme.Color("files.usage.edge", color.NRGBA{R: 0x12, G: 0x14, B: 0x19, A: 0xff})
 	// UsageHot lights the box under the pointer.
 	UsageHot = theme.Color("files.usage.hot", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x40})
-	// UsageInk is the text on a box.
+	// UsageInk is the text on a dark box, in either theme.
 	UsageInk = theme.Foreground("files.usage.ink", color.NRGBA{R: 0xf4, G: 0xf6, B: 0xfa, A: 0xff})
 )
 
@@ -51,7 +51,6 @@ var usageLight = []theme.Entry{
 	theme.Set(UsageBox, color.NRGBA{R: 0xe4, G: 0xe8, B: 0xef, A: 0xff}),
 	theme.Set(UsageEdge, color.NRGBA{R: 0xfa, G: 0xfb, B: 0xfd, A: 0xff}),
 	theme.Set(UsageHot, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x55}),
-	theme.Set(UsageInk, color.NRGBA{R: 0x1d, G: 0x22, B: 0x2c, A: 0xff}),
 }
 
 func registerUsage(w *gunim.Window) {
