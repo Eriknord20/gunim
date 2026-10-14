@@ -296,9 +296,15 @@ type Slotted interface {
 // The engine inserts them when the node is inserted, so a widget made
 // of other widgets arrives whole. [widget.Dialog] uses it for its OK
 // and Cancel buttons.
+//
+// The engine calls Children only then. A composite whose children
+// change later must add and remove them itself: with [Children.Build]
+// and [Children.Drop] from its Layout, or with [UI.Insert] and
+// [UI.Remove]. [UI.Invalidate] does not read Children again.
 type Composite interface {
 	Node
-	// Children returns the nodes this node owns, in paint order.
+	// Children returns the nodes this node owns, in paint order. It is
+	// read once, when the node is inserted.
 	Children() []Node
 }
 
