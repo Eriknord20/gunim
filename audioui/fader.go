@@ -14,8 +14,8 @@ import (
 )
 
 // Fader is a gain in decibels, set by a fader up and down: a drag sets
-// it, finer with Shift; the wheel steps it half a decibel; a
-// double-click sets it to 0 dB. Its 0 dB is marked. The cap lights
+// it, finer with Shift; a double-click sets it to 0 dB. The wheel
+// passes it by, to scroll the pane it is in. Its 0 dB is marked. The cap lights
 // under the pointer. A second button pressed mid-drag ends the drag
 // where it got to.
 //
@@ -232,12 +232,6 @@ func (f *Fader) Handle(e input.Event, u *gunim.UI) bool {
 			f.held = false
 			f.ended(u)
 		}
-	case input.Scroll:
-		n := e.Notches.Y
-		if n == 0 {
-			n = e.Delta.Y / 40
-		}
-		f.set(f.Value()+0.5*n, u)
 	case input.KeyPress:
 		if !f.key(e, u) {
 			return false

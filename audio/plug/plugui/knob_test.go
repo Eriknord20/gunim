@@ -60,16 +60,20 @@ func TestADragTurnsTheKnobAsOneGesture(t *testing.T) {
 	}
 }
 
-func TestKeysWheelAndDoubleClickStepTheKnob(t *testing.T) {
+func TestKeysAndDoubleClickStepTheKnob(t *testing.T) {
 	h := &host{values: map[uint32]float64{3: 10}}
 	k := NewKnob(h, release)
 	k.Handle(input.KeyPress{Key: input.KeyEnd}, nil)
 	if h.values[3] != 1000 {
 		t.Errorf("End took the knob to %v, want 1000", h.values[3])
 	}
-	k.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil)
+	// The wheel passes the knob by, to scroll the pane it is in.
+	if k.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || h.values[3] != 1000 {
+		t.Errorf("the wheel turned the knob to %v, want it left at 1000", h.values[3])
+	}
+	k.Handle(input.KeyPress{Key: input.KeyDown}, nil)
 	if v := h.values[3]; v >= 1000 || v < 900 {
-		t.Errorf("a step of the wheel down took the knob to %v", v)
+		t.Errorf("a step of Down took the knob to %v", v)
 	}
 	k.Handle(input.PointerDown{Pos: geom.Pt(20, 20), Button: input.ButtonPrimary, Clicks: 2}, nil)
 	if h.values[3] != 100 {

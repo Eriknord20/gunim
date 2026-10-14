@@ -15,7 +15,8 @@ import (
 // lamps, the chosen one lit, where a knob's cap stands, and under them,
 // as under a knob, its title and the chosen option's name, or the name
 // of the one under the pointer. A click on a lamp
-// picks its option, and the wheel and the arrow keys step through them.
+// picks its option, and the arrow keys step through them. The wheel
+// passes it by, to scroll the pane it is in.
 // Lamps light and dim gliding, the name turns over as it changes, and
 // each lamp's tooltip says what its option does.
 type Selector struct {
@@ -233,12 +234,6 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		s.tip.Hide(u)
 		s.pick(s.at(e.Pos), u)
-	case input.Scroll:
-		step := 1
-		if e.Delta.Y > 0 {
-			step = -1
-		}
-		s.pick(min(max(s.sel+step, 0), len(s.names)-1), u)
 	case input.KeyPress:
 		switch e.Key {
 		case input.KeyLeft, input.KeyUp:
