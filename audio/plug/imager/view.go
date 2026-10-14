@@ -455,6 +455,8 @@ const scopeFrames = 2048
 func newScope(h plug.Host) *scope {
 	_, out := h.Sound()
 	s := &scope{out: out, frames: make([]float32, 2*scopeFrames), corr: anim.NewFloat(1)}
+	// The correlation measures, so it keeps real time at any pace.
+	s.corr.RealTime()
 	s.group.Add(s.corr)
 	return s
 }

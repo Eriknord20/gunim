@@ -177,7 +177,7 @@ func (t Token[T]) Get(l *Live) T {
 			l.reads[t.key] = func() stepper { return t.slotAt(t.Get(l.parent)) }
 			return t.Get(l.parent)
 		}
-		s = t.slotAt(t.in(l.active))
+		s = t.slotAt(t.In(l.active))
 		l.slots[t.key] = s
 	}
 	typed, ok := s.(valuer[T])
@@ -201,8 +201,9 @@ func (t Token[T]) target(th Theme, parent *Live) T {
 	return t.def
 }
 
-// in returns the token's value in th, or its default.
-func (t Token[T]) in(th Theme) T {
+// In returns the token's value in th, or its default where th leaves
+// it out, with no animation: where a switch to th is going.
+func (t Token[T]) In(th Theme) T {
 	if v, ok := th.values[t.key]; ok {
 		if typed, ok := v.(T); ok {
 			return typed
@@ -263,6 +264,12 @@ func Make(name string, entries ...Entry) Theme {
 // Switch is the motion a theme switch runs with. A theme can set it too:
 // the new theme's value is the one used.
 var Switch = Spring("theme.switch", anim.Spring{Response: 0.6, Damping: 1})
+
+// Scale is how long every animation takes, against the time its motion
+// says: 1 is as made, 2 twice as long, and 0 turns animation off. A
+// window that takes a theme sets the program's scale from it, with
+// [anim.SetScale]; the last theme taken sets it for every window.
+var Scale = Number("motion.scale", 1)
 
 // A Live is the theme in force in one window, or in one part of it:
 // every token read so far, each an animated value. It belongs to the

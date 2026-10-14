@@ -63,6 +63,8 @@ const vuRest, vuPin = vuLow - 2, vuHigh + 0.6
 
 func newVU(name string, read func(time.Duration) (float32, bool)) *vu {
 	m := &vu{name: name, read: read, needle: anim.NewFloat(vuAt(vuRest))}
+	// The needle measures, so it swings in real time at any pace.
+	m.needle.RealTime()
 	m.Add(m.needle)
 	return m
 }

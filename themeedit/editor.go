@@ -15,10 +15,11 @@
 //			Fields: []themeedit.Field{{
 //				Key:    widget.Caret.Key(),
 //				Label:  "Cursor",
-//				Detail: "How the cursor moves along a line.",
+//				Detail: "How long the cursor takes to glide along a line.",
+//				Min:    0, Max: 1,
 //				Presets: []themeedit.Preset{
-//					{Label: "Glides", Value: widget.Caret.Default()},
 //					{Label: "Jumps", Value: themeedit.Instant},
+//					{Label: "Glides", Value: widget.Caret.Default()},
 //				},
 //			}},
 //		}},
@@ -39,7 +40,9 @@
 //
 // It has two tabs. The first, Basics, shows the values the program
 // picked out, in sections, each with a label and a sentence saying what
-// it does. All values lists every token declared, grouped by the first
+// it does. The editor adds Animations under Motion there, a slider for
+// [theme.Scale], how long every animation in the program takes, from
+// off to five times as long, unless the program places it itself. All values lists every token declared, grouped by the first
 // part of its key, with a field to search them and filters for those
 // changed and for each kind.
 package themeedit
@@ -141,8 +144,14 @@ type Field struct {
 	Presets []Preset
 	// Min and Max, when Max is above Min, bound a length or a number,
 	// which then shows as a slider over that range with a field for
-	// the value beside it.
+	// the value beside it. A spring with a range shows as a slider for
+	// how long it takes, in seconds, keeping its bounce; Presets then
+	// name the times they have, such as "Jumps" for nought.
 	Min, Max float32
+	// Step, when set, is how finely a length or a number with a range
+	// moves: 1 for whole numbers. Unset, a number with a whole default
+	// moves by whole numbers, and any other by hundredths.
+	Step float32
 }
 
 // A Preset is a value with a name, such as "Jumps" for an instant
@@ -218,7 +227,7 @@ type Editor struct {
 func New(o Options) *Editor {
 	e := &Editor{
 		OnChange: o.OnChange, OnCommit: o.OnCommit, OnSave: o.OnSave, OnExport: o.OnExport, OnImport: o.OnImport,
-		base: o.Base, over: o.Overrides, saved: o.Overrides, name: o.Name, sections: o.Sections, choices: o.Choices,
+		base: o.Base, over: o.Overrides, saved: o.Overrides, name: o.Name, sections: withScale(o.Sections), choices: o.Choices,
 		tokens: map[string]theme.Info{}, labels: map[string]string{},
 		chosen: map[string][]*row{},
 	}
@@ -229,7 +238,7 @@ func New(o Options) *Editor {
 			e.defaults = over
 		}
 	}
-	for _, s := range o.Sections {
+	for _, s := range e.sections {
 		for _, f := range s.Fields {
 			if _, ok := e.labels[f.Key]; !ok && f.Label != "" {
 				e.labels[f.Key] = f.Label
@@ -600,9 +609,14 @@ func (e *Editor) Set(key string, v any, commit bool, u *gunim.UI) error {
 // row's Play button does: the cursor's jumps along the terminal's line,
 // the quick motion flips a switch, settling slides a panel in, a bounce
 // pops a toast, and a theme switch fades the preview to the base theme
-// and back. Any other motion slides a chip along a track. A key that is
-// no motion plays nothing.
+// and back. Any other motion slides a chip along a track. Animations,
+// how long every animation takes, slides the panel in as settling does.
+// A key that is no motion plays nothing.
 func (e *Editor) Play(key string, u *gunim.UI) {
+	label := e.label(key)
+	if key == theme.Scale.Key() {
+		key = widget.Settle.Key()
+	}
 	s, ok := e.value(key).(anim.Spring)
 	if !ok {
 		return
@@ -611,7 +625,7 @@ func (e *Editor) Play(key string, u *gunim.UI) {
 	if e.spec == nil && (d == demoCaret || d == demoQuick) {
 		d = demoSlide
 	}
-	e.preview.play(d, s, e.label(key), e.pinned(e.base), e.pinned(e.Theme()), u)
+	e.preview.play(d, s, label, e.pinned(e.base), e.pinned(e.Theme()), u)
 }
 
 // playIfMotion plays the token named key, where it is a motion.
@@ -633,6 +647,9 @@ func (e *Editor) edit(key string, v any, commit bool, src control, u *gunim.UI) 
 	e.changed(commit, u)
 	if src == nil && commit {
 		e.playIfMotion(key, u)
+	}
+	if commit && key == theme.Scale.Key() {
+		e.Play(key, u)
 	}
 	return nil
 }
