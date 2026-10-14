@@ -10,17 +10,17 @@ import (
 	"github.com/marrasen/gunim/input"
 )
 
-func TestASelectorPicksByLampWheelAndKeys(t *testing.T) {
+func TestASelectorPicksByLampAndKeys(t *testing.T) {
 	s := NewSelector("Test", []string{"A", "B", "C"}, []string{"one", "two", "three"})
 	var picked []int
 	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
 	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
 	s.Handle(input.PointerDown{Pos: s.cells[2].Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
-	// The wheel down steps back.
-	s.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil)
-	if s.Selected() != 1 {
-		t.Fatalf("the wheel down took the selector from 2 to %d, want 1", s.Selected())
+	// The wheel passes it by, to scroll the pane it is in.
+	if s.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || s.Selected() != 2 {
+		t.Fatalf("the wheel took the selector from 2 to %d", s.Selected())
 	}
+	s.Handle(input.KeyPress{Key: input.KeyLeft}, nil)
 	s.Handle(input.KeyPress{Key: input.KeyLeft}, nil)
 	// Past the first, nothing.
 	s.Handle(input.KeyPress{Key: input.KeyLeft}, nil)

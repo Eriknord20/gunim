@@ -42,8 +42,9 @@ const (
 )
 
 // Knob turns a value, as a synth's knob does: a drag up turns it up,
-// ten times finer with Shift; the wheel and the arrow keys step it; a
-// double click sets it back to its default. Each turn is one gesture,
+// ten times finer with Shift; the arrow keys step it; a double click
+// sets it back to its default. The wheel passes it by, so a pane of
+// knobs scrolls under the pointer without turning one. Each turn is one gesture,
 // one step to undo: of a parameter of the host's, or of whatever the
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
@@ -307,7 +308,7 @@ func (k *Knob) tooltip() string {
 	return k.p.Name + ": " + strings.ToLower(how[:1]) + how[1:]
 }
 
-// stepSize is a step of the wheel or an arrow key, along Normal.
+// stepSize is a step of an arrow key, along Normal.
 func (k *Knob) stepSize() float64 {
 	if k.p.Steps > 0 {
 		return 1 / float64(k.p.Steps)
@@ -372,12 +373,6 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.end(u)
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
-	case input.Scroll:
-		d := k.stepSize()
-		if e.Delta.Y > 0 {
-			d = -d
-		}
-		k.stepTo(k.p.Plain(k.p.Normal(k.v)+d), u)
 	case input.KeyPress:
 		d := k.stepSize()
 		if e.Mods.Has(input.ModShift) {

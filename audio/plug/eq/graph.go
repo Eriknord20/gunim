@@ -66,8 +66,9 @@ func (d *dot) weight() float32 { return min(max(d.in.Value(), 0), 1) * min(max(d
 // across, on a scale of octaves, and gains of eqRange decibels each
 // way. It draws the curve the bands make together and a numbered point
 // for each band. A point drags, its frequency across and its gain up
-// and down, finer with Shift; the wheel over it narrows or widens it,
-// or steepens a cut. A double-click on a point turns its band off and
+// and down, finer with Shift. With Alt, a drag up narrows it and down
+// widens it, or steepens and eases a cut. The wheel passes the graph
+// by, to scroll the pane it is in. A double-click on a point turns its band off and
 // on, and one elsewhere adds a band. A right-click on a point opens its
 // menu: its kind, its slope, on or off, and away. Points glide to their
 // bands, grow in as they come and shrink as they go.
@@ -94,9 +95,13 @@ type graph struct {
 	// pointer; zero for none.
 	sel, hot int
 	// dragging is the band being dragged, and grab where on its point
-	// it was taken.
+	// it was taken. widening says the drag changes the band's width,
+	// as Alt pressed it, from where it was at the press: from; grab is
+	// then where the press was.
 	dragging int
 	grab     geom.Point
+	widening bool
+	from     audio.Band
 	size     geom.Size
 	menu     *widget.ContextMenu
 	picks    []func(*gunim.UI)
@@ -600,23 +605,21 @@ func widthName(b *audio.Band, i int) string {
 	return fmt.Sprintf("Change the width of band %d", i+1)
 }
 
-// widen narrows band b by notches of the wheel, or for a cut steepens
-// it, and reports whether it changed.
-func widen(b *audio.Band, notches float32) bool {
-	was := *b
+// widen narrows band b by notches, or for a cut steepens it by a step
+// for each whole notch.
+func widen(b *audio.Band, notches float32) {
 	if isCut(b.Kind) {
-		step := 12
-		if notches < 0 {
-			step = -12
-		}
+		step := 12 * int(math.Round(float64(notches)))
 		b.Slope = max(12, min(max(b.Slope, 12)+step, 48))
 	} else {
 		b.Q = clampQ(float64(b.Q) * math.Pow(1.15, float64(notches)))
 	}
-	return *b != was
 }
 
-// nudge moves band id by key or wheel: its frequency by octaves, its
+// widenPx is how far up a drag with Alt goes for a notch of widen.
+const widenPx = 24
+
+// nudge moves band id by key: its frequency by octaves, its
 // gain by decibels and its width by notches. It is one gesture.
 func (g *graph) nudge(id int, octaves float64, db, notches float32, u *gunim.UI) {
 	b, i := g.band(id)
@@ -673,7 +676,7 @@ func (g *graph) Handle(e input.Event, u *gunim.UI) bool {
 		case id != 0 && e.Clicks == 2:
 			g.toggle(id, u)
 		case id != 0:
-			g.press(id, e.Pos, u)
+			g.press(id, e.Pos, e.Mods.Has(input.ModAlt), u)
 		case e.Clicks == 2:
 			g.add(e.Pos, u)
 		default:
@@ -681,20 +684,6 @@ func (g *graph) Handle(e input.Event, u *gunim.UI) bool {
 		}
 	case input.PointerUp:
 		g.release(u)
-	case input.Scroll:
-		id := g.hot
-		if id == 0 {
-			id = g.sel
-		}
-		if b, _ := g.band(id); b == nil {
-			return false
-		}
-		notches := e.Notches.Y
-		if notches == 0 {
-			notches = e.Delta.Y / 40
-		}
-		g.sel = id
-		g.nudge(id, 0, 0, notches, u)
 	case input.KeyPress:
 		if !g.key(e, u) {
 			return false
@@ -716,13 +705,19 @@ func (g *graph) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 // press takes band id's point at pos, to drag, and begins the drag's
-// gesture.
-func (g *graph) press(id int, pos geom.Point, u *gunim.UI) {
+// gesture. widening says the drag changes the band's width rather than
+// moving it.
+func (g *graph) press(id int, pos geom.Point, widening bool, u *gunim.UI) {
 	g.release(u)
-	g.sel, g.dragging = id, id
+	g.sel, g.dragging, g.widening = id, id, widening
 	g.grab = pos.Sub(g.dotAt(g.dots[id]))
+	name := fmt.Sprintf("Move band %d", g.number(id))
+	if b, i := g.band(id); widening && b != nil {
+		g.grab, g.from = pos, *b
+		name = widthName(b, i)
+	}
 	u.Cue(gunim.CueSelect, g)
-	g.host.BeginEdit(fmt.Sprintf("Move band %d", g.number(id)), u)
+	g.host.BeginEdit(name, u)
 }
 
 // release lets go of the point dragged, which ends the drag's gesture.
@@ -735,11 +730,25 @@ func (g *graph) release(u *gunim.UI) {
 }
 
 // drag moves the band being dragged to p: its frequency across, and
-// its gain up and down. Shift moves it finely.
+// its gain up and down. Shift moves it finely. Where the drag is
+// widening, it narrows the band as p goes up from the press instead.
 func (g *graph) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 	b, _ := g.band(g.dragging)
 	if b == nil {
 		g.release(u)
+		return
+	}
+	if g.widening {
+		up := g.grab.Y - p.Y
+		if mods.Has(input.ModShift) {
+			up *= 0.1
+		}
+		was := *b
+		b.Q, b.Slope = g.from.Q, g.from.Slope
+		widen(b, up/widenPx)
+		if *b != was {
+			g.commit(false, u)
+		}
 		return
 	}
 	at := p.Sub(g.grab)

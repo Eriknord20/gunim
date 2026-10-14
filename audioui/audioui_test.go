@@ -69,7 +69,7 @@ func TestAMetersHoldWaitsThenFalls(t *testing.T) {
 	}
 }
 
-func TestAFaderSetsItsGainByDragWheelAndDoubleClick(t *testing.T) {
+func TestAFaderSetsItsGainByDragAndDoubleClick(t *testing.T) {
 	var gain float32
 	f := NewFader(func() float32 { return gain }, func(v float32, _ *gunim.UI) gunim.Intent { gain = v; return nil })
 	w := gunimtest.New(t, geom.Sz(24, 224), nil)
@@ -91,15 +91,10 @@ func TestAFaderSetsItsGainByDragWheelAndDoubleClick(t *testing.T) {
 	if math.Abs(float64(gain-12)) > 0.01 {
 		t.Fatalf("a drag up a quarter of the way set %.1f dB, want +12", gain)
 	}
+	// The wheel passes the fader by, to scroll the pane it is in.
 	in(input.Scroll{Pos: mid, Notches: geom.Pt(0, 1)})
-	if math.Abs(float64(gain-12.5)) > 0.01 {
-		t.Fatalf("a notch of the wheel set %.1f dB, want +12.5", gain)
-	}
-	for range 40 {
-		in(input.Scroll{Pos: mid, Notches: geom.Pt(0, 1)})
-	}
-	if gain != 24 {
-		t.Fatalf("the wheel took the gain to %.1f dB, past the fader's 24", gain)
+	if math.Abs(float64(gain-12)) > 0.01 {
+		t.Fatalf("a notch of the wheel set %.1f dB, want it left at +12", gain)
 	}
 	in(input.PointerDown{Pos: mid, Button: input.ButtonPrimary, Clicks: 2})
 	in(input.PointerUp{Pos: mid, Button: input.ButtonPrimary})

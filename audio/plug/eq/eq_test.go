@@ -307,6 +307,52 @@ func TestADragOnTheGraphIsOneGesture(t *testing.T) {
 	}
 }
 
+func TestADragWithAltChangesTheWidthAndTheWheelNothing(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands([]audio.Band{
+		{ID: 1, Kind: audio.Bell, Freq: 1000, Gain: 6, Q: 1, On: true},
+		{ID: 2, Kind: audio.LowCut, Freq: 60, Slope: 12, On: true},
+	})
+	v, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is not the graph")
+	}
+	w, run := stage(t, geom.Sz(800, 400), v)
+	g := v.graph
+	from := g.dotAt(g.dots[1])
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.Scroll{Pos: from, Notches: geom.Pt(0, 1)})
+	if p.Bands()[0].Q != 1 {
+		t.Fatalf("the wheel took the Q to %v", p.Bands()[0].Q)
+	}
+	// Up with Alt narrows the bell, and leaves where it is alone.
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Mods: input.ModAlt, Clicks: 1})
+	for i := 1; i <= 2; i++ {
+		w.Input(input.PointerMove{Pos: from.Add(geom.Pt(30, -24*float32(i))), Mods: input.ModAlt})
+		run(1)
+	}
+	w.Input(input.PointerUp{Pos: from.Add(geom.Pt(30, -48)), Button: input.ButtonPrimary})
+	run(1)
+	b := p.Bands()[0]
+	if math.Abs(float64(b.Q)-1.15*1.15) > 0.01 || b.Freq != 1000 || b.Gain != 6 {
+		t.Errorf("two notches up with Alt left the bell at Q %v, %v Hz and %v dB", b.Q, b.Freq, b.Gain)
+	}
+	want := []string{"edit Change the width of band 1", "changed", "changed", "end edit"}
+	if !slices.Equal(h.log, want) {
+		t.Errorf("the host heard %v, want %v", h.log, want)
+	}
+	// Up with Alt steepens the cut, a step for each notch.
+	from = g.dotAt(g.dots[2])
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Mods: input.ModAlt, Clicks: 1})
+	w.Input(input.PointerMove{Pos: from.Add(geom.Pt(0, -48)), Mods: input.ModAlt})
+	w.Input(input.PointerUp{Pos: from.Add(geom.Pt(0, -48)), Button: input.ButtonPrimary})
+	run(1)
+	if b := p.Bands()[1]; b.Slope != 36 || b.Freq != 60 {
+		t.Errorf("two notches up with Alt left the cut at %v dB/oct and %v Hz", b.Slope, b.Freq)
+	}
+}
+
 func TestEachOtherChangeIsAGestureOfItsOwn(t *testing.T) {
 	p, h := newEQ(t)
 	p.setBands(bell)
