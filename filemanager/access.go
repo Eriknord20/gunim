@@ -43,4 +43,4 @@ func (i *previewIcon) Access() access.Info {
 
 // Access implements [gunim.Accessible]: a group named by what the
 // operation does.
-func (r *opRow) Access() access.Info { return access.Info{Role: access.RoleGroup, Name: r.title.Text} }
+func (c *opCard) Access() access.Info { return access.Info{Role: access.RoleGroup, Name: c.title.Text} }

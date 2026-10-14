@@ -46,8 +46,8 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 // browser is the whole window: the title bar, the path bar, the sidebar,
-// the listing and the preview, the progress panel, the status bar, and
-// the toasts over them.
+// the listing and the preview, the status bar, and the cards of the
+// operations running and the toasts over them.
 type browser struct {
 	shell Shell
 	// icons are the icons Windows shows for items, by their keys, as the
@@ -60,7 +60,7 @@ type browser struct {
 	side    *sidebar
 	listing *listingArea
 	preview *previewPane
-	ops     *opsPanel
+	ops     *opsStack
 	status  *statusBar
 	toasts  *widget.Toasts
 	// layer holds the dialogs, over the browser only.
@@ -83,7 +83,7 @@ func newBrowser() *browser {
 	b.side = newSidebar()
 	b.listing = newListingArea(b)
 	b.preview = newPreviewPane(func(key string) *paint.Image { return b.icons[key].Large })
-	b.ops = newOpsPanel()
+	b.ops = newOpsStack()
 	b.status = newStatusBar()
 	b.palette = newFilesPalette(b)
 	b.dnd = newDndView(b)
@@ -94,7 +94,7 @@ func newBrowser() *browser {
 	b.split.Fixed = true
 	b.split.SetShare(sidebarWidth, nil)
 	b.split.OnCommit = func(w float32, u *gunim.UI) gunim.Intent { return SidebarMoved{Width: w} }
-	b.page = widget.Column(b.title.head, b.dnd.crumbs, b.banner.fold, b.split, b.ops.fold, b.status).Grow(b.split, 1)
+	b.page = widget.Column(b.title.head, b.dnd.crumbs, b.banner.fold, b.split, b.status).Grow(b.split, 1)
 	b.page.Cross = widget.CrossStretch
 	b.page.Gap = noGap
 	return b
@@ -141,11 +141,13 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 		// Over the Disk usage page, so what it does, as move an item to
 		// the trash, says so where it can be seen and undone; back under
 		// the dialogs once it goes.
-		at := 1
 		if s.Usage != "" {
-			at = 2
+			u.InsertAt(b, 3, b.ops)
+			u.InsertAt(b, 3, b.toasts)
+		} else {
+			u.InsertAt(b, 1, b.ops)
+			u.InsertAt(b, 2, b.toasts)
 		}
-		u.InsertAt(b, at, b.toasts)
 	}
 	b.title.setShell(s, u)
 	b.path.setShell(s, u)
@@ -155,8 +157,8 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 }
 
 // Children implements [gunim.Composite]. While the Disk usage page shows,
-// in the layer, the toasts move over it: see setShell.
-func (b *browser) Children() []gunim.Node { return []gunim.Node{b.page, b.toasts, b.layer} }
+// in the layer, the operations and the toasts move over it: see setShell.
+func (b *browser) Children() []gunim.Node { return []gunim.Node{b.page, b.ops, b.toasts, b.layer} }
 
 // Slot implements [gunim.Slotted]: the dialogs mounted under the browser
 // go over it.
@@ -167,8 +169,8 @@ func (b *browser) Slot() gunim.Node { return b.layer }
 func (b *browser) ModalScope() {}
 
 // Layout implements [gunim.Node]: the page fills the window, and the
-// toasts sit at the bottom right, over the progress panel and the status
-// bar. The dialogs go over them all.
+// cards of the operations sit at the bottom right, over the status bar,
+// with the toasts over them. The dialogs go over them all.
 func (b *browser) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	b.path.room = c.Max.W
 	if narrow := c.Max.W < previewRoom; narrow != b.narrow {
@@ -176,11 +178,13 @@ func (b *browser) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children
 		// Laid out, with no UI to glide with: it moves at once.
 		b.main.SetShare(b.previewShare(), nil)
 	}
-	var page, toasts, layer gunim.Child
+	var page, ops, toasts, layer gunim.Child
 	for k := range kids.All {
 		switch k.Node() {
 		case b.page:
 			page = k
+		case b.ops:
+			ops = k
 		case b.toasts:
 			toasts = k
 		default:
@@ -189,12 +193,23 @@ func (b *browser) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children
 	}
 	page.Layout(gunim.Tight(c.Max))
 	page.Place(geom.Point{})
+	// The operations sit over the bottom right corner, the toasts over them.
+	st := ops.Layout(gunim.Loose(geom.Sz(c.Max.W-32, max(0, c.Max.H-opsRoom))))
+	ops.Place(geom.Pt(c.Max.W-st.W-16, c.Max.H-st.H-40))
+	above := float32(0)
+	if st.H > 0 {
+		above = st.H + OpCardGap.Get(f.Theme)
+	}
 	ts := toasts.Layout(gunim.Loose(geom.Sz(c.Max.W-32, c.Max.H)))
-	toasts.Place(geom.Pt(c.Max.W-ts.W-16, c.Max.H-ts.H-40-b.ops.fold.height))
+	toasts.Place(geom.Pt(c.Max.W-ts.W-16, c.Max.H-ts.H-40-above))
 	layer.Layout(gunim.Tight(c.Max))
 	layer.Place(geom.Point{})
 	return c.Max
 }
+
+// opsRoom is the room the cards of the operations leave over them, for
+// the title and the path bar.
+const opsRoom = 140
 
 // dialogLayer holds the dialogs, each over the whole of the browser. It
 // takes no room while it holds none, so the pointer goes by it.

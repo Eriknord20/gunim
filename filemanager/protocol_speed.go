@@ -2,17 +2,16 @@ package filemanager
 
 import "github.com/marrasen/gunim"
 
-// OpSpeed is a patch: how fast operation ID moves bytes now, in bytes a
-// second, how many seconds are left, and the file it is on.
+// OpSpeed is a patch: a sample of how fast operation ID moves bytes,
+// in bytes a second, taken when it had got Done of the way.
 type OpSpeed struct {
 	ID   int
 	Rate float64
-	Left float64
-	File string
+	Done float32
 }
 
 // OpDone is a patch: operation ID has ended, well with OK, and leaves the
-// panel once it has shown so.
+// corner once it has shown so.
 type OpDone struct {
 	ID int
 	OK bool

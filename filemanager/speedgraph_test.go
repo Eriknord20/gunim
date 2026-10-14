@@ -4,11 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/marrasen/gunim/widget"
 )
 
 func TestTheSpeedComesFromACopysProgress(t *testing.T) {
@@ -57,16 +55,16 @@ func TestACopyDrawsItsSpeedAndCheersAsItEnds(t *testing.T) {
 	h.a.startOp(job{kind: OpCopy, srcs: []string{filepath.Join(h.dir, "big.bin")}, dest: filepath.Join(h.dir, "sub")},
 		"Copying big.bin")
 	h.a.ops.limit = 0
-	row := func() *opRow {
-		r, _ := widget.RowOf[*opRow](h.b.ops.list, widget.Key(strconv.Itoa(h.a.ops.next)))
-		return r
+	card := func() *opCard { return h.b.ops.card(h.a.ops.next) }
+	h.until("the graph has speeds", func() bool { return card() != nil && len(card().graph.samples) >= 2 })
+	if c := card(); !strings.HasSuffix(c.big.Text, "/s") || c.moved.Text == "" {
+		t.Fatalf("the running card says %q and %q", c.big.Text, c.moved.Text)
 	}
-	h.until("the graph has speeds", func() bool { return row() != nil && row().samples >= 2 })
-	h.until("the copy ends with a cheer", func() bool { return row() != nil && row().badge.cheering })
-	if row().detail.Text != "Done" || row().title.Text != "Copied 1 item to sub" {
-		t.Fatalf("the finished row says %q and %q", row().title.Text, row().detail.Text)
+	h.until("the copy ends with a cheer", func() bool { return card() != nil && card().badge.cheering })
+	if c := card(); c.big.Text != "Done" || c.title.Text != "Copied 1 item to sub" || c.moved.Text != "100%  ·  3.0 MB of 3.0 MB" {
+		t.Fatalf("the finished card says %q, %q and %q", c.title.Text, c.big.Text, c.moved.Text)
 	}
-	h.until("the row leaves the panel", func() bool { return row() == nil })
+	h.until("the card leaves", func() bool { return card() == nil })
 }
 
 // The time left counts down steadily while the speed swings, rather than

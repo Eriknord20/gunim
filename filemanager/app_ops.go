@@ -3,7 +3,6 @@ package filemanager
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,6 +60,11 @@ type opRun struct {
 	visible bool
 	last    progress
 	meter   speedometer
+	// from names the folder the items come from, where known.
+	from string
+	// pause pauses the operation, where it can be, and paused says it is.
+	pause  *pauseGate
+	paused bool
 	// undoes is the finished operation an undo reverses.
 	undoes int
 }
@@ -87,6 +91,8 @@ func (a *app) handleOps(in gunim.Intent) bool {
 		if r, ok := a.ops.running[v.ID]; ok {
 			r.cancel()
 		}
+	case PauseOp:
+		a.pauseOp(v.ID, !v.Resume)
 	case UndoOp:
 		a.undo(v.ID)
 	case ClashAnswered, Confirmed, Prompted, PasswordGiven, DialogClosed, FavouriteEdited:
@@ -323,7 +329,13 @@ func (a *app) newOp(title string, kind OpKind) (id int, ctx context.Context, can
 // it has run a moment.
 func (a *app) startOp(j job, title string) {
 	id, ctx, _ := a.newOp(title, j.kind)
+	r := a.ops.running[id]
+	r.pause = &pauseGate{}
+	if len(j.srcs) > 0 && (j.kind == OpCopy || j.kind == OpMove || j.kind == OpZip) {
+		r.from = a.placeLabel(a.fs.ID(), a.ps.Dir(j.srcs[0]))
+	}
 	e := env{
+		pause:  r.pause,
 		fs:     a.fs,
 		trash:  a.trash,
 		ask:    func(ctx context.Context, c clash) (answer, error) { return a.askClash(ctx, id, c) },
@@ -362,43 +374,59 @@ func (a *app) progressed(id int, p progress) {
 		return
 	}
 	now := time.Now()
-	sampled := r.meter.add(now, p.bytes)
+	sampled := !r.paused && r.meter.add(now, p.bytes)
 	r.last = p
 	if r.visible {
-		a.patch(r.tick(a.ps, now))
+		t := r.tick(now)
+		a.patch(t)
 		if sampled && p.bytesTotal > 0 {
-			a.patch(OpSpeed{ID: id, Rate: r.meter.rate, Left: r.meter.left(now, p.bytes, p.bytesTotal), File: p.current})
+			a.patch(OpSpeed{ID: id, Rate: r.meter.rate, Done: t.Done})
 		}
 	}
 }
 
-// tick is how the panel shows r at now, with paths of style ps.
-func (r *opRun) tick(ps PathStyle, now time.Time) OpTick {
+// pauseOp pauses operation id, or with on false carries it on.
+func (a *app) pauseOp(id int, on bool) {
+	r, ok := a.ops.running[id]
+	if !ok || r.pause == nil || r.paused == on {
+		return
+	}
+	r.paused = on
+	r.pause.set(on)
+	if !on {
+		// The time paused is no part of the speed, and the time left
+		// counts down from where it stopped.
+		r.meter.at = time.Time{}
+		r.meter.etaAt = time.Now()
+	}
+	if r.visible {
+		a.patch(r.tick(time.Now()))
+	}
+}
+
+// tick is how the corner shows r at now.
+func (r *opRun) tick(now time.Time) OpTick {
 	p := r.last
 	t := OpTick{ID: r.id}
+	t.Paused = r.paused
+	t.Bytes, t.BytesTotal, t.Items, t.ItemsTotal = p.bytes, p.bytesTotal, p.items, p.itemsTotal
+	t.File = lastName(p.current)
 	switch {
 	case p.waiting != "":
 		t.Unknown = true
-		t.Detail = p.waiting
-		return t
+		t.Waiting = p.waiting
 	case p.bytesTotal > 0:
 		t.Done = float32(float64(p.bytes) / float64(p.bytesTotal))
-		t.Detail = humanBytes(p.bytes) + " of " + humanBytes(p.bytesTotal)
-		if speed := r.meter.shown; speed > 0 {
-			t.Detail += "  ·  " + humanBytes(int64(speed)) + "/s"
-			if left := r.meter.left(now, p.bytes, p.bytesTotal); left >= 1 {
-				t.Detail += fmt.Sprintf("  ·  %s left", (time.Duration(left) * time.Second).Round(time.Second))
+		if !r.paused {
+			t.Speed = r.meter.shown
+			if t.Speed > 0 {
+				t.Left = r.meter.left(now, p.bytes, p.bytesTotal)
 			}
 		}
 	case p.itemsTotal > 0:
 		t.Done = float32(p.items) / float32(p.itemsTotal)
-		t.Detail = count(p.items) + " of " + plural(p.itemsTotal, "item")
 	default:
 		t.Unknown = true
-		t.Detail = "Counting…"
-	}
-	if p.current != "" {
-		t.Detail = ps.Base(p.current) + "  ·  " + t.Detail
 	}
 	return t
 }
@@ -421,11 +449,13 @@ func (a *app) publishOps() {
 		if !r.visible {
 			continue
 		}
-		t := r.tick(a.ps, time.Now())
+		t := r.tick(time.Now())
 		if !ok {
-			t = OpTick{ID: id, Done: 1, Detail: "Done"}
+			t.OpProgress = OpProgress{Done: 1, Bytes: t.BytesTotal, BytesTotal: t.BytesTotal,
+				Items: t.ItemsTotal, ItemsTotal: t.ItemsTotal}
 		}
-		s.Ops = append(s.Ops, OpView{ID: id, Title: r.title, Done: t.Done, Unknown: t.Unknown, Detail: t.Detail})
+		s.Ops = append(s.Ops, OpView{ID: id, Title: r.title, Kind: r.kind, From: r.from, CanPause: ok && r.pause != nil,
+			OpProgress: t.OpProgress})
 	}
 	a.patch(s)
 }

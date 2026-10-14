@@ -133,6 +133,7 @@ func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
 		title, done, kind = "Moving "+what+" to "+where, "Moved "+what+" to "+where, OpMove
 	}
 	id, ctx, cancel := a.newOp(title, kind)
+	a.ops.running[id].from = a.placeLabel(t.FromFS, ps.Dir(t.Paths[0]))
 	p := &TransferProgress{a: a, id: id, cancel: cancel}
 	do, w := a.opts.Transfer, a.win
 	a.ops.wg.Go(func() {
