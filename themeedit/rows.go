@@ -198,6 +198,9 @@ type editFunc func(v any, commit bool, src control, u *gunim.UI)
 func newControl(info theme.Info, f Field, label string, choices []Preset, dense bool, edit editFunc, play func(*gunim.UI)) control {
 	switch info.Kind {
 	case theme.KindSpring:
+		if f.Max > f.Min && !dense {
+			return newSpringSlider(f, label, info.Default, edit, play)
+		}
 		presets, custom := springPresets, true
 		if len(f.Presets) > 0 {
 			presets, custom = f.Presets, false
@@ -272,6 +275,9 @@ type numberControl struct {
 func newNumberControl(info theme.Info, f Field, label string, dense bool, edit editFunc) *numberControl {
 	def, _ := info.Default.(float32)
 	c := &numberControl{whole: def == float32(math.Round(float64(def)))}
+	if f.Step > 0 {
+		c.whole = f.Step >= 1 && f.Step == float32(math.Round(float64(f.Step)))
+	}
 	c.field = widget.NewNumberField(-1e6, 1e6)
 	if f.Max > f.Min {
 		c.field.Min, c.field.Max = float64(f.Min), float64(f.Max)
@@ -284,6 +290,9 @@ func newNumberControl(info theme.Info, f Field, label string, dense bool, edit e
 		c.field.Decimals, c.field.Increment = 0, 1
 	} else if f.Max <= f.Min {
 		c.field.DragRate = fractionRate
+	}
+	if f.Step > 0 && !c.whole {
+		c.field.Increment = float64(f.Step)
 	}
 	c.field.Tooltip, c.field.Placeholder = label, label
 	// While the field is dragged the edits are on the way, as a
@@ -305,6 +314,9 @@ func newNumberControl(info theme.Info, f Field, label string, dense bool, edit e
 		c.slider.Label = label
 		if c.whole {
 			c.slider.Snap = 1
+		}
+		if f.Step > 0 {
+			c.slider.Snap = f.Step
 		}
 		c.slider.OnChange = func(v float32, u *gunim.UI) gunim.Intent {
 			c.field.SetValue(float64(v), u)

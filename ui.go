@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -983,6 +984,7 @@ func NewOffscreenWith(o WindowOptions) *Window {
 // one share: its theme, title, AskToClose, zoom keys and zoom.
 func (w *Window) setUp(o WindowOptions) {
 	if o.Theme.Name != "" {
+		anim.SetScale(float64(theme.Scale.In(o.Theme)))
 		w.ui.theme = theme.NewLive(o.Theme)
 	}
 	w.title = o.Title
@@ -1760,7 +1762,11 @@ func (u *UI) on(s *state, fn func()) {
 
 // UseTheme switches the window to th. Every themed value animates from
 // where it is to th's, with th's [theme.Switch] motion.
+//
+// It sets how long every animation in the program takes from th's
+// [theme.Scale].
 func (u *UI) UseTheme(th theme.Theme) {
+	anim.SetScale(float64(theme.Scale.In(th)))
 	u.theme.Use(th)
 	u.invalid = true
 }

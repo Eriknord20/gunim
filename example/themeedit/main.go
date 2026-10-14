@@ -161,10 +161,11 @@ var sections = []themeedit.Section{
 	{Title: "Terminal", Fields: []themeedit.Field{{
 		Key:    widget.Caret.Key(),
 		Label:  "Cursor",
-		Detail: "How the cursor moves to the next place on its line.",
+		Detail: "How long the cursor takes to glide to the next place on its line.",
+		Min:    0, Max: 1,
 		Presets: []themeedit.Preset{
-			{Label: "Glides", Value: widget.Caret.Default()},
 			{Label: "Jumps", Value: themeedit.Instant},
+			{Label: "Glides", Value: widget.Caret.Default()},
 		},
 	}}},
 	{Title: "Motion", Fields: []themeedit.Field{

@@ -69,10 +69,18 @@ type previewPanel struct {
 	chose, playing      bool
 	// stops cancels the steps of the demo playing.
 	stops []func()
+	// scale is how long animations take in the theme as edited, which
+	// the preview moves at; see [theme.Scale]. worn is the theme the
+	// preview wears, as given, and wornAt the program's scale it was
+	// put on against. wears says it wears one yet.
+	scale  float32
+	worn   theme.Theme
+	wornAt float64
+	wears  bool
 }
 
 func newPreviewPanel(content gunim.Node, spec *specimen, title string, th theme.Theme) *previewPanel {
-	p := &previewPanel{heading: widget.NewLabel("Preview"), caption: widget.NewLabel("")}
+	p := &previewPanel{heading: widget.NewLabel("Preview"), caption: widget.NewLabel(""), scale: 1}
 	p.heading.Face = widget.BoldFont
 	p.caption.Color, p.caption.NoWrap, p.caption.MaxLines = widget.Placeholder, true, 1
 	p.scene = newScene(content, spec, title)
@@ -115,7 +123,26 @@ func (p *previewPanel) setNarrow(narrow, short bool, u *gunim.UI) {
 
 // use dresses the preview in th, at once.
 func (p *previewPanel) use(th theme.Theme) {
-	p.themed.Use(th.With(theme.Set(theme.Switch, Instant)))
+	p.scale, p.worn, p.wornAt, p.wears = theme.Scale.In(th), th, anim.Scale(), true
+	p.themed.Use(paced(th, p.against()).With(theme.Set(theme.Switch, Instant)))
+}
+
+// against is how much longer the preview's motions are made than the
+// theme says, for the program's scale to make them as long as the
+// theme edited says. With animation off in the program, nothing the
+// theme moves can move, and the preview's own scene moves alone.
+func (p *previewPanel) against() float64 {
+	if g := anim.Scale(); g > 0 {
+		return float64(p.scale) / g
+	}
+	return 1
+}
+
+// timed returns s as long as the theme edited makes it, for the
+// scene's own values, which keep real time.
+func (p *previewPanel) timed(s anim.Spring) anim.Spring {
+	s.Response *= p.scale
+	return s
 }
 
 // play plays d with spring s, saying it shows label. base and edited
@@ -131,6 +158,13 @@ func (p *previewPanel) play(d demo, s anim.Spring, label string, base, edited th
 		p.setShut(false, u)
 	}
 	p.caption.Text = "Playing " + label
+	// The scene's values keep real time, and play s as the theme edited
+	// makes it; the theme's own, as the switch's, play it as the
+	// program's scale stretches it.
+	worn := s
+	worn.Response *= float32(p.against())
+	s = p.timed(s)
+	settle := p.timed(widget.Settle.Default())
 	back := time.Duration(float64(s.Response)*float64(time.Second)) + hold
 	later := func(d time.Duration, fn func(u *gunim.UI)) {
 		if u != nil {
@@ -153,10 +187,12 @@ func (p *previewPanel) play(d demo, s anim.Spring, label string, base, edited th
 		sc.toast.Jump(0)
 		sc.toast.Animate(1, s)
 		sc.fade.Jump(1)
-		later(back+hold, func(*gunim.UI) { sc.fade.Animate(0, widget.Settle.Default()) })
+		later(back+hold, func(*gunim.UI) { sc.fade.Animate(0, settle) })
 		back += hold
 	case demoSwitch:
-		switched := func(th theme.Theme) theme.Theme { return th.With(theme.Set(theme.Switch, s)) }
+		switched := func(th theme.Theme) theme.Theme {
+			return paced(th, p.against()).With(theme.Set(theme.Switch, worn))
+		}
 		p.themed.Use(switched(base))
 		later(back, func(*gunim.UI) { p.themed.Use(switched(edited)) })
 		back *= 2
@@ -165,7 +201,7 @@ func (p *previewPanel) play(d demo, s anim.Spring, label string, base, edited th
 		sc.chip.Jump(0)
 		sc.chip.Animate(1, s)
 		later(back, func(*gunim.UI) { sc.chip.Animate(0, s) })
-		later(2*back, func(*gunim.UI) { sc.chipOn.Animate(0, widget.Settle.Default()) })
+		later(2*back, func(*gunim.UI) { sc.chipOn.Animate(0, settle) })
 		back *= 2
 	}
 	later(back+hold, func(u *gunim.UI) {
@@ -188,6 +224,11 @@ func (p *previewPanel) Children() []gunim.Node {
 // and the fold button at the right, and the window under them, as tall
 // as it needs, or as there is room for.
 func (p *previewPanel) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
+	if p.wears && anim.Scale() != p.wornAt {
+		// The program took another scale, as with a theme saved: put
+		// the edits on again against it.
+		p.use(p.worn)
+	}
 	th := f.Theme
 	w := c.Max.W
 	gap := widget.Gap.Get(th)
@@ -251,6 +292,11 @@ type scene struct {
 func newScene(content gunim.Node, spec *specimen, name string) *scene {
 	s := &scene{content: content, spec: spec, name: name,
 		panel: anim.NewFloat(0), toast: anim.NewFloat(0), fade: anim.NewFloat(0), chip: anim.NewFloat(0), chipOn: anim.NewFloat(0)}
+	// The scene's values play a motion as long as the theme edited makes
+	// it, whatever the program's own scale; see previewPanel.timed.
+	for _, a := range []*anim.Float{s.panel, s.toast, s.fade, s.chip, s.chipOn} {
+		a.RealTime()
+	}
 	s.Add(s.panel, s.toast, s.fade, s.chip, s.chipOn)
 	head := widget.NewLabel("Details")
 	head.Face = widget.BoldFont

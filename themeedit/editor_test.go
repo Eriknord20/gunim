@@ -95,7 +95,7 @@ func valueIn[T any](th theme.Theme, tok theme.Token[T]) T { return tok.Get(theme
 
 func TestTheEditorListsTheChosenFieldsAndEveryToken(t *testing.T) {
 	e, _, u, run, _ := edStage(t, Options{Base: widget.Dark(), Sections: []Section{cursorSection}})
-	if got, want := e.Chosen(), []string{"motion.caret", "accent", "layout.gap"}; !slices.Equal(got, want) {
+	if got, want := e.Chosen(), []string{"motion.caret", "accent", "layout.gap", "motion.scale"}; !slices.Equal(got, want) {
 		t.Fatalf("Chosen lists %v, want %v", got, want)
 	}
 	for _, k := range e.Chosen() {
@@ -736,8 +736,6 @@ func sortedOf(keys []string) []string {
 }
 
 func typeName(v any) string { return fmt.Sprintf("%T", v) }
-
-func abs(v float32) float32 { return max(v, -v) }
 
 func TestAShortNarrowEditorStartsWithThePreviewFoldedAndPlayOpensIt(t *testing.T) {
 	e, _, u, run, _ := edStageSized(t, geom.Sz(732, 540), Options{Base: widget.Dark(), Sections: []Section{cursorSection}})

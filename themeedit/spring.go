@@ -2,6 +2,8 @@ package themeedit
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -150,4 +152,92 @@ func (c *springControl) show(v any, u *gunim.UI) {
 	c.presets.show(s, u)
 	c.showSliders(s, u)
 	c.fold.SetOpen(c.presets.custom, u)
+}
+
+// springSlider edits how long a spring takes with one slider, for a
+// field with a range: a Play button, the slider, and the time in words
+// after it, or the name of the preset that has it. The spring keeps its
+// bounce.
+type springSlider struct {
+	play    *widget.IconButton
+	slider  *widget.Slider
+	words   *widget.Label
+	row     *widget.Flex
+	presets []Preset
+	// damping is the bounce the spring keeps, as its damping.
+	damping float32
+}
+
+func newSpringSlider(f Field, label string, def any, edit editFunc, play func(*gunim.UI)) *springSlider {
+	c := &springSlider{presets: f.Presets, damping: 1}
+	c.play = widget.NewIconButton(icon.Play, "Play "+label+" in the preview")
+	c.play.IconSize = IconSize
+	c.play.OnClick = func(u *gunim.UI) gunim.Intent {
+		play(u)
+		return nil
+	}
+	c.slider = widget.NewSlider(f.Min, f.Max)
+	c.slider.Snap, c.slider.Label = 0.01, label
+	if f.Step > 0 {
+		c.slider.Snap = f.Step
+	}
+	if s, ok := def.(anim.Spring); ok && s.Response >= f.Min && s.Response <= f.Max {
+		// A double click goes back to the program's own.
+		c.slider.Rest, c.slider.HasRest = s.Response, true
+	}
+	moved := func(commit bool) func(float32, *gunim.UI) gunim.Intent {
+		return func(v float32, u *gunim.UI) gunim.Intent {
+			c.say(v)
+			edit(anim.Spring{Response: v, Damping: c.damping}, commit, c, u)
+			if commit {
+				play(u)
+			}
+			return nil
+		}
+	}
+	c.slider.OnChange, c.slider.OnCommit = moved(false), moved(true)
+	c.words = widget.NewLabel("")
+	c.words.NoWrap, c.words.MaxLines = true, 1
+	c.row = widget.Row(c.play, &sized{child: c.slider, width: SliderWidth}, &sized{child: c.words, width: ValueWidth})
+	c.row.Cross, c.row.Gap = widget.CrossCenter, NamesGap
+	return c
+}
+
+// say writes how long v takes: the name of a preset that takes as
+// long, or the time.
+func (c *springSlider) say(v float32) {
+	for _, p := range c.presets {
+		if s, ok := p.Value.(anim.Spring); ok && abs(s.Response-v) < 0.005 {
+			c.words.Text = p.Label
+			return
+		}
+	}
+	c.words.Text = timeWords(v)
+}
+
+// timeWords writes how long a spring takes: "Instant", "250 ms", or,
+// from a second, "1.25 s".
+func timeWords(v float32) string {
+	if v >= 1 {
+		return strconv.FormatFloat(math.Round(float64(v)*100)/100, 'f', -1, 64) + " s"
+	}
+	return speedWords(v)
+}
+
+func abs(v float32) float32 { return max(v, -v) }
+
+func (c *springSlider) node() gunim.Node    { return c.row }
+func (c *springSlider) below() gunim.Node   { return nil }
+func (c *springSlider) stops() []gunim.Node { return []gunim.Node{c.play, c.slider} }
+
+func (c *springSlider) show(v any, u *gunim.UI) {
+	s, ok := v.(anim.Spring)
+	if !ok {
+		return
+	}
+	if s.Damping > 0 {
+		c.damping = s.Damping
+	}
+	c.slider.SetValue(s.Response, u)
+	c.say(s.Response)
 }
