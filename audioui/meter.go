@@ -25,8 +25,10 @@ type Levels struct {
 	// ms is each channel's mean square over its window: over a frame's
 	// sound alone, an RMS flickers.
 	ms [2]float64
-	lm *audio.LoudnessMeter
-	// rate is the rate lm measures at.
+	// lm measures the loudness, from the first time it is asked for:
+	// a meter that shows only levels never pays for it. rate is the
+	// rate of the frames taken last.
+	lm   *audio.LoudnessMeter
 	rate int
 }
 
@@ -43,10 +45,13 @@ func NewLevels() *Levels {
 // their peaks rise at once, their RMS eases, and both fall back as the
 // sound quietens.
 func (l *Levels) Take(frames []float32, rate int, dt time.Duration) {
-	if l.lm == nil || l.rate != rate {
-		l.lm, l.rate = audio.NewLoudnessMeter(rate), rate
+	if l.lm != nil && l.rate != rate {
+		l.lm = audio.NewLoudnessMeter(rate)
 	}
-	l.lm.Write(frames)
+	l.rate = rate
+	if l.lm != nil {
+		l.lm.Write(frames)
+	}
 	sec := float32(dt.Seconds())
 	for ch := range 2 {
 		var peak, ss float32
@@ -91,9 +96,15 @@ func (l *Levels) Quiet(dt time.Duration) {
 }
 
 // ShortTerm returns the short-term loudness of the frames taken, in
-// LUFS, and false before there is any.
+// LUFS, and false before there is any. The loudness is measured from
+// the first call on, of the frames taken after it: the K-weighting it
+// takes costs more than the levels, so levels whose loudness no one
+// reads skip it.
 func (l *Levels) ShortTerm() (float64, bool) {
 	if l.lm == nil {
+		if l.rate > 0 {
+			l.lm = audio.NewLoudnessMeter(l.rate)
+		}
 		return 0, false
 	}
 	s := l.lm.ShortTerm()

@@ -338,3 +338,22 @@ func TestRunningLoudnessFollowsTheIntegratedLoudness(t *testing.T) {
 		t.Fatalf("a block at -10 LUFS reads %.2f", l)
 	}
 }
+
+func TestAMetersLoudnessStartsAsItIsFirstAskedFor(t *testing.T) {
+	l := NewLevels()
+	tone := sine(4800, 1000, 0.1)
+	l.Take(tone, rate, 100*time.Millisecond)
+	if l.lm != nil {
+		t.Fatal("levels no one asked the loudness of measure it")
+	}
+	if _, ok := l.ShortTerm(); ok {
+		t.Fatal("the loudness reads before any sound was measured for it")
+	}
+	for range 40 {
+		l.Take(tone, rate, 100*time.Millisecond)
+	}
+	s, ok := l.ShortTerm()
+	if !ok || math.Abs(s+20.4) > 1 {
+		t.Fatalf("four seconds of a 1 kHz sine at 0.1 read %.1f LUFS, ok %v; want about -20.4", s, ok)
+	}
+}
