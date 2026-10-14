@@ -510,3 +510,18 @@ func TestPortsOfOneNameAreNumbered(t *testing.T) {
 		t.Errorf("two ports of one name listed as %q, want the second numbered 2", twins)
 	}
 }
+
+// TestAPortIsNamedWithoutItsPadding: ALSA pads some names with spaces,
+// and a port's name says its client's only where it does not already.
+func TestAPortIsNamedWithoutItsPadding(t *testing.T) {
+	for _, c := range []struct{ client, port, want string }{
+		{"PipeWire-System", "input           ", "PipeWire-System: input"},
+		{"Midi Through", "Midi Through Port-0", "Midi Through Port-0"},
+		{"nanoKEY2 ", "nanoKEY2 MIDI 1", "nanoKEY2 MIDI 1"},
+		{"Synth", "  ", "Synth"},
+	} {
+		if got := portName(c.client, c.port); got != c.want {
+			t.Errorf("client %q, port %q is called %q, want %q", c.client, c.port, got, c.want)
+		}
+	}
+}
