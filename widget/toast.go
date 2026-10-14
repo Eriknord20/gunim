@@ -41,6 +41,9 @@ const toastBodyLines = 3
 // Toast is a short notice: a title, and a line or two under it. A body
 // longer than three lines ends in an ellipsis, and shows whole while the
 // pointer rests on the toast.
+//
+// An error toast stays until its close button is clicked, and its text
+// can be selected and copied, so it can be read in full and reported.
 type Toast struct {
 	Title string
 	Body  string
@@ -93,7 +96,8 @@ const (
 	ToastSuccess
 	// ToastWarning shows icon.TriangleAlert in [ToastWarningInk].
 	ToastWarning
-	// ToastError shows icon.CircleAlert in [ToastErrorInk].
+	// ToastError shows icon.CircleAlert in [ToastErrorInk]. It stays
+	// until its close button is clicked.
 	ToastError
 )
 
@@ -156,7 +160,8 @@ type Toasts struct {
 func NewToasts() *Toasts { return &Toasts{} }
 
 // Show adds a toast to the stack. One with the key of a toast showing
-// takes its place. A toast that asks stays until it is answered.
+// takes its place. A toast that asks stays until it is answered, and an
+// error until it is closed.
 func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	if to.Key != "" {
 		// The new toast takes the old one's place, and sounds once, as it arrives.
@@ -174,7 +179,7 @@ func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	t.cards = append(t.cards, c)
 	t.skip = 0
 	u.Insert(t, c)
-	if !c.asks() {
+	if !c.stays() {
 		t.expire(c, u)
 	}
 	u.Cue(gunim.CueOpen, t)
@@ -452,7 +457,7 @@ type toastCard struct {
 	// mark is the kind's icon before the title, or nil.
 	mark *Icon
 	// key is the toast's key. A toast that asks has buttons, a close
-	// button, and check, its tick box, or nil.
+	// button, and check, its tick box, or nil. An error has a close button.
 	key     string
 	buttons *Flex
 	close   *IconButton
@@ -490,6 +495,13 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 	c.key = to.Key
 	if len(to.Buttons) > 0 {
 		c.ask(to)
+	} else if to.Kind == ToastError {
+		c.closer(nil)
+	}
+	if to.Kind == ToastError {
+		// An error is read with care, and reported: its text can be selected and copied.
+		c.title.Selectable = true
+		c.body.Selectable = true
 	}
 	ic, ink := to.Kind.look()
 	if to.Icon != nil {
@@ -531,30 +543,44 @@ func (c *toastCard) ask(to Toast) {
 	c.buttons = Row(kids...)
 	c.buttons.Justify = JustifyEnd
 	c.buttons.Gap = Gap
+	dismiss := to.OnDismiss
+	c.closer(func(u *gunim.UI) gunim.Intent {
+		if dismiss == nil {
+			return nil
+		}
+		return dismiss(checked(), u)
+	})
+}
+
+// closer gives the card a close button, which runs then, if not nil,
+// and takes the card away. It does not take the keyboard when clicked.
+func (c *toastCard) closer(then func(u *gunim.UI) gunim.Intent) {
 	c.close = NewIconButton(icon.X, "Close")
 	c.close.KeepFocus = true
-	dismiss := to.OnDismiss
 	c.close.OnClick = func(u *gunim.UI) gunim.Intent {
-		if dismiss != nil {
-			send(u, c, dismiss(checked(), u))
+		if then != nil {
+			send(u, c, then(u))
 		}
 		c.owner.dismiss(c, u)
 		return nil
 	}
 }
 
-// asks reports whether the card is of a toast that asks.
-func (c *toastCard) asks() bool { return c.buttons != nil }
+// stays reports whether the card stays until it is closed: a toast that
+// asks, or an error.
+func (c *toastCard) stays() bool { return c.close != nil }
 
-// corner is the link or the button at the right of the title, or nil.
-func (c *toastCard) corner() gunim.Node {
-	switch {
-	case c.close != nil:
-		return c.close
-	case c.action != nil:
-		return c.action
+// corner is what sits at the right of the title, from the right: the
+// close button, then the action.
+func (c *toastCard) corner() []gunim.Node {
+	var out []gunim.Node
+	if c.close != nil {
+		out = append(out, c.close)
 	}
-	return nil
+	if c.action != nil {
+		out = append(out, c.action)
+	}
+	return out
 }
 
 // KeepsFocus implements [gunim.FocusKeeper]: a click on a toast leaves
@@ -573,9 +599,7 @@ func (c *toastCard) Children() []gunim.Node {
 	if c.buttons != nil {
 		out = append(out, c.buttons)
 	}
-	if n := c.corner(); n != nil {
-		out = append(out, n)
-	}
+	out = append(out, c.corner()...)
 	if c.mark != nil {
 		out = append(out, c.mark)
 	}
@@ -626,31 +650,39 @@ func (c *toastCard) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Children
 		left += IconSize.Get(th) + IconGap.Get(th)
 	}
 	room := w - left - pad.Right
-	// The action, or the close button, sits at the right of the title.
-	var act, title geom.Size
+	// The close button, and the action before it, sit at the right of
+	// the title; act is the width they take.
+	var act float32
+	var title geom.Size
 	// line is the height of the title's first line, which the icon sits beside.
 	var line float32
 	y := pad.Top
 	corner := c.corner()
+	// Children lists the corner in its order, from the right.
 	for k := range kids.All {
-		if corner != nil && k.Node() == corner {
-			act = k.Layout(gunim.Constraints{Max: geom.Sz(room, 0)})
-			top := pad.Top
-			if corner == gunim.Node(c.close) {
-				// The close button's box is larger than its cross; it
-				// keeps to the corner rather than push the title down.
-				top = pad.Top / 2
-			}
-			k.Place(geom.Pt(w-pad.Right-act.W, top))
+		if !slices.Contains(corner, k.Node()) {
+			continue
 		}
+		if act > 0 {
+			act += Gap.Get(th)
+		}
+		s := k.Layout(gunim.Constraints{Max: geom.Sz(max(0, room-act), 0)})
+		act += s.W
+		top := pad.Top
+		if k.Node() == gunim.Node(c.close) {
+			// The close button's box is larger than its cross; it
+			// keeps to the corner rather than push the title down.
+			top = pad.Top / 2
+		}
+		k.Place(geom.Pt(w-pad.Right-act, top))
 	}
 	for k := range kids.All {
-		switch n := k.Node(); n {
-		case corner, gunim.Node(c.mark):
+		switch n := k.Node(); {
+		case slices.Contains(corner, n), n == gunim.Node(c.mark):
 		default:
 			r := room
-			if n == gunim.Node(c.title) && act.W > 0 {
-				r = max(0, room-act.W-Gap.Get(th))
+			if n == gunim.Node(c.title) && act > 0 {
+				r = max(0, room-act-Gap.Get(th))
 			}
 			cs := gunim.Constraints{Max: geom.Sz(r, 0)}
 			if c.buttons != nil && n == gunim.Node(c.buttons) {
@@ -698,7 +730,7 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 }
 
 // Handle implements [gunim.Handler]: the pointer resting keeps the
-// toast, and a click dismisses it, unless it asks.
+// toast, and a click dismisses it, unless it stays until closed.
 func (c *toastCard) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerEnter:
@@ -712,7 +744,7 @@ func (c *toastCard) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerDown:
 		c.click.Press(e, 0)
 	case input.PointerUp:
-		if c.click.Release(e, over(e.Pos, c.size)) && !c.asks() {
+		if c.click.Release(e, over(e.Pos, c.size)) && !c.stays() {
 			c.owner.dismiss(c, u)
 		}
 	default:
