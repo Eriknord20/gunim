@@ -255,8 +255,8 @@ func TestAChannelPastTheDeviceIsRefused(t *testing.T) {
 
 // TestASIOInputsRecordThroughTheTap publishes a driver's inputs, as the
 // speaker does: Devices lists them, a stream records them with the
-// stamps the driver's buffers give, a second stream finds them busy,
-// and the driver closing ends the first.
+// stamps the driver's buffers give, a second stream records them too,
+// on after the first closes, and the driver closing ends it.
 func TestASIOInputsRecordThroughTheTap(t *testing.T) {
 	tap := duplex.NewTap("Fake ASIO", 48000, 128, 200, []string{"In 1", "In 2", "In 3"})
 	duplex.Publish(tap)
@@ -282,20 +282,38 @@ func TestASIOInputsRecordThroughTheTap(t *testing.T) {
 	if b.Len() != 128 || b.Heard != 7777 || b.Frames[5] != 1005 {
 		t.Fatalf("read %d frames heard %d holding %v", b.Len(), b.Heard, b.Frames[5])
 	}
-	other := &Stream{o: Options{}, done: make(chan struct{}), ratio: 1}
-	if f, err := openTap(other, "Fake ASIO"); err != nil || !errors.Is(other.ready(f, 0), ErrBusy) {
-		t.Fatalf("a second stream opened the inputs: %v", err)
+	other := &Stream{o: Options{Channels: []int{2}}, done: make(chan struct{}), ratio: 1, clock: clock}
+	f, err = openTap(other, "Fake ASIO")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.ready(f, 48000); err != nil {
+		t.Fatalf("a second stream could not record the inputs: %v", err)
+	}
+	tap.Deliver(frames(128, 128, 3), 3, 8888)
+	if b := s.Read(make([]float32, 256)); b.Len() != 128 || b.Heard != 8888 {
+		t.Fatalf("beside a second stream, the first read %d frames heard %d", b.Len(), b.Heard)
+	}
+	if b := other.Read(make([]float32, 256)); b.Len() != 128 || b.Heard != 8888 || b.Frames[5] != 2133 {
+		t.Fatalf("the second stream read %d frames heard %d holding %v", b.Len(), b.Heard, b.Frames[5])
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tap.Deliver(frames(256, 128, 3), 3, 9999)
+	if b := other.Read(make([]float32, 256)); b.Len() != 128 || b.Heard != 9999 {
+		t.Fatalf("with the first closed, the second read %d frames heard %d", b.Len(), b.Heard)
 	}
 	duplex.Withdraw(tap)
 	select {
-	case <-s.Done():
+	case <-other.Done():
 	case <-time.After(3 * time.Second):
 		t.Fatal("the stream recorded on after the driver closed")
 	}
-	if !errors.Is(s.Err(), ErrLost) {
-		t.Fatalf("Err = %v", s.Err())
+	if !errors.Is(other.Err(), ErrLost) {
+		t.Fatalf("Err = %v", other.Err())
 	}
-	if err := s.Close(); err != nil {
+	if err := other.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

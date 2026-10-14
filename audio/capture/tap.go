@@ -11,10 +11,10 @@ import (
 type tapIn struct {
 	s *Stream
 	t *duplex.Tap
-	// attached says the stream hears the inputs, until close.
-	attached bool
-	quit     chan struct{}
-	done     chan struct{}
+	// detach stops the stream hearing the inputs, nil until it does.
+	detach func()
+	quit   chan struct{}
+	done   chan struct{}
 }
 
 func openTap(s *Stream, driver string) (format, error) {
@@ -31,10 +31,7 @@ func openTap(s *Stream, driver string) (format, error) {
 }
 
 func (b *tapIn) start() error {
-	if !b.t.Attach(func(in []float32, _ int, heard int64) { b.s.putAt(in, heard) }) {
-		return ErrBusy
-	}
-	b.attached = true
+	b.detach = b.t.Attach(func(in []float32, _ int, heard int64) { b.s.putAt(in, heard) })
 	go b.watch()
 	return nil
 }
@@ -51,10 +48,10 @@ func (b *tapIn) watch() {
 
 // close runs once, from Open or Close.
 func (b *tapIn) close() error {
-	if !b.attached {
+	if b.detach == nil {
 		return nil
 	}
-	b.t.Detach()
+	b.detach()
 	close(b.quit)
 	<-b.done
 	return nil
