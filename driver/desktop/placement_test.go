@@ -170,14 +170,14 @@ func TestAWindowBesideItsParentOpensOnTheScreen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	w, err := display.NewWindow(driver.Options{
 		Title: "gunim beside test", Size: geom.Sz(320, 200), Parent: parent, Anchor: geom.Rc(400, 400, 0, 0),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	r, _ := w.(driver.PlacementReader)
 	var p driver.Placement
 	deadline := time.Now().Add(3 * time.Second)
