@@ -103,6 +103,8 @@ type mixRings struct {
 func NewMixer() *Mixer {
 	m := &Mixer{history: make([]atomic.Uint32, historyFrames), buf: make([]float32, 2*block), gain: 1,
 		fade: anim.NewFloat(1), out: make([]float32, 2*1024)}
+	// Fades in sound keep real time, whatever pace the windows move at.
+	m.fade.RealTime()
 	m.rate.Store(SampleRate)
 	m.rings.Store(&mixRings{})
 	return m
@@ -182,6 +184,9 @@ func (m *Mixer) Play(src Source, o Options) *Voice {
 		paused: o.Paused,
 		insert: o.Insert,
 	}
+	v.vol.RealTime()
+	v.pan.RealTime()
+	v.gate.RealTime()
 	v.rated, _ = o.Insert.(rated)
 	v.volTo.Store(floatBits(vol))
 	v.pausedTo.Store(o.Paused)

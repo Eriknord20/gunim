@@ -86,6 +86,9 @@ type Animated[T any] struct {
 	state  [MaxScalars]State
 	motion Motion
 	active bool
+	// real keeps the value out of the scale's reach; see
+	// [Animated.RealTime].
+	real bool
 }
 
 // New returns an Animated holding v, at rest.
@@ -173,6 +176,30 @@ func (a *Animated[T]) Step(dt time.Duration) bool {
 	if !a.active {
 		return false
 	}
+	if a.scaled(a.motion) {
+		if s := Scale(); s == 0 {
+			// Animation was turned off on the way: land now.
+			a.land()
+			return false
+		} else if s != 1 {
+			// A long frame counts as maxStep at most, as in a motion's
+			// own step. At a scale under 1 that is more motion than one
+			// step may take, so it goes in steps of maxStep.
+			dt = scaledStep(min(dt, maxStep), s)
+			for dt > maxStep && a.stepBy(maxStep) {
+				dt -= maxStep
+			}
+			if !a.active {
+				return false
+			}
+		}
+	}
+	return a.stepBy(dt)
+}
+
+// stepBy moves every scalar by dt of its motion, and reports whether
+// any is still moving.
+func (a *Animated[T]) stepBy(dt time.Duration) bool {
 	settled := true
 	for i := range a.codec.N {
 		if !a.motion.Step(&a.state[i], dt) {
@@ -184,6 +211,15 @@ func (a *Animated[T]) Step(dt time.Duration) bool {
 		a.motion = nil
 	}
 	return a.active
+}
+
+// land puts the value where it is going, at rest.
+func (a *Animated[T]) land() {
+	for i := range a.codec.N {
+		to := a.state[i].To
+		a.state[i] = State{Position: to, From: to, To: to}
+	}
+	a.active, a.motion = false, nil
 }
 
 // heading reports whether the animation is already on its way to buf,
@@ -202,7 +238,7 @@ func (a *Animated[T]) heading(buf *[MaxScalars]float32) bool {
 func (a *Animated[T]) startMotion(buf *[MaxScalars]float32, m Motion) {
 	// An instant motion lands now, so the frame that asks for it shows
 	// the value where it is going.
-	if instant(m) {
+	if instant(m) || a.scaled(m) && Scale() == 0 {
 		for i := range a.codec.N {
 			a.state[i] = State{Position: buf[i], From: buf[i], To: buf[i]}
 		}
