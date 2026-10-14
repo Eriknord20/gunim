@@ -78,6 +78,10 @@ func wndProc(hwnd, m, wParam, lParam uintptr) uintptr {
 	}
 	if w := windowsByHandle[hwnd]; w != nil {
 		switch m {
+		case wmDestroy:
+			// Only a child goes this way still known: with its parent,
+			// which the host closed first.
+			w.e.lost()
 		case wmClose:
 			w.e.close()
 			return 0
@@ -139,12 +143,14 @@ func wake() { _, _, _ = postMessage.Call(msgWindow, wmApp, 0, 0) }
 // platformType is the kind of window an editor attaches to here.
 const platformType = "HWND"
 
-// window is an editor's window.
+// window is an editor's window: one of its own, or, with child set, a
+// child of the host's.
 type window struct {
 	hwnd          uintptr
 	style, styleX uintptr
 	e             *editor
 	sizing        bool
+	child         bool
 }
 
 const (
@@ -154,19 +160,32 @@ const (
 	wsMinimizeBox  = 0x00020000
 	wsMaximizeBox  = 0x00010000
 	wsClipChildren = 0x02000000
+	wsClipSiblings = 0x04000000
+	wsChild        = 0x40000000
 	cwUseDefault   = 0x80000000
+	// wsExNoParentNotify keeps a child's coming and going from being
+	// sent to its parent, whose thread is the host's: a message sent
+	// there waits on it.
+	wsExNoParentNotify = 0x00000004
 )
 
-// newWindow makes a window of a client w×h, titled title, for e.
-func newWindow(title string, w, h int, e *editor) (*window, error) {
+// newWindow makes a window of a client w×h for e: one of its own,
+// titled title, or, where parent is set, a hidden child of parent's.
+func newWindow(title string, w, h int, e *editor, parent uintptr) (*window, error) {
 	win := &window{e: e, style: wsCaption | wsSysMenu | wsMinimizeBox | wsClipChildren}
 	if e.resizable {
 		win.style |= wsThickFrame | wsMaximizeBox
 	}
+	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
+	if parent != 0 {
+		win.child = true
+		win.style, win.styleX = wsChild|wsClipChildren|wsClipSiblings, wsExNoParentNotify
+		x, y = 0, 0
+	}
 	t, _ := windows.UTF16PtrFromString(title)
 	ww, wh := win.outer(w, h)
 	hwnd, _, err := createWindowEx.Call(win.styleX, uintptr(unsafe.Pointer(editorClass)), uintptr(unsafe.Pointer(t)),
-		win.style, cwUseDefault, cwUseDefault, uintptr(ww), uintptr(wh), 0, 0, instance, 0)
+		win.style, x, y, uintptr(ww), uintptr(wh), parent, 0, instance, 0)
 	if hwnd == 0 {
 		return nil, err
 	}
@@ -201,10 +220,22 @@ func (w *window) resize(cw, ch int) {
 	w.sizing = false
 }
 
+// place moves a child to x, y in its parent and shows it.
+func (w *window) place(x, y int) {
+	const swpNoSize, swpNoZOrder, swpNoActivate, swpShowWindow = 0x1, 0x4, 0x10, 0x40
+	_, _, _ = setWindowPos.Call(w.hwnd, 0, uintptr(x), uintptr(y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate|swpShowWindow)
+}
+
+// hide hides a child.
+func (w *window) hide() { _, _, _ = showWindow.Call(w.hwnd, 0) }
+
 func (w *window) destroy() {
 	delete(windowsByHandle, w.hwnd)
 	_, _, _ = destroyWindow.Call(w.hwnd)
 }
+
+// forget lets go of a window the system destroyed.
+func (w *window) forget() { delete(windowsByHandle, w.hwnd) }
 
 // runLoop is for Linux, where a plugin's editor runs on the host's loop.
 func runLoop() uintptr { return 0 }

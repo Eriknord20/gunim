@@ -2232,6 +2232,15 @@ func (w *Window) platformSetWindowPos(xpos, ypos int) error {
 	return nil
 }
 
+func (w *Window) platformSetWindowBounds(xpos, ypos, width, height int) error {
+	if !w.resizable {
+		updateNormalHints(w, width, height)
+	}
+	xMoveResizeWindow(_glfw.platformWindow.display, w.platform.handle, int32(xpos), int32(ypos), uint32(width), uint32(height))
+	xFlush(_glfw.platformWindow.display)
+	return nil
+}
+
 func (w *Window) platformGetWindowSize() (width, height int, err error) {
 	var attribs _XWindowAttributes
 	xGetWindowAttributes(_glfw.platformWindow.display, w.platform.handle, &attribs)

@@ -1134,6 +1134,8 @@ func (w *Window) loop() {
 	}()
 	// The compass stops before the window closes.
 	defer w.ui.stopHeading()
+	// The child windows of the system's in it close before it does.
+	defer w.ui.closeNatives()
 
 	for {
 		if !w.inFlight && w.wants() && w.draws() {
@@ -1511,6 +1513,9 @@ type UI struct {
 	// edgeswipe.go.
 	edgeSwipeNodes map[*state]struct{}
 	edgeSwipes     []geom.Rect
+	// nativeNodes holds the nodes in the tree a window of the system's covers, each with where it was last told it
+	// stands; see native.go.
+	nativeNodes map[*state]nativeNode
 	// caretAt is the text caret last told to the driver, and boxAt the
 	// bounds of the node it is in.
 	caretAt, boxAt geom.Rect
@@ -1973,6 +1978,7 @@ func (u *UI) InsertAt(parent Node, i int, child Node) {
 	u.index[child] = cs
 	u.noteHeadingNode(cs)
 	u.noteEdgeSwipeNode(cs)
+	u.noteNativeNode(cs)
 	u.invalid = true
 	if m, ok := child.(Modal); ok && m.Modal() {
 		u.Cue(CueOpen, nil)
@@ -2467,6 +2473,7 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 		u.w.Close()
 	}
 	u.fadedAway()
+	u.placeNatives(f.Scale)
 	u.sendTitleBar()
 	u.placeCaret()
 	u.syncText(u.focus, false)
@@ -2685,6 +2692,7 @@ func (u *UI) forget(s *state) {
 	u.unsubscribe(s)
 	delete(u.headingNodes, s)
 	delete(u.edgeSwipeNodes, s)
+	u.forgetNativeNode(s)
 	delete(u.index, s.node)
 	for _, a := range s.aliases {
 		if u.index[a] == s {

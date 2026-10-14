@@ -1314,7 +1314,9 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 		window.inputWindowContentScale(xscale, yscale)
 
 	case _WM_SETCURSOR:
-		if _LOWORD(uint32(lParam)) == _HTCLIENT {
+		// gunim change: a child window's cursor, as a plugin's editor's,
+		// is its own: the window sets its cursor over itself alone.
+		if _LOWORD(uint32(lParam)) == _HTCLIENT && windows.HWND(wParam) == hWnd {
 			if err := window.updateCursorImage(); err != nil {
 				_glfw.errors = append(_glfw.errors, err)
 				return 0
@@ -1850,6 +1852,29 @@ func (w *Window) platformSetWindowPos(xpos, ypos int) error {
 		return err
 	}
 	return nil
+}
+
+func (w *Window) platformSetWindowBounds(xpos, ypos, width, height int) error {
+	if microsoftgdk.IsXbox() {
+		return nil
+	}
+	rect := _RECT{
+		left:   int32(xpos),
+		top:    int32(ypos),
+		right:  int32(xpos + width),
+		bottom: int32(ypos + height),
+	}
+	if winver.IsWindows10AnniversaryUpdateOrGreater() {
+		if err := w.adjustRectForDpi(&rect, w.getWindowStyle(), false, w.getWindowExStyle(), _GetDpiForWindow(w.platform.handle)); err != nil {
+			return err
+		}
+	} else {
+		if err := w.adjustRect(&rect, w.getWindowStyle(), false, w.getWindowExStyle()); err != nil {
+			return err
+		}
+	}
+	return _SetWindowPos(w.platform.handle, 0, rect.left, rect.top, rect.right-rect.left, rect.bottom-rect.top,
+		_SWP_NOACTIVATE|_SWP_NOZORDER|_SWP_NOOWNERZORDER)
 }
 
 func (w *Window) platformGetWindowSize() (width, height int, err error) {

@@ -1,6 +1,7 @@
 package plug
 
 import (
+	"image"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -122,4 +123,33 @@ type Editor interface {
 	Editing() bool
 	// Values returns each parameter's value now, by ID.
 	Values() map[uint32]float64
+}
+
+// Embedder is an [Editor] whose editor can show inside a window of the
+// host's, as a child window of the system's, in place of a window of
+// its own. The host then draws the window round it: its title bar, and
+// what it shows beside the editor. Its methods are safe from any
+// goroutine but the audio's.
+type Embedder interface {
+	Editor
+	// EmbedEditor shows the editor in parent, the system's window
+	// behind a host's ([gunim.UI.NativeWindow]). It opens hidden, for
+	// the host to put in place with PlaceEditor, and returns its size
+	// in device pixels, which the host makes room for. sized hears each
+	// size the editor takes of itself after, in turn, on a goroutine of
+	// the plugin's: it notes the size and returns, waiting on nothing.
+	// The host closes the editor before it closes parent.
+	EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, err error)
+	// EditorEmbedded reports whether the editor is open in a host's
+	// window, as EmbedEditor opened it, and not in one of its own.
+	EditorEmbedded() bool
+	// EditorSize returns the size the editor opens at, in device
+	// pixels, without opening it, for the host to open a window of the
+	// size; ok is false where the plugin cannot say.
+	EditorSize() (w, h int, ok bool)
+	// PlaceEditor puts the embedded editor at r in its parent, in
+	// device pixels, and shows it, or hides it where r is empty, as
+	// [gunim.NativeHost] hears. An editor that can be resized takes r's
+	// size as near as it can. It returns the size the editor has.
+	PlaceEditor(r image.Rectangle) (w, h int)
 }

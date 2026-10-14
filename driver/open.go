@@ -387,6 +387,20 @@ type Pinner interface {
 	SetPinned(on bool) error
 }
 
+// A NativeWindow is a [Window] that can hand out the system's own window behind it, for a window of the system's to
+// sit inside it, as a plugin's editor does.
+type NativeWindow interface {
+	// NativeHandle returns the system's window: an HWND on Windows, and an X11 window's ID on Linux.
+	NativeHandle() (uintptr, error)
+}
+
+// A Reshaper is a [Window] the application can grow and shrink from code, as when a panel opens at its side.
+type Reshaper interface {
+	// Reshape moves each of the window's edges out by by, in logical pixels, or in where a side is negative: Left
+	// grows it leftwards. Where that takes it off its monitor's work area, the window moves whole to keep on it.
+	Reshape(by geom.Insets) error
+}
+
 // MoveStarted is sent on [Window.Input] when the user starts moving or sizing the window by its frame or its title
 // bar, where the system takes the press that starts it for itself. It closes what a press outside would.
 type MoveStarted struct{}
