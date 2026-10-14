@@ -573,15 +573,17 @@ func (c *toastCard) asks() bool { return c.buttons != nil }
 // asks, or an error.
 func (c *toastCard) stays() bool { return c.close != nil }
 
-// corner is the link or the button at the right of the title, or nil.
-func (c *toastCard) corner() gunim.Node {
-	switch {
-	case c.close != nil:
-		return c.close
-	case c.action != nil:
-		return c.action
+// corner is what sits at the right of the title, from the right: the
+// close button, then the action.
+func (c *toastCard) corner() []gunim.Node {
+	var out []gunim.Node
+	if c.close != nil {
+		out = append(out, c.close)
 	}
-	return nil
+	if c.action != nil {
+		out = append(out, c.action)
+	}
+	return out
 }
 
 // KeepsFocus implements [gunim.FocusKeeper]: a click on a toast leaves
@@ -600,9 +602,7 @@ func (c *toastCard) Children() []gunim.Node {
 	if c.buttons != nil {
 		out = append(out, c.buttons)
 	}
-	if n := c.corner(); n != nil {
-		out = append(out, n)
-	}
+	out = append(out, c.corner()...)
 	if c.mark != nil {
 		out = append(out, c.mark)
 	}
@@ -653,31 +653,39 @@ func (c *toastCard) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Children
 		left += IconSize.Get(th) + IconGap.Get(th)
 	}
 	room := w - left - pad.Right
-	// The action, or the close button, sits at the right of the title.
-	var act, title geom.Size
+	// The close button, and the action before it, sit at the right of
+	// the title; act is the width they take.
+	var act float32
+	var title geom.Size
 	// line is the height of the title's first line, which the icon sits beside.
 	var line float32
 	y := pad.Top
 	corner := c.corner()
+	// Children lists the corner in its order, from the right.
 	for k := range kids.All {
-		if corner != nil && k.Node() == corner {
-			act = k.Layout(gunim.Constraints{Max: geom.Sz(room, 0)})
-			top := pad.Top
-			if corner == gunim.Node(c.close) {
-				// The close button's box is larger than its cross; it
-				// keeps to the corner rather than push the title down.
-				top = pad.Top / 2
-			}
-			k.Place(geom.Pt(w-pad.Right-act.W, top))
+		if !slices.Contains(corner, k.Node()) {
+			continue
 		}
+		if act > 0 {
+			act += Gap.Get(th)
+		}
+		s := k.Layout(gunim.Constraints{Max: geom.Sz(max(0, room-act), 0)})
+		act += s.W
+		top := pad.Top
+		if k.Node() == gunim.Node(c.close) {
+			// The close button's box is larger than its cross; it
+			// keeps to the corner rather than push the title down.
+			top = pad.Top / 2
+		}
+		k.Place(geom.Pt(w-pad.Right-act, top))
 	}
 	for k := range kids.All {
-		switch n := k.Node(); n {
-		case corner, gunim.Node(c.mark):
+		switch n := k.Node(); {
+		case slices.Contains(corner, n), n == gunim.Node(c.mark):
 		default:
 			r := room
-			if n == gunim.Node(c.title) && act.W > 0 {
-				r = max(0, room-act.W-Gap.Get(th))
+			if n == gunim.Node(c.title) && act > 0 {
+				r = max(0, room-act-Gap.Get(th))
 			}
 			cs := gunim.Constraints{Max: geom.Sz(r, 0)}
 			if c.buttons != nil && n == gunim.Node(c.buttons) {

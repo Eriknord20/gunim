@@ -266,3 +266,40 @@ func TestAnErrorToastStaysUntilClosedAndItsTextCopies(t *testing.T) {
 		t.Fatalf("after its close button, %d toasts showing, want 0", n)
 	}
 }
+
+func TestAnErrorToastKeepsItsActionBesideItsCloseButton(t *testing.T) {
+	h := &toastHost{t: &Toasts{}}
+	w, run := stage(t, h)
+	type do struct{ fn func(u *gunim.UI) }
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, d do, u *gunim.UI) { d.fn(u) })
+	on := func(fn func(u *gunim.UI)) {
+		if err := w.Client().Patch("stage", do{fn}); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+	}
+	on(func(u *gunim.UI) {
+		h.t.Show(Toast{Title: "Could not save", Kind: ToastError, Action: "Retry", OnClick: Sends(undone{3})}, u)
+	})
+	run(40)
+	card := h.t.cards[0]
+	var act, closer, title geom.Rect
+	on(func(u *gunim.UI) {
+		act, _ = u.Bounds(card.action)
+		closer, _ = u.Bounds(card.close)
+		title, _ = u.Bounds(card.title)
+	})
+	if act.Empty() || closer.Empty() {
+		t.Fatalf("the action is at %v and the close button at %v", act, closer)
+	}
+	if title.Max.X > act.Min.X || act.Max.X > closer.Min.X {
+		t.Fatalf("title %v, action %v, close %v; want them in that order, apart", title, act, closer)
+	}
+	at := act.Center()
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	run(1)
+	if got := sent(w); len(got) != 1 || got[0] != (undone{3}) {
+		t.Fatalf("a click on Retry sent %v", got)
+	}
+}
