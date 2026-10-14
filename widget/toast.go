@@ -566,9 +566,6 @@ func (c *toastCard) closer(then func(u *gunim.UI) gunim.Intent) {
 	}
 }
 
-// asks reports whether the card is of a toast that asks.
-func (c *toastCard) asks() bool { return c.buttons != nil }
-
 // stays reports whether the card stays until it is closed: a toast that
 // asks, or an error.
 func (c *toastCard) stays() bool { return c.close != nil }
