@@ -249,8 +249,9 @@ func registeredAs(id string) (plug.Descriptor, bool) {
 	return d, ok
 }
 
-// The modules loaded by Load, by path: loaded once, kept while the
-// program runs, as a plugin's library is seldom safe to unload.
+// The modules loaded by Load, by path: loaded once, kept until
+// Shutdown, as a plugin's library is seldom safe to unload while the
+// program runs.
 var (
 	modulesMu sync.Mutex
 	modules   = map[string]*Module{}
@@ -270,6 +271,26 @@ func Load(path string) (*Module, error) {
 	}
 	modules[path] = m
 	return m, nil
+}
+
+// Shutdown closes the modules Load loaded, each running its exit before
+// the program's, and ends the plugins' thread. A program calls it as it
+// ends, once it has closed the plugins made from them, and their
+// editors: some modules crash as they unload with the process instead,
+// their exit not run. Load loads a module again after.
+func Shutdown() error {
+	modulesMu.Lock()
+	ms := modules
+	modules = map[string]*Module{}
+	modulesMu.Unlock()
+	var errs []error
+	for _, m := range ms {
+		if err := m.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("vst3: %s: %w", m.Path, err))
+		}
+	}
+	stopUI()
+	return errors.Join(errs...)
 }
 
 // ErrNotFound is the error of RegisterID for a class none of the

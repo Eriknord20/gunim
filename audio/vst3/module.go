@@ -208,6 +208,10 @@ func (m *Module) classes(keep func(Class) bool) []Class {
 // create makes an object of class id, as the interface iid.
 func (m *Module) create(id, iid uid) uintptr {
 	var obj uintptr
+	if m.factory == 0 {
+		// Closed.
+		return 0
+	}
 	if result(call(m.factory, mCreateInstance, uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(&iid)),
 		uintptr(unsafe.Pointer(&obj)))) != resultOK {
 		return 0
@@ -216,7 +220,8 @@ func (m *Module) create(id, iid uid) uintptr {
 }
 
 // Close lets go of the module's factory and unloads its library. The
-// plugins made from it must be closed first.
+// plugins made from it must be closed first. Closing it again does
+// nothing.
 func (m *Module) Close() error {
 	var err error
 	onUI(func() {
@@ -225,6 +230,7 @@ func (m *Module) Close() error {
 			m.factory = 0
 		}
 		err = m.lib.close()
+		m.lib = library{}
 	})
 	return err
 }

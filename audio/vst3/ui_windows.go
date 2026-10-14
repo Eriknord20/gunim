@@ -21,6 +21,7 @@ var (
 	translateMessage = user32.NewProc("TranslateMessage")
 	dispatchMessage  = user32.NewProc("DispatchMessageW")
 	postMessage      = user32.NewProc("PostMessageW")
+	postQuitMessage  = user32.NewProc("PostQuitMessage")
 	setTimer         = user32.NewProc("SetTimer")
 	loadCursor       = user32.NewProc("LoadCursorW")
 	getModuleHandle  = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetModuleHandleW")
@@ -122,6 +123,14 @@ func uiRun(ready chan struct{}) {
 		_, _, _ = translateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		_, _, _ = dispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
 	}
+}
+
+// quitUI ends the thread, run on it: its window goes, with its timer,
+// and its loop ends.
+func quitUI() {
+	_, _, _ = destroyWindow.Call(msgWindow)
+	msgWindow = 0
+	_, _, _ = postQuitMessage.Call(0)
 }
 
 // wake tells the thread work waits.
