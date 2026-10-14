@@ -33,6 +33,8 @@ var x struct {
 	SetWMProtocols     func(dpy, win uintptr, atoms *uintptr, n int32) int32
 	SelectInput        func(dpy, win uintptr, mask int64) int32
 	MapRaised          func(dpy, win uintptr) int32
+	UnmapWindow        func(dpy, win uintptr) int32
+	MoveWindow         func(dpy, win uintptr, x, y int32) int32
 	ResizeWindow       func(dpy, win uintptr, w, h uint32) int32
 	DestroyWindow      func(dpy, win uintptr) int32
 	Pending            func(dpy uintptr) int32
@@ -54,6 +56,7 @@ func loadX() error {
 			"XCreateSimpleWindow": &x.CreateSimpleWindow, "XStoreName": &x.StoreName,
 			"XInternAtom": &x.InternAtom, "XSetWMProtocols": &x.SetWMProtocols,
 			"XSelectInput": &x.SelectInput, "XMapRaised": &x.MapRaised, "XResizeWindow": &x.ResizeWindow,
+			"XUnmapWindow": &x.UnmapWindow, "XMoveWindow": &x.MoveWindow,
 			"XDestroyWindow": &x.DestroyWindow, "XPending": &x.Pending, "XNextEvent": &x.NextEvent,
 			"XFlush": &x.Flush,
 		} {
@@ -81,6 +84,12 @@ func pumpX() {
 		typ := int32(binary.LittleEndian.Uint32(b))
 		id := uintptr(binary.LittleEndian.Uint64(b[32:]))
 		switch typ {
+		case 17: // DestroyNotify
+			// Only a child goes this way still known: with its parent,
+			// which the host closed first.
+			if w := windowsByID[id]; w != nil && w.child {
+				w.e.lost()
+			}
 		case 33: // ClientMessage
 			if w := windowsByID[id]; w != nil && uintptr(binary.LittleEndian.Uint64(b[56:])) == x.deleteWindow {
 				w.e.close()
@@ -100,28 +109,37 @@ func pumpX() {
 	}
 }
 
-// window is an editor's window.
+// window is an editor's window: one of its own, or, with child set, a
+// child of the host's.
 type window struct {
 	id     uintptr
 	e      *editor
 	w, h   int
 	sizing bool
+	child  bool
 }
 
-// newWindow makes a window of w×h, titled title, for e.
-func newWindow(title string, w, h int, e *editor) (*window, error) {
+// newWindow makes a window of w×h for e: one of its own, titled title,
+// or, where parent is set, an unmapped child of parent's.
+func newWindow(title string, w, h int, e *editor, parent uintptr) (*window, error) {
 	if err := loadX(); err != nil {
 		return nil, err
 	}
-	id := x.CreateSimpleWindow(x.dpy, x.DefaultRootWindow(x.dpy), 0, 0, uint32(w), uint32(h), 0, 0, 0)
+	in := parent
+	if in == 0 {
+		in = x.DefaultRootWindow(x.dpy)
+	}
+	id := x.CreateSimpleWindow(x.dpy, in, 0, 0, uint32(w), uint32(h), 0, 0, 0)
 	if id == 0 {
 		return nil, errors.New("vst3: X made no window")
 	}
-	x.StoreName(x.dpy, id, title)
-	atom := x.deleteWindow
-	x.SetWMProtocols(x.dpy, id, &atom, 1)
+	if parent == 0 {
+		x.StoreName(x.dpy, id, title)
+		atom := x.deleteWindow
+		x.SetWMProtocols(x.dpy, id, &atom, 1)
+	}
 	x.SelectInput(x.dpy, id, 1<<17) // StructureNotifyMask
-	win := &window{id: id, e: e, w: w, h: h}
+	win := &window{id: id, e: e, w: w, h: h, child: parent != 0}
 	windowsByID[id] = win
 	x.Flush(x.dpy)
 	return win, nil
@@ -142,11 +160,27 @@ func (w *window) resize(cw, ch int) {
 	x.Flush(x.dpy)
 }
 
+// place moves a child to x, y in its parent and shows it.
+func (w *window) place(px, py int) {
+	x.MoveWindow(x.dpy, w.id, int32(px), int32(py))
+	x.MapRaised(x.dpy, w.id)
+	x.Flush(x.dpy)
+}
+
+// hide hides a child.
+func (w *window) hide() {
+	x.UnmapWindow(x.dpy, w.id)
+	x.Flush(x.dpy)
+}
+
 func (w *window) destroy() {
 	delete(windowsByID, w.id)
 	x.DestroyWindow(x.dpy, w.id)
 	x.Flush(x.dpy)
 }
+
+// forget lets go of a window the server destroyed.
+func (w *window) forget() { delete(windowsByID, w.id) }
 
 // The host's run loop, which a Linux editor asks its frame for.
 
