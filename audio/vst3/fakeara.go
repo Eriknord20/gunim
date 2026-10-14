@@ -368,7 +368,9 @@ func (d *fakeDoc) startAnalysis(s *fakeSource) {
 		// host's code, run on it, grows it; pinned, it lies on the heap.
 		bufs := make([]uintptr, s.channels)
 		var pin runtime.Pinner
-		pin.Pin(&bufs[0])
+		if len(bufs) > 0 {
+			pin.Pin(&bufs[0])
+		}
 		defer pin.Unpin()
 		var d64 [][]float64
 		for c := range samples {
