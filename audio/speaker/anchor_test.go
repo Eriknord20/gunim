@@ -3,6 +3,7 @@ package speaker
 import (
 	"math"
 	"math/rand/v2"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,32 +219,99 @@ func TestAnchoringMakesNothing(t *testing.T) {
 	}
 }
 
+// TestABusyMomentLeavesTheAnchor: a host takes a buffer each buffer's
+// time and asks for the anchor at once, as the fake driver below does,
+// and is held up a moment: the buffers that came due meanwhile come at
+// once after. The anchor keeps to the buffers' pace through it, with a
+// sample the speaker takes itself in the moment or without.
+func TestABusyMomentLeavesTheAnchor(t *testing.T) {
+	period := 256 * time.Second / 48000
+	for _, ms := range []int{20, 30, 40, 100, 200} {
+		for _, watched := range []bool{false, true} {
+			held := time.Duration(ms) * time.Millisecond
+			var d dll
+			start := time.Unix(1000, 0)
+			busy := start.Add(150 * period)
+			for k := range int64(300) {
+				due := start.Add(time.Duration(k) * period)
+				at := due
+				if !due.Before(busy) && due.Before(busy.Add(held)) {
+					if watched && at.Equal(busy) {
+						d.sample((k-1)*256, busy.Add(held/2), 48000)
+					}
+					at = busy.Add(held)
+				}
+				a := d.sample(k*256, at.Add(time.Duration(k%7)*time.Microsecond), 48000)
+				// Half a second in, the loop has found the line.
+				if off := a.TimeOf(k * 256).Sub(due).Abs(); k >= 100 && off > 4*time.Millisecond {
+					t.Fatalf("held %v, watched %v: buffer %d placed %v from when it was due", held, watched, k, off)
+				}
+			}
+			if d.started != 0 {
+				t.Errorf("held %v, watched %v: the loop started again", held, watched)
+			}
+		}
+	}
+}
+
+// TestTheAnchorKeepsToACoarseClock: Windows may read [time.Now] from a
+// clock that ticks each 15.6 ms, so a host taking a buffer each 5.3 ms
+// sees three at a time, and a hold-up as well. The anchor places them
+// within a tick still.
+func TestTheAnchorKeepsToACoarseClock(t *testing.T) {
+	period := 256 * time.Second / 48000
+	const tick = 15625 * time.Microsecond
+	start := time.Unix(1000, 0)
+	coarse := func(t time.Time) time.Time { return start.Add(t.Sub(start).Truncate(tick)) }
+	var d dll
+	busy := start.Add(150 * period)
+	for k := range int64(300) {
+		due := start.Add(time.Duration(k) * period)
+		at := due
+		if !due.Before(busy) && due.Before(busy.Add(50*time.Millisecond)) {
+			at = busy.Add(50 * time.Millisecond)
+		}
+		a := d.sample(k*256, coarse(at), 48000)
+		if off := a.TimeOf(k * 256).Sub(due).Abs(); k >= 100 && off > tick {
+			t.Fatalf("buffer %d placed %v from when it was due, want within a tick", k, off)
+		}
+	}
+}
+
 // TestASpeakersAnchorFollowsItsDriver plays through a fake ASIO driver
-// that takes a buffer each buffer's time, and checks the frame heard
-// now is placed now: within 20 ms, and two ticks of the clock more.
-// Windows reads [time.Now] from a clock that ticks each 15.6 ms, so
-// there the fake takes its buffers in bursts, and the anchor learns
-// from times a tick old.
+// that takes a buffer each buffer's time, on a clock of the test's own,
+// and checks the frame heard is placed when the driver took it. The
+// fake driver's pace is the test's: were the test held up a moment, as
+// on a busy runner, its buffers would come late and then at once, and
+// the frames heard would not keep to any one line. So the test keeps
+// the clock, and lets the ring fill before each buffer; the two tests
+// above follow the anchor through such moments, and Windows' clock.
 func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
+	var at atomic.Int64
+	start := time.Unix(1000, 0)
+	was := clock
+	clock = func() time.Time { return start.Add(time.Duration(at.Load())) }
+	t.Cleanup(func() { clock = was })
 	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
 	m := audio.NewMixer()
 	s, err := Open(m, Options{Driver: "Fake", Latency: 30 * time.Millisecond, Fixed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the ring to fill", ringOf(t, s).primed.Load)
+	r := ringOf(t, s)
+	full := func() bool { return r.q.Load().len() >= r.target.Load() }
+	waitFor(t, "the ring to fill", r.primed.Load)
 	period := 256 * time.Second / 48000
-	start := time.Now()
 	var a Anchor
-	for k := 1; k <= 300; k++ {
+	for k := range 300 {
+		at.Store(int64(time.Duration(k) * period))
 		f.take()
+		waitFor(t, "the ring to fill again", full)
 		a = s.Anchor()
-		time.Sleep(time.Until(start.Add(time.Duration(k) * period)))
 	}
-	now := time.Now()
-	want := 20*time.Millisecond + 2*clockTick()
-	if off := a.TimeOf(s.Heard()).Sub(now).Abs(); off > want {
-		t.Errorf("the frame heard now is placed %v from now, want within %v", off, want)
+	took := clock()
+	if off := a.TimeOf(s.Heard()).Sub(took).Abs(); off > 4*time.Millisecond {
+		t.Errorf("the frame heard last is placed %v from when the driver took it, want within 4 ms", off)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -251,19 +319,4 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 	if a := s.Anchor(); a != (Anchor{}) {
 		t.Errorf("a closed speaker's anchor is %+v, want the zero Anchor", a)
 	}
-}
-
-// clockTick returns how far [time.Now] steps when it moves: tens of
-// nanoseconds on Linux, 15.6 ms on Windows.
-func clockTick() time.Duration {
-	var tick time.Duration
-	for range 3 {
-		was := time.Now()
-		now := was
-		for now.Sub(was) == 0 {
-			now = time.Now()
-		}
-		tick = max(tick, now.Sub(was))
-	}
-	return tick
 }
