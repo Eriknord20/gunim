@@ -16,7 +16,10 @@ const scriptPause = 700 * time.Millisecond
 // "theme:dark" to switch the theme, "big-copy" or
 // "big-copy:MB a second" to copy a 2 GB file slowly,
 // "edit-favourite:name" to open the Edit favourite dialog of the
-// favourite of that name, or "wait" to do nothing.
+// favourite of that name, "usage-by:all", ":device" or ":online" and
+// "usage-colour:type" or ":cloud" to change how Disk usage looks,
+// "usage-focus:key" to show a folder of it in its boxes, or "wait" to do
+// nothing.
 func (a *app) runScript() {
 	time.AfterFunc(scriptPause, func() {
 		a.post(func() {
@@ -58,6 +61,8 @@ func (a *app) scriptStep(step string) {
 				return
 			}
 		}
+	case "usage-by", "usage-colour", "usage-focus":
+		a.usageStep(verb, arg)
 	case "wait":
 	default:
 		if a.scriptDnd(verb, arg) {

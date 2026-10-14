@@ -1,0 +1,283 @@
+package filemanager
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/marrasen/gunim"
+)
+
+// usageEvery is how often Disk usage shows what has been read, while it
+// reads.
+const usageEvery = 400 * time.Millisecond
+
+// usageState is the Disk usage page: whether it shows, the folder it
+// reads, and how the user looks at it.
+type usageState struct {
+	open bool
+	// opened counts the pages opened, for each one's ID, and the scans
+	// started, for each one's Seq.
+	opened int
+	id     gunim.ID
+	seq    int
+	gen    int
+	root   string
+	scan   *scanner
+	cancel context.CancelFunc
+	// focus is the key of the folder the boxes show, and shut the folders
+	// the tree has open, by key.
+	focus   string
+	folders map[string]bool
+	measure Measure
+	colour  ColourBy
+	// free and space are the bytes free and in all on the drive.
+	free, space uint64
+	// last is the state sent last, which a pane coming to a window shows.
+	last Usage
+}
+
+// stop stops the reading.
+func (s *usageState) stop() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+}
+
+// handleUsage takes the intents of Disk usage.
+func (a *app) handleUsage(in gunim.Intent) bool {
+	s := &a.usage
+	switch v := in.(type) {
+	case Command:
+		if v.Name != CmdUsage {
+			return false
+		}
+		a.openUsage(a.usageTarget())
+	case UsageFocus:
+		if v.Seq == s.seq && s.open {
+			s.focus = v.Key
+			a.publishUsage()
+		}
+	case UsageOpened:
+		if v.Seq == s.seq && s.open {
+			if v.Open {
+				s.folders[v.Key] = true
+			} else {
+				delete(s.folders, v.Key)
+			}
+			a.publishUsage()
+		}
+	case UsageSet:
+		if v.Seq == s.seq && s.open {
+			s.measure, s.colour = v.Measure, v.Colour
+			a.publishUsage()
+		}
+	case UsageAct:
+		if v.Seq == s.seq && s.open {
+			a.usageAct(v.Key, v.Act)
+		}
+	case UsageClosed:
+		if v.Seq == s.seq && s.open {
+			a.closeUsage(false)
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// usageTarget is the folder Disk usage reads: the one folder selected,
+// or else the folder showing.
+func (a *app) usageTarget() string {
+	if es := a.selectedEntries(); len(es) == 1 && es[0].Kind == KindFolder {
+		return a.ps.Join(a.nav.path, es[0].Name)
+	}
+	return a.nav.path
+}
+
+// openUsage shows Disk usage, reading root.
+func (a *app) openUsage(root string) {
+	if root == "" {
+		return
+	}
+	s := &a.usage
+	a.closeViewer()
+	s.stop()
+	s.seq++
+	s.gen = 0
+	s.root, s.focus, s.folders = root, "", map[string]bool{}
+	s.free, s.space = 0, 0
+	fsys := a.fs
+	if a.nav.archive == "" {
+		// Outside an archive, the file system itself, so a zip on the way
+		// counts as the file it is, and no path is looked up in one.
+		fsys = unwrapFS(fsys)
+	}
+	s.scan = newScanner(fsys, root)
+	ctx, cancel := context.WithCancel(a.ctx)
+	s.cancel = cancel
+	seq, scan := s.seq, s.scan
+	go scan.run(ctx, func() { a.post(func() { a.usageRead(seq) }) })
+	go func() {
+		t := time.NewTicker(usageEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				a.post(func() {
+					if seq == a.usage.seq && a.usage.open {
+						a.publishUsage()
+					}
+				})
+			}
+		}
+	}()
+	if sr, ok := optional[SpaceReporter](fsys); ok {
+		go func() {
+			free, total, err := sr.Space(root)
+			if err != nil {
+				return
+			}
+			a.post(func() {
+				if seq == a.usage.seq {
+					a.usage.free, a.usage.space = free, total
+				}
+			})
+		}()
+	}
+	if !s.open {
+		s.open = true
+		s.opened++
+		s.id = a.ids.usage(s.opened)
+		s.last = a.usageState()
+		a.mountUsage(true)
+		return
+	}
+	a.publishUsage()
+}
+
+// mountUsage shows the page over the browser, under any dialog asking,
+// and with focus gives it the keyboard.
+func (a *app) mountUsage(focus bool) {
+	a.send(a.c.Mount(a.ids.browser(), a.usage.id, "usage", a.usage.last))
+	if focus && len(a.ops.dialogs) == 0 {
+		a.send(a.c.Focus(a.usage.id))
+	}
+}
+
+// usageRead takes word that the reading of scan seq has ended.
+func (a *app) usageRead(seq int) {
+	s := &a.usage
+	if seq != s.seq || !s.open {
+		return
+	}
+	// Stops the ticking too.
+	s.stop()
+	if st := s.scan; st != nil {
+		st.mu.Lock()
+		errs, first := st.errs, st.first
+		st.mu.Unlock()
+		if errs > 0 {
+			a.logLine("Reading the disk usage of "+a.ps.Show(s.root), plural(errs, "folder")+" could not be read, the first "+first)
+		}
+	}
+	a.publishUsage()
+}
+
+// usageState is the page's state as it is now.
+func (a *app) usageState() Usage {
+	s := &a.usage
+	u := s.scan.snapshot(s.focus, s.folders, s.measure)
+	s.gen++
+	u.Seq, u.Gen = s.seq, s.gen
+	u.Root, u.Paths = s.root, a.ps
+	u.Where = a.shell.Where
+	u.Free, u.Space = s.free, s.space
+	u.Measure, u.Colour = s.measure, s.colour
+	if !u.Cloud {
+		u.Measure = MeasureAll
+	}
+	s.focus = u.Focus
+	return u
+}
+
+// publishUsage sends the page its state.
+func (a *app) publishUsage() {
+	s := &a.usage
+	if !s.open || s.scan == nil {
+		return
+	}
+	s.last = a.usageState()
+	a.send(a.c.Update(s.id, s.last))
+}
+
+// usageStep runs a step of a script that changes how Disk usage looks.
+func (a *app) usageStep(verb, arg string) {
+	s := &a.usage
+	if !s.open {
+		return
+	}
+	switch verb {
+	case "usage-by":
+		s.measure = map[string]Measure{"all": MeasureAll, "device": MeasureDevice, "online": MeasureOnline}[arg]
+	case "usage-colour":
+		s.colour = map[string]ColourBy{"type": ColourType, "cloud": ColourCloud}[arg]
+	case "usage-focus":
+		s.focus = arg
+	}
+	a.publishUsage()
+}
+
+// usageAct does what the page asks to item key.
+func (a *app) usageAct(key, act string) {
+	s := &a.usage
+	key, _, rest := strings.Cut(key, "\x00")
+	switch act {
+	case UsageRead:
+		a.openUsage(s.root)
+		return
+	case UsageStop:
+		s.stop()
+		return
+	}
+	path := s.root
+	if key != "" {
+		path = a.ps.Join(append([]string{s.root}, strings.Split(key, "/")...)...)
+	}
+	switch act {
+	case UsageShow:
+		dir, name := a.ps.Dir(path), a.ps.Base(path)
+		if rest || key == "" {
+			dir, name = path, ""
+		}
+		a.closeUsage(true)
+		a.navigate(dir, 0, true)
+		if name != "" {
+			a.nav.pick = []string{name}
+		}
+	case UsageOpen:
+		if rest {
+			return
+		}
+		a.openFiles([]string{path})
+	}
+}
+
+// closeUsage closes the page, and drops what it read. unmount takes it
+// away, where the page has not closed itself.
+func (a *app) closeUsage(unmount bool) {
+	s := &a.usage
+	if !s.open {
+		return
+	}
+	s.open = false
+	s.stop()
+	s.scan, s.folders, s.last = nil, nil, Usage{}
+	if unmount {
+		a.send(a.c.Unmount(s.id))
+	}
+	a.patch(FocusListing{})
+}

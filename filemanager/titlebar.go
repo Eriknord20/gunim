@@ -72,6 +72,7 @@ var menus = []struct {
 		{"Details", "Ctrl+1", CmdViewDetails},
 		{"Icons", "Ctrl+2", CmdViewIcons},
 		{"View", "Space", CmdViewer},
+		{"Disk usage", "", CmdUsage},
 		{"-", "", ""},
 		{"Sort by name", "", CmdSortName},
 		{"Sort by size", "", CmdSortSize},

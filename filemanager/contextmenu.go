@@ -57,6 +57,7 @@ var rowItems = []menuItem{
 	{"-", "", ""},
 	{"Pin to favourites", "Ctrl+D", CmdPin},
 	{"Copy path", "Ctrl+Shift+C", localCopyPath},
+	{"Disk usage", "", CmdUsage},
 	{"Properties", "Alt+Enter", CmdProperties},
 }
 
@@ -78,6 +79,7 @@ var emptyItems = []menuItem{
 	{"-", "", ""},
 	{"Open in new window", "Ctrl+N", CmdNewWindow},
 	{"Copy path", "Ctrl+Shift+C", localCopyPath},
+	{"Disk usage", "", CmdUsage},
 	{"Properties", "Alt+Enter", CmdProperties},
 }
 
@@ -229,6 +231,10 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		if !one || sel[0].At == 0 {
 			// Only for an item the filter found in a folder under this one.
 			items = without(items, CmdGoToFolder)
+		}
+		if !one || sel[0].Kind != KindFolder {
+			// Only for a folder, which it reads.
+			items = without(items, CmdUsage)
 		}
 		if !one || sel[0].Dir || !isArchive(sel[0].Name) {
 			// Only for an archive it can open.
