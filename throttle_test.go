@@ -361,3 +361,47 @@ func TestATimerOfASteppedWindowRunsAfterItsSteps(t *testing.T) {
 		t.Fatalf("after 200 ms of steps, the timer of 150 ms ran %d times", ran)
 	}
 }
+
+// A window out of sight still applies the commands queued for it, once each awayApply at most, so the application
+// hears its own news: a job finishing in a window under others rings and sounds then, not when the window is back.
+func TestAWindowOutOfSightCatchesUpOnItsCommands(t *testing.T) {
+	for _, away := range []struct {
+		name string
+		ev   any
+	}{
+		{"hidden", driver.WindowShown{Shown: false}},
+		{"covered", driver.WindowCovered{Covered: true}},
+	} {
+		t.Run(away.name, func(t *testing.T) {
+			w := newTestWindow()
+			w.Frame(time.Second / 60)
+			w.Input(away.ev)
+			send := func() {
+				w.inMu.Lock()
+				w.queueLocked(Publish{Key: "news"})
+				w.inMu.Unlock()
+			}
+			send()
+			if !w.catchUp() || w.queued() {
+				t.Fatal("out of sight, the window did not apply its queued command")
+			}
+			send()
+			if w.catchUp() {
+				t.Fatal("the window applied its commands again straight away")
+			}
+			// The loop waits for the next catch-up, and wakes for it.
+			woke := make(chan bool, 1)
+			go func() { woke <- w.wait() }()
+			select {
+			case <-woke:
+			case <-time.After(10 * awayApply):
+				w.wake <- struct{}{}
+				<-woke
+				t.Fatal("the loop did not wake to apply the commands queued out of sight")
+			}
+			if !w.catchUp() || w.queued() {
+				t.Fatal("awake, the window did not apply its queued command")
+			}
+		})
+	}
+}

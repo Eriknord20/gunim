@@ -834,10 +834,12 @@ func (u *UI) popupCovered(s *surface, covered bool) {
 	}
 }
 
-// popupInSight reports whether a popup's window is open and not out of sight.
+// popupInSight reports whether a popup's window is open and not out of sight, or has yet to open. A popup opened
+// while the window is covered, such as a glow round it, opens with the next frame, and its own window then says
+// whether it can be seen: a ring reaching past the edges of a window in the background still shows.
 func (u *UI) popupInSight() bool {
 	for _, s := range u.popups {
-		if s.dw != nil && !s.covered {
+		if s.dw == nil && !s.closing || s.dw != nil && !s.covered {
 			return true
 		}
 	}

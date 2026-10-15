@@ -539,3 +539,28 @@ func TestACoveredWindowDrawsWhileItsPopupIsInSight(t *testing.T) {
 		t.Fatal("covered with its menu closed, the window draws")
 	}
 }
+
+// A popup opened while its window is covered, such as rings round a window in the background, opens with the next
+// frame: the window draws until the popup's own window says whether it can be seen.
+func TestACoveredWindowDrawsToOpenAPopup(t *testing.T) {
+	w, _, opener := newStage(t, paint.Identity)
+	w.Input(driver.WindowCovered{Covered: true})
+	if w.draws() {
+		t.Fatal("covered with no popup, the window draws")
+	}
+	w.ui.OpenPopup(opener, newMenu(), PopupOptions{Anchor: geom.Rect{Max: geom.Pt(100, 50)}, Passthrough: true, Over: true, Owned: true})
+	if !w.draws() {
+		t.Fatal("covered with a popup to open, the window does not draw")
+	}
+	run(w, 1)
+	if w.ui.popups[0].dw == nil {
+		t.Fatal("the popup's window did not open")
+	}
+	if !w.draws() {
+		t.Fatal("covered with its popup open and in sight, the window does not draw")
+	}
+	w.ui.popups[0].covered = true
+	if w.draws() {
+		t.Fatal("covered with its popup covered too, the window draws")
+	}
+}

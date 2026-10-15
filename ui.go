@@ -497,6 +497,8 @@ type Window struct {
 	strays     []Stray
 	// alarm wakes the loop for the next timer; see wait.
 	alarm *time.Timer
+	// caughtUp is when the window, out of sight, last applied the commands queued for it; see catchUp.
+	caughtUp time.Time
 
 	// inFlight is true from Present until the driver reports the frame
 	// shown. shown is when the last one was, and due is when the frame
@@ -1142,6 +1144,9 @@ func (w *Window) loop() {
 			w.draw()
 			continue
 		}
+		if w.catchUp() {
+			continue
+		}
 		if !w.wait() {
 			return
 		}
@@ -1152,10 +1157,7 @@ func (w *Window) loop() {
 // commands, running animations, or a node that asked for one more
 // frame.
 func (w *Window) wants() bool {
-	w.inMu.Lock()
-	queued := len(w.pending)
-	w.inMu.Unlock()
-	return queued > 0 || w.ui.needsFrame()
+	return w.queued() || w.ui.needsFrame()
 }
 
 // draws reports whether the window draws its frames: while it is
@@ -1167,6 +1169,29 @@ func (w *Window) draws() bool {
 		return w.ui.shotsOwed.Load() > 0
 	}
 	return !w.hidden && (!w.covered || w.ui.popupInSight()) || w.ui.goingAway || w.ui.fadeMoving() || w.ui.shotsOwed.Load() > 0
+}
+
+// awayApply is how often a window out of sight applies the commands queued for it.
+const awayApply = 250 * time.Millisecond
+
+// catchUp applies the commands queued for a window that draws no frames, once each awayApply at most, and reports
+// whether it did. Out of sight, the application still hears its own news: a job finishing in a window under others
+// plays its sound, and the rings it sends round the window open their popup, which shows past the window's edges.
+// The frame drawn once the window is back lays out what changed.
+func (w *Window) catchUp() bool {
+	if w.draws() || !w.queued() || time.Since(w.caughtUp) < awayApply {
+		return false
+	}
+	w.caughtUp = time.Now()
+	w.applyPending()
+	return true
+}
+
+// queued reports whether commands are waiting to be applied.
+func (w *Window) queued() bool {
+	w.inMu.Lock()
+	defer w.inMu.Unlock()
+	return len(w.pending) > 0
 }
 
 // wait blocks until something happens, handles it, and reports whether
@@ -1196,10 +1221,20 @@ func (w *Window) wait() bool {
 	// A window out of sight draws no frame, so a timer due then waits
 	// for the window to come back, and the frame drawn then runs it.
 	// Armed anyway, it would spin the loop for as long as the window
-	// stayed hidden or covered.
+	// stayed hidden or covered. Commands queued meanwhile wake it when
+	// catchUp is due to apply them.
 	var alarm <-chan time.Time
-	if at, ok := w.ui.nextTimer(); ok && !w.inFlight && w.draws() {
-		d := time.Until(wakeFor(at, w.shown, refreshInterval(w.dw.RefreshRate())))
+	var at time.Time
+	switch timer, ok := w.ui.nextTimer(); {
+	case w.draws():
+		if ok && !w.inFlight {
+			at = wakeFor(timer, w.shown, refreshInterval(w.dw.RefreshRate()))
+		}
+	case w.queued():
+		at = w.caughtUp.Add(awayApply)
+	}
+	if !at.IsZero() {
+		d := time.Until(at)
 		if w.alarm == nil {
 			w.alarm = time.NewTimer(d)
 		} else {
