@@ -78,7 +78,7 @@ func TestAModulatedKnobDrawsEveryFrame(t *testing.T) {
 	if k.Step(time.Second / 60) {
 		t.Fatal("a knob left alone keeps drawing")
 	}
-	for _, m := range []plug.Modulation{{Depth: 0.3, Now: 200}, {Depth: -2, Now: 5}, {Sets: true, Now: 1000}} {
+	for _, m := range []plug.Modulation{{High: 0.3, Now: 200}, {Low: -2, Now: 5}, {Low: -0.4, High: 0.4, Now: 150}, {Sets: true, Now: 1000}} {
 		h.mod[3] = m
 		if !k.Step(time.Second / 60) {
 			t.Fatalf("a knob moved by %+v rests", m)
@@ -90,7 +90,7 @@ func TestAModulatedKnobDrawsEveryFrame(t *testing.T) {
 // A knob whose parameter control moves asks for frames while the value
 // heard changes, and rests while it stands still.
 func TestAModulatedKnobRestsWhileItsValueStandsStill(t *testing.T) {
-	h := &menuHost{host: host{values: map[uint32]float64{3: 100}}, mod: map[uint32]plug.Modulation{release.ID: {Depth: 0.2, Now: 120}}}
+	h := &menuHost{host: host{values: map[uint32]float64{3: 100}}, mod: map[uint32]plug.Modulation{release.ID: {High: 0.2, Now: 120}}}
 	k := NewKnob(h, release)
 	if !k.Step(time.Second / 60) {
 		t.Fatal("a knob control moves asks for no frame as it first shows it")
@@ -100,7 +100,7 @@ func TestAModulatedKnobRestsWhileItsValueStandsStill(t *testing.T) {
 			t.Fatalf("step %d: a knob whose value heard stands still asks for frames", i)
 		}
 	}
-	h.mod[release.ID] = plug.Modulation{Depth: 0.2, Now: 130}
+	h.mod[release.ID] = plug.Modulation{High: 0.2, Now: 130}
 	if !k.Step(time.Second / 60) {
 		t.Fatal("a knob whose value heard moved asks for no frame")
 	}

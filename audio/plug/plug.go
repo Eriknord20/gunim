@@ -359,9 +359,11 @@ type ParamMenuHost interface {
 
 // Modulation is how control moves a parameter as it plays.
 type Modulation struct {
-	// Depth is how far the control wired to the parameter reaches from
-	// its value, along [Param.Normal], from -1 to 1.
-	Depth float64
+	// Low and High are how far the control wired to the parameter
+	// reaches below and above its value, along [Param.Normal], each from
+	// -1 to 1: an LFO that swings either way of zero reaches both ways,
+	// a control from 0 to 1 only one.
+	Low, High float64
 	// Now is the parameter's value as heard now.
 	Now float64
 	// Sets says control sets the value, as automation does, so the
