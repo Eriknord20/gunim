@@ -16,8 +16,9 @@ import (
 // Each frame a drag is held, the engine asks the scroll views around
 // it to scroll, by how near the pointer is to their edges. The content
 // then moves under a pointer that stands still, so the engine replays
-// the pointer where it is: the node holding the drag hears it move, and
-// a drag from [UI.StartDrag] lands on whatever is now under it.
+// the pointer where it is, with the keys held: the node holding the
+// drag hears it move, and a drag from [UI.StartDrag] lands on whatever
+// is now under it.
 
 // A DragHolder is a node that drags something while it holds the
 // pointer, such as a list whose rows the pointer drags into order.
@@ -115,7 +116,7 @@ func (u *UI) edgeScroll(dt time.Duration) bool {
 		back := at.Sub(s.screenAt(moved).Sub(s.screenAt(geom.Point{})))
 		if from == u.capture {
 			c := u.capture
-			u.deliver(c, input.PointerMove{Pos: u.localHeld(c, back), Time: u.now})
+			u.deliver(c, input.PointerMove{Pos: u.localHeld(c, back), Mods: u.mods, Time: u.now})
 		} else {
 			u.dragHover(back, u.dragOverData)
 		}
