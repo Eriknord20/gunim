@@ -16,6 +16,7 @@ var (
 	showWindow       = user32.NewProc("ShowWindow")
 	setForeground    = user32.NewProc("SetForegroundWindow")
 	setWindowPos     = user32.NewProc("SetWindowPos")
+	setLayeredAttrs  = user32.NewProc("SetLayeredWindowAttributes")
 	adjustWindowRect = user32.NewProc("AdjustWindowRectEx")
 	getMessage       = user32.NewProc("GetMessageW")
 	translateMessage = user32.NewProc("TranslateMessage")
@@ -167,6 +168,13 @@ const (
 	// sent to its parent, whose thread is the host's: a message sent
 	// there waits on it.
 	wsExNoParentNotify = 0x00000004
+	// wsExLayered gives a child a surface of its own to draw on. The
+	// host's window may have none (WS_EX_NOREDIRECTIONBITMAP), as a gunim
+	// window presenting through DirectComposition does, and a child
+	// drawing with GDI, Direct2D or OpenGL, as an editor does, draws into
+	// its parent's: there, nothing shows of it.
+	wsExLayered = 0x00080000
+	lwaAlpha    = 0x2
 )
 
 // newWindow makes a window of a client w×h for e: one of its own,
@@ -179,13 +187,32 @@ func newWindow(title string, w, h int, e *editor, parent uintptr) (*window, erro
 	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
 	if parent != 0 {
 		win.child = true
-		win.style, win.styleX = wsChild|wsClipChildren|wsClipSiblings, wsExNoParentNotify
+		win.style, win.styleX = wsChild|wsClipChildren|wsClipSiblings, wsExNoParentNotify|wsExLayered
 		x, y = 0, 0
 	}
 	t, _ := windows.UTF16PtrFromString(title)
 	ww, wh := win.outer(w, h)
-	hwnd, _, err := createWindowEx.Call(win.styleX, uintptr(unsafe.Pointer(editorClass)), uintptr(unsafe.Pointer(t)),
-		win.style, x, y, uintptr(ww), uintptr(wh), parent, 0, instance, 0)
+	create := func() (uintptr, error) {
+		hwnd, _, err := createWindowEx.Call(win.styleX, uintptr(unsafe.Pointer(editorClass)), uintptr(unsafe.Pointer(t)),
+			win.style, x, y, uintptr(ww), uintptr(wh), parent, 0, instance, 0)
+		return hwnd, err
+	}
+	hwnd, err := create()
+	if win.child {
+		if hwnd != 0 {
+			// Fully opaque: a layered window shows nothing until told how.
+			if r, _, _ := setLayeredAttrs.Call(hwnd, 0, 255, lwaAlpha); r == 0 {
+				_, _, _ = destroyWindow.Call(hwnd)
+				hwnd = 0
+			}
+		}
+		if hwnd == 0 {
+			// A system that has no layered children: a plain one, which
+			// shows where the host's window has a surface of its own.
+			win.styleX &^= wsExLayered
+			hwnd, err = create()
+		}
+	}
 	if hwnd == 0 {
 		return nil, err
 	}
