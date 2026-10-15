@@ -79,13 +79,26 @@ func (s *Section) dim(on bool) {
 	}
 }
 
-// Width is how wide the section is.
+// Width is how wide the section is: its controls', or its name's,
+// after the power lamp, where that is wider.
 func (s *Section) Width() float32 {
 	w := float32(len(s.Knobs))*KnobW + 2*SectionPad
 	for _, e := range s.extras {
 		w += e.w + SectionPad
 	}
-	return w
+	return max(w, s.nameX()+audioui.Shaped(s.Name, sectionText, true, false).Advance+SectionPad)
+}
+
+// sectionText is how big the section's name is.
+const sectionText = 10
+
+// nameX is where the section's name starts: after its power lamp,
+// where it has one.
+func (s *Section) nameX() float32 {
+	if s.Switch != nil {
+		return SectionPad + PowerSize
+	}
+	return SectionPad
 }
 
 // Follow takes a parameter set elsewhere, where it is the section's.
@@ -148,13 +161,8 @@ func (s *Section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	th := f.Theme
 	ink := widget.Ink.Get(th)
 	PaintGlass(p, th, geom.Rect{Max: box.Point()}, widget.CardRadius.Get(th))
-	name := audioui.Shaped(s.Name, 10, true, false)
-	x := float32(SectionPad)
-	if s.Switch != nil {
-		// After its power lamp.
-		x += PowerSize
-	}
-	name.Paint(p, geom.Pt(x, (SectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
+	name := audioui.Shaped(s.Name, sectionText, true, false)
+	name.Paint(p, geom.Pt(s.nameX(), (SectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
 	for k := range kids.All {
 		k.Paint(p)
 	}

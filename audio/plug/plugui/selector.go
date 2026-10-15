@@ -62,13 +62,21 @@ func (s *Selector) Cell(i int) geom.Rect { return s.cells[i] }
 // Selected returns the option chosen.
 func (s *Selector) Selected() int { return s.sel }
 
-// SetSelected chooses option i, as set elsewhere, its lamp gliding lit.
+// SetSelected chooses option i, as set elsewhere, its lamp gliding lit;
+// with no UI, as a selector is made, it is lit at once.
 func (s *Selector) SetSelected(i int, u *gunim.UI) {
 	i = min(max(i, 0), len(s.names)-1)
 	if i == s.sel {
 		return
 	}
 	s.sel = i
+	if u == nil {
+		for k, l := range s.lit {
+			l.Jump(onOff(k == s.sel))
+		}
+		s.shown.Jump(float32(s.sel))
+		return
+	}
 	s.glide(u)
 }
 

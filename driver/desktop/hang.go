@@ -72,7 +72,13 @@ func writeHang(late time.Duration) {
 	head := fmt.Sprintf("gunim: the main thread of %s has not answered for %.0f s, at %s; where each goroutine is:\n\n",
 		name, late.Seconds(), time.Now().Format(time.RFC3339))
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("gunim-hang-%s-%d-%s.txt", name, os.Getpid(), time.Now().Format("20060102-150405")))
-	if err := os.WriteFile(path, append([]byte(head), buf...), 0o600); err == nil {
+	// Written aside and renamed into place, the report shows only whole.
+	part := path + ".part"
+	err := os.WriteFile(part, append([]byte(head), buf...), 0o600)
+	if err == nil {
+		err = os.Rename(part, path)
+	}
+	if err == nil {
 		fmt.Fprintf(os.Stderr, "gunim: the main thread has not answered for %.0f s; where each goroutine is: %s\n", late.Seconds(), path)
 		return
 	}
