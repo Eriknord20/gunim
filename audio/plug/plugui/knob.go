@@ -49,9 +49,9 @@ const (
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
 // it is a [plug.ModulationHost], a ring outside the knob spans the
-// depth of the control moving the parameter, and a dot on the arc
-// shows its value as heard. A value that runs either side of zero fills its arc
-// from zero. It lights as the pointer comes over it, and its tooltip
+// reach of the control moving the parameter, either side of its value,
+// and a dot on the arc shows its value as heard. A value that runs
+// either side of zero fills its arc from zero. It lights as the pointer comes over it, and its tooltip
 // says how to turn it. A second button pressed mid-turn ends the turn
 // where it got to.
 type Knob struct {
@@ -245,9 +245,9 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 }
 
 // paintModulation draws how control moves the knob's value: a ring
-// outside the arc, of radius r about c, from the value, at t along it,
-// as far as the depth reaches, or all round where control sets the
-// value; and a dot on the arc at the value heard, all in ring.
+// outside the arc, of radius r about c, as far below and above the
+// value, at t along it, as the control reaches, or all round where
+// control sets the value; and a dot on the arc at the value heard, all in ring.
 func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, t float64, ring color.NRGBA) {
 	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
 	out := r + 5
@@ -255,7 +255,7 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 		a := from + sweep*t
 		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
 	}
-	t0, t1, a := t, min(max(t+m.Depth, 0), 1), float32(0.85)
+	t0, t1, a := min(max(t+m.Low, 0), 1), min(max(t+m.High, 0), 1), float32(0.85)
 	if m.Sets {
 		t0, t1, a = 0, 1, 0.35
 	}
