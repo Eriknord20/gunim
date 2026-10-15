@@ -923,6 +923,12 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 			action = Release
 		}
 
+		// gunim change: a press takes the keyboard back from a child
+		// window holding it. See win32_childfocus_windows.go.
+		if action == Press {
+			takeFocusFromChild(hWnd)
+		}
+
 		var i MouseButton
 		for i = 0; i <= MouseButtonLast; i++ {
 			if window.mouseButtons[i] == Press {
