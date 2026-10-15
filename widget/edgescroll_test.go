@@ -242,3 +242,59 @@ func TestADragHeldPastTheBottomOfAListOfTargetsScrollsIt(t *testing.T) {
 // halfPixel is half a device pixel of w, in logical pixels, and a little
 // over: how far what scrolls may be from where the pointer holds it.
 func halfPixel(w *gunim.Window) float64 { return 0.5/float64(w.Offscreen().Scale()) + 0.01 }
+
+// holder is a tall block that holds a drag from a press to a release,
+// and keeps the keys each move it hears says are held.
+type holder struct {
+	block
+	held bool
+	mods []input.Mods
+}
+
+func (h *holder) DragHeld() bool { return h.held }
+
+func (h *holder) Handle(e input.Event, _ *gunim.UI) bool {
+	switch e := e.(type) {
+	case input.PointerDown:
+		h.held = true
+	case input.PointerMove:
+		h.mods = append(h.mods, e.Mods)
+	case input.PointerUp:
+		h.held = false
+	}
+	return true
+}
+
+func TestAMoveMadeUpAsADragScrollsCarriesTheKeysHeld(t *testing.T) {
+	h := &holder{block: block{h: 2000}}
+	s := NewScroll(h)
+	w, run := stage(t, &frame{child: s, size: geom.Sz(300, 200)})
+	run(10)
+	w.Input(input.PointerDown{Pos: geom.Pt(100, 100), Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerMove{Pos: geom.Pt(100, 190), Time: time.Now()})
+	// Ctrl goes down with the pointer still at the edge: the moves made
+	// up as the view scrolls say it is held, and once it is let go, not.
+	w.Input(input.KeyPress{Key: input.KeyLeftControl, Time: time.Now()})
+	h.mods = nil
+	run(10)
+	if s.Offset() == 0 {
+		t.Fatal("the drag held at the edge scrolled nothing")
+	}
+	if len(h.mods) == 0 {
+		t.Fatal("the holder heard no move as the view scrolled")
+	}
+	for i, m := range h.mods {
+		if !m.Has(input.ModControl) {
+			t.Fatalf("move %d made up as the view scrolled has keys %v, want Ctrl", i, m)
+		}
+	}
+	w.Input(input.KeyRelease{Key: input.KeyLeftControl, Mods: input.ModControl, Time: time.Now()})
+	h.mods = nil
+	run(10)
+	for i, m := range h.mods {
+		if m.Has(input.ModControl) {
+			t.Fatalf("move %d after Ctrl was let go still has Ctrl", i)
+		}
+	}
+	w.Input(input.PointerUp{Pos: geom.Pt(100, 190), Time: time.Now()})
+}
