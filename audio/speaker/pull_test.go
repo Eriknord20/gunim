@@ -232,6 +232,34 @@ func TestSetChangesTheRate(t *testing.T) {
 	}
 }
 
+// TestBufferReachesTheDriver opens a driver with a buffer asked for,
+// and finds a change of it opening the driver again with the new one.
+func TestBufferReachesTheDriver(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
+	m := audio.NewMixer()
+	o := Options{Driver: "Fake", Buffer: 64}
+	s, err := Open(m, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f.mu.Lock()
+	got := f.cfg.Buffer
+	f.mu.Unlock()
+	if got != 64 {
+		t.Errorf("the driver was asked for a buffer of %d, want 64", got)
+	}
+	o.Buffer = 128
+	if err := s.Set(o); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.opens != 2 || f.cfg.Buffer != 128 {
+		t.Errorf("the driver opened %d times, last with a buffer of %d, want 2 and 128", f.opens, f.cfg.Buffer)
+	}
+}
+
 // TestADriverThatFailedOpensItsSettings has a driver fail to open, opens
 // its settings, and finds the speaker trying it again after.
 func TestADriverThatFailedOpensItsSettings(t *testing.T) {
