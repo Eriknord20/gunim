@@ -63,7 +63,7 @@ type ringOutput struct {
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
-	c := asio.Config{Name: o.Driver, Rate: o.rate(), Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
+	c := asio.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
 	if len(o.Outputs) > 2 {
 		r.chans = len(o.Outputs)
 		c.FillN = r.takeN
@@ -79,6 +79,8 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 		return nil, err
 	}
 	r.dev, r.info = dev, dev.Info()
+	s.logf("%s takes %d frames at a time (asked %d; it allows %d to %d, prefers %d), and reports %d frames of output latency and %d of input",
+		r.info.Driver, r.info.Buffer, o.Buffer, r.info.MinBuffer, r.info.MaxBuffer, r.info.PreferredBuffer, r.info.Latency, r.info.InputLatency)
 	r.q.Store(newRing(int(audio.FramesAt(MaxLatency, r.info.Rate))+2*r.info.Buffer+4096, r.chans))
 	return r, nil
 }

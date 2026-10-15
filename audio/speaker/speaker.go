@@ -67,6 +67,11 @@ type Options struct {
 	// mixer is late to fill it, the speaker works further ahead, 10
 	// milliseconds at a time, as far as [MaxLatency].
 	Fixed bool
+	// Buffer is how many frames an ASIO driver takes at a time, brought
+	// to the nearest size the driver allows. Zero takes the size its
+	// control panel sets. The latency is never less than a buffer and
+	// the driver's own latency, whatever Latency asks for.
+	Buffer int
 	// Record opens the inputs of the ASIO driver too, for package
 	// audio/capture to record. A driver may then open a device of its
 	// own to record from, as FlexASIO and ASIO4ALL open Windows'
@@ -388,10 +393,10 @@ func (s *Speaker) SetLatency(d time.Duration) {
 }
 
 // Set changes how the speakers play. A change of driver or rate, or of
-// Record or Outputs while a driver plays, opens the output again, with
-// a moment's silence; the mixer's rate follows,
-// and [Speaker.Changed] tells of it. A change of Latency or Fixed sets
-// how far ahead the mixer works from where it is.
+// Buffer, Record or Outputs while a driver plays, opens the output
+// again, with a moment's silence; the mixer's rate follows, and
+// [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
+// far ahead the mixer works from where it is.
 func (s *Speaker) Set(o Options) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -405,7 +410,7 @@ func (s *Speaker) Set(o Options) error {
 		s.setAhead(o.latency())
 	}
 	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
-		(o.Driver != "" && (o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
+		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil
