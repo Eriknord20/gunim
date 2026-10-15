@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/marrasen/gunim/audioui"
+
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/audio/plug"
@@ -157,6 +159,20 @@ func TestASectionsPowerLampStandsBeforeItsName(t *testing.T) {
 	s.Switch.OnChange(false, nil)
 	if h.values[1] != 0 || !s.Knobs[0].Disabled {
 		t.Errorf("switched off, the parameter is %v and its knob greyed %v", h.values[1], s.Knobs[0].Disabled)
+	}
+}
+
+func TestASectionIsAsWideAsItsName(t *testing.T) {
+	d := &plug.Descriptor{Params: []plug.Param{{ID: 1, Name: "On", Max: 1, Steps: 1}, {ID: 2, Name: "A", Max: 1}}}
+	h := &host{values: map[uint32]float64{1: 1}}
+	short := NewSection(h, d, "EQ", 0, 2)
+	if want := float32(KnobW + 2*SectionPad); short.Width() != want {
+		t.Errorf("a knob under a short name stands %v wide, want %v", short.Width(), want)
+	}
+	long := NewSection(h, d, "A NAME FAR WIDER THAN ONE KNOB", 1, 2)
+	name := audioui.Shaped(long.Name, sectionText, true, false).Advance
+	if w := long.Width(); w < SectionPad+PowerSize+name+SectionPad {
+		t.Errorf("a knob under a long name, after a lamp, stands %v wide, short of its name's %v", w, name)
 	}
 }
 

@@ -41,6 +41,14 @@ func TestASelectorPicksByLampAndKeys(t *testing.T) {
 	}
 }
 
+func TestASelectorSetWithNoUIIsLitAtOnce(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	s.SetSelected(2, nil)
+	if s.lit[0].Value() != 0 || s.lit[2].Value() != 1 || s.shown.Value() != 2 || s.shown.Active() {
+		t.Errorf("set as it is made, the lamps stand at %v and %v, the name at %v", s.lit[0].Value(), s.lit[2].Value(), s.shown.Value())
+	}
+}
+
 func TestAKnobBoundToItsOwnValueTurnsItAsAGesture(t *testing.T) {
 	var log []string
 	v := 0.0
