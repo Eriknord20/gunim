@@ -143,7 +143,7 @@ func TestTheARATestPluginRendersAndRestoresItsDocument(t *testing.T) {
 	}
 	out := [][]float32{make([]float32, 512), make([]float32, 512)}
 	in := [][]float32{make([]float32, 512), make([]float32, 512)}
-	b := &plug.Block{Frames: 512, In: in, Out: out, Position: plug.Position{Frame: rate + 1000, Playing: true}}
+	b := &plug.Block{Frames: 512, In: in, Out: out, Position: plug.Position{Frame: rate + 1000, Song: rate + 1000, Playing: true}}
 	p.ProcessBlock(b)
 	want := [2][]float32{make([]float32, 512), make([]float32, 512)}
 	host.ReadAudio(src, 1000, want[:])

@@ -230,7 +230,7 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 	var blocks []plug.Block
 	for at := 0; at < frames; at += s.MaxBlock {
 		n := min(s.MaxBlock, frames-at)
-		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Playing: true, Tempo: p.Tempo, EndTempo: p.Tempo,
+		b := plug.Block{Frames: n, Position: plug.Position{Frame: int64(at), Song: int64(at), Playing: true, Tempo: p.Tempo, EndTempo: p.Tempo,
 			Beat: float64(at) * p.Tempo / 60 / s.Rate},
 			In: window(p.In, at, n), Out: window(out, 0, n), ControlIn: window(p.ControlIn, at, n),
 			ControlOut: window(controlOut, 0, n)}

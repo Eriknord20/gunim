@@ -56,7 +56,9 @@ func (p *Plugin) ProcessBlock(b *plug.Block) {
 		}
 	}
 	pos := b.Position
-	p.ctx.projectTime = pos.Frame
+	// The project's time is the playhead's, which a plugin draws and
+	// records by; the continuous time is the host's clock, which runs on.
+	p.ctx.projectTime, p.ctx.contTime = pos.Song, pos.Frame
 	p.ctx.state = ctxTimeSig | ctxContTime
 	// A song standing still is stopped, to the plugin, though the
 	// sound plays on.
