@@ -218,3 +218,38 @@ func TestTheHistoryFillsToItsLeftEdgeAsItCatchesUp(t *testing.T) {
 		t.Errorf("with 10 columns, the first drawn is %d", hs.firstShown())
 	}
 }
+
+func TestATaperTurnsTheKnobUnevenly(t *testing.T) {
+	gain := plug.Param{ID: 4, Name: "Gain", Min: -10, Max: 10}
+	h := &host{values: map[uint32]float64{4: 0}}
+	k := NewKnob(h, gain)
+	// The top half of the turn spans the top tenth of the values.
+	k.Taper = &Taper{
+		To: func(n float64) float64 {
+			if n <= 0.9 {
+				return n / 0.9 / 2
+			}
+			return 0.5 + (n-0.9)/0.1/2
+		},
+		From: func(t float64) float64 {
+			if t <= 0.5 {
+				return t * 2 * 0.9
+			}
+			return 0.9 + (t-0.5)*2*0.1
+		},
+	}
+	// From 0, at 0.278 of the turn, up a quarter of the throw: 0.528,
+	// which is 0.9056 along, or 8.11.
+	k.Handle(input.PointerDown{Pos: geom.Pt(20, 100), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	k.Handle(input.PointerMove{Pos: geom.Pt(20, 55)}, nil)
+	k.Handle(input.PointerUp{Pos: geom.Pt(20, 55), Button: input.ButtonPrimary}, nil)
+	want := gain.Plain(k.Taper.From(k.Taper.To(gain.Normal(0)) + 0.25))
+	if v := h.values[4]; math.Abs(v-want) > 1e-9 || v < 8 {
+		t.Errorf("a quarter of the throw up took the knob to %v, want %v", v, want)
+	}
+	// A step of a key moves a hundredth of the turn, not of the values.
+	k.Handle(input.KeyPress{Key: input.KeyUp}, nil)
+	if want := gain.Plain(k.Taper.From(k.Taper.To(gain.Normal(want)) + 0.01)); math.Abs(h.values[4]-want) > 1e-9 {
+		t.Errorf("a step of Up took the knob to %v, want %v", h.values[4], want)
+	}
+}
