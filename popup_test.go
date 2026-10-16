@@ -308,6 +308,43 @@ func TestAClosedPopupsWindowIsKeptForTheNext(t *testing.T) {
 	}
 }
 
+// A popup opened from within another keeps its window for popups from
+// that one, even when its opener has left the other's content by the
+// time it goes: a popup from the main window opens in a window of its own.
+func TestAPopupsWindowIsKeptForItsOwnParent(t *testing.T) {
+	w, opener, m, _ := openMenu(t, nil)
+	outer := w.ui.popups[0].dw
+	item := &recorder{}
+	w.ui.Insert(m, item)
+	w.ui.OpenPopup(item, newMenu(), PopupOptions{Anchor: geom.Rect{Max: geom.Pt(20, 20)}})
+	run(w, 1)
+	if len(w.ui.popups) != 2 || w.ui.popups[1].dw == nil {
+		t.Fatal("the inner popup's window did not open")
+	}
+	inner := w.ui.popups[1].dw.(*driver.OffscreenWindow)
+	w.ui.Remove(item)
+	for range 120 {
+		if len(w.ui.popups) == 1 {
+			break
+		}
+		shown(w, inner)
+		run(w, 1)
+	}
+	if len(w.ui.popups) != 1 || !inner.Hidden() {
+		t.Fatalf("there are %d popups, the inner one's window hidden %v", len(w.ui.popups), inner.Hidden())
+	}
+	for _, sp := range w.ui.spare {
+		if sp.dw == inner && sp.parent != outer {
+			t.Fatal("the inner popup's window was kept for another parent than the popup it opened from")
+		}
+	}
+	w.ui.OpenPopup(opener, newMenu(), PopupOptions{Anchor: geom.Rect{Max: geom.Pt(100, 50)}})
+	run(w, 1)
+	if w.ui.popups[len(w.ui.popups)-1].dw == inner {
+		t.Fatal("a popup from the main window opened in the window of a popup from another popup")
+	}
+}
+
 // card is popup content that draws a card on the top half of its box,
 // as a palette kept at its tallest does.
 type card struct{ menu }
