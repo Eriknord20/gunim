@@ -239,9 +239,15 @@ func (x *aDocument) analyse(t *testing.T) []Update {
 // render renders frames at song frame from through p, and returns its
 // left and right.
 func render(p *Plugin, from int64, frames int) [][]float32 {
+	return renderAt(p, plug.Position{Frame: from, Playing: true}, frames)
+}
+
+// renderAt renders frames at pos through p, and returns its left and
+// right.
+func renderAt(p *Plugin, pos plug.Position, frames int) [][]float32 {
 	out := [][]float32{make([]float32, frames), make([]float32, frames)}
 	b := &plug.Block{Frames: frames, In: [][]float32{make([]float32, frames), make([]float32, frames)}, Out: out,
-		Position: plug.Position{Frame: from, Playing: true}}
+		Position: pos}
 	p.ProcessBlock(b)
 	return out
 }
@@ -326,6 +332,11 @@ func TestARendererRendersItsRegionsWhereTheSongIs(t *testing.T) {
 	_ = p.ARA().SetRegions(x.r2)
 	if rms(render(p, 48100, 256)[0]) != 0 {
 		t.Fatal("the first region still sounds")
+	}
+	// A song standing still is stopped, to the plugin: it renders
+	// nothing, though the sound plays on.
+	if rms(renderAt(p, plug.Position{Frame: 4 * 48000, Playing: true, Still: true}, 256)[0]) != 0 {
+		t.Fatal("the renderer plays with the song standing still")
 	}
 	noViolations(t, x.a)
 }
