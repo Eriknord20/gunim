@@ -141,7 +141,9 @@ func (p *Painter) Replay(r *Recording) {
 		case *RibbonOp:
 			c := p.takeRibbon(op, r.points[k.from:k.to])
 			c.Transform = p.at()
-			p.record(c, k.bounds)
+			// A ribbon's width reaches as far as the space it is drawn in
+			// scales it, so its bounds are found again for this one.
+			p.record(c, ribbonBounds(c.Points, c.Transform))
 		case *LayerOp:
 			closers = append(closers, p.Layer(op.Opts))
 		case *LayerEndOp:
