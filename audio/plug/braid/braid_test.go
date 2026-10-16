@@ -108,6 +108,34 @@ func TestAtItsDefaultsTheSoundGoesThroughExactly(t *testing.T) {
 	}
 }
 
+func TestAtItsDefaultsEvenOddSamplesGoThroughAsTheyCame(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	inf := float32(math.Inf(1))
+	outL, outR := run(t, []float32{negZero, 1}, []float32{inf, 2})
+	if math.Signbit(float64(outL[0])) != true || outR[0] != inf || outL[1] != 1 || outR[1] != 2 {
+		t.Errorf("at the defaults -0 and +Inf came out as %v and %v", outL[0], outR[0])
+	}
+	if monoText(math.NaN()) != "Off" {
+		t.Errorf("a NaN Mono reads %q", monoText(math.NaN()))
+	}
+}
+
+func TestAThirdChannelTakesTheGainAlone(t *testing.T) {
+	p, _ := newPlugin(t)
+	pr := p.Processor()
+	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 8, Channels: 3})
+	in := [][]float32{wave(8, 0.1), wave(8, 0.2), wave(8, 0.3)}
+	for _, gain := range []float64{0, -6} {
+		out := [][]float32{make([]float32, 8), make([]float32, 8), make([]float32, 8)}
+		pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 8, Channels: 3})
+		pr.Process(&plug.Block{In: in, Out: out, Frames: 8, Changes: append(defaults(), plug.Change{ID: GainID, Value: gain})})
+		g := float32(math.Pow(10, gain/20))
+		if !near(out[2][5], in[2][5]*g) {
+			t.Errorf("at %v dB the third channel is %v, want %v", gain, out[2][5], in[2][5]*g)
+		}
+	}
+}
+
 func TestEachInvertFlipsItsSideAlone(t *testing.T) {
 	l, r := wave(256, 0.01), wave(256, 0.037)
 	outL, outR := run(t, l, r, plug.Change{ID: InvertLID, Value: 1})
@@ -335,6 +363,11 @@ func TestThePanelsControlsWorkThroughTheHost(t *testing.T) {
 	}
 	if !pn.pan[0].Disabled || !pn.pan[1].Disabled {
 		t.Error("with Left only the pan knobs are not greyed")
+	}
+	// A knob turned here moves the ribbons, without the host's echo.
+	pn.pan[0].OnTurn(20, u)
+	if pn.set.PanL != 20 {
+		t.Errorf("turning Pan L leaves the ribbons at %v", pn.set.PanL)
 	}
 	pn.Follow(MonoID, MonoOff, u)
 	pn.Follow(GainID, 6, u)

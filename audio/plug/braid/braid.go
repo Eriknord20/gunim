@@ -94,8 +94,13 @@ func onOff(v float64) string {
 
 func monoText(v float64) string { return monoNames[monoOf(v)] }
 
-// monoOf returns the Mono value v is nearest.
-func monoOf(v float64) int { return int(min(max(math.Round(v), MonoOff), MonoRight)) }
+// monoOf returns the Mono value v is nearest; Off for a NaN.
+func monoOf(v float64) int {
+	if math.IsNaN(v) {
+		return MonoOff
+	}
+	return int(min(max(math.Round(v), MonoOff), MonoRight))
+}
 
 // panText writes a pan, from -100, left, to 100, right, as "L40", "C"
 // or "R100".
@@ -254,7 +259,8 @@ func (p *plugin) View(s plug.Size, h plug.Host) gunim.Node {
 
 // ways is how many factors glide: the stereo matrix's four, the factor
 // of the one channel of a mono sound, and the gain alone, for channels
-// past the second.
+// past the second. A mono sound is the left channel alone: it takes the
+// gain and Invert L, and the pans, Mono and Invert R leave it be.
 const ways = 6
 
 // processor sends the sound through, gliding to each new setting.
@@ -332,8 +338,14 @@ func (p *processor) frame(b *plug.Block, i int) {
 		b.Out[0][i] = b.In[0][i] * float32(p.now[4])
 	default:
 		l, r := b.In[0][i], b.In[1][i]
-		b.Out[0][i] = l*float32(p.now[0]) + r*float32(p.now[1])
-		b.Out[1][i] = l*float32(p.now[2]) + r*float32(p.now[3])
+		if p.now[0] == 1 && p.now[1] == 0 && p.now[2] == 0 && p.now[3] == 1 {
+			// As it came, exactly: a -0 stays -0, and a NaN or an
+			// infinity on one side stays on that side.
+			b.Out[0][i], b.Out[1][i] = l, r
+		} else {
+			b.Out[0][i] = l*float32(p.now[0]) + r*float32(p.now[1])
+			b.Out[1][i] = l*float32(p.now[2]) + r*float32(p.now[3])
+		}
 		g := float32(p.now[5])
 		for ch := 2; ch < len(b.Out); ch++ {
 			b.Out[ch][i] = b.In[ch][i] * g

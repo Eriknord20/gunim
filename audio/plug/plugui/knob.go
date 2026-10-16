@@ -80,6 +80,9 @@ type Knob struct {
 	Tooltip string
 	// Taper, where set, turns the knob unevenly across its values.
 	Taper *Taper
+	// OnTurn, where set, hears each value the knob is turned to, after
+	// the value is set: for a view that draws what the value does.
+	OnTurn func(v float64, u *gunim.UI)
 	// shown is the modulation the knob last stepped with, and modded
 	// says control moved it then.
 	shown  plug.Modulation
@@ -316,6 +319,9 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 	}
 	k.v = v
 	k.set(v, u)
+	if k.OnTurn != nil {
+		k.OnTurn(v, u)
+	}
 	u.Invalidate()
 }
 

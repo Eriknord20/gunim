@@ -295,6 +295,7 @@ func newPanel(h plug.Host) *panel {
 		k := plugui.NewKnob(h, param(panIDs[c]))
 		k.Compact = true
 		k.Tooltip = "Where the " + [2]string{"left", "right"}[c] + " channel plays, from left to right"
+		k.OnTurn = func(v float64, u *gunim.UI) { p.take(panIDs[c], v, u) }
 		p.pan[c] = k
 	}
 	p.mono = plugui.NewSelector("Mono", monoNames[:], []string{
@@ -314,6 +315,7 @@ func newPanel(h plug.Host) *panel {
 	p.gain = plugui.NewKnob(h, param(GainID))
 	p.gain.Taper = gainTaper
 	p.gain.Tooltip = "How loud the sound comes out; all the way down is silence"
+	p.gain.OnTurn = func(v float64, u *gunim.UI) { p.take(GainID, v, u) }
 	p.lock()
 	return p
 }
@@ -493,7 +495,7 @@ func (p *panel) paintRibbons(pt *paint.Painter, th *theme.Live) {
 	for c := range 2 {
 		level[c] = audioui.MeterAt(p.in.levels.RMS[c])
 	}
-	gain := lk.gain.Value()
+	gain := max(lk.gain.Value(), 0)
 	// light is how lit a ribbon of channel c is at x: brighter with the
 	// sound, with bands of light flowing along it.
 	light := func(col color.NRGBA, c int, x float32) color.NRGBA {
@@ -508,7 +510,7 @@ func (p *panel) paintRibbons(pt *paint.Painter, th *theme.Live) {
 	for _, c := range [2]int{1, 0} {
 		// The ribbon in, the twist at the lamp, and, as far as it is
 		// dropped, its end drawn back toward the meter.
-		flip, drop := lk.flip[c].Value(), lk.drop[c].Value()
+		flip, drop := min(max(lk.flip[c].Value(), 0), 1), min(max(lk.drop[c].Value(), 0), 1)
 		end := l.pan + (l.x0-l.pan)*drop
 		p.pts = p.pts[:0]
 		for x := l.x0; x <= l.pan; x += ribbonStep {
@@ -530,7 +532,7 @@ func (p *panel) paintRibbons(pt *paint.Painter, th *theme.Live) {
 	strands := [4]strand{{0, 0}, {1, 0}, {0, 1}, {1, 1}}
 	for _, i := range [4]int{3, 1, 2, 0} {
 		s := strands[i]
-		w := lk.weight[i].Value()
+		w := max(lk.weight[i].Value(), 0)
 		if w*ribbonW < 0.05 {
 			continue
 		}
