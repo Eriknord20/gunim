@@ -453,8 +453,12 @@ func TestAStateSetIsTheStateGiven(t *testing.T) {
 	f.mu.Lock()
 	f.state = []byte("moved")
 	f.mu.Unlock()
-	if !ch.Changed() || !ch.Changed() {
+	if !ch.Changed() {
 		t.Fatal("changed, it says it did not")
+	}
+	// Asking whether it changed asks for no state.
+	if !ch.Changed() {
+		t.Fatal("changed, and asked again, it says it did not")
 	}
 	if got := pl.State(); bytes.Equal(got, edited) {
 		t.Fatal("changed, it gives the state it was given")
