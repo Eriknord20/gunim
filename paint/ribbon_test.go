@@ -75,11 +75,34 @@ func TestARibbonsBoundsHoldItsWidthAndBends(t *testing.T) {
 		{At: geom.Pt(10, 20), Width: 4},
 		{At: geom.Pt(50, 40), Width: 8},
 	})
-	// Grown by half the widest width as far as a sharp bend's corner
-	// reaches, and by the pixel and a half every op is grown by.
-	want := geom.Rect{Min: geom.Pt(100+10-8-1.5, 20-8-1.5), Max: geom.Pt(100+50+8+1.5, 40+8+1.5)}
+	// Grown by half the widest width and the smoothed edge's pixel, as
+	// far as a sharp bend's corner reaches, and by the pixel and a half
+	// every op is grown by.
+	g := float32((8.0/2+1)*RibbonMiter + 1.5)
+	want := geom.Rect{Min: geom.Pt(100+10-g, 20-g), Max: geom.Pt(100+50+g, 40+g)}
 	if got := p.bounds[0]; got != want {
 		t.Fatalf("the ribbon's bounds are %v, want %v", got, want)
+	}
+}
+
+func TestARibbonsBoundsHoldItsWidthUnderAnUnevenScale(t *testing.T) {
+	var p Painter
+	p.Reset()
+	// Nine times as tall: a driver draws the width three times as wide,
+	// the mean of the two scales, though across it scales by one.
+	defer p.Push(Transform{A: 1, E: 9})()
+	p.Ribbon([]RibbonPoint{
+		{At: geom.Pt(100, 10), Width: 10},
+		{At: geom.Pt(100, 50), Width: 10},
+	})
+	// Half of 30 wide either side of x 100, and a pixel more for the
+	// smoothed edge.
+	b := p.bounds[0]
+	if b.Min.X > 100-16 || b.Max.X < 100+16 {
+		t.Fatalf("the ribbon's bounds run across from %v to %v, want at least 84 to 116", b.Min.X, b.Max.X)
+	}
+	if b.Min.Y > 90-16 || b.Max.Y < 450+16 {
+		t.Fatalf("the ribbon's bounds run down from %v to %v, want at least 74 to 466", b.Min.Y, b.Max.Y)
 	}
 }
 

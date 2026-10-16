@@ -284,3 +284,48 @@ func TestARibbonInATiltedLayerTurnsWithIt(t *testing.T) {
 		t.Errorf("the turned ribbon shows %d pixels wide, want about 110", lit)
 	}
 }
+
+func TestARibbonsEndsAreSmooth(t *testing.T) {
+	r, done := hiddenGL(t)
+	defer done()
+	// Its ends lie a quarter of a pixel into a column of pixels.
+	pix := drawn(r, func(p *paint.Painter) {
+		p.Ribbon(line(geom.Pt(100.75, 100), geom.Pt(300.25, 100), 2, 10, white))
+	})
+	quarter := [4]byte{0x40, 0x40, 0x40, 0xff}
+	for _, c := range []struct {
+		x    int
+		want [4]byte
+		what string
+	}{
+		{99, px(black), "the column before its start"},
+		{100, quarter, "the column its start cuts a quarter into"},
+		{101, px(white), "the column after its start"},
+		{299, px(white), "the column before its end"},
+		{300, quarter, "the column its end cuts a quarter into"},
+		{301, px(black), "the column after its end"},
+	} {
+		if got := pixelAt(pix, c.x, 100); !near(got, c.want, 3) {
+			t.Errorf("%s, at %d, is %v, want %v", c.what, c.x, got, c.want)
+		}
+	}
+}
+
+func TestARibbonOfManyShortStretchesShowsNoSeams(t *testing.T) {
+	r, done := hiddenGL(t)
+	defer done()
+	// Stretches of a third of a pixel, and of four pixels and a bit.
+	short := drawn(r, func(p *paint.Painter) {
+		p.Ribbon(line(geom.Pt(100.3, 100.2), geom.Pt(300.6, 120.7), 601, 9.5, white))
+	})
+	long := drawn(r, func(p *paint.Painter) {
+		p.Ribbon(line(geom.Pt(100.3, 100.2), geom.Pt(300.6, 120.7), 46, 9.5, white))
+	})
+	for y := 85; y < 135; y++ {
+		for x := 95; x < 306; x++ {
+			if a, b := pixelAt(short, x, y), pixelAt(long, x, y); !near(a, b, 2) {
+				t.Fatalf("at %d,%d the ribbon of short stretches is %v and of long ones %v", x, y, a, b)
+			}
+		}
+	}
+}

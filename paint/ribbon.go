@@ -2,6 +2,7 @@ package paint
 
 import (
 	"image/color"
+	"math"
 	"slices"
 
 	"github.com/marrasen/gunim/geom"
@@ -52,7 +53,7 @@ func (p *Painter) Ribbon(pts []RibbonPoint) {
 	}
 	op := p.ribbons.take()
 	*op = RibbonOp{Points: p.copyPoints(pts), Transform: p.at(), Blend: p.blendNow()}
-	p.record(op, ribbonBounds(pts))
+	p.record(op, ribbonBounds(pts, op.Transform))
 }
 
 // takeRibbon takes a RibbonOp from the painter's blocks, a copy of op
@@ -72,10 +73,19 @@ func (p *Painter) copyPoints(pts []RibbonPoint) []RibbonPoint {
 	return p.points[at:len(p.points):len(p.points)]
 }
 
-// ribbonBounds is the box a ribbon through pts can touch: the box round
-// its points, grown by the furthest its corners reach out from them.
-// record grows it further, for the smoothed edge.
-func ribbonBounds(pts []RibbonPoint) geom.Rect {
+// ribbonFeather is how far a driver draws a ribbon past its edges and
+// ends, in device pixels, for their smoothing. Bounds take a device
+// pixel as no more than a logical one, as it is at a scale of 1 and up.
+const ribbonFeather = 1
+
+// ribbonBounds is the box a ribbon through pts, drawn through t, can
+// touch, in its own space: the box round its points, grown by the
+// furthest its corners reach out from them. A driver draws the width
+// scaled by the square root of t's determinant, the mean of its two
+// scales; the box grows by that reach taken back into the op's space
+// through t's least scale, which a turn or an uneven scale leaves as
+// the one that shrinks a distance most. record grows it further.
+func ribbonBounds(pts []RibbonPoint, t Transform) geom.Rect {
 	b := geom.Rect{Min: pts[0].At, Max: pts[0].At}
 	var widest float32
 	for _, q := range pts {
@@ -83,7 +93,16 @@ func ribbonBounds(pts []RibbonPoint) geom.Rect {
 		b.Max = geom.Pt(max(b.Max.X, q.At.X), max(b.Max.Y, q.At.Y))
 		widest = max(widest, q.Width)
 	}
-	return grow(b, widest/2*RibbonMiter)
+	det := math.Abs(float64(t.A*t.E - t.B*t.D))
+	sum := float64(t.A*t.A + t.B*t.B + t.D*t.D + t.E*t.E)
+	most := math.Sqrt((sum + math.Sqrt(max(sum*sum-4*det*det, 0))) / 2)
+	if det == 0 || most == 0 {
+		// Folded flat, the ribbon has no width to draw.
+		return b
+	}
+	least := det / most
+	reach := (float64(widest)/2*math.Sqrt(det) + ribbonFeather) * RibbonMiter
+	return grow(b, float32(reach/least))
 }
 
 // grow returns r grown by d on every side.

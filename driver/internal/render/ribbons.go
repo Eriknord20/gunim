@@ -19,6 +19,12 @@ import (
 // covers. So the edges stay smooth, and a ribbon thinner than a pixel
 // fades out evenly, with no mask drawn on the CPU.
 //
+// The ends are smoothed as the edges are, a pixel's width apart: a short
+// quad at each end fades the colour in, from nothing half a pixel
+// outside the end to the whole of it half a pixel inside, the share of
+// each pixel the cut end covers. It shares its corners with the quad
+// next to it, so no seam shows.
+//
 // Where the ribbon bends more sharply than its width allows, the quads
 // either side of a bend overlap on its inside, and a see-through ribbon
 // is darker there.
@@ -61,6 +67,10 @@ func (r *Renderer) ribbon(op *paint.RibbonOp) {
 	if !ribbonNormals(cs) {
 		return
 	}
+	// The capped corners go after the points' own, in the same buffer.
+	all := capRibbon(cs, cs)
+	r.ribbonCorners = all[:0]
+	cs = all[len(cs):]
 	add := op.Blend == paint.BlendAdd
 	for i := range len(cs) - 1 {
 		a, b := &cs[i], &cs[i+1]
@@ -84,6 +94,67 @@ func (r *Renderer) ribbon(op *paint.RibbonOp) {
 		r.ribbonVert(quad[2], b, -1, add)
 		r.ribbonVert(quad[3], b, 1, add)
 	}
+}
+
+// capRibbon appends to dst the corners of cs with a fading quad at each
+// end, and returns the longer dst: each end moves half a pixel in along
+// the ribbon, or halfway along a shorter one, the corners it passes
+// left out, and a corner of no colour a pixel further out ends it.
+func capRibbon(dst, cs []ribbonCorner) []ribbonCorner {
+	n := len(cs)
+	var length float32
+	for i := range n - 1 {
+		length += dist(cs[i].at, cs[i+1].at)
+	}
+	in := min(0.5, length/2)
+	start, first, startOut := capEnd(cs, in, 1)
+	end, last, endOut := capEnd(cs, in, -1)
+	dst = append(dst, startOut, start)
+	if first <= last {
+		dst = append(dst, cs[first:last+1]...)
+	}
+	return append(dst, end, endOut)
+}
+
+// capEnd returns the point at distance in along cs from its first
+// corner, for way 1, or from its last, for way -1; the index of the next
+// corner on from there; and the corner of no colour a pixel back out
+// from the point.
+func capEnd(cs []ribbonCorner, in float32, way int) (at ribbonCorner, next int, beyond ribbonCorner) {
+	i, j := 0, 1
+	if way < 0 {
+		i, j = len(cs)-1, len(cs)-2
+	}
+	for ; j >= 0 && j < len(cs); i, j = j, j+way {
+		l := dist(cs[i].at, cs[j].at)
+		if l < in || l == 0 {
+			in -= l
+			continue
+		}
+		c, d := &cs[i], &cs[j]
+		t := in / l
+		lerp := func(a, b float32) float32 { return a + (b-a)*t }
+		at = *c
+		at.at = geom.Pt(lerp(c.at.X, d.at.X), lerp(c.at.Y, d.at.Y))
+		at.out = geom.Pt(lerp(c.out.X, d.out.X), lerp(c.out.Y, d.out.Y))
+		at.across, at.half = lerp(c.across, d.across), lerp(c.half, d.half)
+		for k := range at.color {
+			at.color[k] = lerp(c.color[k], d.color[k])
+		}
+		beyond = at
+		beyond.at = at.at.Add(c.at.Sub(d.at).Mul(1 / l))
+		beyond.color = [4]float32{}
+		return at, j, beyond
+	}
+	// Rounding left in a hair past the ribbon's length: its far end.
+	at = cs[i]
+	return at, i + way, at
+}
+
+// dist returns how far apart a and b lie.
+func dist(a, b geom.Point) float32 {
+	d := b.Sub(a)
+	return float32(math.Hypot(float64(d.X), float64(d.Y)))
 }
 
 // ribbonNormals sets each corner's way out and how far across it lies,
