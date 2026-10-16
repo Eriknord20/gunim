@@ -239,7 +239,7 @@ func (x *aDocument) analyse(t *testing.T) []Update {
 // render renders frames at song frame from through p, and returns its
 // left and right.
 func render(p *Plugin, from int64, frames int) [][]float32 {
-	return renderAt(p, plug.Position{Frame: from, Playing: true}, frames)
+	return renderAt(p, plug.Position{Frame: from, Song: from, Playing: true}, frames)
 }
 
 // renderAt renders frames at pos through p, and returns its left and
@@ -335,8 +335,43 @@ func TestARendererRendersItsRegionsWhereTheSongIs(t *testing.T) {
 	}
 	// A song standing still is stopped, to the plugin: it renders
 	// nothing, though the sound plays on.
-	if rms(renderAt(p, plug.Position{Frame: 4 * 48000, Playing: true, Still: true}, 256)[0]) != 0 {
+	if rms(renderAt(p, plug.Position{Frame: 4 * 48000, Song: 4 * 48000, Playing: true, Still: true}, 256)[0]) != 0 {
 		t.Fatal("the renderer plays with the song standing still")
+	}
+	noViolations(t, x.a)
+}
+
+// A plugin is told where the playhead is, not the host's clock, which
+// runs on from wherever it started, stopped or not: it renders the song
+// at the playhead, and its project time holds while the song stands
+// still.
+func TestAPluginHearsThePlayheadNotTheHostsClock(t *testing.T) {
+	x := newADocument(t)
+	x.analyse(t)
+	p, _ := bound(t, x.a, x.d, PlaybackRenderer)
+	defer p.Close()
+	_ = p.ARA().SetRegions(x.r1)
+	// The clock is far past the song; the playhead at song frame
+	// 48000+100, the source's frame 100.
+	out := renderAt(p, plug.Position{Frame: 10 * 48000, Song: 48100, Playing: true}, 256)
+	want := [][]float32{make([]float32, 256), make([]float32, 256)}
+	x.host.ReadAudio(x.src, 100, want)
+	for c := range 2 {
+		if !slices.Equal(out[c], want[c]) {
+			t.Fatalf("channel %d: %v, the source at the playhead %v", c, out[c][:4], want[c][:4])
+		}
+	}
+	// The continuous time moves on by the block once it is processed.
+	if p.ctx.projectTime != 48100 || p.ctx.contTime != 10*48000+256 {
+		t.Fatalf("project time %d, continuous time %d", p.ctx.projectTime, p.ctx.contTime)
+	}
+	// Stopped, the clock runs on and the playhead holds.
+	for k := range int64(4) {
+		renderAt(p, plug.Position{Frame: 11*48000 + 256*k, Song: 48100, Playing: true, Still: true}, 256)
+		if p.ctx.projectTime != 48100 || p.ctx.contTime != 11*48000+256*(k+1) || p.ctx.state&ctxPlaying != 0 {
+			t.Fatalf("stopped, block %d: project time %d, continuous time %d, playing %v",
+				k, p.ctx.projectTime, p.ctx.contTime, p.ctx.state&ctxPlaying != 0)
+		}
 	}
 	noViolations(t, x.a)
 }
