@@ -20,6 +20,8 @@ func blendOf(op Op) Blend {
 		return op.Blend
 	case *TextOp:
 		return op.Blend
+	case *RibbonOp:
+		return op.Blend
 	case *LayerOp:
 		return op.Opts.Blend
 	}
@@ -39,6 +41,7 @@ func everyKind(p *Painter, img *Image) {
 	p.MaskFill(square{true}, r, Fill{Gradient: &Gradient{To: geom.Pt(10, 0), Start: red, End: red}})
 	p.Image(img, r, ImageOpts{Opacity: 1})
 	p.Text([]Glyph{{ID: 1}}, 12, red, r)
+	p.Ribbon([]RibbonPoint{{At: r.Min, Width: 2, Color: red}, {At: r.Max, Width: 2, Color: red}})
 	p.Layer(LayerOpts{Bounds: r, Opacity: 0.5})()
 }
 
@@ -138,6 +141,9 @@ func TestOnlyTheBlendChangingDamagesTheOp(t *testing.T) {
 		"image": func(p *Painter) { p.Image(img, r, ImageOpts{Opacity: 1}) },
 		"text":  func(p *Painter) { p.Text([]Glyph{{ID: 1}}, 12, red, r) },
 		"layer": func(p *Painter) { p.Layer(LayerOpts{Bounds: r, Opacity: 0.5})() },
+		"ribbon": func(p *Painter) {
+			p.Ribbon([]RibbonPoint{{At: r.Min, Width: 2, Color: red}, {At: r.Max, Width: 2, Color: red}})
+		},
 	} {
 		var p Painter
 		p.Reset()

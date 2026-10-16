@@ -15,11 +15,13 @@ import (
 // of it, and it reuses its buffers from one keeping to the next.
 type Recording struct {
 	ops []keptOp
-	// glyphs holds every text command's glyphs, back to back, and items
-	// every scene's items. A kept command never points into the
-	// painter's own buffers, which later frames reuse.
+	// glyphs holds every text command's glyphs, back to back, items
+	// every scene's items, and points every ribbon's points. A kept
+	// command never points into the painter's own buffers, which later
+	// frames reuse.
 	glyphs []Glyph
 	items  []SceneItem
+	points []RibbonPoint
 }
 
 // keptOp is one command, its transform taken back into the recording's
@@ -29,7 +31,8 @@ type keptOp struct {
 	rel    Transform
 	bounds geom.Rect
 	// from and to are where a text command's glyphs lie in the glyph
-	// buffer, or a scene's items in the item buffer.
+	// buffer, a scene's items in the item buffer, or a ribbon's points
+	// in the point buffer.
 	from, to int
 }
 
@@ -41,7 +44,7 @@ func (p *Painter) Mark() int { return len(p.ops) }
 // the stretch must have closed in it.
 func (p *Painter) Keep(mark int, r *Recording) {
 	inv, ok := p.at().Invert()
-	r.ops, r.glyphs = r.ops[:0], r.glyphs[:0]
+	r.ops, r.glyphs, r.points = r.ops[:0], r.glyphs[:0], r.points[:0]
 	clear(r.items)
 	r.items = r.items[:0]
 	if !ok {
@@ -73,6 +76,13 @@ func (p *Painter) Keep(mark int, r *Recording) {
 			r.items = append(r.items, op.Scene.Items...)
 			k.to = len(r.items)
 			c.Scene.Items = nil
+			k.op, own = &c, op.Transform
+		case *RibbonOp:
+			c := *op
+			k.from = len(r.points)
+			r.points = append(r.points, op.Points...)
+			k.to = len(r.points)
+			c.Points = nil
 			k.op, own = &c, op.Transform
 		case *LayerOp:
 			c := *op
@@ -128,6 +138,10 @@ func (p *Painter) Replay(r *Recording) {
 			s := op.Scene
 			s.Items = r.items[k.from:k.to]
 			p.Scene(op.Rect, s)
+		case *RibbonOp:
+			c := p.takeRibbon(op, r.points[k.from:k.to])
+			c.Transform = p.at()
+			p.record(c, k.bounds)
 		case *LayerOp:
 			closers = append(closers, p.Layer(op.Opts))
 		case *LayerEndOp:

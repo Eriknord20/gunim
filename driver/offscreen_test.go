@@ -29,25 +29,31 @@ type game struct {
 	glyphs []paint.Glyph
 	items  []paint.SceneItem
 	cells  []paint.CellPaint
+	ribbon []paint.RibbonPoint
 }
 
 func newGame(mesh *paint.Mesh) *game {
-	return &game{mesh: mesh, glyphs: make([]paint.Glyph, 1), items: make([]paint.SceneItem, 1), cells: make([]paint.CellPaint, 1)}
+	return &game{mesh: mesh, glyphs: make([]paint.Glyph, 1), items: make([]paint.SceneItem, 1), cells: make([]paint.CellPaint, 1),
+		ribbon: make([]paint.RibbonPoint, 2)}
 }
 
-// frame records frame n into p: a shape, text, a mask, a scene and a
-// row of cells, each placed or coloured by n.
+// frame records frame n into p: a shape, text, a mask, a scene, a row
+// of cells and a ribbon, each placed or coloured by n.
 func (g *game) frame(p *paint.Painter, n int) {
 	at := float32(n)
 	g.glyphs[0] = paint.Glyph{ID: uint32(n), At: geom.Pt(at, 5)}
 	g.items[0] = paint.SceneItem{Mesh: g.mesh, Model: geom.Move3(geom.V3(at, 0, 0))}
 	g.cells[0] = paint.CellPaint{BG: color.NRGBA{R: uint8(n), A: 0xff}}
+	for i := range g.ribbon {
+		g.ribbon[i] = paint.RibbonPoint{At: geom.Pt(at+float32(i)*20, 180), Width: 4, Color: color.NRGBA{G: uint8(n), A: 0xff}}
+	}
 	p.Reset()
 	p.RRect(geom.Rc(at, 0, 10, 10), 2, paint.Solid(color.NRGBA{R: uint8(n), A: 0xff}))
 	p.Text(g.glyphs, 12, color.NRGBA{G: uint8(n), A: 0xff}, geom.Rc(at, 0, 20, 12))
 	p.Mask(dot{}, geom.Rc(at, 20, 16, 16), color.NRGBA{B: uint8(n), A: 0xff})
 	p.Scene(geom.Rc(0, 40, 100, 100), paint.Scene{Items: g.items})
 	p.Cells(geom.Pt(0, 150), geom.Sz(8, 16), g.cells, nil, 1, n, 12, 12)
+	p.Ribbon(g.ribbon)
 }
 
 func TestAnOffscreenWindowKeepsAFrameAsItWasPresented(t *testing.T) {
