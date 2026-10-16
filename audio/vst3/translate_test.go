@@ -410,6 +410,92 @@ func TestNoStateIsTheStateAPluginStartedWith(t *testing.T) {
 	}
 }
 
+// TestAStateSetIsTheStateGiven sets the state of a plugin that writes
+// a state set otherwise than it was given: until it changes, it gives
+// back the state it was given, as an undo set it, so a host that asks
+// finds nothing changed; once it changes, it gives its own.
+func TestAStateSetIsTheStateGiven(t *testing.T) {
+	f := fakeSynth()
+	f.rewrites = true
+	c := Class{ID: uid{10}, Name: "Fake", Category: "Audio Module Class", SubCategories: "Instrument|Synth"}
+	d, err := describe(c, func(cfg Config) (*Plugin, error) { return f.open(t, cfg) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := d.New(nil)
+	t.Cleanup(pl.Close)
+	pl.Processor().Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	f.mu.Lock()
+	f.state = []byte("edited")
+	f.mu.Unlock()
+	edited := pl.State()
+	if err := pl.SetState(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := pl.SetState(edited); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	held := string(f.state)
+	f.mu.Unlock()
+	if held != "edited!" {
+		t.Fatalf("the plugin holds %q", held)
+	}
+	for range 3 {
+		if got := pl.State(); !bytes.Equal(got, edited) {
+			t.Fatalf("set the state %q, it gives %q", edited, got)
+		}
+	}
+	ch := pl.(interface{ Changed() bool })
+	if ch.Changed() {
+		t.Fatal("set a state, and unchanged since, it says it changed")
+	}
+	f.mu.Lock()
+	f.state = []byte("moved")
+	f.mu.Unlock()
+	if !ch.Changed() {
+		t.Fatal("changed, it says it did not")
+	}
+	// Asking whether it changed asks for no state.
+	if !ch.Changed() {
+		t.Fatal("changed, and asked again, it says it did not")
+	}
+	if got := pl.State(); bytes.Equal(got, edited) {
+		t.Fatal("changed, it gives the state it was given")
+	}
+	if ch.Changed() {
+		t.Fatal("asked for its state, and unchanged since, it says it changed")
+	}
+}
+
+// A plugin made with no state, unchanged since, changed nothing: a host
+// that keeps none for it has it as it is.
+func TestAPluginMadeChangedNothing(t *testing.T) {
+	f := fakeSynth()
+	f.state = []byte("as made")
+	c := Class{ID: uid{11}, Name: "Fake", Category: "Audio Module Class", SubCategories: "Instrument|Synth"}
+	d, err := describe(c, func(cfg Config) (*Plugin, error) { return f.open(t, cfg) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := d.New(nil)
+	t.Cleanup(pl.Close)
+	ch := pl.(interface{ Changed() bool })
+	if ch.Changed() {
+		t.Fatal("not made yet, it says it changed")
+	}
+	pl.Processor().Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	if ch.Changed() {
+		t.Fatal("just made, it says it changed")
+	}
+	f.mu.Lock()
+	f.state = []byte("edited")
+	f.mu.Unlock()
+	if !ch.Changed() {
+		t.Fatal("edited, it says it did not change")
+	}
+}
+
 // TestAFailedBlockIsSilence has a plugin fail to process a block after
 // one it played: the block comes out silent, its buffers' sound from
 // before played no more, and the failure is counted and told.

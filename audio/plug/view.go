@@ -125,6 +125,18 @@ type Editor interface {
 	Values() map[uint32]float64
 }
 
+// A Changer is an [Editor] that tells whether its state changed of
+// itself, as its editor or its own work changed it, since it was made,
+// given a state with SetState, or last asked for it with State. A host
+// that keeps the state it gave, or was given last, needs ask for no
+// other while Changed is false: a plugin set a state it writes back
+// otherwise, or not set the state of a song just taken yet, changed
+// nothing.
+type Changer interface {
+	Editor
+	Changed() bool
+}
+
 // Embedder is an [Editor] whose editor can show inside a window of the
 // host's, as a child window of the system's, in place of a window of
 // its own. The host then draws the window round it: its title bar, and
