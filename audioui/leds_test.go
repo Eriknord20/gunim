@@ -56,3 +56,22 @@ func TestAMeterOfLightsLightsUpToItsLevel(t *testing.T) {
 		t.Fatalf("a sine at 0.5 lights %d lights, and at 1 %d", quiet, loud)
 	}
 }
+
+// A tall meter lights its columns as the chips' rows are lit, in the
+// lights' colours, not in grey bars.
+func TestATallMeterIsLit(t *testing.T) {
+	th := theme.NewLive(widget.Dark())
+	l := NewLevels()
+	l.Take(sine(800, 1000, 0.5), rate, time.Second/60)
+	var p paint.Painter
+	PaintMeter(&p, th, geom.Rc(0, 40, MeterW, 200), l)
+	safe := 0
+	for _, op := range p.Ops() {
+		if r, ok := op.(*paint.RRectOp); ok && r.Fill.Solid == Safe.Get(th) {
+			safe++
+		}
+	}
+	if safe == 0 {
+		t.Fatal("a meter of a sine at 0.5 lights no lights")
+	}
+}

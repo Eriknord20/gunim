@@ -97,10 +97,10 @@ func newChip(h plug.Host) *chip {
 // Children implements [gunim.Composite].
 func (c *chip) Children() []gunim.Node { return []gunim.Node{c.label} }
 
-// chipBars is how wide the chip's bars are.
+// chipBars is how wide the chip's meter is.
 const chipBars = 40
 
-// Layout implements [gunim.Node]: the words, and the bars at the right.
+// Layout implements [gunim.Node]: the words, and the meter at the right.
 func (c *chip) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	c.size = cs.Max
 	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(c.size.W-chipBars-6, 0), c.size.H)})
@@ -108,28 +108,12 @@ func (c *chip) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	return c.size
 }
 
-// Paint implements [gunim.Node]: each channel's RMS over its peak,
-// fainter, coral where it reaches full scale.
+// Paint implements [gunim.Node]: the words, and the sound going out as
+// two rows of lights, left over right, as the other chips show it.
 func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	kids.At(0).Paint(p)
-	ink, ground, over := widget.Ink.Get(f.Theme), audioui.Ground.Get(f.Theme), audioui.Over.Get(f.Theme)
-	x, h := box.W-chipBars, float32(3)
-	top := (box.H - 2*h - 2) / 2
-	lv := c.out.levels
-	for ch := range 2 {
-		y := top + float32(ch)*(h+2)
-		p.RRect(geom.Rc(x, y, chipBars, h), h/2, paint.Solid(audioui.Faded(ground, 0.85)))
-		if pk := audioui.MeterAt(lv.Peak[ch]); lv.Peak[ch] > -59 {
-			p.RRect(geom.Rc(x, y, chipBars*pk, h), h/2, paint.Solid(audioui.Faded(ink, 0.3)))
-		}
-		if lv.RMS[ch] > -59 {
-			c := ink
-			if lv.Peak[ch] > -0.1 {
-				c = over
-			}
-			p.RRect(geom.Rc(x, y, chipBars*audioui.MeterAt(lv.RMS[ch]), h), h/2, paint.Solid(audioui.Faded(c, 0.85)))
-		}
-	}
+	h := float32(8)
+	audioui.ChipLEDs.Paint(p, f.Theme, geom.Rc(box.W-chipBars, (box.H-h)/2, chipBars, h), c.out.levels)
 }
 
 // Step implements [gunim.Animator].

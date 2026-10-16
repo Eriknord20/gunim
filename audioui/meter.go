@@ -122,21 +122,25 @@ func MeterAt(db float32) float32 {
 // MeterTicks are the levels a meter's scale is marked at.
 var MeterTicks = []float32{0, -3, -6, -10, -15, -20, -30, -40, -60}
 
-// MeterW is the width of a meter: two bars, BarW wide, BarPitch apart.
+// MeterW is the width of a meter: two columns of lights, BarW wide,
+// BarPitch apart.
 const (
 	BarW     = 18
 	BarPitch = 28
 	MeterW   = BarPitch + BarW
 )
 
-// PaintMeter draws l as a pair of bars, left and right, from r.Min, as
-// tall as r: each channel's RMS solid, its peak over it fainter, and
-// its hold a line, coral at full scale. Over the bars, in the 36 points
-// above r, go each channel's highest peak and the short-term loudness.
+// MeterLEDs are the lights of a tall meter, as [PaintMeter] draws it:
+// two columns, BarW wide, BarPitch apart.
+var MeterLEDs = LEDs{Pitch: 3.5, Gap: 1.25, Sep: BarPitch - BarW, Upright: true}
+
+// PaintMeter draws l as two columns of lights, left and right, from
+// r.Min, as tall as r, as [MeterLEDs]. Over them, in the 36 points
+// above r, go each channel's highest peak, in its light's colour near
+// full scale, and the short-term loudness.
 func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
-	ink, ground, over := widget.Ink.Get(th), Ground.Get(th), Over.Get(th)
-	top, bottom := r.Min.Y, r.Max.Y
-	yOf := func(db float32) float32 { return bottom - (bottom-top)*MeterAt(db) }
+	ink := widget.Ink.Get(th)
+	top := r.Min.Y
 	runs := topRuns(l.Top, "%.1f")
 	if runs[0].Advance+runs[1].Advance+labelGap > MeterW {
 		// Two long readouts side by side lose their tenths, to stay
@@ -150,8 +154,8 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 	}
 	for ch, x := range []float32{x0, x1} {
 		c := Faded(ink, 0.7)
-		if l.Top[ch] > -1 {
-			c = over
+		if l.Top[ch] >= -9 {
+			c = LEDColour(th, l.Top[ch])
 		}
 		runs[ch].Paint(p, geom.Pt(x, top-34), c)
 	}
@@ -161,24 +165,7 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 	}
 	run := Shaped(loud, 11, true, true)
 	run.Paint(p, geom.Pt(meterLabelX(r.Min.X, MeterW/2, run.Advance), top-20), ink)
-	for ch := range 2 {
-		bx := r.Min.X + float32(ch)*BarPitch
-		p.RRect(geom.Rc(bx, top, BarW, bottom-top), 2, paint.Solid(Faded(ground, 0.85)))
-		ry, py := yOf(l.RMS[ch]), yOf(l.Peak[ch])
-		if l.Peak[ch] > -59 {
-			p.RRect(geom.Rc(bx, py, BarW, bottom-py), 2, paint.Solid(Faded(ink, 0.3)))
-		}
-		if l.RMS[ch] > -59 {
-			p.RRect(geom.Rc(bx, ry, BarW, bottom-ry), 2, paint.Solid(Faded(Mix(ink, ground, 0.12), 0.9)))
-		}
-		if l.Hold[ch] > -59 {
-			hc := ink
-			if l.Hold[ch] > -0.1 {
-				hc = over
-			}
-			p.RRect(geom.Rc(bx, yOf(l.Hold[ch])-1, BarW, 2), 1, paint.Solid(hc))
-		}
-	}
+	MeterLEDs.Paint(p, th, geom.Rc(r.Min.X, top, MeterW, r.Size().H), l)
 }
 
 // labelGap is the least room between a meter's two peak readouts.
