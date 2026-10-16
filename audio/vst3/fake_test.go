@@ -28,9 +28,12 @@ type fakePlugin struct {
 	tuning bool
 	midi   map[[2]int]uint32
 	// state is what it saves, and latency and tail what it says;
-	// tells says it tells its parameters changed as its state is set.
-	state []byte
-	tells bool
+	// tells says it tells its parameters changed as its state is set,
+	// and rewrites that it saves a state set otherwise than it was
+	// given, as a plugin that writes its own anew does.
+	state    []byte
+	tells    bool
+	rewrites bool
 	// fails says its process fails, writing nothing.
 	fails   bool
 	latency int
@@ -150,6 +153,9 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 			call(stream, 3, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&n)))
 			f.mu.Lock()
 			f.state = buf[:n]
+			if f.rewrites && (n == 0 || buf[n-1] != '!') {
+				f.state = append(f.state, '!')
+			}
 			f.setStates++
 			tells, h := f.tells, f.handler
 			f.mu.Unlock()
