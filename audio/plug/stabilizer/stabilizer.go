@@ -144,12 +144,14 @@ func speedTime(m int, v float64) float64 {
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:      "marrasen.stabilizer",
-	Name:    "Stabilizer",
-	Vendor:  "Marras",
-	Version: "0.1.0",
-	Kind:    "Fx|EQ|Mastering",
-	New:     func(h plug.Host) plug.Plugin { return &plugin{} },
+	ID:       "marrasen.stabilizer",
+	Name:     "Stabilizer",
+	Vendor:   "Marras",
+	Version:  "0.1.0",
+	Kind:     "Fx|EQ|Mastering",
+	Tagline:  "Self-setting EQ",
+	Keywords: []string{"resonance", "resonant", "tonal balance", "auto eq", "dynamic eq", "soothe", "harsh", "mastering"},
+	New:      func(h plug.Host) plug.Plugin { return &plugin{} },
 	Params: []plug.Param{
 		{ID: ModeID, Name: "Mode", Max: modes - 1, Steps: modes - 1, Flags: plug.Automatable,
 			Format: func(v float64) string { return modeNames[int(math.Round(v))] }},

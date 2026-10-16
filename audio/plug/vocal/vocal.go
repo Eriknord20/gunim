@@ -147,11 +147,13 @@ const auto = plug.Automatable
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:      "marrasen.vocal",
-	Name:    "Vocal Chain",
-	Vendor:  "Marras",
-	Version: "0.1.0",
-	Kind:    "Fx|EQ|Dynamics",
+	ID:       "marrasen.vocal",
+	Name:     "Vocal Chain",
+	Vendor:   "Marras",
+	Version:  "0.1.0",
+	Kind:     "Fx|EQ|Dynamics",
+	Tagline:  "Voice in one plugin",
+	Keywords: []string{"vocal", "voice", "de-esser", "sibilance", "compressor", "eq", "singer", "podcast", "dialog"},
 	Params: []plug.Param{
 		{ID: DeEssID, Name: "De-Ess", Unit: "%", Max: 200, Default: 100, Flags: auto, Format: percent},
 		{ID: RumbleID, Name: "Rumble", Unit: "%", Max: 200, Default: 100, Flags: auto, Format: percent},

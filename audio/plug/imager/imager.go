@@ -44,12 +44,14 @@ func hz(v float64) string {
 // Descriptor is the plugin, as it is registered.
 var Descriptor = func() plug.Descriptor {
 	d := plug.Descriptor{
-		ID:      "marrasen.imager",
-		Name:    "Imager",
-		Vendor:  "Marras",
-		Version: "0.1.0",
-		Kind:    "Fx|Spatial|Mastering",
-		New:     func(h plug.Host) plug.Plugin { return &plugin{} },
+		ID:       "marrasen.imager",
+		Name:     "Imager",
+		Vendor:   "Marras",
+		Version:  "0.1.0",
+		Kind:     "Fx|Spatial|Mastering",
+		Tagline:  "Stereo width, band by band",
+		Keywords: []string{"stereo", "width", "widener", "mono", "bass mono", "image", "spatial", "multiband", "correlation"},
+		New:      func(h plug.Host) plug.Plugin { return &plugin{} },
 	}
 	homes := [bands - 1][3]float64{{30, 1000, 120}, {200, 5000, 1200}, {1000, 16000, 6000}}
 	for i, x := range homes {

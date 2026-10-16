@@ -36,7 +36,7 @@ import (
 type Descriptor struct {
 	// ID tells the plugin from every other, for good: projects and
 	// presets name it by its ID. Write it as a reversed domain:
-	// "marrasen.trim".
+	// "marrasen.braid".
 	ID      string
 	Name    string
 	Vendor  string
@@ -46,6 +46,13 @@ type Descriptor struct {
 	// Instrument category is an instrument, as [Descriptor.Instrument]
 	// reports.
 	Kind string
+	// Tagline says what the plugin does in a few words, for a browser to
+	// show under its name: "Gain & stereo".
+	Tagline string
+	// Keywords are words someone looking for the plugin might type,
+	// past its name and kind: "mono" and "phase" find a gain and stereo
+	// tool. A browser searches them, and shows none.
+	Keywords []string
 	// Notes says the plugin takes notes, in [Block.Events]. An
 	// instrument does.
 	Notes bool
