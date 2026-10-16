@@ -276,6 +276,11 @@ type Position struct {
 	Frame int64
 	// Playing is set while the sound plays, and clear as it renders.
 	Playing bool
+	// Still says the song stands still through the block, as a host's
+	// does while it is stopped and its engine runs on: Beat holds, and
+	// [Position.BeatAt] gives it at every frame. A render is never
+	// still.
+	Still bool
 	// Tempo is quarter notes a minute at Frame, or zero where none is
 	// known.
 	Tempo float64
@@ -294,9 +299,13 @@ type Position struct {
 
 // BeatAt returns where frame f of a block n frames long falls, in
 // quarter notes from the start of the track, at rate frames a second:
-// from Beat, as the tempo runs from Tempo to EndTempo across the block.
-// It holds where Tempo is above zero.
+// from Beat, as the tempo runs from Tempo to EndTempo across the block,
+// or Beat itself at every frame where the song stands Still. It holds
+// where Tempo is above zero.
 func (p Position) BeatAt(f, n int, rate float64) float64 {
+	if p.Still {
+		return p.Beat
+	}
 	end := p.EndTempo
 	if end <= 0 {
 		end = p.Tempo

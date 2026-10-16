@@ -63,3 +63,12 @@ func TestABeatOfASteadyTempoHoldsWithoutAnEndTempo(t *testing.T) {
 		t.Errorf("half a second at 120 from beat 3 is %v, want 4", got)
 	}
 }
+
+func TestABeatHoldsWhileTheSongStandsStill(t *testing.T) {
+	pos := plug.Position{Tempo: 120, EndTempo: 120, Beat: 3, Still: true}
+	for _, f := range []int{0, 100, 47999} {
+		if got := pos.BeatAt(f, 48000, 48000); got != 3 {
+			t.Errorf("standing still, frame %d is beat %v, want 3", f, got)
+		}
+	}
+}

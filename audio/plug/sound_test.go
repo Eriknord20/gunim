@@ -68,3 +68,38 @@ func TestAListenerHearsPlayingBetweenChunksUntilStill(t *testing.T) {
 		t.Fatal("a Listener of no sound hears it playing")
 	}
 }
+
+// quiet is a sound that has played to frame at, every frame of it v.
+type quiet struct {
+	at int64
+	v  float32
+}
+
+func (q *quiet) Heard(dst []float32) (frames int, at int64, rate int) {
+	n := min(int64(len(dst)/2), q.at)
+	for i := range 2 * n {
+		dst[i] = q.v
+	}
+	return int(n), q.at, 48000
+}
+
+// Silence moving on is a sound standing still: an engine running on
+// with the song stopped. A sound heard again plays at once.
+func TestAListenerHearsSilenceAsStill(t *testing.T) {
+	q := &quiet{at: 1000}
+	l := Listener{Sound: q}
+	frame := StillAfter / 10
+	for i := range 11 {
+		q.at += 100
+		if got, _, _ := l.Hear(256, frame); got != nil {
+			t.Fatalf("frame %d: silence heard as %d frames", i, len(got)/2)
+		}
+	}
+	if _, _, on := l.Hear(256, frame); on {
+		t.Fatal("silence for StillAfter plays on")
+	}
+	q.at, q.v = q.at+100, Silence*2
+	if got, _, on := l.Hear(256, frame); len(got) != 2*100 || !on {
+		t.Fatal("the sound coming back was not heard playing")
+	}
+}

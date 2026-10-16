@@ -58,7 +58,9 @@ func (p *Plugin) ProcessBlock(b *plug.Block) {
 	pos := b.Position
 	p.ctx.projectTime = pos.Frame
 	p.ctx.state = ctxTimeSig | ctxContTime
-	if pos.Playing {
+	// A song standing still is stopped, to the plugin, though the
+	// sound plays on.
+	if pos.Playing && !pos.Still {
 		p.ctx.state |= ctxPlaying
 	}
 	if pos.Tempo > 0 {
