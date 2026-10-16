@@ -254,7 +254,7 @@ func TestALibraryFindsPluginsAsPlugLooksThemUp(t *testing.T) {
 	if lib.Find(missing) || lib.Err(missing) == nil {
 		t.Fatalf("an ID of no plugin was found, or its reason lost: %v", lib.Err(missing))
 	}
-	if lib.Find("marrasen.trim") {
+	if lib.Find("marrasen.braid") {
 		t.Fatal("a Go plugin's ID was found as a VST3 plugin's")
 	}
 	m := lsp(t)
