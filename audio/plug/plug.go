@@ -181,10 +181,10 @@ type AudioPort struct {
 	// Channels is how many channels it has. Zero gives it as many as the
 	// main sound, [Setup.Channels].
 	Channels int
-	// Group puts the port on one row with the plugin's other ports of
-	// the same Group, under the Group as a label, where the host draws
-	// ports, as a light's Red, Green and Blue on a row named "Colour".
-	// Empty gives the port a row of its own.
+	// Group keeps the port together with the plugin's other ports of
+	// the same Group, where the host draws ports, as a light's Red,
+	// Green and Blue in a group named "Colour". Empty leaves it in no
+	// group.
 	Group string
 	// Color is the port's colour, and the colour of the wires from it.
 	// The host may make it lighter or darker to stand out from what it
@@ -204,10 +204,10 @@ type ControlPort struct {
 	// signal into it, and an output's, as the plugin writes them.
 	// Default is what an input left unconnected stands for.
 	Min, Max, Default float64
-	// Group puts the port on one row with the plugin's other ports of
-	// the same Group, under the Group as a label, where the host draws
-	// ports, as a light's Red, Green and Blue on a row named "Colour".
-	// Empty gives the port a row of its own.
+	// Group keeps the port together with the plugin's other ports of
+	// the same Group, where the host draws ports, as a light's Red,
+	// Green and Blue in a group named "Colour". Empty leaves it in no
+	// group.
 	Group string
 	// Color is the port's colour, and the colour of the wires from it.
 	// The host may make it lighter or darker to stand out from what it
