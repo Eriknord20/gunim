@@ -44,7 +44,7 @@ func (t *TrimPot) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) g
 
 // slotAngle is how far round the slot is turned, in radians from
 // upright: from 135° left to 135° right.
-func (t *TrimPot) slotAngle() float64 { return (t.p.Normal(t.v)*2 - 1) * 0.75 * math.Pi }
+func (t *TrimPot) slotAngle() float64 { return (t.turnOf(t.v)*2 - 1) * 0.75 * math.Pi }
 
 // Paint implements [gunim.Node].
 func (t *TrimPot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {

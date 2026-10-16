@@ -78,10 +78,42 @@ type Knob struct {
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
 	Tooltip string
+	// Taper, where set, turns the knob unevenly across its values.
+	Taper *Taper
+	// OnTurn, where set, hears each value the knob is turned to, after
+	// the value is set: for a view that draws what the value does.
+	OnTurn func(v float64, u *gunim.UI)
 	// shown is the modulation the knob last stepped with, and modded
 	// says control moved it then.
 	shown  plug.Modulation
 	modded bool
+}
+
+// Taper is how far round a knob turns for its value, where that is not
+// evenly, as a gain that spends most of its turn near 0 dB: To takes a
+// parameter's Normal to how far round, both from 0 to 1, and From takes
+// it back. Both rise from 0 to 1.
+type Taper struct{ To, From func(float64) float64 }
+
+// round returns how far round the knob turns for n, a Normal.
+func (k *Knob) round(n float64) float64 {
+	n = min(max(n, 0), 1)
+	if k.Taper != nil {
+		return k.Taper.To(n)
+	}
+	return n
+}
+
+// turnOf returns how far round the knob turns for v.
+func (k *Knob) turnOf(v float64) float64 { return k.round(k.p.Normal(v)) }
+
+// valueAt returns the value of the knob turned t of the way round.
+func (k *Knob) valueAt(t float64) float64 {
+	t = min(max(t, 0), 1)
+	if k.Taper != nil {
+		t = k.Taper.From(t)
+	}
+	return k.p.Plain(t)
 }
 
 // NewKnob returns a knob for p, a parameter of h's, at its value in h.
@@ -216,17 +248,17 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		}
 	}
 	arc(0, 1, 3.5, audioui.Mix(KnobGroove.Get(th), audioui.Faded(ink, 0.25), 0.5*hover))
-	t := k.p.Normal(k.v)
+	t := k.turnOf(k.v)
 	zero := 0.0
 	if k.p.Min < 0 && k.p.Max > 0 {
-		zero = k.p.Normal(0)
+		zero = k.turnOf(0)
 	}
 	if k.held {
 		arc(zero, t, 5, audioui.Faded(accent, 0.25))
 	}
 	arc(zero, t, 3.5, accent)
 	if m, ok := k.modulation(); ok {
-		k.paintModulation(p, m, c, r, t, audioui.Mix(accent, KnobRing.Get(th), 0.7))
+		k.paintModulation(p, m, c, r, audioui.Mix(accent, KnobRing.Get(th), 0.7))
 	}
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
@@ -246,16 +278,17 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 
 // paintModulation draws how control moves the knob's value: a ring
 // outside the arc, of radius r about c, as far below and above the
-// value, at t along it, as the control reaches, or all round where
+// value as the control reaches, or all round where
 // control sets the value; and a dot on the arc at the value heard, all in ring.
-func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, t float64, ring color.NRGBA) {
+func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, ring color.NRGBA) {
 	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
 	out := r + 5
 	at := func(t float64, rad float32) geom.Point {
 		a := from + sweep*t
 		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
 	}
-	t0, t1, a := min(max(t+m.Low, 0), 1), min(max(t+m.High, 0), 1), float32(0.85)
+	n := k.p.Normal(k.v)
+	t0, t1, a := k.round(n+m.Low), k.round(n+m.High), float32(0.85)
 	if m.Sets {
 		t0, t1, a = 0, 1, 0.35
 	}
@@ -267,7 +300,7 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, audioui.Faded(ring, a))
 		}
 	}
-	dot := at(k.p.Normal(m.Now), r)
+	dot := at(k.turnOf(m.Now), r)
 	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: audioui.Faded(ring, 0.6)})
 }
 
@@ -286,6 +319,9 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 	}
 	k.v = v
 	k.set(v, u)
+	if k.OnTurn != nil {
+		k.OnTurn(v, u)
+	}
 	u.Invalidate()
 }
 
@@ -308,7 +344,7 @@ func (k *Knob) tooltip() string {
 	return k.p.Name + ": " + strings.ToLower(how[:1]) + how[1:]
 }
 
-// stepSize is a step of an arrow key, along Normal.
+// stepSize is a step of an arrow key, of the way round.
 func (k *Knob) stepSize() float64 {
 	if k.p.Steps > 0 {
 		return 1 / float64(k.p.Steps)
@@ -353,7 +389,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 			k.stepTo(k.p.Default, u)
 			return true
 		}
-		k.held, k.from, k.start = true, e.Pos, k.p.Normal(k.v)
+		k.held, k.from, k.start = true, e.Pos, k.turnOf(k.v)
 		k.begin(u)
 		u.Invalidate()
 	case input.PointerMove:
@@ -364,7 +400,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Mods.Has(input.ModShift) {
 			px *= 10
 		}
-		k.turn(k.p.Plain(k.start+float64((k.from.Y-e.Pos.Y)/px)), u)
+		k.turn(k.valueAt(k.start+float64((k.from.Y-e.Pos.Y)/px)), u)
 	case input.PointerUp:
 		if !k.held {
 			return false
@@ -389,7 +425,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		default:
 			return false
 		}
-		k.stepTo(k.p.Plain(k.p.Normal(k.v)+d), u)
+		k.stepTo(k.valueAt(k.turnOf(k.v)+d), u)
 	default:
 		return false
 	}

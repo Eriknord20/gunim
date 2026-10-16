@@ -50,11 +50,13 @@ func dbText(v float64) string { return fmt.Sprintf("%.1f dB", v) }
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:      "marrasen.maximizer",
-	Name:    "Maximizer",
-	Vendor:  "Marras",
-	Version: "0.1.0",
-	Kind:    "Fx|Dynamics|Mastering",
+	ID:       "marrasen.maximizer",
+	Name:     "Maximizer",
+	Vendor:   "Marras",
+	Version:  "0.1.0",
+	Kind:     "Fx|Dynamics|Mastering",
+	Tagline:  "Loudness & ceiling for the master",
+	Keywords: []string{"limiter", "loudness", "lufs", "ceiling", "true peak", "master", "mastering", "clipper"},
 	Params: []plug.Param{
 		{ID: GainID, Name: "Gain", Unit: "dB", Max: 24, Flags: plug.Automatable,
 			Format: func(v float64) string { return fmt.Sprintf("%+.1f dB", v) }},

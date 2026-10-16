@@ -233,9 +233,9 @@ func (w *OffscreenWindow) Present(ops []paint.Op, damage geom.Rect) error {
 }
 
 // keepOps copies ops deep enough that later frames leave the copy as
-// it is: each op, and the glyphs, items or cells it lists. What an op
-// points to that the engine never reuses, such as a mesh, an image or
-// a gradient, is shared.
+// it is: each op, and the glyphs, items, cells or points it lists. What
+// an op points to that the engine never reuses, such as a mesh, an
+// image or a gradient, is shared.
 func keepOps(ops []paint.Op) []paint.Op {
 	kept := make([]paint.Op, len(ops))
 	for i, op := range ops {
@@ -256,6 +256,10 @@ func keepOps(ops []paint.Op) []paint.Op {
 			kept[i] = &c
 		case *paint.ImageOp:
 			c := *op
+			kept[i] = &c
+		case *paint.RibbonOp:
+			c := *op
+			c.Points = slices.Clone(op.Points)
 			kept[i] = &c
 		case *paint.CellsOp:
 			c := *op
