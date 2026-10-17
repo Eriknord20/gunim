@@ -1,6 +1,7 @@
 package plugui
 
 import (
+	"errors"
 	"image"
 	"sync/atomic"
 	"time"
@@ -28,7 +29,8 @@ type EditorSlot struct {
 	// a fixed part of its own.
 	Fit bool
 	// Opened hears the editor open, and Failed an editor that would
-	// not.
+	// not: at once for a plugin with none to show ([plug.ErrNoEditor]),
+	// whose host shows it otherwise.
 	Opened func(u *gunim.UI)
 	Failed func(err error, u *gunim.UI)
 
@@ -95,9 +97,9 @@ func (s *EditorSlot) embed(u *gunim.UI) bool {
 	}
 	if err != nil {
 		// A plugin still loading may have no editor yet: the slot tries
-		// again, a while, before it gives up.
+		// again, a while, before it gives up. One with none gives up now.
 		s.tries++
-		if s.tries < embedTries {
+		if s.tries < embedTries && !errors.Is(err, plug.ErrNoEditor) {
 			u.After(embedWait, func(u *gunim.UI) {
 				if !s.open && !s.closed && !s.at.Empty() {
 					s.PlaceNative(s.at, u)

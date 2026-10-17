@@ -229,7 +229,7 @@ func TestAnyInstrument(t *testing.T) {
 		t.Fatalf("the chord played at %v", first)
 	}
 	p := pl.(*plugged).Plugin()
-	t.Logf("level %.4f, latency %d, tail %d, bends notes %v, editor %v", first, p.Latency(), p.Tail(), p.Bends(), p.HasEditor())
+	t.Logf("level %.4f, latency %d, tail %d, bends notes %v, editor %v", first, p.Latency(), p.Tail(), p.Bends(), hasEditor(p))
 	for _, prm := range d.Params[:min(len(d.Params), 3)] {
 		t.Logf("%s starts at %.3f, written %q", prm.Name, prm.Default, prm.Text(prm.Default))
 	}
@@ -287,13 +287,10 @@ func TestAnInstrumentsEditorOpensBehindPlug(t *testing.T) {
 	pl := d.New(nil)
 	defer pl.Close()
 	ed := pl.(plug.Editor)
-	if ed.HasEditor() || ed.OpenEditor("x") == nil {
+	if ed.OpenEditor("x") == nil {
 		t.Fatal("one not yet prepared has an editor")
 	}
 	pl.Processor().Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
-	if !ed.HasEditor() {
-		t.Fatal("the sampler has no editor")
-	}
 	if err := ed.OpenEditor("gunim vst3 test: LSP Sampler"); err != nil {
 		t.Fatal(err)
 	}
