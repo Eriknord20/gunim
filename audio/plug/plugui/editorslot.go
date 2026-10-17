@@ -22,7 +22,7 @@ import (
 // goes: a plugin whose windows go under it may end the program, as
 // Xlib does. A host that closes the editor first closes it with Close.
 type EditorSlot struct {
-	ed plug.Embedder
+	ed Embeddable
 	// Fit grows and shrinks the window by as much as the editor's own
 	// size, as it opens and as it changes, differs from the room the slot
 	// has: for a slot that takes all the room the window gives it beyond
@@ -52,8 +52,20 @@ type EditorSlot struct {
 	box   geom.Size
 }
 
+// Embeddable is what a slot asks of the editor it shows: a
+// [plug.Embedder]'s methods that open, place and close it. A plugin
+// that plays nothing a host hears, as an ARA plugin bound to show its
+// editor, has them too.
+type Embeddable interface {
+	EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, err error)
+	PlaceEditor(r image.Rectangle) (w, h int)
+	CloseEditor()
+}
+
+var _ Embeddable = plug.Embedder(nil)
+
 // NewEditorSlot returns a slot for ed's editor.
-func NewEditorSlot(ed plug.Embedder) *EditorSlot { return &EditorSlot{ed: ed, scale: 1} }
+func NewEditorSlot(ed Embeddable) *EditorSlot { return &EditorSlot{ed: ed, scale: 1} }
 
 // sizedPoll is how often an open slot looks for a size the editor took
 // of itself; embedTries is how many times the slot tries to open the
