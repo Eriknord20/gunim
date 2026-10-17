@@ -21,6 +21,7 @@ package plug
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"slices"
 	"strings"
@@ -180,6 +181,15 @@ type AudioPort struct {
 	// Channels is how many channels it has. Zero gives it as many as the
 	// main sound, [Setup.Channels].
 	Channels int
+	// Group keeps the port together with the plugin's other ports of
+	// the same Group, where the host draws ports, as a light's Red,
+	// Green and Blue in a group named "Colour". Empty leaves it in no
+	// group.
+	Group string
+	// Color is the port's colour, and the colour of the wires from it.
+	// The host may make it lighter or darker to stand out from what it
+	// is drawn on. Zero leaves it to the host.
+	Color color.NRGBA
 }
 
 // ControlPort is a control port of a plugin's: a value a frame, within
@@ -194,6 +204,15 @@ type ControlPort struct {
 	// signal into it, and an output's, as the plugin writes them.
 	// Default is what an input left unconnected stands for.
 	Min, Max, Default float64
+	// Group keeps the port together with the plugin's other ports of
+	// the same Group, where the host draws ports, as a light's Red,
+	// Green and Blue in a group named "Colour". Empty leaves it in no
+	// group.
+	Group string
+	// Color is the port's colour, and the colour of the wires from it.
+	// The host may make it lighter or darker to stand out from what it
+	// is drawn on. Zero leaves it to the host.
+	Color color.NRGBA
 }
 
 // Param is one of a plugin's parameters: a value the host keeps, shows,
@@ -217,6 +236,11 @@ type Param struct {
 	Flags ParamFlags
 	// Format writes a value to show. Nil writes it with Unit.
 	Format func(v float64) string
+	// Group and Color are the parameter's input, where the host draws
+	// one for wires to drive it, as [ControlPort.Group] and
+	// [ControlPort.Color] are a port's.
+	Group string
+	Color color.NRGBA
 }
 
 // ParamFlags say how the host treats a parameter.
