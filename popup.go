@@ -138,8 +138,11 @@ type PopupFitter interface {
 type surface struct {
 	root *state
 	opts PopupOptions
-	// dw is nil until the first frame has laid the content out.
-	dw driver.Window
+	// dw is nil until the first frame has laid the content out, and
+	// parent is the window it was opened from, which stays its parent
+	// while it is kept as a spare after.
+	dw     driver.Window
+	parent driver.Window
 	// zoom is the zoom dw was last given.
 	zoom float32
 	// size and anchor are where the window was last put, in logical
@@ -357,7 +360,7 @@ func (u *UI) framePopup(s *surface, f Frame) {
 				_ = pl.Place(anchor, size)
 			}
 		}
-		s.dw, s.size, s.anchor = dw, size, anchor
+		s.dw, s.parent, s.size, s.anchor = dw, parent, size, anchor
 		s.stop = make(chan struct{})
 		go u.w.forward(s)
 		if tr := transparent(dw); tr != f.Transparent {
@@ -651,8 +654,9 @@ func (u *UI) dropPopup(s *surface) {
 	close(s.stop)
 	// Kept, hidden, for the next popup, unless a frame is still on its
 	// way to it, whose report would reach that popup instead. Each kind
-	// of window keeps its own few.
-	sp := spareWindow{dw: s.dw, parent: u.windowOf(s.root.opener), passthrough: s.opts.Passthrough, over: s.opts.Over,
+	// of window keeps its own few. It keeps the parent it was opened
+	// from: by now the opener's own popup may have gone.
+	sp := spareWindow{dw: s.dw, parent: s.parent, passthrough: s.opts.Passthrough, over: s.opts.Over,
 		above: s.opts.Above, owned: s.opts.Owned}
 	alike := 0
 	for _, o := range u.spare {

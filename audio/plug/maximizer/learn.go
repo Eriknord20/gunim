@@ -217,7 +217,7 @@ func loudnessOf(ctx context.Context, src plug.Source, s *settings, progress func
 		}
 		if proc != nil {
 			proc.Process(&plug.Block{In: [][]float32{ch[0][:n], ch[1][:n]}, Out: [][]float32{ch[0][:n], ch[1][:n]},
-				Frames: n, Position: plug.Position{Frame: at}})
+				Frames: n, Position: plug.Position{Frame: at, Song: at}})
 		}
 		for i := range n {
 			frames[2*i], frames[2*i+1] = ch[0][i], ch[1][i]

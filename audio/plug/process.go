@@ -271,9 +271,16 @@ const (
 //     one stretch of a ramp. A ramp runs linearly in time, as
 //     audio/tempo draws one, so Tempo and EndTempo tell the whole of it.
 type Position struct {
-	// Frame is the block's first frame, counted from the start of the
-	// track.
+	// Frame is the block's first frame on the host's clock, which runs
+	// on as the sound plays, stopped or not, as [Sound.Heard] and a
+	// [Trace] count it. A render counts it from the start of the track.
 	Frame int64
+	// Song is the block's first frame in the song, counted from the
+	// start of the track: where the playhead is. It holds where the
+	// song stands still, and jumps where the playhead does. A plugin
+	// that puts what it hears in the song, as a recorder does, places
+	// it by Song. A render's Song is its Frame.
+	Song int64
 	// Playing is set while the sound plays, and clear as it renders.
 	Playing bool
 	// Still says the song stands still through the block, as a host's

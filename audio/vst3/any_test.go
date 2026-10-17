@@ -38,7 +38,7 @@ func TestAnyPlugin(t *testing.T) {
 		t.Fatalf("the plugin played %v", r)
 	}
 	t.Logf("level out %.3f of %.3f in, latency %d, %d parameters, editor %v", rms(out), rms(in), p.Latency(),
-		len(p.Params()), p.HasEditor())
+		len(p.Params()), hasEditor(p))
 	st, err := p.State()
 	if err != nil {
 		t.Fatal(err)
@@ -91,4 +91,11 @@ func TestAnyPlugin(t *testing.T) {
 		}
 	}
 	t.Logf("%d edits made in the editor; it is open: %v", p.Edits(), p.EditorOpen())
+}
+
+// hasEditor reports whether p says what size its editor opens at, as one
+// with an editor here does, for the logs.
+func hasEditor(p *Plugin) bool {
+	_, _, ok := p.EditorSize()
+	return ok
 }

@@ -56,7 +56,9 @@ func (p *Plugin) ProcessBlock(b *plug.Block) {
 		}
 	}
 	pos := b.Position
-	p.ctx.projectTime = pos.Frame
+	// The project's time is the playhead's, which a plugin draws and
+	// records by; the continuous time is the host's clock, which runs on.
+	p.ctx.projectTime, p.ctx.contTime = pos.Song, pos.Frame
 	p.ctx.state = ctxTimeSig | ctxContTime
 	// A song standing still is stopped, to the plugin, though the
 	// sound plays on.
@@ -420,14 +422,17 @@ type plugged struct {
 	mu sync.Mutex
 	// state is the state given before the plugin is made, given the
 	// state State last gave, or SetState last set, and initial the
-	// state the plugin had as it was made.
-	state, given, initial []byte
-	err                   error
+	// state the plugin had as it was made. echo is the state the plugin
+	// gave just after given was set: one that writes the state it was
+	// set otherwise, unchanged since, still holds given.
+	state, given, initial, echo []byte
+	err                         error
 }
 
 var (
 	_ plug.Plugin       = (*plugged)(nil)
 	_ plug.Editor       = (*plugged)(nil)
+	_ plug.Changer      = (*plugged)(nil)
 	_ plug.Embedder     = (*plugged)(nil)
 	_ plug.PresetLister = (*plugged)(nil)
 	_ plug.Reporter     = (*plugProc)(nil)
@@ -450,8 +455,36 @@ func (a *plugged) State() []byte {
 		a.err = err
 		return a.given
 	}
-	a.given = st
+	if a.echo != nil && bytes.Equal(st, a.echo) {
+		return a.given
+	}
+	a.given, a.echo = st, st
 	return st
+}
+
+// Changed implements [plug.Changer]. One not made yet changed nothing.
+func (a *plugged) Changed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p := a.playing.Load()
+	if p == nil {
+		return false
+	}
+	st, err := p.State()
+	if err != nil {
+		a.err = err
+		return false
+	}
+	return a.echo == nil || !bytes.Equal(st, a.echo)
+}
+
+// settle notes the state p holds, just set to given, as its echo. a.mu
+// is held.
+func (a *plugged) settle(p *Plugin, given []byte) {
+	a.given, a.echo = bytes.Clone(given), nil
+	if st, err := p.State(); err == nil {
+		a.echo = st
+	}
 }
 
 // SetState implements [plug.Plugin]. The state State last gave, or
@@ -479,7 +512,7 @@ func (a *plugged) SetState(b []byte) error {
 	if err := p.SetState(b); err != nil {
 		return err
 	}
-	a.given = bytes.Clone(b)
+	a.settle(p, b)
 	return nil
 }
 
@@ -521,12 +554,6 @@ func (a *plugged) Err() error {
 // Plugin returns the VST3 plugin playing, or nil before the processor
 // is prepared.
 func (a *plugged) Plugin() *Plugin { return a.playing.Load() }
-
-// HasEditor implements [plug.Editor].
-func (a *plugged) HasEditor() bool {
-	p := a.playing.Load()
-	return p != nil && p.HasEditor()
-}
 
 // errNotPlaying is the error of an editor opened on a plugin that plays
 // nowhere yet.
@@ -640,13 +667,13 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 		return
 	}
 	if st, err := p.State(); err == nil {
-		a.initial, a.given = st, st
+		a.initial, a.given, a.echo = st, st, st
 	}
 	if len(a.state) > 0 {
 		if err := p.SetState(a.state); err != nil {
 			a.err = err
 		} else {
-			a.given = a.state
+			a.settle(p, a.state)
 		}
 	}
 	a.state = nil

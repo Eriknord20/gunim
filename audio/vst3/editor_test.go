@@ -18,9 +18,6 @@ func TestAnEditorOpens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if !p.HasEditor() {
-		t.Fatal("no editor")
-	}
 	if err := p.OpenEditor("LSP Parametric Equalizer"); err != nil {
 		t.Fatal(err)
 	}
