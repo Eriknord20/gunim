@@ -1,11 +1,16 @@
 package plug
 
 import (
+	"errors"
 	"image"
 	"time"
 
 	"github.com/marrasen/gunim"
 )
+
+// ErrNoEditor is the error, wrapped, of an editor opened on a plugin
+// that has none to show here: the host shows the plugin otherwise.
+var ErrNoEditor = errors.New("no editor to show here")
 
 // Size is how big a view the host has room for.
 type Size int
@@ -103,11 +108,13 @@ type Holder interface {
 // but the audio's.
 type Editor interface {
 	Plugin
-	// HasEditor reports whether the plugin has an editor to show here:
-	// false for one made for views alone, which plays nothing.
-	HasEditor() bool
 	// OpenEditor shows the editor, in a window titled title, or brings
-	// it to the front where it is open.
+	// it to the front where it is open. It fails with [ErrNoEditor]
+	// where the plugin has no editor to show here, and the host shows the
+	// plugin otherwise; and otherwise where it plays nowhere yet. A host
+	// learns whether there is an editor so, as it opens one: an editor
+	// made only to ask, and thrown away, fails on a plugin that shows one
+	// at a time while it is open.
 	OpenEditor(title string) error
 	// CloseEditor closes the editor, where it is open.
 	CloseEditor()

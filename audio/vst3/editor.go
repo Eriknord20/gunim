@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image"
 	"unsafe"
+
+	"github.com/marrasen/gunim/audio/plug"
 )
 
 // The plugin's editor: its view, on the plugins' thread, in a window of
@@ -63,23 +65,6 @@ var frameKind = &kind{
 		}
 		return 0
 	},
-}
-
-// HasEditor says whether the plugin has an editor this platform shows.
-func (p *Plugin) HasEditor() bool {
-	ok := false
-	onUI(func() {
-		if p.ctrl == 0 {
-			return
-		}
-		v := p.createView()
-		if v == 0 {
-			return
-		}
-		ok = true
-		release(v)
-	})
-	return ok
 }
 
 // createView makes the controller's editor view, if this platform can
@@ -213,11 +198,11 @@ func (e *editor) sizeTo(w, h int) {
 // title, or, where parent is set, a child of parent's.
 func (p *Plugin) attachEditor(title string, parent uintptr, sized func(w, h int)) error {
 	if p.ctrl == 0 {
-		return fmt.Errorf("vst3: %s has no editor", p.Class.Name)
+		return fmt.Errorf("vst3: %s: %w", p.Class.Name, plug.ErrNoEditor)
 	}
 	v := p.createView()
 	if v == 0 {
-		return fmt.Errorf("vst3: %s has no editor here", p.Class.Name)
+		return fmt.Errorf("vst3: %s: %w", p.Class.Name, plug.ErrNoEditor)
 	}
 	var r viewRect
 	call(v, mGetSize, uintptr(unsafe.Pointer(&r)))

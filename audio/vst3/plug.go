@@ -555,12 +555,6 @@ func (a *plugged) Err() error {
 // is prepared.
 func (a *plugged) Plugin() *Plugin { return a.playing.Load() }
 
-// HasEditor implements [plug.Editor].
-func (a *plugged) HasEditor() bool {
-	p := a.playing.Load()
-	return p != nil && p.HasEditor()
-}
-
 // errNotPlaying is the error of an editor opened on a plugin that plays
 // nowhere yet.
 var errNotPlaying = errors.New("vst3: the plugin plays nowhere yet, so its editor has nothing to edit")
