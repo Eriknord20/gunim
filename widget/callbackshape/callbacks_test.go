@@ -18,11 +18,26 @@ import (
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/calendar"
 	"github.com/marrasen/gunim/widget"
+	"github.com/marrasen/gunim/widget/dock"
 )
 
-// structs are the exported struct types of widget, calendar and audioui. TestEveryStructIsListed keeps the list
+// structs are the exported struct types of widget, calendar, audioui and dock. TestEveryStructIsListed keeps the list
 // whole, from the packages' source.
 var structs = []any{
+	(*dock.Bar)(nil),
+	(*dock.Close)(nil),
+	(*dock.Detach)(nil),
+	(*dock.Dock)(nil),
+	(*dock.Drag)(nil),
+	(*dock.Face)(nil),
+	(*dock.Layout)(nil),
+	(*dock.Move)(nil),
+	(*dock.New)(nil),
+	(*dock.Node)(nil),
+	(*dock.Resize)(nil),
+	(*dock.Show)(nil),
+	(*dock.Target)(nil),
+	(*dock.Window)(nil),
 	(*widget.AddressBar)(nil),
 	(*widget.AddressLead)(nil),
 	(*widget.AddressPlace)(nil),
@@ -149,7 +164,7 @@ var structs = []any{
 }
 
 // dirs are the packages' directories, from this one, by their names.
-var dirs = map[string]string{"widget": "..", "calendar": "../../calendar", "audioui": "../../audioui"}
+var dirs = map[string]string{"widget": "..", "calendar": "../../calendar", "audioui": "../../audioui", "dock": "../dock"}
 
 func TestEveryStructIsListed(t *testing.T) {
 	listed := map[string]bool{}
