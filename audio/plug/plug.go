@@ -213,6 +213,17 @@ type ControlPort struct {
 	// The host may make it lighter or darker to stand out from what it
 	// is drawn on. Zero leaves it to the host.
 	Color color.NRGBA
+	// Trigger marks a port that carries hits, as a drum's notes: 0,
+	// with a pulse one frame long at each hit, as high as the hit's
+	// velocity, from 0 to 1. Two hits on one frame make one pulse, the
+	// louder. A trigger port runs from 0 to 1 and defaults to 0. A
+	// trigger output comes as late as the plugin's sound, by its
+	// [Processor.Latency], as a host takes every control output to: a
+	// plugin writes each pulse that many frames after its hit, on the
+	// frame the hit's sound comes out, in the next block where that
+	// falls past the block's end. A host joins a trigger output only to
+	// a trigger input, and the other way round.
+	Trigger bool
 }
 
 // Param is one of a plugin's parameters: a value the host keeps, shows,
@@ -492,7 +503,7 @@ func check(d *Descriptor) error {
 // checkPorts returns what is wrong with d's ports, if anything: each
 // needs a name of its own among those going its way, an audio port a
 // channel count of zero or more, and a control port a range holding its
-// default.
+// default: from 0 to 1, from 0, for a trigger.
 func checkPorts(d *Descriptor) error {
 	for way, ports := range map[string][]AudioPort{"aux input": d.AuxIn, "aux output": d.AuxOut} {
 		names := map[string]bool{}
@@ -515,6 +526,10 @@ func checkPorts(d *Descriptor) error {
 			names[p.Name] = true
 			if p.Max <= p.Min || p.Default < p.Min || p.Default > p.Max {
 				return fmt.Errorf("%s: %s %q runs from %g to %g, from %g", d.ID, way, p.Name, p.Min, p.Max, p.Default)
+			}
+			if p.Trigger && (p.Min != 0 || p.Max != 1 || p.Default != 0) {
+				return fmt.Errorf("%s: %s %q is a trigger, so runs from 0 to 1, from 0, not from %g to %g, from %g",
+					d.ID, way, p.Name, p.Min, p.Max, p.Default)
 			}
 		}
 	}

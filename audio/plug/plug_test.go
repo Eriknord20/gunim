@@ -82,6 +82,12 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			LookAhead: -time.Millisecond},
 		"controls of one name": {ID: "test.ctls", Name: "X", New: newer,
 			ControlIn: []ControlPort{{Name: "A", Max: 1}, {Name: "A", Max: 1}}},
+		"trigger of another range": {ID: "test.trig", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "Kick", Max: 127, Trigger: true}}},
+		"trigger below zero": {ID: "test.trigneg", Name: "X", New: newer,
+			ControlIn: []ControlPort{{Name: "Kick", Min: -1, Max: 1, Trigger: true}}},
+		"trigger defaulting to a hit": {ID: "test.trigdef", Name: "X", New: newer,
+			ControlIn: []ControlPort{{Name: "Kick", Max: 1, Default: 1, Trigger: true}}},
 	} {
 		func() {
 			defer func() {
@@ -91,6 +97,15 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			}()
 			Register(d)
 		}()
+	}
+}
+
+func TestRegisterTakesTriggersFromZeroToOne(t *testing.T) {
+	d := Descriptor{ID: "test.triggers", Name: "X", New: func(Host) Plugin { return nil },
+		ControlIn:  []ControlPort{{Name: "Kick", Max: 1, Trigger: true}},
+		ControlOut: []ControlPort{{Name: "Kick", Max: 1, Trigger: true}, {Name: "Level", Max: 1}}}
+	if err := check(&d); err != nil {
+		t.Fatalf("a trigger in and out from 0 to 1 was refused: %v", err)
 	}
 }
 
