@@ -111,6 +111,22 @@ func TestALiveFollowerFollowsATempoChange(t *testing.T) {
 	}
 }
 
+// TestALiveFollowerTakesHalfTimeHeardForLong: a half or double tempo
+// is most often the same music, read another way, but where the music
+// truly goes to half time and stays there it is followed.
+func TestALiveFollowerTakesHalfTimeHeardForLong(t *testing.T) {
+	const rate = 48000
+	first := beats(0, 40, func(int) float64 { return 160 })
+	end := first[len(first)-1] + 750*time.Millisecond
+	second := beats(end, 24, func(int) float64 { return 80 })
+	want := append(append([]time.Duration{}, first...), second...)
+	l := NewLive(rate)
+	follow(l, render(rate, want, end+18*time.Second))
+	if math.Abs(l.BPM()-80) > 1 {
+		t.Errorf("after eighteen seconds of half time the tempo held is %v, want 80", l.BPM())
+	}
+}
+
 // TestALiveFollowerFollowsADrift: a band speeding up from 120 to 132
 // over half a minute.
 func TestALiveFollowerFollowsADrift(t *testing.T) {
@@ -155,6 +171,21 @@ func TestALiveFollowerCountsThroughSilence(t *testing.T) {
 	}
 	if worst, _ := stray(back, all[32:]); worst > 20*time.Millisecond || len(back) < 23 {
 		t.Errorf("%d beats called after the break, the furthest %v from one played", len(back), worst)
+	}
+}
+
+// TestALiveFollowerIsLessSureInABreak: the beat goes on in a long
+// break, but the follower says it hears none.
+func TestALiveFollowerIsLessSureInABreak(t *testing.T) {
+	const rate = 48000
+	want := beats(0, 20, func(int) float64 { return 120 })
+	l := NewLive(rate)
+	follow(l, render(rate, want, 10*time.Second))
+	sure := l.Confidence()
+	follow(l, render(rate, nil, 8*time.Second))
+	if l.BPM() == 0 || l.Confidence() >= sure/2 {
+		t.Errorf("eight seconds into a break the tempo is %v and the follower %v sure, %v before it",
+			l.BPM(), l.Confidence(), sure)
 	}
 }
 

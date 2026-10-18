@@ -57,6 +57,10 @@ type Live struct {
 	before, peak float32
 	// quiet counts the columns since an onset was heard.
 	quiet int
+	// clock is what Beats says.
+	clock float64
+	// again counts the looks running that found want.
+	again int
 	// loud is the strongest rise heard lately, falling slowly, which
 	// an onset has to reach a part of: in a break, hiss stands out
 	// against hiss, and must not pull the beat.
@@ -118,6 +122,9 @@ const (
 	sure = 0.4
 	// phaseBeats is how many beats back the beat is placed from.
 	phaseBeats = 4
+	// related is how many looks running a tempo half, double, or one
+	// and a half times the tempo held is heard before it is taken.
+	related = 8
 )
 
 // Write takes frames, interleaved stereo, and returns the beats that
@@ -180,13 +187,25 @@ func (l *Live) column(rise float32) (time.Duration, bool) {
 		l.pullTo()
 	}
 	if l.per <= 0 || float64(l.col-1) < l.next {
+		l.tick()
 		return 0, false
 	}
+	defer l.tick()
 	// The beat is due: reported, and the next one a beat on.
 	at = l.next
 	l.next += l.per
 	l.count++
 	return l.timeOf(at), true
+}
+
+// tick moves the clock on to where the beat is now. It never runs
+// back: where the beat is pulled back, the clock waits for it.
+func (l *Live) tick() {
+	if l.per <= 0 {
+		return
+	}
+	since := (float64(l.col) - (l.next - l.per)) / l.per
+	l.clock = max(l.clock, float64(l.count)+min(max(since, 0), 1))
 }
 
 // onset takes an onset at column at, of strength o, where it falls
@@ -204,7 +223,9 @@ func (l *Live) onset(at float64, o float32) {
 	default:
 		return
 	}
-	if beat != l.aim {
+	// The beat aimed at moves a little as it is pulled and the tempo
+	// eases, so it is the same beat while it is near.
+	if math.Abs(beat-l.aim) > reach*l.per {
 		l.pullTo()
 		l.aim = beat
 	}
@@ -224,6 +245,7 @@ func (l *Live) pullTo() {
 		// A beat found late time after time is a tempo a little slow:
 		// the tempo is nudged too, so it keeps up between looks.
 		l.per += nudge * off
+		l.per = min(max(l.per, 60*l.d.fps()/l.maxBPM()), 60*l.d.fps()/l.minBPM())
 	}
 	l.aim, l.best, l.bestAt = 0, 0, 0
 }
@@ -240,37 +262,50 @@ func (l *Live) look() {
 	strength := level(f, int(fps/2))
 	per, clarity, ok := period(strength, fps, l.minBPM(), l.maxBPM())
 	if !ok || clarity < 0.1 {
+		// No beat heard: the tempo held, and said to be less sure.
+		l.clarity = clarity
 		return
+	}
+	if l.want > 0 && near(per, l.want) {
+		l.again++
+	} else {
+		l.want, l.again = per, 1
 	}
 	switch {
 	case l.per <= 0:
 		// The first tempo, heard clearly or twice: the beat set where
 		// the onsets heard last fall most, a beat apart.
-		if clarity >= sure || l.want > 0 && near(per, l.want) {
-			l.per, l.clarity, l.want = per, clarity, 0
-			l.next = float64(l.col-1) + phase(strength, per)
-			l.shift = 0
-			return
+		if clarity >= sure || l.again >= 2 {
+			l.take(per, clarity, strength)
 		}
-		l.want = per
+		return
 	case math.Abs(per-l.per) < 0.06*l.per:
 		// Near the tempo held: moved towards, smoothly.
 		l.per += 0.3 * (per - l.per)
 		l.clarity = clarity
-		l.want = 0
 	case near(per, 2*l.per) || near(per, l.per/2) || near(per, 1.5*l.per) || near(per, l.per/1.5):
-		// Its half, its double: the same music, read another way.
-	case l.want > 0 && near(per, l.want):
+		// Its half, its double: most often the same music read
+		// another way, so taken only once heard for a while.
+		l.clarity = clarity
+		if l.again >= related {
+			l.take(per, clarity, strength)
+			return
+		}
+	case l.again >= 2:
 		// Another tempo, heard twice: taken, and the beat placed
 		// afresh.
-		l.per, l.clarity, l.want = per, clarity, 0
-		l.next = float64(l.col-1) + phase(strength, per)
-		l.shift, l.aim, l.best = 0, 0, 0
+		l.take(per, clarity, strength)
 		return
-	default:
-		l.want = per
 	}
 	l.place(strength)
+}
+
+// take takes the tempo per, the beat placed where the onsets heard
+// last fall most, a beat apart.
+func (l *Live) take(per, clarity float64, strength []float32) {
+	l.per, l.clarity = per, clarity
+	l.next = float64(l.col-1) + phase(strength, per)
+	l.want, l.again, l.shift, l.aim, l.best = 0, 0, 0, 0, 0
 }
 
 // place moves the beat where the onsets heard last say it falls, once
@@ -349,8 +384,9 @@ func (l *Live) BPM() float64 {
 	return 60 * l.d.fps() / l.per
 }
 
-// Confidence is how clearly the sound beats at the tempo followed, as
-// [Result.Confidence] says, as last looked.
+// Confidence is how clearly the sound beats, as [Result.Confidence]
+// says, as the last look heard it: low in a break, though the beat
+// goes on through it.
 func (l *Live) Confidence() float64 { return l.clarity }
 
 // Next is when the next beat falls, from the first frame written, and
@@ -364,13 +400,8 @@ func (l *Live) Next() (time.Duration, bool) {
 
 // Beats is how many beats have fallen, and how far the sound written
 // has come towards the next, from 0 to 1: the count a clock runs on.
-func (l *Live) Beats() float64 {
-	if l.per <= 0 {
-		return 0
-	}
-	since := (float64(l.col) - (l.next - l.per)) / l.per
-	return float64(l.count) + min(max(since, 0), 1)
-}
+// It never runs back.
+func (l *Live) Beats() float64 { return l.clock }
 
 // Quiet is how long since an onset was heard: the beat goes on through
 // it, kept by the tempo alone.
