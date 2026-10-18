@@ -224,7 +224,7 @@ func (d *Dock) Refresh(u *gunim.UI) { d.sync(u) }
 // application to put in its title bar, with TitleBar set.
 func (d *Dock) TopBar() *Bar {
 	if d.top == nil {
-		d.top = newBar(d, "", d.win)
+		d.top = makeBar(d, "", d.win)
 		d.sync(nil)
 	}
 	return d.top
@@ -405,14 +405,15 @@ func (d *Dock) sync(u *gunim.UI) {
 			b := d.bars[n.ID]
 			if top && d.TitleBar {
 				if d.top == nil {
-					d.top = newBar(d, "", d.win)
+					d.top = makeBar(d, "", d.win)
 				}
 				b = d.top
 				b.group = n.ID
 			} else if b == nil {
-				b = newBar(d, n.ID, d.win)
+				b = makeBar(d, n.ID, d.win)
 				d.bars[n.ID] = b
 			}
+			b.Plus, b.Plain = d.Plus, top && d.TitleBar
 			tabs := make([]tab, len(n.Kids))
 			for i, k := range n.Kids {
 				tabs[i] = tab{id: k.ID, Face: d.faceOf(k)}

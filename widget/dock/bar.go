@@ -39,8 +39,11 @@ type tab struct {
 	Face
 }
 
-// Bar is a group's row of tabs, which a [Dock] makes and lays out over
-// the group, or hands the application to put in the title bar.
+// Bar is a row of tabs. A [Dock] makes one for each group and lays it
+// out over the group, or hands it to the application to put in the
+// title bar. NewBar makes one that stands alone, which the application
+// fills with SetTabs, as one row of tabs in its title bar over panes
+// it lays out itself.
 //
 // A click shows a tab. The middle button, or its ×, closes it, and the
 // + after the tabs asks for a new one. A tab dragged along the bar
@@ -54,13 +57,40 @@ type tab struct {
 // A screen reader sees a tab list, and presses a tab to show it.
 type Bar struct {
 	anim.Group
+	// Win is the window the bar is in, which the tabs dragged off it
+	// name; a bar on its own whose window learns its number later sets
+	// it then.
+	Win int
 	// Caption lets the room after the tabs move the window, as a title
 	// bar does.
 	Caption bool
+	// Plus puts a + after the tabs, which asks for a New tab. A dock
+	// sets it on its bars from its own.
+	Plus bool
+	// Plain draws no fill behind the tabs, for a bar in a title bar that
+	// has its own.
+	Plain bool
+	// DetachSize is how large a window of its own a tab of a bar on its
+	// own asks for; a dock's bars ask for their group's size.
+	DetachSize geom.Size
+	// OnChange, on a bar on its own, runs on the UI goroutine with what
+	// the user asks for: Show, Close, New, Move (onto this bar, To.At
+	// naming its group) and Detach; a non-nil result is sent to the
+	// application as the bar's intent. Without it the Change is sent
+	// itself. A dock's bars ask their dock's OnChange.
+	OnChange func(c Change, u *gunim.UI) gunim.Intent
+	// OnPlusMenu, when set, runs as the + is clicked with the second
+	// button, with where the + is in the bar's space, to open a menu of
+	// what a new tab can hold.
+	OnPlusMenu func(at geom.Rect, u *gunim.UI) gunim.Intent
+	// Takes says the bar takes data other than a tab dragged over it,
+	// landing between the tabs; OnDrop runs with it, and where, as it is
+	// let go there.
+	Takes  func(data any) bool
+	OnDrop func(d Dropped, u *gunim.UI) gunim.Intent
 
 	d     *Dock
 	group string
-	win   int
 	tabs  []tab
 	front string
 	// titles are the tabs' titles, shaped, shorts their short titles
@@ -75,7 +105,7 @@ type Bar struct {
 	// and end where the tabs and the + end. reserve is room kept free
 	// at the bar's right end, for the window's buttons.
 	boxes   []geom.Rect
-	plus    geom.Rect
+	plusBox geom.Rect
 	end     float32
 	reserve float32
 	// hot is the tab under the pointer, and pressed the one the pointer
@@ -118,6 +148,102 @@ type Bar struct {
 	// group the keys work in, while the window shows several panes.
 	mark *anim.Float
 	laid bool
+	// dropped is the tab whose drag ended taken, or let go outside every
+	// window, until the tabs change.
+	dropped string
+}
+
+// A Tab is a tab on a bar on its own: the node it stands for, by its
+// ID, and how it looks.
+type Tab struct {
+	ID string
+	Face
+}
+
+// Dropped is something other than a tab let go on a bar on its own,
+// which its Takes took: the data the drag carried, and the place among
+// the tabs it landed at, len of the tabs for last.
+type Dropped struct {
+	Data  any
+	Index int
+}
+
+// NewBar returns a bar on its own, for the application to fill with
+// SetTabs. group names it in the Moves it sends, and win is the window
+// it is in, which the tabs dragged off it name.
+func NewBar(group string, win int) *Bar { return makeBar(nil, group, win) }
+
+// SetTabs puts tabs on a bar on its own, front in front. Once laid out,
+// tabs new on it grow in, tabs gone shrink away, the rest slide to
+// their places, and the front tab's fill glides to the one in front;
+// before, they are simply there.
+func (b *Bar) SetTabs(tabs []Tab, front string, u *gunim.UI) {
+	ts := make([]tab, len(tabs))
+	for i, t := range tabs {
+		ts[i] = tab{id: t.ID, Face: t.Face}
+	}
+	b.set(ts, front, false, u)
+}
+
+// TabRect returns where tab id stands, in the bar's space, as the last
+// layout put it and a click finds it; false where the bar has no such
+// tab.
+func (b *Bar) TabRect(id string) (geom.Rect, bool) {
+	if i := b.boxOf(id); i >= 0 {
+		return b.boxes[i], true
+	}
+	return geom.Rect{}, false
+}
+
+// PlusRect returns where the + stands, in the bar's space; empty
+// without Plus.
+func (b *Bar) PlusRect() geom.Rect { return b.plusBox }
+
+// Carried returns the tab dragged off the bar, "" for none.
+func (b *Bar) Carried() string { return b.carried }
+
+// Dropped returns the tab whose drag off the bar ended taken, or let
+// go outside every window, "" for none: the next tabs the bar is given
+// may show the tab in front changing for it, which an application need
+// not show as a switch. SetTabs forgets it once the tabs change.
+func (b *Bar) Dropped() string { return b.dropped }
+
+// change hands c to the bar's dock, or else to OnChange, or sends it.
+func (b *Bar) change(c Change, u *gunim.UI) {
+	if b.d != nil {
+		b.d.change(c, b, u)
+		return
+	}
+	var in gunim.Intent = c
+	if b.OnChange != nil {
+		in = b.OnChange(c, u)
+	}
+	if in != nil {
+		u.Send(b, in)
+	}
+}
+
+// pick brings tab id to the front at once, before the application says
+// so, as the user picked it.
+func (b *Bar) pick(id string, u *gunim.UI) {
+	if b.d != nil {
+		b.d.pick(id, b, u)
+		return
+	}
+	if id == b.front || b.boxOf(id) < 0 {
+		return
+	}
+	b.set(b.tabs, id, b.mark.Target() > 0.5, u)
+	b.change(Show{ID: id}, u)
+}
+
+// detachSize is how large a window of its own a tab of the bar's asks
+// for.
+func (b *Bar) detachSize() geom.Size {
+	if b.d != nil {
+		return b.d.detachSize(b.group)
+	}
+	return b.DetachSize
 }
 
 // tabMove is how a tab moves on the bar: its box, sliding to where the
@@ -152,8 +278,8 @@ const (
 	springHold = 500 * time.Millisecond
 )
 
-func newBar(d *Dock, group string, win int) *Bar {
-	b := &Bar{d: d, group: group, win: win, hot: -1, pressed: -1, landing: -1,
+func makeBar(d *Dock, group string, win int) *Bar {
+	b := &Bar{d: d, group: group, Win: win, hot: -1, pressed: -1, landing: -1,
 		moves: map[string]*tabMove{}, arriving: map[string]bool{}, lit: anim.NewFloat(1), mark: anim.NewFloat(0)}
 	b.Add(b.lit, b.mark)
 	return b
@@ -185,6 +311,9 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 	sameTabs := slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a == c })
 	if sameTabs && front == b.front {
 		return
+	}
+	if !sameTabs {
+		b.dropped = ""
 	}
 	if len(tabs) != len(b.tabs) {
 		b.hot, b.crossHot = -1, false
@@ -361,9 +490,9 @@ func (b *Bar) moveTabs(th *theme.Live) bool {
 		moving = moving || m.box.Active() || m.open.Active()
 	}
 	if b.plusAt == nil || !b.laid {
-		b.plusAt = anim.NewRect(b.plus)
+		b.plusAt = anim.NewRect(b.plusBox)
 	}
-	b.plusAt.Animate(b.plus, slide)
+	b.plusAt.Animate(b.plusBox, slide)
 	return moving || b.plusAt.Active() || len(b.gone) > 0
 }
 
@@ -428,7 +557,7 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 		total += want[i] + gap
 	}
 	room := c.Max.W - 2*inset - b.reserve
-	if b.d.Plus {
+	if b.Plus {
 		room -= tabPlus
 	}
 	if b.Caption {
@@ -445,9 +574,9 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 		b.boxes = append(b.boxes, geom.Rc(x, inset, want[i], h-2*inset))
 		x += want[i] + gap
 	}
-	b.plus, b.end = geom.Rect{}, x
-	if b.d.Plus {
-		b.plus = geom.Rc(x+2, (h-24)/2, 24, 24)
+	b.plusBox, b.end = geom.Rect{}, x
+	if b.Plus {
+		b.plusBox = geom.Rc(x+2, (h-24)/2, 24, 24)
 		b.end = x + tabPlus
 	}
 	if b.moveTabs(th) {
@@ -464,8 +593,8 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 // Paint implements [gunim.Node].
 func (b *Bar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
-	if b != b.d.top {
-		// The title bar's fill is the title bar's own.
+	if !b.Plain {
+		// A bar in a title bar draws on the title bar's own fill.
 		p.RRect(geom.Rect{Max: box.Point()}, BarRadius.Get(th), paint.Solid(BarFill.Get(th)))
 	}
 	for _, g := range b.gone {
@@ -505,7 +634,7 @@ func (b *Bar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chil
 		}
 		p.RRect(geom.Rc(x-1.5, 6, 3, box.H-12), 1.5, paint.Solid(DropRing.Get(th)))
 	}
-	if b.d.Plus && b.plusAt != nil {
+	if b.Plus && b.plusAt != nil {
 		c := TabFaint.Get(th)
 		if b.hot == len(b.tabs) {
 			c = TabInk.Get(th)
@@ -613,7 +742,7 @@ func (b *Bar) tabAt(p geom.Point) int {
 			return i
 		}
 	}
-	if b.d.Plus && b.plus.Inset(geom.Uniform(-2)).Contains(p) {
+	if b.Plus && b.plusBox.Inset(geom.Uniform(-2)).Contains(p) {
 		return len(b.tabs)
 	}
 	return -1
@@ -680,7 +809,12 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		switch {
 		case e.Button == input.ButtonMiddle && i >= 0 && i < len(b.tabs):
 			if b.tabs[i].Closable {
-				b.d.change(Close{ID: b.tabs[i].id}, b, u)
+				b.change(Close{ID: b.tabs[i].id}, u)
+			}
+			return true
+		case e.Button == input.ButtonSecondary && i == len(b.tabs) && b.OnPlusMenu != nil:
+			if in := b.OnPlusMenu(b.plusBox, u); in != nil {
+				u.Send(b, in)
 			}
 			return true
 		case e.Button != input.ButtonPrimary:
@@ -704,7 +838,7 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 			b.plusPressed = false
 			if b.tabAt(e.Pos) == len(b.tabs) {
 				u.Cue(gunim.CuePress, b)
-				b.d.change(New{Group: b.group, Win: b.win}, b, u)
+				b.change(New{Group: b.group, Win: b.Win}, u)
 			}
 			return true
 		}
@@ -716,14 +850,14 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		if b.pressedCross {
 			if b.onCross(i, e.Pos) {
 				u.Cue(gunim.CueClose, b)
-				b.d.change(Close{ID: b.tabs[i].id}, b, u)
+				b.change(Close{ID: b.tabs[i].id}, u)
 			}
 			return true
 		}
 		if b.tabs[i].id != b.front {
 			u.Cue(gunim.CueSelect, b)
 		}
-		b.d.pick(b.tabs[i].id, b, u)
+		b.pick(b.tabs[i].id, u)
 		return true
 	case input.DragEnd:
 		b.dragEnded(e, u)
@@ -731,7 +865,14 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 	case input.DragOver:
 		d, ok := e.Data.(Drag)
 		if !ok {
-			return false
+			if b.Takes == nil || !b.Takes(e.Data) {
+				return false
+			}
+			b.landing = b.landingAt(e.Pos)
+			b.holdOver(b.tabAt(e.Pos), Drag{}, u)
+			u.AnswerDrag(widget.DropHint{Text: DockHere.Get(u.Theme()), Effect: widget.DropMove})
+			u.Invalidate()
+			return true
 		}
 		b.landing = b.landingAt(e.Pos)
 		b.holdOver(b.tabAt(e.Pos), d, u)
@@ -748,7 +889,20 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 	case input.Drop:
 		d, ok := e.Data.(Drag)
 		if !ok {
-			return false
+			if b.Takes == nil || !b.Takes(e.Data) {
+				return false
+			}
+			at := b.landingAt(e.Pos)
+			b.landing = -1
+			b.holdOver(-1, Drag{}, u)
+			b.sprungFrom = ""
+			u.Invalidate()
+			if b.OnDrop != nil {
+				if in := b.OnDrop(Dropped{Data: e.Data, Index: at}, u); in != nil {
+					u.Send(b, in)
+				}
+			}
+			return true
 		}
 		at := b.landingAt(e.Pos)
 		b.landing = -1
@@ -757,10 +911,10 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		u.Invalidate()
 		if !b.lands(d, at) {
 			// Where it was: in front, as a tab dropped is.
-			b.d.pick(d.ID, b, u)
+			b.pick(d.ID, u)
 			return true
 		}
-		b.d.change(Move{ID: d.ID, To: Target{At: b.group, Win: b.win, Index: at}}, b, u)
+		b.change(Move{ID: d.ID, To: Target{At: b.group, Win: b.Win, Index: at}}, u)
 		return true
 	}
 	return false
@@ -787,6 +941,9 @@ func pointerAt(e input.Event) geom.Point {
 func (b *Bar) lands(d Drag, landing int) bool {
 	if d.ID == b.group {
 		return false
+	}
+	if b.d == nil {
+		return true
 	}
 	if n := b.d.l.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
 		// The bar is in the tab dragged.
@@ -822,7 +979,7 @@ func (b *Bar) holdOver(i int, dr Drag, u *gunim.UI) {
 		if b.sprungFrom == "" || b.sprungFor != dr {
 			b.sprungFrom, b.sprungFor = b.front, dr
 		}
-		b.d.pick(id, b, u)
+		b.pick(id, u)
 	})
 }
 
@@ -845,7 +1002,7 @@ func (b *Bar) lift(u *gunim.UI) {
 	b.carried, b.sprungFrom = t.id, ""
 	b.grab = b.pressAt.Sub(r.Min)
 	b.tip.Hide(u)
-	d := Drag{ID: t.id, Win: b.win, Grab: b.grab, Size: b.d.detachSize(b.group)}
+	d := Drag{ID: t.id, Win: b.Win, Grab: b.grab, Size: b.detachSize()}
 	b.dragging = d
 	pic := &tabPicture{face: t.Face, title: b.titles[i], size: r.Size()}
 	u.StartDrag(b, d, widget.NewDragGhost(pic, b.grab), b.grab)
@@ -865,18 +1022,25 @@ func (b *Bar) dragEnded(e input.DragEnd, u *gunim.UI) {
 	}
 	// Every bar of the window this drag brought a tab forward on, this
 	// one or another, puts back the tab it had in front.
-	for _, o := range b.d.allBars() {
+	bars := []*Bar{b}
+	if b.d != nil {
+		bars = b.d.allBars()
+	}
+	for _, o := range bars {
 		if o.sprungFrom == "" || o.sprungFor != dr {
 			continue
 		}
 		from := o.sprungFrom
 		o.sprungFrom, o.sprungFor = "", Drag{}
 		if !e.Taken && !e.Out {
-			b.d.pick(from, o, u)
+			o.pick(from, u)
 		}
 	}
+	if e.Out || e.Taken {
+		b.dropped = id
+	}
 	if e.Out && !e.Taken {
-		b.d.change(Detach{ID: id, From: b.win, At: e.At.Sub(b.grab), Size: b.d.detachSize(b.group)}, b, u)
+		b.change(Detach{ID: id, From: b.Win, At: e.At.Sub(b.grab), Size: b.detachSize()}, u)
 	}
 	u.Invalidate()
 }
@@ -907,7 +1071,7 @@ func (b *Bar) AccessAct(r access.Request, u *gunim.UI) bool {
 	if r.Action != access.ActionPress || r.Part < 0 || r.Part >= len(b.tabs) {
 		return false
 	}
-	b.d.pick(b.tabs[r.Part].id, b, u)
+	b.pick(b.tabs[r.Part].id, u)
 	return true
 }
 
