@@ -248,8 +248,45 @@ func TestFindReadsASoundToItsEnd(t *testing.T) {
 // starting where the kick does.
 func TestASongLikePatternIsFound(t *testing.T) {
 	const rate, bpm, bars = 48000, 124.0, 14
+	out, want := song(rate, bpm, bars)
+	got := scan(rate, out)
+	if math.Abs(got.BPM-bpm) > 0.5 {
+		t.Errorf("the tempo came out at %v, want %v", got.BPM, bpm)
+	}
+	if worst, over := stray(got.Beats, want); worst > 15*time.Millisecond || over < -2 || over > 2 {
+		t.Errorf("%d beats found of %d, the furthest %v from where it was played",
+			len(got.Beats), len(want), worst)
+	}
+	if got.Confidence < 0.5 {
+		t.Errorf("the scan is only %v sure of a plain pattern", got.Confidence)
+	}
+	// The bars have to start on a kick: every beat called a downbeat
+	// falls where one was played. The kick plays on one and three, and
+	// the two sound the same, so either will do; see Result.Downbeat.
+	for i := got.Downbeat; i < len(got.Beats); i += got.PerBar {
+		played := -1
+		for j, w := range want {
+			if d := got.Beats[i] - w; d < 20*time.Millisecond && d > -20*time.Millisecond {
+				played = j
+			}
+		}
+		if played < 0 {
+			t.Fatalf("beat %d at %v is called a downbeat, but nothing was played there", i, got.Beats[i])
+		}
+		if played%2 != 0 {
+			t.Fatalf("beat %d at %v is called a downbeat, but beat %d of the bar was played there",
+				i, got.Beats[i], played%4+1)
+		}
+	}
+}
+
+// song makes bars of a song-like pattern at bpm: a kick on one and
+// three, a snare on two and four, hats on and off the beat, and a bass
+// note under it all. It returns the recording and where each beat was
+// played.
+func song(rate int, bpm float64, bars int) ([]float32, []time.Duration) {
 	beat := 60 / bpm
-	total := int(float64(rate) * beat * 4 * bars)
+	total := int(float64(rate) * beat * 4 * float64(bars))
 	out := make([]float32, 2*total)
 	r := rand.New(rand.NewPCG(7, 9))
 	hit := func(at, hz, decay, gain float64, noise bool) {
@@ -284,36 +321,7 @@ func TestASongLikePatternIsFound(t *testing.T) {
 		hit(at, 6000, 0.01, 0.1, true)
 		hit(at, 82.4, 0.3, 0.35, false) // a bass note, held, with no attack of its own
 	}
-
-	got := scan(rate, out)
-	if math.Abs(got.BPM-bpm) > 0.5 {
-		t.Errorf("the tempo came out at %v, want %v", got.BPM, bpm)
-	}
-	if worst, over := stray(got.Beats, want); worst > 15*time.Millisecond || over < -2 || over > 2 {
-		t.Errorf("%d beats found of %d, the furthest %v from where it was played",
-			len(got.Beats), len(want), worst)
-	}
-	if got.Confidence < 0.5 {
-		t.Errorf("the scan is only %v sure of a plain pattern", got.Confidence)
-	}
-	// The bars have to start on a kick: every beat called a downbeat
-	// falls where one was played. The kick plays on one and three, and
-	// the two sound the same, so either will do; see Result.Downbeat.
-	for i := got.Downbeat; i < len(got.Beats); i += got.PerBar {
-		played := -1
-		for j, w := range want {
-			if d := got.Beats[i] - w; d < 20*time.Millisecond && d > -20*time.Millisecond {
-				played = j
-			}
-		}
-		if played < 0 {
-			t.Fatalf("beat %d at %v is called a downbeat, but nothing was played there", i, got.Beats[i])
-		}
-		if played%2 != 0 {
-			t.Fatalf("beat %d at %v is called a downbeat, but beat %d of the bar was played there",
-				i, got.Beats[i], played%4+1)
-		}
-	}
+	return out, want
 }
 
 // TestAClickTrackFitsInOneTempo: a recording made to a grid comes back
@@ -349,7 +357,7 @@ func TestNoBinIsCountedTwice(t *testing.T) {
 	for _, rate := range []int{22050, 44100, 48000, 96000} {
 		s := NewScan(rate)
 		end := 0
-		for b, span := range s.bands {
+		for b, span := range s.d.bands {
 			if span[0] < end || span[1] < span[0] {
 				t.Errorf("at %d Hz band %d spans bins %v, overlapping the band below it", rate, b, span)
 			}
