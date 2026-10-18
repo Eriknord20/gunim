@@ -224,7 +224,7 @@ func (d *Dock) Refresh(u *gunim.UI) { d.sync(u) }
 // application to put in its title bar, with TitleBar set.
 func (d *Dock) TopBar() *Bar {
 	if d.top == nil {
-		d.top = newBar(d, "", d.win)
+		d.top = makeBar(d, "", d.win)
 		d.sync(nil)
 	}
 	return d.top
@@ -405,12 +405,12 @@ func (d *Dock) sync(u *gunim.UI) {
 			b := d.bars[n.ID]
 			if top && d.TitleBar {
 				if d.top == nil {
-					d.top = newBar(d, "", d.win)
+					d.top = makeBar(d, "", d.win)
 				}
 				b = d.top
 				b.group = n.ID
 			} else if b == nil {
-				b = newBar(d, n.ID, d.win)
+				b = makeBar(d, n.ID, d.win)
 				d.bars[n.ID] = b
 			}
 			tabs := make([]tab, len(n.Kids))
@@ -469,6 +469,13 @@ func (d *Dock) sync(u *gunim.UI) {
 				walk(k, false)
 			}
 		}
+	}
+	for _, b := range d.bars {
+		b.Plus = d.Plus
+	}
+	if d.top != nil {
+		// The title bar's: on the title bar's own fill.
+		d.top.Plus, d.top.Plain = d.Plus, true
 	}
 	if root != nil {
 		walk(root, true)
@@ -635,13 +642,7 @@ func shareOf(s float32) float32 {
 
 // change hands c to OnChange, or sends it.
 func (d *Dock) change(c Change, from gunim.Node, u *gunim.UI) {
-	var in gunim.Intent = c
-	if d.OnChange != nil {
-		in = d.OnChange(c, u)
-	}
-	if in != nil {
-		u.Send(from, in)
-	}
+	sendChange(u, from, d.OnChange, c)
 }
 
 // pick brings tab id to the front at once, before the application says
@@ -833,7 +834,7 @@ func (d *Dock) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	}
 	for _, g := range d.groups {
 		if g.bar != nil {
-			g.bar.Caption = d.Caption && g.top.Min.Y <= 0
+			g.bar.Caption, g.bar.Plus = d.Caption && g.top.Min.Y <= 0, d.Plus
 			g.bar.reserve = 0
 			if g.top.Min.Y <= 0 && g.top.Max.X >= size.W {
 				g.bar.reserve = d.Corner
