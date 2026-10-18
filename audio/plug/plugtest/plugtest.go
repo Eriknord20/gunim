@@ -1,6 +1,7 @@
 // Package plugtest helps test plugins: it counts what a processor
-// allocates, plays an instrument notes and tells it of them ahead, and
-// drives a plugin's ports, to check what comes out.
+// allocates, plays an instrument notes and tells it of them ahead,
+// drives a plugin's ports, to check what comes out, and reads the hits
+// on a trigger.
 package plugtest
 
 import (
@@ -267,6 +268,31 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 	pr.Prepare(s)
 	playBlocks(pr, blocks, &res)
 	return res
+}
+
+// Pulse is a hit on a trigger, as [Pulses] reads it: the frame it is on,
+// and its velocity, from 0 to 1.
+type Pulse struct {
+	Frame    int
+	Velocity float32
+}
+
+// Pulses returns the hits on a trigger's values, as
+// [plug.ControlPort.Trigger] has them: each frame above 0. It fails t
+// where a value is below 0, above 1 or not a number, which no trigger
+// carries.
+func Pulses(t *testing.T, values []float32) []Pulse {
+	t.Helper()
+	var out []Pulse
+	for f, v := range values {
+		if !(v >= 0 && v <= 1) {
+			t.Fatalf("plugtest: a trigger is %v at frame %d, outside 0 to 1", v, f)
+		}
+		if v > 0 {
+			out = append(out, Pulse{Frame: f, Velocity: v})
+		}
+	}
+	return out
 }
 
 // channels returns n channels of the given number of frames.

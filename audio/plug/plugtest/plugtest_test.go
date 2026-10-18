@@ -2,6 +2,7 @@ package plugtest
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -417,5 +418,17 @@ func TestAnnounceTellsANotesTurn(t *testing.T) {
 	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, Turn: 7})
 	if len(ahead) != 1 || ahead[0].Turn != 7 {
 		t.Fatalf("Announce gave %+v, want news of note 1 with turn 7", ahead)
+	}
+}
+
+func TestPulsesReadEachHitOnATrigger(t *testing.T) {
+	values := []float32{0, 0.5, 0, 0, 1, 0.25, 0}
+	got := Pulses(t, values)
+	want := []Pulse{{1, 0.5}, {4, 1}, {5, 0.25}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Pulses read %v, want %v", got, want)
+	}
+	if got := Pulses(t, make([]float32, 64)); got != nil {
+		t.Errorf("silence held hits: %v", got)
 	}
 }
