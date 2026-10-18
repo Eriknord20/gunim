@@ -4,6 +4,7 @@ import (
 	"image/color"
 
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
 )
 
@@ -17,8 +18,11 @@ var (
 	// BarFill is a bar's background, and BarRadius rounds it.
 	BarFill   = theme.Color("dock.bar.fill", color.NRGBA{R: 0x1d, G: 0x20, B: 0x28, A: 0xe6})
 	BarRadius = theme.Length("dock.bar.radius", 10)
-	// TabText is the size of a tab's title.
+	// TabText is the size of a tab's title, and TabFont its face.
 	TabText = theme.Length("dock.tab.text", 12.5)
+	TabFont = theme.Choice("dock.tab.font", text.Default())
+	// TabIcon is how large a tab's icon is.
+	TabIcon = theme.Length("dock.tab.icon", 16)
 	// TabPadding is the room each side of a tab's insides, TabGap the
 	// room between tabs, and TabInset how far in from the bar's edges
 	// the tabs stand.

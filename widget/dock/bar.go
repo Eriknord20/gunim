@@ -142,7 +142,6 @@ type tabGone struct {
 // The bar's fixed measures: a tab's icon, its ×, the + and the room a
 // bar in the title bar leaves to move the window by.
 const (
-	tabIcon      = 16
 	tabCross     = 16
 	tabPlus      = 30
 	captionLeast = 64
@@ -216,7 +215,7 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 
 // shape shapes the titles again where they or the text changed.
 func (b *Bar) shape(th *theme.Live) {
-	face, size := widget.Font.Get(th), TabText.Get(th)
+	face, size := TabFont.Get(th), TabText.Get(th)
 	if b.shapedFace == face && b.shapedSize == size && len(b.titles) == len(b.tabs) {
 		return
 	}
@@ -406,7 +405,7 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 	for i, t := range b.tabs {
 		w := 2*pad + b.titles[i].Advance
 		if t.Icon != nil {
-			w += tabIcon + 6
+			w += TabIcon.Get(th) + 6
 		}
 		if t.Closable {
 			w += tabCross + 2
@@ -534,7 +533,7 @@ func (b *Bar) paintTab(p *paint.Painter, th *theme.Live, t tab, title, more text
 	if l.lifted {
 		c.A /= 3
 	}
-	pad := TabPadding.Get(th)
+	pad, tabIcon := TabPadding.Get(th), TabIcon.Get(th)
 	mid := r.Min.Y + r.Size().H/2
 	x := r.Min.X + pad
 	if t.Icon != nil {
@@ -921,7 +920,7 @@ func (t *tabPicture) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	p.RRect(r, radius, paint.Solid(BarFill.Get(th)))
 	p.RRect(r, radius, paint.Solid(TabFront.Get(th)))
 	ink := TabInk.Get(th)
-	pad := TabPadding.Get(th)
+	pad, tabIcon := TabPadding.Get(th), TabIcon.Get(th)
 	mid := box.H / 2
 	x := pad
 	if t.face.Icon != nil {

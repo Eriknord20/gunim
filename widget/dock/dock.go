@@ -64,6 +64,10 @@ type Dock struct {
 	Corner  float32
 	// Keys steps through the tabs and the panes from the keyboard.
 	Keys bool
+	// MarkAlone marks the tab in front of the pane the keys work in
+	// where the window shows that pane alone too, not only among
+	// several.
+	MarkAlone bool
 	// OnChange, when set, runs on the UI goroutine with what the user
 	// asks for; a non-nil result is sent to the application as the
 	// dock's intent. Without it the Change is sent itself.
@@ -176,6 +180,35 @@ func (d *Dock) TopBar() *Bar {
 func (d *Dock) Rect(item string) (geom.Rect, bool) {
 	r, ok := d.items[item]
 	return r, ok
+}
+
+// TabRect returns where tab id stands on a bar the dock lays out, in
+// the dock's space, as the last layout put it: to anchor something to
+// it, or for a test to press it. False where no bar of the dock's shows
+// it; TopBar's tabs are where the application put that bar.
+func (d *Dock) TabRect(id string) (geom.Rect, bool) {
+	for _, g := range d.groups {
+		if g.bar == nil {
+			continue
+		}
+		for i, t := range g.bar.tabs {
+			if t.id == id && i < len(g.bar.boxes) {
+				return g.bar.boxes[i].Add(g.top.Min), true
+			}
+		}
+	}
+	return geom.Rect{}, false
+}
+
+// DividerRect returns where the divider of split id stands, in the
+// dock's space, as the last layout put it; false where it shows none.
+func (d *Dock) DividerRect(id string) (geom.Rect, bool) {
+	for _, dv := range d.dividers {
+		if dv.id == id {
+			return dv.rect, true
+		}
+	}
+	return geom.Rect{}, false
 }
 
 // Shown returns the items the dock shows, in order.
@@ -425,7 +458,7 @@ func (d *Dock) marks(u *gunim.UI) {
 	}
 	for _, b := range d.allBars() {
 		on := false
-		if g := d.l.Node(b.group); g != nil && bars > 1 {
+		if g := d.l.Node(b.group); g != nil && (bars > 1 || d.MarkAlone) {
 			if f := g.front(); f != nil && slices.Contains(f.Items(), active) {
 				on = true
 			}
