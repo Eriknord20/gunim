@@ -183,11 +183,12 @@ func (b *Bar) SetTabs(tabs []Tab, front string, u *gunim.UI) {
 	for i, t := range tabs {
 		ts[i] = tab{id: t.ID, Face: t.Face}
 	}
-	if !slices.EqualFunc(ts, b.tabs, func(a, c tab) bool { return a.id == c.id }) || front != b.front {
+	happened := !slices.EqualFunc(ts, b.tabs, func(a, c tab) bool { return a.id == c.id }) || front != b.front
+	b.set(ts, front, false, u)
+	if happened {
 		// What the drop was for has happened.
 		b.dropped = ""
 	}
-	b.set(ts, front, false, u)
 }
 
 // TabRect returns where tab id stands, in the bar's space, as the last
@@ -335,7 +336,14 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 			b.pressed = -1
 		}
 	}
-	if b.laid && u != nil && front != b.front && b.front != "" && front != "" && b.carried == "" {
+	if len(b.tabs) == 0 {
+		// Tabs again on a bar that had none show as its first did: in
+		// place, the + too, and nothing left of the tabs before.
+		b.gone, b.plusAt = nil, nil
+		clear(b.moves)
+	}
+	if b.laid && u != nil && front != b.front && b.front != "" && front != "" && b.carried == "" && b.dropped == "" {
+		// A tab in front for a tab dragged away is simply there.
 		b.litFrom, b.was = b.litAt(), b.front
 		b.lit.Jump(0)
 		b.lit.Animate(1, Glide.Get(u.Theme()))
