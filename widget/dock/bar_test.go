@@ -288,3 +288,77 @@ func TestATitleBarsBarDrawsOnTheTitleBarsFill(t *testing.T) {
 		t.Errorf("the title bar's bar has Plain %v and Plus %v", top.Plain, top.Plus)
 	}
 }
+
+// TestTabsAfterNoneAreSimplyThere: a bar left with no tabs, given tabs
+// again, shows them in place, the + too, as its first; and a tab in
+// front for a tab dragged away is there with no glide.
+func TestTabsAfterNoneAreSimplyThere(t *testing.T) {
+	b := NewBar("g", 1)
+	b.Plus = true
+	w, run, _ := stageBar(t, b, threeTabs())
+	update := func(s barTabs) {
+		t.Helper()
+		if err := w.Client().Update("v", s); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+	}
+	update(barTabs{})
+	run(60)
+	update(threeTabs())
+	for i := range b.tabs {
+		if r, open := b.drawnAt(i); r != b.boxes[i] || open != 1 {
+			t.Fatalf("tab %d comes back at %v, %v open, not where it is, %v", i, r, open, b.boxes[i])
+		}
+	}
+	if b.plusAt.Value() != b.plusBox {
+		t.Fatalf("the + comes back at %v, not where it is, %v", b.plusAt.Value(), b.plusBox)
+	}
+	// The tab in front dragged away: the next in front is simply there.
+	at := barTabAt(t, b, "1")
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(20, 30))})
+	run(1)
+	onUIBar(t, w, run, func(u *gunim.UI) { b.Handle(input.DragEnd{Out: true, At: geom.Pt(1200, 300)}, u) })
+	if b.Dropped() != "1" {
+		t.Fatalf("dragged away, the bar says %q was dropped", b.Dropped())
+	}
+	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(20, 30)), Button: input.ButtonPrimary})
+	run(1)
+	st := threeTabs()
+	st.tabs, st.front = st.tabs[1:], "2"
+	update(st)
+	if b.lit.Active() || b.lit.Value() != 1 {
+		t.Fatalf("the front tab's fill glides for a tab dragged away: %v", b.lit.Value())
+	}
+	// A click after it glides, as any does.
+	click(w, run, barTabAt(t, b, "3"), input.ButtonPrimary)
+	if !b.lit.Active() {
+		t.Fatal("a click after a tab was dragged away shows no glide")
+	}
+}
+
+// TestADockBarGlidesAfterATabLeftIt: dragged off a dock's bar, a tab
+// leaves the bar gliding as before.
+func TestADockBarGlidesAfterATabLeftIt(t *testing.T) {
+	d, _ := hosting()
+	l := NewLayout(true, "a", "b", "c")
+	w, run, _ := stage(t, d, l)
+	b := d.groups[0].bar
+	at := tabAt(t, d, "a")
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(20, 30))})
+	run(1)
+	onUIDock(t, w, run, func(u *gunim.UI) { b.Handle(input.DragEnd{Out: true, At: geom.Pt(1200, 300)}, u) })
+	if b.Dropped() != "a" {
+		t.Fatalf("dragged off, the bar says %q was dropped", b.Dropped())
+	}
+	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(20, 30)), Button: input.ButtonPrimary})
+	run(30)
+	click(w, run, tabAt(t, d, "c"), input.ButtonPrimary)
+	if !b.lit.Active() {
+		t.Fatal("a click on a dock's bar after a tab left it shows no glide")
+	}
+}
