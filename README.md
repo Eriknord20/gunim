@@ -73,6 +73,15 @@ to move it, and drag its bottom edge to change its length.
 CGO_ENABLED=0 go run ./example/calendar
 ```
 
+`example/dock` shows the `widget/dock` package: panes in tabs and splits, over as many windows as they are dragged
+into. Drag a tab along its bar, onto another, to a pane's edge to split it, or out of the window to open one of its
+own. With `-tabs` the window has one bar of tabs in its title bar, and each tab holds a set of panes.
+
+```sh
+CGO_ENABLED=0 go run ./example/dock
+CGO_ENABLED=0 go run ./example/dock -tabs
+```
+
 `example/themeedit` shows the `themeedit` package: a theme editor beside
 a few widgets and a grid of cells whose cursor moves along a line. Each
 edit shows at once. The Chosen tab picks out the cursor, which glides or
@@ -858,6 +867,7 @@ path data.
 | `gunim/gunimtest` | Offscreen windows for tests, which fail a test that sent from or focused a node out of the tree |
 | `gunim/filemanager` | A file manager to open in any program, on the local disk or on a file system of its own, such as a server's |
 | `gunim/themeedit` | A theme editor to show in any program: the values the program picks out, an Animations slider for how long every animation takes, every token in the theme with a search, a control for each kind of value, live edits and JSON files |
+| `gunim/widget/dock` | Views in tabs and splits over many windows, which the user drags along a bar, into another group, to a pane's edge to split it, or out into a window of its own; the layout is plain data the program keeps, and the widgets say what the user asks for |
 | `gunim/calendar` | A calendar's views: a day or a week by the hour, a month, and a small month to pick a day from |
 | `gunim/widget` | `Row`, `Column`, `Scroll`, a `TileGrid` that builds only the tiles in view and selects with a band, `Label` whose text the mouse can select and copy when `Selectable`, `TextField`, `NumberField` that sits at the right, steps with the arrows and the wheel, drags up and down as in a design tool, and holds itself to its bounds, `TextArea`, `Card`, `Button`, `Icon`, `IconButton`, `Checkbox`, `Switch`, `Slider`, which runs up the height as a fader when its `Axis` is vertical, fills from a resting value a double click glides back to, colours its track with a `Gradient` and drags finely with Shift, a `SliderRow` that labels one with a readout counting along and a reset mark, a `ToneCurve` that edits a monotone curve through points, a `Histogram` of red, green and blue mixed as light, `Tabs`, a `Segmented` control whose pill springs to the option chosen, `Dropdown`, a `ColorPicker` of a square, a hue strip, an opacity strip and a hex field, and a `ColorButton` that opens one in a popup, `ContextMenu`, `Tooltip`, `Image`, `Hero` for elements that fly between screens, `Draggable` and `DropTarget` for drag and drop within and between windows and to and from file managers, a `DragGhost` that trails the pointer and says what a drop would do, a `DropZone` that lights the spot under a drag and springs it open, `Dialog`, a keyed `List`, a `VirtualList` that builds only the rows in view, a `DataGrid` that draws millions of rows of styled cells by index and drags the rows selected, an `Overview` strip that maps and scrolls it, a `MenuButton` whose menu can stay open to tick several items, removable `Chip`s and a `Wrap` that flows them onto lines, `RichText` that wraps text in several styles with links, a `CodeEditor` with line numbers, tab stops, highlighting and marks such as a compiler's errors, and their theme tokens |
 
