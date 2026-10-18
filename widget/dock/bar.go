@@ -98,6 +98,9 @@ type Bar struct {
 	// go where nothing takes it.
 	spring, sprungFrom string
 	springRun          int
+	// sprungFor is the drag that brought a tab forward, and dragging the
+	// drag of a tab off this bar.
+	sprungFor, dragging Drag
 	// moves are how the tabs move, by ID: each slides to its box, grows
 	// in as it opens and shrinks away in gone as it closes. arriving
 	// are the tabs new on the bar, which grow in; plusAt is where the +
@@ -196,7 +199,7 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 		b.lit.Animate(1, Glide.Get(u.Theme()))
 	}
 	if b.laid {
-		b.tabsMoved(tabs)
+		b.tabsMoved(tabs, u.Theme())
 	}
 	titlesChanged := len(tabs) != len(b.tabs)
 	for i := range tabs {
@@ -229,7 +232,8 @@ func (b *Bar) shape(th *theme.Live) {
 
 // tabsMoved notes what changes on the bar: a tab gone shrinks away
 // where it was, and one new grows in where it lands.
-func (b *Bar) tabsMoved(tabs []tab) {
+func (b *Bar) tabsMoved(tabs []tab, th *theme.Live) {
+	slide := Slide.Get(th)
 	in := func(tabs []tab, id string) bool {
 		return slices.ContainsFunc(tabs, func(t tab) bool { return t.id == id })
 	}
@@ -244,8 +248,8 @@ func (b *Bar) tabsMoved(tabs []tab) {
 			g.title, g.more = b.titles[i], b.more[i]
 		}
 		r := m.box.Value()
-		m.box.Animate(geom.Rc(r.Min.X, r.Min.Y, 0, r.Size().H), Slide.Default())
-		m.open.Animate(0, Slide.Default())
+		m.box.Animate(geom.Rc(r.Min.X, r.Min.Y, 0, r.Size().H), slide)
+		m.open.Animate(0, slide)
 		b.gone = append(b.gone, g)
 	}
 	if len(b.tabs) > 0 {
@@ -720,7 +724,7 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		b.landing = b.landingAt(e.Pos)
-		b.holdOver(b.tabAt(e.Pos), u)
+		b.holdOver(b.tabAt(e.Pos), d, u)
 		if b.lands(d, b.landing) {
 			u.AnswerDrag(widget.DropHint{Text: DockHere.Get(u.Theme()), Effect: widget.DropMove})
 		}
@@ -728,7 +732,7 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		return true
 	case input.DragLeave:
 		b.landing = -1
-		b.holdOver(-1, u)
+		b.holdOver(-1, Drag{}, u)
 		u.Invalidate()
 		return false
 	case input.Drop:
@@ -738,7 +742,7 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		at := b.landingAt(e.Pos)
 		b.landing = -1
-		b.holdOver(-1, u)
+		b.holdOver(-1, Drag{}, u)
 		b.sprungFrom = ""
 		u.Invalidate()
 		if !b.lands(d, at) {
@@ -774,6 +778,10 @@ func (b *Bar) lands(d Drag, landing int) bool {
 	if d.ID == b.group {
 		return false
 	}
+	if n := b.d.l.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
+		// The bar is in the tab dragged.
+		return false
+	}
 	i := slices.IndexFunc(b.tabs, func(t tab) bool { return t.id == d.ID })
 	if i < 0 {
 		return true
@@ -783,7 +791,7 @@ func (b *Bar) lands(d Drag, landing int) bool {
 
 // holdOver notes that a drag is over the tab at i, -1 for none: held
 // there for springHold, the tab comes to the front.
-func (b *Bar) holdOver(i int, u *gunim.UI) {
+func (b *Bar) holdOver(i int, dr Drag, u *gunim.UI) {
 	id := ""
 	if i >= 0 && i < len(b.tabs) {
 		id = b.tabs[i].id
@@ -801,8 +809,8 @@ func (b *Bar) holdOver(i int, u *gunim.UI) {
 		if b.springRun != run || b.spring != id || id == b.front {
 			return
 		}
-		if b.sprungFrom == "" {
-			b.sprungFrom = b.front
+		if b.sprungFrom == "" || b.sprungFor != dr {
+			b.sprungFrom, b.sprungFor = b.front, dr
 		}
 		b.d.pick(id, b, u)
 	})
@@ -828,6 +836,7 @@ func (b *Bar) lift(u *gunim.UI) {
 	b.grab = b.pressAt.Sub(r.Min)
 	b.tip.Hide(u)
 	d := Drag{ID: t.id, Win: b.win, Grab: b.grab, Size: b.d.detachSize(b.group)}
+	b.dragging = d
 	pic := &tabPicture{face: t.Face, title: b.titles[i], size: r.Size()}
 	u.StartDrag(b, d, widget.NewDragGhost(pic, b.grab), b.grab)
 	u.Invalidate()
@@ -838,16 +847,23 @@ func (b *Bar) lift(u *gunim.UI) {
 // neither, and the tab stays where it was, the tab in front before a
 // held drag brought another forward back in front.
 func (b *Bar) dragEnded(e input.DragEnd, u *gunim.UI) {
-	id := b.carried
-	b.carried, b.pressed, b.landing = "", -1, -1
-	from := b.sprungFrom
-	b.sprungFrom = ""
-	b.holdOver(-1, u)
+	id, dr := b.carried, b.dragging
+	b.carried, b.pressed, b.landing, b.dragging = "", -1, -1, Drag{}
+	b.holdOver(-1, Drag{}, u)
 	if id == "" {
 		return
 	}
-	if from != "" && !e.Taken && !e.Out {
-		b.d.pick(from, b, u)
+	// Every bar of the window this drag brought a tab forward on, this
+	// one or another, puts back the tab it had in front.
+	for _, o := range b.d.allBars() {
+		if o.sprungFrom == "" || o.sprungFor != dr {
+			continue
+		}
+		from := o.sprungFrom
+		o.sprungFrom, o.sprungFor = "", Drag{}
+		if !e.Taken && !e.Out {
+			b.d.pick(from, o, u)
+		}
 	}
 	if e.Out && !e.Taken {
 		b.d.change(Detach{ID: id, From: b.win, At: e.At.Sub(b.grab), Size: b.d.detachSize(b.group)}, b, u)

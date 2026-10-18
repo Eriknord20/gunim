@@ -408,3 +408,80 @@ func TestSettersTakeANilUI(t *testing.T) {
 		t.Errorf("active %s, %d children, want b and 4: two views and their bars", d.Active(), len(d.Children()))
 	}
 }
+
+// TestTheBarsTakeThePointerWithoutContent: drawing the views itself,
+// the application still has the dock's bars take clicks.
+func TestTheBarsTakeThePointerWithoutContent(t *testing.T) {
+	d := NewDock(0)
+	w, run, sent := stage(t, d, NewLayout(true, "a", "b"))
+	click(w, run, tabAt(t, d, "b"), input.ButtonPrimary)
+	if got := sent(); len(got) != 1 || got[0] != (Show{ID: "b"}) {
+		t.Errorf("a click on a tab sent %v", got)
+	}
+}
+
+// TestASecondButtonPutsTheDividerBack: where it was before the drag,
+// sending nothing.
+func TestASecondButtonPutsTheDividerBack(t *testing.T) {
+	d, _ := hosting()
+	l := NewLayout(true, "a", "b")
+	l.Move("b", Target{At: "a", Side: Right})
+	w, run, sent := stage(t, d, l)
+	dv := d.dividers[0].rect.Center()
+	w.Input(input.PointerMove{Pos: dv})
+	w.Input(input.PointerDown{Pos: dv, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: geom.Pt(600, dv.Y)})
+	run(1)
+	w.Input(input.PointerDown{Pos: geom.Pt(600, dv.Y), Button: input.ButtonSecondary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: geom.Pt(600, dv.Y), Button: input.ButtonPrimary})
+	run(2)
+	if c := d.dividers[0].rect.Center().X; math.Abs(float64(c-dv.X)) > 0.5 {
+		t.Errorf("the divider stayed at %v, want %v", c, dv.X)
+	}
+	if got := sent(); len(got) != 0 {
+		t.Errorf("sent %v", got)
+	}
+}
+
+// TestATabDroppedOnANestedGroupJoinsIt: the innermost group under the
+// pointer takes it, not the one round it.
+func TestATabDroppedOnANestedGroupJoinsIt(t *testing.T) {
+	d, _ := hosting()
+	l := NewLayout(false, "p1", "p2", "p4")
+	l.Move("p2", Target{At: "p1", Side: Right})
+	l.Add("p3", Target{At: "p2", Index: -1})
+	l.Show("p1")
+	l.Show("p2")
+	_, _, _ = stage(t, d, l)
+	inner := l.GroupOf("p2").ID
+	r, _ := d.Rect("p2")
+	to, _, split, ok := d.dropAt(r.Center(), Drag{ID: "p4"}, nil)
+	if !ok || split || to.At != inner {
+		t.Errorf("dropped at %+v, split %v, ok %v; want into %s", to, split, ok, inner)
+	}
+	// A tab holding the group cannot land on the group's bar.
+	tab := l.Parent("p1").ID
+	if b := d.bars[inner]; b == nil || b.lands(Drag{ID: tab}, 0) {
+		t.Error("the bar took the tab it is in")
+	}
+}
+
+// TestAStaleDividerOrABrokenLayoutCrashesNothing: a press on a divider
+// the layout let go, and a split of one node.
+func TestAStaleDividerOrABrokenLayoutCrashesNothing(t *testing.T) {
+	d, _ := hosting()
+	l := NewLayout(true, "a", "b")
+	l.Move("b", Target{At: "a", Side: Right})
+	w, run, _ := stage(t, d, l)
+	dv := d.dividers[0].rect.Center()
+	one := NewLayout(true, "a")
+	one.Windows[0].Root = &Node{ID: "#9", Kind: Row, Kids: []*Node{{ID: "a", Kind: Item}}}
+	if err := w.Client().Update("v", one); err != nil {
+		t.Fatal(err)
+	}
+	w.Input(input.PointerDown{Pos: dv, Button: input.ButtonPrimary, Clicks: 1})
+	run(2)
+	if !slices.Equal(d.Shown(), []string{"a"}) {
+		t.Errorf("shows %v", d.Shown())
+	}
+}

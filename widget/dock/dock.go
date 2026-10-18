@@ -152,6 +152,9 @@ func (d *Dock) Arrangement() Layout { return d.l.Clone() }
 // nil u, they jump.
 func (d *Dock) SetLayout(l Layout, u *gunim.UI) {
 	d.l = l.Clone()
+	// Whole, as one read from a file may not be: a split of two nodes,
+	// a group with a tab in front.
+	d.l.Mend(nil)
 	d.sync(u)
 }
 
@@ -781,6 +784,11 @@ func (d *Dock) Covers(p geom.Point) bool {
 	if d.Content != nil || len(d.groups) == 0 && len(d.items) == 0 {
 		return true
 	}
+	for _, g := range d.groups {
+		if g.bar != nil && g.top.Contains(p) {
+			return true
+		}
+	}
 	return d.dividerAt(p) >= 0
 }
 
@@ -840,6 +848,9 @@ func (d *Dock) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Button != input.ButtonPrimary {
 			if d.held != "" {
 				// A second button puts the divider back.
+				if s, n := d.shares[d.held], d.l.Node(d.held); s != nil && n != nil {
+					s.Jump(shareOf(n.Share))
+				}
 				d.held = ""
 				u.Invalidate()
 				return true
@@ -851,11 +862,16 @@ func (d *Dock) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		dv := d.dividers[i]
+		n := d.l.Node(dv.id)
+		if n == nil {
+			// A split the layout has let go since the last frame.
+			return true
+		}
 		if e.Clicks == 2 {
 			d.resize(dv.id, 0.5, u)
 			return true
 		}
-		d.held, d.heldShare = dv.id, shareOf(d.l.Node(dv.id).Share)
+		d.held, d.heldShare = dv.id, shareOf(n.Share)
 		if s := d.shares[dv.id]; s != nil {
 			d.heldShare = s.Value()
 		}
@@ -919,12 +935,11 @@ func (d *Dock) DragEvent(e input.Event, u *gunim.UI) bool {
 		if !ok {
 			return false
 		}
-		to, at, split, ok := d.dropAt(e.Pos, dr, u.Theme())
+		_, at, split, ok := d.dropAt(e.Pos, dr, u.Theme())
 		d.light(at, ok, u)
 		if !ok {
 			return false
 		}
-		_ = to
 		hint := DockHere.Get(u.Theme())
 		if split {
 			hint = SplitHere.Get(u.Theme())
@@ -977,7 +992,8 @@ func (d *Dock) dropAt(p geom.Point, dr Drag, th *theme.Live) (to Target, at geom
 		return Target{Win: d.win, Index: -1}, geom.Rect{Max: d.size.Point()}, false, true
 	}
 	edge := EdgeShare.Get(th)
-	for _, g := range d.groups {
+	// The innermost group first: groups are laid out outermost first.
+	for _, g := range slices.Backward(d.groups) {
 		if !g.area.Contains(p) || g.top.Contains(p) {
 			continue
 		}

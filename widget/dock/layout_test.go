@@ -314,3 +314,13 @@ func TestCloseWindowGivesItsItems(t *testing.T) {
 		t.Error("Apply carried out the application's change")
 	}
 }
+
+// TestATabMovedIntoASiblingCountsItsPlaceTheSame: into its group by
+// naming the group, a tab in it, or the window.
+func TestATabMovedIntoASiblingCountsItsPlaceTheSame(t *testing.T) {
+	for _, to := range []Target{{At: "B", Index: 2}, {Win: 0, Index: 2}} {
+		l := NewLayout(true, "A", "B", "C")
+		l.Move("A", to)
+		want(t, l, 0, "[B *A C]")
+	}
+}

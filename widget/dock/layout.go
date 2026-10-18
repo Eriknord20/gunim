@@ -143,9 +143,6 @@ func (l *Layout) AddWindow(keep bool) int {
 }
 
 func (l *Layout) nextWindow() int {
-	if len(l.Windows) == 0 {
-		return 0
-	}
 	id := 0
 	for _, w := range l.Windows {
 		id = max(id, w.ID+1)
@@ -360,7 +357,7 @@ func (l *Layout) Move(id string, to Target) bool {
 	}
 	c := l.Clone()
 	cs, _ := c.find(id)
-	if to.Side == Into && to.At != "" && cs.parent != nil && cs.parent.ID == to.At && to.Index > cs.index {
+	if to.Side == Into && cs.parent != nil && c.intoGroup(to) == cs.parent.ID && to.Index > cs.index {
 		// Along its own bar: the place counts the tabs with it.
 		to.Index--
 	}
@@ -680,6 +677,32 @@ func (l *Layout) put(n *Node, to Target) bool {
 	}
 	s.replace(split)
 	return true
+}
+
+// intoGroup returns the ID of the group a node moved Into to joins,
+// "" for none yet.
+func (l *Layout) intoGroup(to Target) string {
+	at := to.At
+	if at == "" {
+		w := l.Window(to.Win)
+		if w == nil || w.Root == nil {
+			return ""
+		}
+		at = w.Root.ID
+		if g := w.Root.firstGroup(); g != nil {
+			at = g.ID
+		}
+	}
+	s, ok := l.find(at)
+	switch {
+	case !ok:
+		return ""
+	case s.node.Kind == Group:
+		return s.node.ID
+	case s.parent != nil && s.parent.Kind == Group:
+		return s.parent.ID
+	}
+	return ""
 }
 
 // replace puts n where the spot's node stands.
