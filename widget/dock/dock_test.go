@@ -554,6 +554,8 @@ func TestLetGoPutsAHeldDividerBack(t *testing.T) {
 	l.Move("b", Target{At: "a", Side: Right})
 	w, run, sent := stage(t, d, l)
 	onUIDock(t, w, run, func(u *gunim.UI) { u.UseTheme(theme.Make("least", theme.Set(ShareLeast, float32(0.25)))) })
+	// The theme glides to its values.
+	run(120)
 	dv := d.dividers[0].rect.Center()
 	w.Input(input.PointerMove{Pos: dv})
 	w.Input(input.PointerDown{Pos: dv, Button: input.ButtonPrimary, Clicks: 1})
@@ -566,9 +568,20 @@ func TestLetGoPutsAHeldDividerBack(t *testing.T) {
 		t.Errorf("the divider went to %v, past a quarter", x)
 	}
 	onUIDock(t, w, run, func(u *gunim.UI) { d.LetGo(u) })
-	w.Input(input.PointerUp{Pos: geom.Pt(20, dv.Y), Button: input.ButtonPrimary})
+	if !d.Handle(input.PointerUp{Pos: geom.Pt(20, dv.Y), Button: input.ButtonPrimary}, nil) {
+		t.Error("the release of the press let go went on to the views")
+	}
 	run(2)
 	if d.Held() || math.Abs(float64(d.dividers[0].rect.Center().X-dv.X)) > 0.5 || len(sent()) != 0 {
 		t.Errorf("let go, the divider is at %v, held %v", d.dividers[0].rect.Center().X, d.Held())
+	}
+	// A share past the least, as a layout read, shows inside it.
+	l.SetShare(l.Windows[0].Root.ID, 0.05)
+	if err := w.Client().Update("v", l); err != nil {
+		t.Fatal(err)
+	}
+	run(40)
+	if x := d.dividers[0].rect.Center().X; math.Abs(float64(x-(0.25*792+4))) > 1 {
+		t.Errorf("a share of 0.05 shows at %v, want a quarter", x)
 	}
 }
