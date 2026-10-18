@@ -346,6 +346,51 @@ func TestANewSplitSlidesOpen(t *testing.T) {
 	}
 }
 
+// TestASideClosedSlidesAway: where a split's side closes, the side
+// kept grows over its room on every frame, from where it stood to the
+// whole window, and a side that moves to the other window goes alike.
+func TestASideClosedSlidesAway(t *testing.T) {
+	for _, way := range []string{"close", "detach"} {
+		d, _ := hosting()
+		l := NewLayout(true, "a")
+		l.Add("b", Target{At: "a", Side: Right})
+		w, run, _ := stage(t, d, l)
+		run(40)
+		g := d.l.GroupOf("a").ID
+		if r := groupArea(t, d, g); math.Abs(float64(r.Max.X-396)) > 1 {
+			t.Fatalf("a stands in %v before, want it to end at 396", r)
+		}
+		if way == "close" {
+			l.Remove("b")
+		} else {
+			l.ToWindow("b", nil)
+		}
+		if err := w.Client().Update("v", l); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+		first := groupArea(t, d, g).Max.X
+		if first > 700 {
+			t.Fatalf("%s: a jumped to %v at once", way, first)
+		}
+		last := first
+		for range 40 {
+			x := groupArea(t, d, g).Max.X
+			if x < last-0.01 {
+				t.Fatalf("%s: a shrank back, from %v to %v", way, last, x)
+			}
+			last = x
+			run(1)
+		}
+		if last != 800 {
+			t.Errorf("%s: a came to end at %v, want 800", way, last)
+		}
+		if len(d.closing) != 0 {
+			t.Errorf("%s: still closing %v once still", way, d.closing)
+		}
+	}
+}
+
 // TestDrawingTheBarsAloneLeavesTheViewsTheirPointer: without Content
 // the dock takes the pointer on its dividers alone, and says where the
 // application draws each view.

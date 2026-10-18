@@ -99,6 +99,11 @@ type Dock struct {
 	fronts  map[string]string
 	// shares are the splits' shares as they glide.
 	shares map[string]*anim.Float
+	// splits are the splits as the last sync saw them, and closing the
+	// sides left where a split went with the other side, by the kept
+	// side's node: each grows over the room the side gone had.
+	splits  map[string]splitWas
+	closing map[string]*closingSide
 	// active is the item the keys work in.
 	active string
 	// held is the divider dragged, "" for none, at heldShare; hot the
@@ -115,6 +120,49 @@ type Dock struct {
 type fadeIn struct {
 	on   *anim.Float
 	from float32
+}
+
+// splitWas is a split as the dock last saw it: which way it splits,
+// its sides' nodes, and the items each side held.
+type splitWas struct {
+	kind  Kind
+	kids  [2]string
+	items [2][]string
+}
+
+// closingSide is the side kept, kept 0 the first, of a split that went
+// with its other side: its room grows from its share of the split as
+// gone, the room the side gone had, shrinks to nothing.
+type closingSide struct {
+	kind  Kind
+	kept  int
+	share float32
+	gone  *anim.Float
+}
+
+// room is where the kept side stands in r, the room it takes once the
+// side gone has shrunk away.
+func (c *closingSide) room(r geom.Rect, gap float32) geom.Rect {
+	along := r.Size().W
+	if c.kind == Column {
+		along = r.Size().H
+	}
+	goneShare := 1 - c.share
+	if c.kept == 1 {
+		goneShare = c.share
+	}
+	cut := (max(along-gap, 0)*goneShare + gap) * min(max(c.gone.Value(), 0), 1)
+	switch {
+	case c.kind == Row && c.kept == 0:
+		r.Max.X -= cut
+	case c.kind == Row:
+		r.Min.X += cut
+	case c.kept == 0:
+		r.Max.Y -= cut
+	default:
+		r.Min.Y += cut
+	}
+	return r
 }
 
 // placedGroup is a group as the dock laid it out: the room it takes,
@@ -140,7 +188,7 @@ const minPane = 48
 func NewDock(win int) *Dock {
 	d := &Dock{win: win, items: map[string]geom.Rect{}, bars: map[string]*Bar{}, nodes: map[string]gunim.Node{},
 		itemOf: map[gunim.Node]string{}, mounted: map[gunim.Node]bool{}, showing: map[string]*fadeIn{}, fronts: map[string]string{},
-		shares: map[string]*anim.Float{}, drop: anim.NewRect(geom.Rect{}), dropLit: anim.NewFloat(0)}
+		shares: map[string]*anim.Float{}, splits: map[string]splitWas{}, closing: map[string]*closingSide{}, drop: anim.NewRect(geom.Rect{}), dropLit: anim.NewFloat(0)}
 	d.Add(d.drop, d.dropLit)
 	return d
 }
@@ -318,6 +366,7 @@ func (d *Dock) sync(u *gunim.UI) {
 	d.showing = map[string]*fadeIn{}
 	shown := root.shown(nil)
 	keep := map[string]bool{}
+	splits := map[string]splitWas{}
 	from := map[string]float32{}
 	var walk func(n *Node, top bool)
 	walk = func(n *Node, top bool) {
@@ -359,6 +408,8 @@ func (d *Dock) sync(u *gunim.UI) {
 			}
 		case Row, Column:
 			keep[n.ID] = true
+			splits[n.ID] = splitWas{kind: n.Kind, kids: [2]string{n.Kids[0].ID, n.Kids[1].ID},
+				items: [2][]string{n.Kids[0].Items(), n.Kids[1].Items()}}
 			s := d.shares[n.ID]
 			target := shareOf(n.Share)
 			if s == nil {
@@ -406,6 +457,7 @@ func (d *Dock) sync(u *gunim.UI) {
 		}
 		d.showing[it] = f
 	}
+	d.closeSplits(splits, moving, slide)
 	for id := range d.bars {
 		if !keep[id] {
 			delete(d.bars, id)
@@ -429,6 +481,40 @@ func (d *Dock) sync(u *gunim.UI) {
 	}
 	d.marks(u)
 	u.Invalidate()
+}
+
+// closeSplits notes the splits gone since the last sync, now splits:
+// where one side stays in the window and none of the other's items
+// does, the side kept grows over the room of the side gone, while
+// moving, as a new side slides in.
+func (d *Dock) closeSplits(splits map[string]splitWas, moving bool, slide anim.Spring) {
+	here := func(id string) bool {
+		win, ok := d.l.Where(id)
+		return ok && win == d.win
+	}
+	for kept := range d.closing {
+		if !here(kept) {
+			delete(d.closing, kept)
+		}
+	}
+	for id, sp := range d.splits {
+		if _, ok := splits[id]; ok || !moving {
+			continue
+		}
+		for k := range 2 {
+			if !here(sp.kids[k]) || slices.ContainsFunc(sp.items[1-k], here) {
+				continue
+			}
+			share := float32(0.5)
+			if s := d.shares[id]; s != nil {
+				share = min(max(s.Value(), 0), 1)
+			}
+			c := &closingSide{kind: sp.kind, kept: k, share: share, gone: anim.NewFloat(1)}
+			c.gone.Animate(0, slide)
+			d.closing[sp.kids[k]] = c
+		}
+	}
+	d.splits = splits
 }
 
 // seen reports whether any item of n was shown, in was.
@@ -640,6 +726,9 @@ func (d *Dock) arrange(th *theme.Live, r geom.Rect) {
 	gap, barH, space := Gap.Get(th), BarHeight.Get(th), BarSpace.Get(th)
 	var walk func(n *Node, r geom.Rect, root bool)
 	walk = func(n *Node, r geom.Rect, root bool) {
+		if c := d.closing[n.ID]; c != nil {
+			r = c.room(r, gap)
+		}
 		switch n.Kind {
 		case Item:
 			d.items[n.ID] = r
@@ -740,7 +829,8 @@ func (d *Dock) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	return size
 }
 
-// Step implements [gunim.Animator]: the fades and the splits' glides.
+// Step implements [gunim.Animator]: the fades, the splits' glides and
+// the sides that grow over a side gone.
 func (d *Dock) Step(dt time.Duration) bool {
 	moving := d.Group.Step(dt)
 	for _, f := range d.showing {
@@ -751,6 +841,13 @@ func (d *Dock) Step(dt time.Duration) bool {
 	for _, s := range d.shares {
 		if s.Step(dt) {
 			moving = true
+		}
+	}
+	for kept, c := range d.closing {
+		if c.gone.Step(dt) {
+			moving = true
+		} else {
+			delete(d.closing, kept)
 		}
 	}
 	return moving
