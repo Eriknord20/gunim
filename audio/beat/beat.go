@@ -152,6 +152,17 @@ type Scan struct {
 	// as its half or its double.
 	MinBPM, MaxBPM float64
 
+	d *detector
+	// rise is how much the bands rose at each column, and bass rise the
+	// same over the bass alone.
+	rise, bassRise []float32
+	done           bool
+	out            Result
+}
+
+// A detector measures how far the sound's bands rise, a column at a
+// time: [Scan] keeps every column, and [Live] the last few seconds.
+type detector struct {
 	rate      int
 	hop, size int
 	fft       *audio.FFT
@@ -168,21 +179,20 @@ type Scan struct {
 	bass  int
 	// last is the band levels of the column before, in decibels.
 	last [Bands]float64
-	// rise is how much the bands rose at each column, and bass rise the
-	// same over the bass alone.
-	rise, bassRise []float32
 	// warm counts the columns taken so far. Until a window holds
 	// nothing but the recording itself, what rises in it is the
 	// recording starting rather than anything in it.
 	warm int
-	done bool
-	out  Result
 }
 
 // NewScan returns a scan of sound at rate. Its columns fall about every
 // ten milliseconds, each taken over a window four times as long. A rate
 // of zero or less is taken as [audio.SampleRate].
-func NewScan(rate int) *Scan {
+func NewScan(rate int) *Scan { return &Scan{d: newDetector(rate)} }
+
+// newDetector returns a detector of sound at rate, its columns about
+// every ten milliseconds, each over a window four times as long.
+func newDetector(rate int) *detector {
 	if rate <= 0 {
 		rate = audio.SampleRate
 	}
@@ -191,7 +201,7 @@ func NewScan(rate int) *Scan {
 		hop *= 2
 	}
 	size := 4 * hop
-	s := &Scan{rate: rate, hop: hop, size: size, fft: audio.NewFFT(size),
+	s := &detector{rate: rate, hop: hop, size: size, fft: audio.NewFFT(size),
 		window: make([]float64, size), ring: make([]float64, size), x: make([]complex128, size)}
 	for i := range s.window {
 		s.window[i] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(size))
@@ -223,25 +233,38 @@ func NewScan(rate int) *Scan {
 	return s
 }
 
-// Write takes frames, interleaved stereo. Writing after [Scan.Done]
-// does nothing.
-func (s *Scan) Write(frames []float32) {
-	if s.done {
-		return
-	}
+// fps is how many columns fall in a second.
+func (s *detector) fps() float64 { return float64(s.rate) / float64(s.hop) }
+
+// write takes frames, interleaved stereo, calling column with each
+// column's rise, all over and in the bass, as one is taken.
+func (s *detector) write(frames []float32, column func(all, bass float32)) {
 	for i := 0; i+1 < len(frames); i += 2 {
 		s.ring[s.n%s.size] = float64(frames[i]+frames[i+1]) / 2
 		s.n++
 		s.since++
 		if s.since == s.hop {
 			s.since = 0
-			s.column()
+			column(s.column())
 		}
 	}
 }
 
-// column measures the last window's bands and how far each rose.
-func (s *Scan) column() {
+// Write takes frames, interleaved stereo. Writing after [Scan.Done]
+// does nothing.
+func (s *Scan) Write(frames []float32) {
+	if s.done {
+		return
+	}
+	s.d.write(frames, func(all, bass float32) {
+		s.rise = append(s.rise, all)
+		s.bassRise = append(s.bassRise, bass)
+	})
+}
+
+// column measures the last window's bands, and returns how far they
+// rose, all over and in the bass.
+func (s *detector) column() (rise, bassRise float32) {
 	for i := range s.size {
 		s.x[i] = complex(s.ring[(s.n+i)%s.size]*s.window[i], 0)
 	}
@@ -275,8 +298,7 @@ func (s *Scan) column() {
 	if s.warm <= s.edge() {
 		all, bass = 0, 0
 	}
-	s.rise = append(s.rise, float32(all))
-	s.bassRise = append(s.bassRise, float32(bass))
+	return float32(all), float32(bass)
 }
 
 // Done finds the beats in what has been written. Writing after it does
@@ -290,15 +312,15 @@ func (s *Scan) Done() (r Result) {
 	// rise of its own — cutting sound off spreads it over every band —
 	// so the columns that hear the end are quieted, as those that hear
 	// the start are.
-	s.Write(make([]float32, 2*(s.size/2)))
+	s.Write(make([]float32, 2*(s.d.size/2)))
 	s.done = true
-	for i := max(len(s.rise)-s.edge(), 0); i < len(s.rise); i++ {
+	for i := max(len(s.rise)-s.d.edge(), 0); i < len(s.rise); i++ {
 		s.rise[i], s.bassRise[i] = 0, 0
 	}
 
 	defer func() { s.out = r }()
 	r = Result{PerBar: s.perBar()}
-	fps := float64(s.rate) / float64(s.hop)
+	fps := s.d.fps()
 	strength := level(s.rise, int(fps/2))
 	bass := level(s.bassRise, int(fps/2))
 	per, clarity, ok := period(strength, fps, s.minBPM(), s.maxBPM())
@@ -323,7 +345,7 @@ func (s *Scan) Done() (r Result) {
 // edge is how many columns at each end of a recording hear its start or
 // its end in their window, rather than only what is in it. A window is
 // four columns long, so three columns hear each end.
-func (s *Scan) edge() int { return s.size/s.hop - 1 }
+func (s *detector) edge() int { return s.size/s.hop - 1 }
 
 func (s *Scan) perBar() int {
 	if s.PerBar > 0 {
