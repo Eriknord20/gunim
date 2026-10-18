@@ -149,8 +149,9 @@ type Bar struct {
 	mark *anim.Float
 	laid bool
 	// dropped is the tab whose drag ended taken, or let go outside every
-	// window, until the tabs change.
-	dropped string
+	// window, until the tabs change; keptHere is a tab dropped back where
+	// it stood, which is none.
+	dropped, keptHere string
 }
 
 // A Tab is a tab on a bar on its own: the node it stands for, by its
@@ -182,6 +183,10 @@ func (b *Bar) SetTabs(tabs []Tab, front string, u *gunim.UI) {
 	for i, t := range tabs {
 		ts[i] = tab{id: t.ID, Face: t.Face}
 	}
+	if !slices.EqualFunc(ts, b.tabs, func(a, c tab) bool { return a.id == c.id }) || front != b.front {
+		// What the drop was for has happened.
+		b.dropped = ""
+	}
 	b.set(ts, front, false, u)
 }
 
@@ -205,7 +210,8 @@ func (b *Bar) Carried() string { return b.carried }
 // Dropped returns the tab whose drag off the bar ended taken, or let
 // go outside every window, "" for none: the next tabs the bar is given
 // may show the tab in front changing for it, which an application need
-// not show as a switch. SetTabs forgets it once the tabs change.
+// not show as a switch. SetTabs forgets it as the tabs or the tab in
+// front change. A tab dropped back where it stood is no tab dropped.
 func (b *Bar) Dropped() string { return b.dropped }
 
 // change hands c to the bar's dock, or else to OnChange, or sends it.
@@ -214,12 +220,23 @@ func (b *Bar) change(c Change, u *gunim.UI) {
 		b.d.change(c, b, u)
 		return
 	}
-	var in gunim.Intent = c
-	if b.OnChange != nil {
-		in = b.OnChange(c, u)
+	sendChange(u, b, b.OnChange, c)
+}
+
+// sendChange hands c to on, where it is set, and sends what it returns
+// from n; without it, it sends c.
+func sendChange(u *gunim.UI, n gunim.Node, on func(Change, *gunim.UI) gunim.Intent, c Change) {
+	if on == nil {
+		send(u, n, c)
+		return
 	}
+	send(u, n, on(c, u))
+}
+
+// send sends in from n, where there is one.
+func send(u *gunim.UI, n gunim.Node, in gunim.Intent) {
 	if in != nil {
-		u.Send(b, in)
+		u.Send(n, in)
 	}
 }
 
@@ -311,9 +328,6 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 	sameTabs := slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a == c })
 	if sameTabs && front == b.front {
 		return
-	}
-	if !sameTabs {
-		b.dropped = ""
 	}
 	if len(tabs) != len(b.tabs) {
 		b.hot, b.crossHot = -1, false
@@ -812,17 +826,14 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 				b.change(Close{ID: b.tabs[i].id}, u)
 			}
 			return true
+		case e.Button != input.ButtonPrimary && b.pressed >= 0 && b.carried == "":
+			// A second button ends the press.
+			b.pressed = -1
+			return true
 		case e.Button == input.ButtonSecondary && i == len(b.tabs) && b.OnPlusMenu != nil:
-			if in := b.OnPlusMenu(b.plusBox, u); in != nil {
-				u.Send(b, in)
-			}
+			send(u, b, b.OnPlusMenu(b.plusBox, u))
 			return true
 		case e.Button != input.ButtonPrimary:
-			if b.pressed >= 0 && b.carried == "" {
-				// A second button ends the press.
-				b.pressed = -1
-				return true
-			}
 			return false
 		case i == len(b.tabs):
 			b.plusPressed = true
@@ -863,20 +874,13 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		b.dragEnded(e, u)
 		return true
 	case input.DragOver:
-		d, ok := e.Data.(Drag)
-		if !ok {
-			if b.Takes == nil || !b.Takes(e.Data) {
-				return false
-			}
-			b.landing = b.landingAt(e.Pos)
-			b.holdOver(b.tabAt(e.Pos), Drag{}, u)
-			u.AnswerDrag(widget.DropHint{Text: DockHere.Get(u.Theme()), Effect: widget.DropMove})
-			u.Invalidate()
-			return true
+		d, tab := e.Data.(Drag)
+		if !tab && (b.Takes == nil || !b.Takes(e.Data)) {
+			return false
 		}
 		b.landing = b.landingAt(e.Pos)
 		b.holdOver(b.tabAt(e.Pos), d, u)
-		if b.lands(d, b.landing) {
+		if !tab || b.lands(d, b.landing) {
 			u.AnswerDrag(widget.DropHint{Text: DockHere.Get(u.Theme()), Effect: widget.DropMove})
 		}
 		u.Invalidate()
@@ -887,34 +891,28 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		u.Invalidate()
 		return false
 	case input.Drop:
-		d, ok := e.Data.(Drag)
-		if !ok {
-			if b.Takes == nil || !b.Takes(e.Data) {
-				return false
-			}
-			at := b.landingAt(e.Pos)
-			b.landing = -1
-			b.holdOver(-1, Drag{}, u)
-			b.sprungFrom = ""
-			u.Invalidate()
-			if b.OnDrop != nil {
-				if in := b.OnDrop(Dropped{Data: e.Data, Index: at}, u); in != nil {
-					u.Send(b, in)
-				}
-			}
-			return true
+		d, tab := e.Data.(Drag)
+		if !tab && (b.Takes == nil || !b.Takes(e.Data)) {
+			return false
 		}
 		at := b.landingAt(e.Pos)
 		b.landing = -1
 		b.holdOver(-1, Drag{}, u)
 		b.sprungFrom = ""
 		u.Invalidate()
-		if !b.lands(d, at) {
-			// Where it was: in front, as a tab dropped is.
+		switch {
+		case !tab:
+			if b.OnDrop != nil {
+				send(u, b, b.OnDrop(Dropped{Data: e.Data, Index: at}, u))
+			}
+		case !b.lands(d, at):
+			// Where it was: in front, as a tab dropped is, and no tab
+			// dropped elsewhere.
 			b.pick(d.ID, u)
-			return true
+			b.keptHere = d.ID
+		default:
+			b.change(Move{ID: d.ID, To: Target{At: b.group, Win: b.Win, Index: at}}, u)
 		}
-		b.change(Move{ID: d.ID, To: Target{At: b.group, Win: b.Win, Index: at}}, u)
 		return true
 	}
 	return false
@@ -942,12 +940,11 @@ func (b *Bar) lands(d Drag, landing int) bool {
 	if d.ID == b.group {
 		return false
 	}
-	if b.d == nil {
-		return true
-	}
-	if n := b.d.l.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
-		// The bar is in the tab dragged.
-		return false
+	if b.d != nil {
+		if n := b.d.l.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
+			// The bar is in the tab dragged.
+			return false
+		}
 	}
 	i := slices.IndexFunc(b.tabs, func(t tab) bool { return t.id == d.ID })
 	if i < 0 {
@@ -976,7 +973,9 @@ func (b *Bar) holdOver(i int, dr Drag, u *gunim.UI) {
 		if b.springRun != run || b.spring != id || id == b.front {
 			return
 		}
-		if b.sprungFrom == "" || b.sprungFor != dr {
+		if dr.ID != "" && (b.sprungFrom == "" || b.sprungFor != dr) {
+			// A tab's drag puts the tab in front back where it ends
+			// untaken; another's, the bar never hears end.
 			b.sprungFrom, b.sprungFor = b.front, dr
 		}
 		b.pick(id, u)
@@ -1036,9 +1035,10 @@ func (b *Bar) dragEnded(e input.DragEnd, u *gunim.UI) {
 			o.pick(from, u)
 		}
 	}
-	if e.Out || e.Taken {
+	if e.Out || e.Taken && b.keptHere != id {
 		b.dropped = id
 	}
+	b.keptHere = ""
 	if e.Out && !e.Taken {
 		b.change(Detach{ID: id, From: b.Win, At: e.At.Sub(b.grab), Size: b.detachSize()}, u)
 	}

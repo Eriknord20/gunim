@@ -147,6 +147,14 @@ func TestABarOnItsOwnSaysATabLeft(t *testing.T) {
 	if d.ID != "2" || d.From != 1 || d.Size != b.DetachSize || b.Carried() != "" || b.Dropped() != "2" {
 		t.Fatalf("let go outside, the bar sent %+v, carries %q, dropped %q", d, b.Carried(), b.Dropped())
 	}
+	// The same tabs again, as an unrelated update brings them, keep it.
+	if err := w.Client().Update("v", threeTabs()); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if b.Dropped() != "2" {
+		t.Fatal("the same tabs again forgot the tab dropped")
+	}
 	st := threeTabs()
 	st.tabs = append(st.tabs[:1], st.tabs[2])
 	if err := w.Client().Update("v", st); err != nil {
@@ -232,5 +240,51 @@ func TestATitleThatDoesNotFitGivesWayToItsShortOne(t *testing.T) {
 	b.shorts[0] = face.Shape("", 13)
 	if got, cut := b.fitTitle(0, 30); got.Advance != full.Advance || !cut {
 		t.Errorf("a title with nothing shorter says %v wide, cut %v, want all of it, faded, and cut", got.Advance, cut)
+	}
+}
+
+// TestATabDroppedWhereItStandsMovesNothing: on a bar on its own too.
+func TestATabDroppedWhereItStandsMovesNothing(t *testing.T) {
+	b := NewBar("g", 1)
+	w, run, sent := stageBar(t, b, threeTabs())
+	at := barTabAt(t, b, "2")
+	w.Input(input.Drop{Pos: at, Data: Drag{ID: "2", Win: 1}})
+	run(1)
+	for _, in := range sent() {
+		if _, ok := in.(Move); ok {
+			t.Fatalf("a tab dropped on itself sent %v", in)
+		}
+	}
+	if b.Front() != "2" {
+		t.Errorf("dropped on itself, %s is in front, want 2", b.Front())
+	}
+}
+
+// TestASecondButtonOnThePlusEndsATabsPress: and opens no menu.
+func TestASecondButtonOnThePlusEndsATabsPress(t *testing.T) {
+	b := NewBar("g", 1)
+	b.Plus = true
+	opened := false
+	b.OnPlusMenu = func(geom.Rect, *gunim.UI) gunim.Intent { opened = true; return nil }
+	w, run, _ := stageBar(t, b, threeTabs())
+	at := barTabAt(t, b, "2")
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerDown{Pos: b.PlusRect().Center(), Button: input.ButtonSecondary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(30, 10))})
+	run(1)
+	if b.Carried() != "" || opened {
+		t.Errorf("after a second button, the tab is carried %q, the menu opened %v", b.Carried(), opened)
+	}
+}
+
+// TestATitleBarsBarDrawsOnTheTitleBarsFill: whatever the dock's root.
+func TestATitleBarsBarDrawsOnTheTitleBarsFill(t *testing.T) {
+	d := NewDock(0)
+	d.TitleBar, d.Plus = true, true
+	top := d.TopBar()
+	d.SetLayout(Layout{Windows: []Window{{Root: &Node{ID: "a", Kind: Item}, Keep: true}}}, nil)
+	if !top.Plain || !top.Plus {
+		t.Errorf("the title bar's bar has Plain %v and Plus %v", top.Plain, top.Plus)
 	}
 }
