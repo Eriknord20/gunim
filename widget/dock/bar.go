@@ -183,10 +183,10 @@ func (b *Bar) SetTabs(tabs []Tab, front string, u *gunim.UI) {
 	for i, t := range tabs {
 		ts[i] = tab{id: t.ID, Face: t.Face}
 	}
-	happened := !slices.EqualFunc(ts, b.tabs, func(a, c tab) bool { return a.id == c.id }) || front != b.front
-	b.set(ts, front, false, u)
-	if happened {
-		// What the drop was for has happened.
+	// A tab in front for a tab dragged away is simply there; and once
+	// the tabs or the tab in front move, what the drop was for has
+	// happened.
+	if b.setStill(ts, front, false, b.dropped != "", u) {
 		b.dropped = ""
 	}
 }
@@ -321,6 +321,12 @@ func (b *Bar) Front() string { return b.front }
 // set puts tabs on the bar, front in front, and marks the front tab
 // where mark says. A change of the tab in front glides the fill there.
 func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
+	b.setStill(tabs, front, mark, false, u)
+}
+
+// setStill is set, the front tab's fill not gliding where still says,
+// and reports whether the tabs or the tab in front moved.
+func (b *Bar) setStill(tabs []tab, front string, mark, still bool, u *gunim.UI) bool {
 	if !b.laid || u == nil {
 		b.mark.Jump(onOff(mark))
 	} else {
@@ -328,8 +334,9 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 	}
 	sameTabs := slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a == c })
 	if sameTabs && front == b.front {
-		return
+		return false
 	}
+	moved := front != b.front || !slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a.id == c.id })
 	if len(tabs) != len(b.tabs) {
 		b.hot, b.crossHot = -1, false
 		if b.carried == "" {
@@ -341,9 +348,11 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 		// place, the + too, and nothing left of the tabs before.
 		b.gone, b.plusAt = nil, nil
 		clear(b.moves)
+		clear(b.arriving)
+		b.lit.Jump(1)
+		b.litFrom, b.was = geom.Rect{}, ""
 	}
-	if b.laid && u != nil && front != b.front && b.front != "" && front != "" && b.carried == "" && b.dropped == "" {
-		// A tab in front for a tab dragged away is simply there.
+	if b.laid && u != nil && front != b.front && b.front != "" && front != "" && b.carried == "" && !still {
 		b.litFrom, b.was = b.litAt(), b.front
 		b.lit.Jump(0)
 		b.lit.Animate(1, Glide.Get(u.Theme()))
@@ -362,6 +371,7 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 		b.shapedFace = nil
 	}
 	u.Invalidate()
+	return moved
 }
 
 // shape shapes the titles again where they or the text changed.
