@@ -211,6 +211,22 @@ func (d *Dock) DividerRect(id string) (geom.Rect, bool) {
 	return geom.Rect{}, false
 }
 
+// Held reports whether the pointer is dragging a divider.
+func (d *Dock) Held() bool { return d.held != "" }
+
+// LetGo ends a divider's drag, as Escape might, and puts the divider
+// back where it was, sending nothing.
+func (d *Dock) LetGo(u *gunim.UI) {
+	if d.held == "" {
+		return
+	}
+	if s, n := d.shares[d.held], d.l.Node(d.held); s != nil && n != nil {
+		s.Jump(shareOf(n.Share))
+	}
+	d.held = ""
+	u.Invalidate()
+}
+
 // Shown returns the items the dock shows, in order.
 func (d *Dock) Shown() []string { return d.l.Shown(d.win) }
 
@@ -881,11 +897,7 @@ func (d *Dock) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Button != input.ButtonPrimary {
 			if d.held != "" {
 				// A second button puts the divider back.
-				if s, n := d.shares[d.held], d.l.Node(d.held); s != nil && n != nil {
-					s.Jump(shareOf(n.Share))
-				}
-				d.held = ""
-				u.Invalidate()
+				d.LetGo(u)
 				return true
 			}
 			return false
@@ -938,7 +950,7 @@ func (d *Dock) dragDivider(p geom.Point, u *gunim.UI) {
 		at, length = p.Y-dv.whole.Min.Y, dv.whole.Size().H
 	}
 	room := max(length-gap, 1)
-	least := min(minPane/room, 0.5)
+	least := min(max(minPane/room, ShareLeast.Get(u.Theme())), 0.5)
 	d.heldShare = min(max((at-gap/2)/room, least), 1-least)
 	if s := d.shares[dv.id]; s != nil {
 		s.Jump(d.heldShare)

@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 )
 
 // pane is a view the tests dock: it fills its place, and counts its
@@ -26,6 +27,7 @@ func stage(t *testing.T, d *Dock, l Layout) (w *gunim.Window, run func(int), sen
 	t.Helper()
 	w = gunimtest.New(t, geom.Sz(800, 500), nil)
 	gunim.RegisterView(w, "v", func(Layout) *Dock { return d }, func(d *Dock, l Layout, u *gunim.UI) { d.SetLayout(l, u) })
+	gunim.RegisterPatch(w, "v", func(_ *Dock, call uiCall, u *gunim.UI) { call(u) })
 	if err := w.Client().Mount(gunim.Root, "v", "v", l, "v"); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +49,18 @@ func stage(t *testing.T, d *Dock, l Layout) (w *gunim.Window, run func(int), sen
 		}
 	}
 	return w, run, sent
+}
+
+// uiCall is a call to run on the UI goroutine, as a patch.
+type uiCall func(u *gunim.UI)
+
+// onUIDock runs fn on the UI goroutine of w, and a frame.
+func onUIDock(t *testing.T, w *gunim.Window, run func(int), fn func(u *gunim.UI)) {
+	t.Helper()
+	if err := w.Client().Patch("v", uiCall(fn)); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
 }
 
 // hosting returns a dock holding a pane for each item.
@@ -529,5 +543,32 @@ func TestMarkAloneMarksALonePane(t *testing.T) {
 		if on := d.groups[0].bar.mark.Value() > 0.5; on != alone {
 			t.Errorf("with MarkAlone %v, the tab is marked %v", alone, on)
 		}
+	}
+}
+
+// TestLetGoPutsAHeldDividerBack: the drag ends, sending nothing, the
+// divider where it was; and ShareLeast holds a dragged divider back.
+func TestLetGoPutsAHeldDividerBack(t *testing.T) {
+	d, _ := hosting()
+	l := NewLayout(true, "a", "b")
+	l.Move("b", Target{At: "a", Side: Right})
+	w, run, sent := stage(t, d, l)
+	onUIDock(t, w, run, func(u *gunim.UI) { u.UseTheme(theme.Make("least", theme.Set(ShareLeast, float32(0.25)))) })
+	dv := d.dividers[0].rect.Center()
+	w.Input(input.PointerMove{Pos: dv})
+	w.Input(input.PointerDown{Pos: dv, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: geom.Pt(20, dv.Y)})
+	run(1)
+	if !d.Held() {
+		t.Fatal("the divider is not held")
+	}
+	if x := d.dividers[0].rect.Center().X; x < 0.25*792 {
+		t.Errorf("the divider went to %v, past a quarter", x)
+	}
+	onUIDock(t, w, run, func(u *gunim.UI) { d.LetGo(u) })
+	w.Input(input.PointerUp{Pos: geom.Pt(20, dv.Y), Button: input.ButtonPrimary})
+	run(2)
+	if d.Held() || math.Abs(float64(d.dividers[0].rect.Center().X-dv.X)) > 0.5 || len(sent()) != 0 {
+		t.Errorf("let go, the divider is at %v, held %v", d.dividers[0].rect.Center().X, d.Held())
 	}
 }

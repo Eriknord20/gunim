@@ -66,6 +66,9 @@ var (
 	// another window's bar.
 	DockHere  = theme.Choice("dock.drop.tab", "Dock here")
 	SplitHere = theme.Choice("dock.drop.split", "Split here")
+	// ShareLeast is the least share of a split's room a divider dragged
+	// leaves either side, as well as the room a pane needs.
+	ShareLeast = theme.Number("dock.share.least", 0)
 	// EdgeShare is how far into a pane, as a share of its width or
 	// height, a tab dragged splits it rather than joining its group.
 	EdgeShare = theme.Number("dock.edge", 0.25)
