@@ -391,6 +391,60 @@ func TestASideClosedSlidesAway(t *testing.T) {
 	}
 }
 
+// TestASideClosingJumpsWithANilUIOrANewSplit: the side kept stops
+// growing where a layout comes without a UI, which jumps it to the
+// whole room, or where a new split takes it in, which slides the new
+// side in alone, the side kept only ever shrinking.
+func TestASideClosingJumpsWithANilUIOrANewSplit(t *testing.T) {
+	for _, way := range []string{"nil", "split"} {
+		d, _ := hosting()
+		l := NewLayout(true, "a")
+		l.Add("b", Target{At: "a", Side: Right})
+		w, run, _ := stage(t, d, l)
+		run(40)
+		g := d.l.GroupOf("a").ID
+		l.Remove("b")
+		if err := w.Client().Update("v", l); err != nil {
+			t.Fatal(err)
+		}
+		run(2)
+		if len(d.closing) != 1 {
+			t.Fatalf("%s: closing %v, want a's group", way, d.closing)
+		}
+		if way == "nil" {
+			d.SetLayout(l, nil)
+			if len(d.closing) != 0 {
+				t.Errorf("nil: still closing %v", d.closing)
+			}
+			run(1)
+			if x := groupArea(t, d, g).Max.X; x != 800 {
+				t.Errorf("nil: a ends at %v, want 800 at once", x)
+			}
+			continue
+		}
+		l.Add("c", Target{At: g, Side: Right})
+		if err := w.Client().Update("v", l); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+		if len(d.closing) != 0 {
+			t.Errorf("split: still closing %v", d.closing)
+		}
+		last := groupArea(t, d, g).Max.X
+		for range 40 {
+			run(1)
+			x := groupArea(t, d, g).Max.X
+			if x > last+0.01 {
+				t.Fatalf("split: a grew back, from %v to %v", last, x)
+			}
+			last = x
+		}
+		if math.Abs(float64(last-396)) > 1 {
+			t.Errorf("split: a came to end at %v, want 396", last)
+		}
+	}
+}
+
 // TestDrawingTheBarsAloneLeavesTheViewsTheirPointer: without Content
 // the dock takes the pointer on its dividers alone, and says where the
 // application draws each view.

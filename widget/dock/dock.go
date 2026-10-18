@@ -138,6 +138,9 @@ type closingSide struct {
 	kept  int
 	share float32
 	gone  *anim.Float
+	// parent is the node that holds the kept side as it grows, "" for
+	// the window's root.
+	parent string
 }
 
 // room is where the kept side stands in r, the room it takes once the
@@ -486,14 +489,22 @@ func (d *Dock) sync(u *gunim.UI) {
 // closeSplits notes the splits gone since the last sync, now splits:
 // where one side stays in the window and none of the other's items
 // does, the side kept grows over the room of the side gone, while
-// moving, as a new side slides in.
+// moving, as a new side slides in. Not moving, every side jumps to its
+// place. A side growing that leaves the window, or the node it grew in,
+// stops growing there.
 func (d *Dock) closeSplits(splits map[string]splitWas, moving bool, slide anim.Spring) {
 	here := func(id string) bool {
 		win, ok := d.l.Where(id)
 		return ok && win == d.win
 	}
-	for kept := range d.closing {
-		if !here(kept) {
+	parentOf := func(id string) string {
+		if p := d.l.Parent(id); p != nil {
+			return p.ID
+		}
+		return ""
+	}
+	for kept, c := range d.closing {
+		if !moving || !here(kept) || parentOf(kept) != c.parent {
 			delete(d.closing, kept)
 		}
 	}
@@ -509,7 +520,10 @@ func (d *Dock) closeSplits(splits map[string]splitWas, moving bool, slide anim.S
 			if s := d.shares[id]; s != nil {
 				share = min(max(s.Value(), 0), 1)
 			}
-			c := &closingSide{kind: sp.kind, kept: k, share: share, gone: anim.NewFloat(1)}
+			if id == d.held {
+				share = d.heldShare
+			}
+			c := &closingSide{kind: sp.kind, kept: k, share: share, gone: anim.NewFloat(1), parent: parentOf(sp.kids[k])}
 			c.gone.Animate(0, slide)
 			d.closing[sp.kids[k]] = c
 		}
