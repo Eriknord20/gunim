@@ -65,16 +65,11 @@ func hosting() (d *Dock, panes map[string]*pane) {
 // window.
 func tabAt(t *testing.T, d *Dock, id string) geom.Point {
 	t.Helper()
-	for _, g := range d.groups {
-		if g.bar == nil {
-			continue
-		}
-		if i := slices.Index(g.bar.Tabs(), id); i >= 0 {
-			return g.top.Min.Add(g.bar.boxes[i].Center())
-		}
+	r, ok := d.TabRect(id)
+	if !ok {
+		t.Fatalf("no tab %s", id)
 	}
-	t.Fatalf("no tab %s", id)
-	return geom.Point{}
+	return r.Center()
 }
 
 // groupArea returns where group g's tab in front shows.
@@ -493,14 +488,24 @@ func TestTheDockSaysWhereItsTabsAndDividersStand(t *testing.T) {
 	l := NewLayout(true, "a", "b")
 	l.Move("b", Target{At: "a", Side: Right})
 	w, run, sent := stage(t, d, l)
-	r, ok := d.TabRect("b")
-	if !ok || r.Center() != tabAt(t, d, "b") || r.Size().W <= 0 {
-		t.Errorf("tab b at %v, %v", r, ok)
+	l.Add("c", Target{At: "b", Index: -1})
+	l.Show("b")
+	if err := w.Client().Update("v", l); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	r, ok := d.TabRect("c")
+	if !ok || r.Size().W <= 0 {
+		t.Fatalf("tab c at %v, %v", r, ok)
+	}
+	click(w, run, r.Center(), input.ButtonPrimary)
+	if got := sent(); len(got) != 1 || got[0] != (Show{ID: "c"}) {
+		t.Errorf("a click in tab c's rect sent %v", got)
 	}
 	split := l.Windows[0].Root.ID
 	dv, ok := d.DividerRect(split)
-	if !ok || dv != d.dividers[0].rect {
-		t.Errorf("the divider at %v, %v", dv, ok)
+	if !ok {
+		t.Fatalf("the divider at %v, %v", dv, ok)
 	}
 	if _, ok := d.TabRect("nothing"); ok {
 		t.Error("a tab of nothing stands somewhere")

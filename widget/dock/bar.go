@@ -215,7 +215,10 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 
 // shape shapes the titles again where they or the text changed.
 func (b *Bar) shape(th *theme.Live) {
-	face, size := TabFont.Get(th), TabText.Get(th)
+	face, size := widget.Font.Get(th), TabText.Get(th)
+	if TabBold.Get(th) {
+		face = widget.BoldFont.Get(th)
+	}
 	if b.shapedFace == face && b.shapedSize == size && len(b.titles) == len(b.tabs) {
 		return
 	}
@@ -275,11 +278,9 @@ func (b *Bar) litAt() geom.Rect {
 
 // drawnOf is where tab id is drawn, closing or not.
 func (b *Bar) drawnOf(id string) (geom.Rect, bool) {
-	for i, t := range b.tabs {
-		if t.id == id && i < len(b.boxes) {
-			r, _ := b.drawnAt(i)
-			return r, true
-		}
+	if i := b.boxOf(id); i >= 0 {
+		r, _ := b.drawnAt(i)
+		return r, true
 	}
 	for _, g := range b.gone {
 		if g.tab.id == id {
@@ -287,6 +288,16 @@ func (b *Bar) drawnOf(id string) (geom.Rect, bool) {
 		}
 	}
 	return geom.Rect{}, false
+}
+
+// boxOf returns the place on the bar of tab id, laid out, -1 for none.
+func (b *Bar) boxOf(id string) int {
+	for i, t := range b.tabs {
+		if t.id == id && i < len(b.boxes) {
+			return i
+		}
+	}
+	return -1
 }
 
 // litOf is how far tab id has the front tab's ink, 0 to 1.
@@ -397,7 +408,7 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 	if c.Max.H > 0 {
 		h = c.Max.H
 	}
-	pad, gap, inset := TabPadding.Get(th), TabGap.Get(th), TabInset.Get(th)
+	pad, gap, inset, iconW := TabPadding.Get(th), TabGap.Get(th), TabInset.Get(th), TabIcon.Get(th)
 	widest, least := TabWidest.Get(th), TabLeast.Get(th)
 	b.boxes = b.boxes[:0]
 	want := make([]float32, len(b.tabs))
@@ -405,7 +416,7 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 	for i, t := range b.tabs {
 		w := 2*pad + b.titles[i].Advance
 		if t.Icon != nil {
-			w += TabIcon.Get(th) + 6
+			w += iconW + 6
 		}
 		if t.Closable {
 			w += tabCross + 2

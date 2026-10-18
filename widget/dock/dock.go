@@ -66,7 +66,8 @@ type Dock struct {
 	Keys bool
 	// MarkAlone marks the tab in front of the pane the keys work in
 	// where the window shows that pane alone too, not only among
-	// several.
+	// several. Changed once the dock shows, it shows from the next
+	// SetLayout or Refresh.
 	MarkAlone bool
 	// OnChange, when set, runs on the UI goroutine with what the user
 	// asks for; a non-nil result is sent to the application as the
@@ -183,18 +184,17 @@ func (d *Dock) Rect(item string) (geom.Rect, bool) {
 }
 
 // TabRect returns where tab id stands on a bar the dock lays out, in
-// the dock's space, as the last layout put it: to anchor something to
-// it, or for a test to press it. False where no bar of the dock's shows
+// the dock's space, as the last layout put it and a click finds it: to
+// anchor something to it, or for a test to press it. A tab sliding
+// there is drawn on its way. False where no bar of the dock's shows
 // it; TopBar's tabs are where the application put that bar.
 func (d *Dock) TabRect(id string) (geom.Rect, bool) {
 	for _, g := range d.groups {
 		if g.bar == nil {
 			continue
 		}
-		for i, t := range g.bar.tabs {
-			if t.id == id && i < len(g.bar.boxes) {
-				return g.bar.boxes[i].Add(g.top.Min), true
-			}
+		if i := g.bar.boxOf(id); i >= 0 {
+			return g.bar.boxes[i].Add(g.top.Min), true
 		}
 	}
 	return geom.Rect{}, false
@@ -447,7 +447,7 @@ func (n *Node) index(id string) int {
 }
 
 // marks underlines the tab in front of the pane the keys work in, where
-// the window shows more than one pane.
+// the window shows more than one pane, or with MarkAlone, one.
 func (d *Dock) marks(u *gunim.UI) {
 	active := d.Active()
 	bars := 0
