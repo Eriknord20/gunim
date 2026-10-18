@@ -77,6 +77,33 @@ type View struct {
 	boxOf map[gunim.Node]string
 	// runs are text shaped, kept from frame to frame.
 	runs runCache
+	// m are the boxes' measures, from the theme the view last laid out
+	// in.
+	m measures
+	// idx is each box's place in the graph, by its ID.
+	idx map[string]int
+	// shapes are the wires' curves, worked out once for each seq: seq
+	// counts the changes to where the boxes stand.
+	shapes map[string]wirePoints
+	seq    int
+	// replay is how far the plane scrolled under a held drag, which the
+	// engine's replay of the pointer takes off.
+	replay geom.Point
+}
+
+// measures are the boxes' sizes, from the theme.
+type measures struct{ width, head, row float32 }
+
+// measuresOf are the measures th gives.
+func measuresOf(th *theme.Live) measures {
+	return measures{NodeWidth.Get(th), HeadHeight.Get(th), RowHeight.Get(th)}
+}
+
+// wirePoints are a wire's curve, as at seq.
+type wirePoints struct {
+	seq int
+	sh  wireShape
+	pts []geom.Point
 }
 
 // place is where a box stands as it glides to its place.
@@ -158,18 +185,16 @@ const (
 	// keep is how much of the boxes, in pixels, the plane keeps in view
 	// as it is panned.
 	keep = 80
-	// edgeZone and edgeSpeed are how near an edge a box or a wire held
-	// scrolls the plane, in pixels, and how fast at the most, in pixels
-	// a second.
-	edgeZone  = 48
-	edgeSpeed = 900
+	// dotGap is how far apart a wire's dots run, at a zoom of 1.
+	dotGap = 30
 )
 
 // NewView returns a view of no boxes.
 func NewView() *View {
 	v := &View{zoom: anim.NewFloat(1), panX: anim.NewFloat(0), panY: anim.NewFloat(0), places: map[string]*place{},
 		picked: map[string]bool{}, phase: map[string]float32{}, joined: map[portKey]bool{}, nodes: map[string]gunim.Node{},
-		boxOf: map[gunim.Node]string{}}
+		boxOf: map[gunim.Node]string{}, idx: map[string]int{}, shapes: map[string]wirePoints{},
+		m: measures{NodeWidth.Default(), HeadHeight.Default(), RowHeight.Default()}}
 	v.Add(v.zoom, v.panX, v.panY)
 	return v
 }
@@ -183,6 +208,14 @@ func (v *View) Graph() Graph { return v.g.Clone() }
 // it is there. The first graph shown is fitted in view.
 func (v *View) SetGraph(g Graph, u *gunim.UI) {
 	v.g = g.Clone()
+	v.seq++
+	clear(v.idx)
+	for i, n := range v.g.Nodes {
+		v.idx[n.ID] = i
+	}
+	if u != nil {
+		v.m = measuresOf(u.Theme())
+	}
 	var spring anim.Spring
 	if u != nil {
 		spring = Place.Get(u.Theme())
@@ -197,9 +230,13 @@ func (v *View) SetGraph(g Graph, u *gunim.UI) {
 			v.order = append(v.order, n.ID)
 			continue
 		}
-		if v.pr.kind == pressMove && v.pr.moved && v.moving(n.ID) {
-			// Held: it follows the pointer, not the graph.
-			continue
+		if v.pr.kind == pressMove && v.moving(n.ID) {
+			if v.pr.moved {
+				// Held: it follows the pointer, not the graph.
+				continue
+			}
+			// Pressed and not moved yet: it moves from here.
+			v.pr.start[n.ID] = n.At
 		}
 		if v.laid && u != nil {
 			pl.x.Animate(n.At.X, spring)
@@ -231,6 +268,11 @@ func (v *View) SetGraph(g Graph, u *gunim.UI) {
 			delete(v.phase, id)
 		}
 	}
+	for id := range v.shapes {
+		if !wires[id] {
+			delete(v.shapes, id)
+		}
+	}
 	for id, n := range v.nodes {
 		if !seen[id] {
 			delete(v.nodes, id)
@@ -249,6 +291,14 @@ func (v *View) SetGraph(g Graph, u *gunim.UI) {
 	case pressNone, pressPan, pressMove, pressBand:
 	}
 	u.Invalidate()
+}
+
+// node returns box id, by the index, or nil.
+func (v *View) node(id string) *Node {
+	if i, ok := v.idx[id]; ok && i < len(v.g.Nodes) && v.g.Nodes[i].ID == id {
+		return &v.g.Nodes[i]
+	}
+	return nil
 }
 
 // moving reports whether box id moves with the press under way.
@@ -443,14 +493,14 @@ func (v *View) at(n *Node) geom.Point {
 func (v *View) sizeOf(n *Node) geom.Size {
 	w := n.Width
 	if w <= 0 {
-		w = NodeWidth.Default()
+		w = v.m.width
 	}
 	rows := max(len(n.Ins), len(n.Outs))
-	h := HeadHeight.Default() + n.Body + float32(rows)*RowHeight.Default()
+	h := v.m.head + n.Body + float32(rows)*v.m.row
 	if rows > 0 {
 		h += 8
 	}
-	return geom.Sz(w, max(h, HeadHeight.Default()+6))
+	return geom.Sz(w, max(h, v.m.head+6))
 }
 
 // rectOf is where box n stands on the plane now.
@@ -462,7 +512,7 @@ func (v *View) rectOf(n *Node) geom.Rect {
 // bodyOf is the room under box n's head for its content, on the plane.
 func (v *View) bodyOf(n *Node) geom.Rect {
 	r := v.rectOf(n)
-	return geom.Rc(r.Min.X+1, r.Min.Y+HeadHeight.Default(), r.Size().W-2, n.Body)
+	return geom.Rc(r.Min.X+1, r.Min.Y+v.m.head, r.Size().W-2, n.Body)
 }
 
 // portAt is where port i of box n stands on the plane: down its left
@@ -473,13 +523,13 @@ func (v *View) portAt(n *Node, out bool, i int) geom.Point {
 	if out {
 		x = r.Max.X
 	}
-	return geom.Pt(x, r.Min.Y+HeadHeight.Default()+n.Body+4+float32(i)*RowHeight.Default()+RowHeight.Default()/2)
+	return geom.Pt(x, r.Min.Y+v.m.head+n.Body+4+float32(i)*v.m.row+v.m.row/2)
 }
 
 // endAt is where the port k stands on the plane, and false where there
 // is no such port.
 func (v *View) endAt(k portKey) (geom.Point, bool) {
-	n := v.g.Node(k.Node)
+	n := v.node(k.Node)
 	if n == nil {
 		return geom.Point{}, false
 	}
@@ -499,7 +549,7 @@ func (v *View) endAt(k portKey) (geom.Point, bool) {
 func (v *View) nodeAt(p geom.Point) string {
 	w := v.ToPlane(p)
 	for _, id := range slices.Backward(v.order) {
-		if n := v.g.Node(id); n != nil && v.rectOf(n).Contains(w) {
+		if n := v.node(id); n != nil && v.rectOf(n).Contains(w) {
 			return id
 		}
 	}
@@ -511,7 +561,7 @@ func (v *View) nodeAt(p geom.Point) string {
 func (v *View) portUnder(p geom.Point) (portKey, bool) {
 	best, found, ok := float32(portHit), portKey{}, false
 	for _, id := range slices.Backward(v.order) {
-		n := v.g.Node(id)
+		n := v.node(id)
 		if n == nil {
 			continue
 		}
@@ -534,11 +584,10 @@ func (v *View) portUnder(p geom.Point) (portKey, bool) {
 func (v *View) wireUnder(p geom.Point) (string, bool) {
 	best, found, ok := float32(wireHit), "", false
 	for _, w := range v.g.Wires {
-		sh, okShape := v.shapeOf(w)
+		_, pts, okShape := v.wirePts(w)
 		if !okShape {
 			continue
 		}
-		pts := sh.points()
 		for i := 1; i < len(pts); i++ {
 			if d := segDist(p, v.ToView(pts[i-1]), v.ToView(pts[i])); d < best {
 				best, found, ok = d, w.ID, true
@@ -596,7 +645,7 @@ func (v *View) joinable(k, to portKey) bool {
 
 // snapFor is the port the loose end at view point p would join: the
 // nearest that could take it, within snapNear.
-func (v *View) snapFor(from portKey, p geom.Point, skip string) (portKey, bool) {
+func (v *View) snapFor(from portKey, p geom.Point) (portKey, bool) {
 	best, found, ok := float32(snapNear), portKey{}, false
 	for _, n := range v.g.Nodes {
 		ps := n.Ins
@@ -607,15 +656,6 @@ func (v *View) snapFor(from portKey, p geom.Point, skip string) (portKey, bool) 
 			to := portKey{End{n.ID, port.ID}, !from.out}
 			if !v.joinable(from, to) {
 				continue
-			}
-			if skip != "" {
-				if w := v.g.Wire(skip); w != nil && to.End == w.To {
-					// Its own input counts, to put it back.
-					if d := dist(v.ToView(v.portAt(&n, false, i)), p); d < best {
-						best, found, ok = d, to, true
-					}
-					continue
-				}
 			}
 			if d := dist(v.ToView(v.portAt(&n, !from.out, i)), p); d < best {
 				best, found, ok = d, to, true
@@ -661,6 +701,9 @@ func (v *View) raise(id string) {
 func (v *View) Children() []gunim.Node {
 	var out []gunim.Node
 	for _, n := range v.g.Nodes {
+		if n.Body <= 0 {
+			continue
+		}
 		if c := v.content(n.ID); c != nil {
 			out = append(out, c)
 		}
@@ -686,8 +729,12 @@ func (v *View) content(id string) gunim.Node {
 
 // Layout implements [gunim.Node]: the view fills its room, and each
 // box's content its body, on the plane.
-func (v *View) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+func (v *View) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	v.size = c.Max
+	if m := measuresOf(f.Theme); m != v.m {
+		v.m = m
+		v.seq++
+	}
 	type want struct {
 		c gunim.Node
 		r geom.Rect
@@ -741,62 +788,67 @@ func (v *View) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) g
 func (v *View) Step(dt time.Duration) bool {
 	moving := v.Group.Step(dt)
 	v.followWheel()
+	glided := false
 	for _, pl := range v.places {
 		x := pl.x.Step(dt)
 		if pl.y.Step(dt) || x {
-			moving = true
+			glided = true
 		}
 	}
-	if v.followDrag(dt) {
+	if glided {
+		v.seq++
 		moving = true
 	}
 	for _, w := range v.g.Wires {
 		if w.Flow > 0.02 {
-			v.phase[w.ID] += float32(dt.Seconds()) * (24 + 90*w.Flow)
+			// Round the dots' gap, so it never grows past what a float
+			// keeps exactly.
+			v.phase[w.ID] = float32(math.Mod(float64(v.phase[w.ID]+float32(dt.Seconds())*(24+90*w.Flow)), dotGap))
 			moving = true
 		}
 	}
 	return moving
 }
 
-// edgeScroll is how fast the plane scrolls with a box or a wire held
-// at view point p: none away from the edges, faster nearer one.
-func (v *View) edgeScroll(p geom.Point) geom.Point {
-	if v.size.W <= 2*edgeZone || v.size.H <= 2*edgeZone {
-		return geom.Point{}
+// DragHeld implements [gunim.DragHolder]: a box or a wire held near
+// an edge has the plane scroll toward it.
+func (v *View) DragHeld() bool {
+	switch v.pr.kind {
+	case pressMove, pressLink, pressReplug, pressBand:
+		return v.pr.moved
+	case pressNone, pressPan:
 	}
-	axis := func(at, size float32) float32 {
-		switch {
-		case at < edgeZone:
-			return min((edgeZone-at)/edgeZone, 1) * edgeSpeed
-		case at > size-edgeZone:
-			return -min((at-(size-edgeZone))/edgeZone, 1) * edgeSpeed
-		}
-		return 0
-	}
-	return geom.Pt(axis(p.X, v.size.W), axis(p.Y, v.size.H))
+	return false
 }
 
-// followDrag scrolls the plane over dt as a box or a wire held near an
-// edge asks, keeping what is held under the pointer; it reports
-// whether the plane scrolls.
-func (v *View) followDrag(dt time.Duration) bool {
+// EdgeScroll implements [gunim.EdgeScroller]: the plane scrolls toward
+// an edge the pointer holding a box or a wire nears, as fast as
+// gunim's EdgeSpeed says, as far as some of the boxes stay in view.
+func (v *View) EdgeScroll(p geom.Point, dt time.Duration, _ *gunim.UI) geom.Point {
+	s := geom.Pt(gunim.EdgeSpeed(p.X, 0, v.size.W), gunim.EdgeSpeed(p.Y, 0, v.size.H))
+	if s == (geom.Point{}) {
+		return geom.Point{}
+	}
+	was := geom.Pt(v.panX.Target(), v.panY.Target())
+	v.panBy(s.Mul(-float32(dt.Seconds())))
+	moved := geom.Pt(v.panX.Target(), v.panY.Target()).Sub(was)
+	// The engine replays the pointer where the content was before it
+	// moved, as a scroll view's children are drawn where they were. The
+	// plane is drawn by the camera, which moved already: the replay
+	// comes back that far.
+	v.replay = moved
+	return moved
+}
+
+// DragsTouch implements [gunim.TouchDragger]: a finger that presses a
+// box or a port drags it, and one on empty room pans, as it scrolls.
+func (v *View) DragsTouch() bool {
 	switch v.pr.kind {
-	case pressMove, pressLink, pressReplug:
-	default:
-		return false
+	case pressMove, pressLink, pressReplug, pressBand:
+		return true
+	case pressNone, pressPan:
 	}
-	if !v.pr.moved {
-		return false
-	}
-	scrolling := false
-	if s := v.edgeScroll(v.pointer); s != (geom.Point{}) {
-		was := geom.Pt(v.panX.Target(), v.panY.Target())
-		v.panBy(s.Mul(float32(dt.Seconds())))
-		scrolling = geom.Pt(v.panX.Target(), v.panY.Target()) != was
-	}
-	v.follow(v.pointer)
-	return scrolling
+	return false
 }
 
 // follow brings what the press holds to view point p.
@@ -811,9 +863,10 @@ func (v *View) follow(p geom.Point) {
 				pl.y.Jump(at.Y + d.Y)
 			}
 		}
+		v.seq++
 	case pressLink:
 		pr.to = v.ToPlane(p)
-		pr.snap, pr.snapped = v.snapFor(pr.port, p, "")
+		pr.snap, pr.snapped = v.snapFor(pr.port, p)
 		pr.why = ""
 		if pr.snapped {
 			from, to := ends(pr.port, pr.snap)
@@ -830,7 +883,7 @@ func (v *View) follow(p geom.Point) {
 			return
 		}
 		pr.to = v.ToPlane(p)
-		pr.snap, pr.snapped = v.snapFor(portKey{w.From, true}, p, pr.wire)
+		pr.snap, pr.snapped = v.snapFor(portKey{w.From, true}, p)
 		pr.why = ""
 		if pr.snapped && pr.snap.End != w.To {
 			if ok, why := v.accepts(w.From, pr.snap.End); !ok {
@@ -883,7 +936,10 @@ func (v *View) Cursor(p geom.Point) input.Cursor {
 		return input.CursorCrosshair
 	case pressNone, pressBand:
 	}
-	t := v.targetAt(p)
+	t := v.hover
+	if p != v.pointer {
+		t = v.targetAt(p)
+	}
 	switch {
 	case t.isPort():
 		return input.CursorCrosshair
@@ -899,6 +955,9 @@ func (v *View) Cursor(p geom.Point) input.Cursor {
 func (v *View) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerMove:
+		if v.replay != (geom.Point{}) {
+			e.Pos, v.replay = e.Pos.Add(v.replay), geom.Point{}
+		}
 		v.pointer = e.Pos
 		v.drag(e.Pos)
 		if v.pr.kind == pressNone {
@@ -991,8 +1050,12 @@ func (v *View) cancel(u *gunim.UI) {
 
 // scroll moves the plane by the wheel, or zooms it with Ctrl.
 func (v *View) scroll(e input.Scroll, th *theme.Live) {
+	// A wheel turns in whole notches; a touchpad's fractions move the
+	// plane as smoothly as the fingers go.
+	wheel := e.Notches != (geom.Point{}) && e.Notches.X == float32(math.Round(float64(e.Notches.X))) &&
+		e.Notches.Y == float32(math.Round(float64(e.Notches.Y)))
 	if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModSuper) {
-		if e.Notches.Y == 0 {
+		if !wheel {
 			// A touchpad zooms as smoothly as it moves.
 			v.zoomAbout(e.Pos, float32(math.Exp(float64(e.Delta.Y)/240)))
 			return
@@ -1001,14 +1064,13 @@ func (v *View) scroll(e input.Scroll, th *theme.Live) {
 		return
 	}
 	d := e.Delta
-	notched := e.Notches != (geom.Point{})
-	if notched {
+	if wheel {
 		d = e.Notches.Mul(60)
 	}
 	if e.Mods.Has(input.ModShift) && d.X == 0 {
 		d = geom.Pt(d.Y, 0)
 	}
-	if !notched {
+	if !wheel {
 		v.panBy(d)
 		return
 	}

@@ -16,6 +16,7 @@ package graph
 import (
 	"image/color"
 	"slices"
+	"strconv"
 
 	"github.com/marrasen/gunim/geom"
 )
@@ -177,7 +178,12 @@ func (g *Graph) Apply(c Change) bool {
 		if g.Joins(c.From, c.To) {
 			return false
 		}
-		g.Wires = append(g.Wires, Wire{ID: WireID(c.From, c.To), From: c.From, To: c.To})
+		id := WireID(c.From, c.To)
+		for n := 2; g.Wire(id) != nil; n++ {
+			// A wire replugged keeps its name, which may be this one's.
+			id = WireID(c.From, c.To) + "#" + strconv.Itoa(n)
+		}
+		g.Wires = append(g.Wires, Wire{ID: id, From: c.From, To: c.To})
 		return true
 	case Replug:
 		w := g.Wire(c.Wire)
@@ -201,7 +207,8 @@ func (g *Graph) Apply(c Change) bool {
 	return false
 }
 
-// WireID is the ID Apply names a wire from output from to input to.
+// WireID is the ID Apply names a wire from output from to input to,
+// unless a wire has that ID already, as one replugged from there.
 func WireID(from, to End) string {
 	return from.Node + "." + from.Port + ">" + to.Node + "." + to.Port
 }

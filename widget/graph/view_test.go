@@ -351,3 +351,77 @@ func TestApplyCarriesOutThePlainChanges(t *testing.T) {
 		t.Error("a change that changes nothing changed the graph")
 	}
 }
+
+// TestAWireConnectedAfterAReplugHasANameOfItsOwn: the replugged wire
+// keeps its name, and the new one takes another.
+func TestAWireConnectedAfterAReplugHasANameOfItsOwn(t *testing.T) {
+	g := three()
+	a, b := End{"flt", "out"}, End{"snk", "in"}
+	g.Apply(Connect{From: a, To: b})
+	g.Apply(Replug{Wire: WireID(a, b), From: a, To: End{"flt", "cut"}})
+	if !g.Apply(Connect{From: a, To: b}) {
+		t.Fatal("the second wire was refused")
+	}
+	seen := map[string]bool{}
+	for _, w := range g.Wires {
+		if seen[w.ID] {
+			t.Fatalf("two wires are named %s", w.ID)
+		}
+		seen[w.ID] = true
+	}
+}
+
+// TestATouchpadPansAsTheFingersGo: fractions of a notch move the plane
+// at once, by the scroll's own distance.
+func TestATouchpadPansAsTheFingersGo(t *testing.T) {
+	v := NewView()
+	w, run, _ := stage(t, v, three())
+	x0 := v.panX.Value()
+	w.Input(input.Scroll{Pos: geom.Pt(500, 300), Delta: geom.Pt(-7, 0), Notches: geom.Pt(-0.17, 0)})
+	run(1)
+	if d := x0 - v.panX.Value(); math.Abs(float64(d-7)) > 0.01 || v.panX.Active() {
+		t.Errorf("a touchpad's scroll moved the plane %v, gliding %v; want 7 at once", d, v.panX.Active())
+	}
+}
+
+// TestAFingerDragsABox: on a touch screen, a box pressed drags, and
+// empty room pans as it scrolls.
+func TestAFingerDragsABox(t *testing.T) {
+	v := NewView()
+	_, _, _ = stage(t, v, three())
+	v.pr = press{kind: pressMove}
+	if !v.DragsTouch() {
+		t.Error("a finger on a box does not drag it")
+	}
+	v.pr = press{kind: pressPan}
+	if v.DragsTouch() {
+		t.Error("a finger on empty room drags rather than scrolls")
+	}
+	v.pr = press{}
+}
+
+// TestABoxMovedAsItIsPressedMovesFromWhereItIsNow: the application
+// moved it before the drag began.
+func TestABoxMovedAsItIsPressedMovesFromWhereItIsNow(t *testing.T) {
+	v := NewView()
+	g := three()
+	w, run, sent := stage(t, v, g)
+	n := v.g.Node("snk")
+	from := v.ToView(v.rectOf(n).Min.Add(geom.Pt(40, 10)))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	run(1)
+	g.Node("snk").At = geom.Pt(600, 100)
+	if err := w.Client().Update("v", g); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	to := from.Add(geom.Pt(0, 50))
+	w.Input(input.PointerMove{Pos: to})
+	w.Input(input.PointerUp{Pos: to, Button: input.ButtonPrimary})
+	run(1)
+	mv := only[Move](t, sent())
+	if want := geom.Pt(600, 100+50/v.Zoom()); dist(mv.To["snk"], want) > 0.5 {
+		t.Errorf("moved to %v, want %v, from where the application put it", mv.To["snk"], want)
+	}
+}

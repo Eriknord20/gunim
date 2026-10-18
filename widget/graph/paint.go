@@ -55,9 +55,27 @@ func abs32(v float32) float32 { return float32(math.Abs(float64(v))) }
 // shapeOf is the shape wire w takes now, and false where an end is
 // missing.
 func (v *View) shapeOf(w Wire) (wireShape, bool) {
+	sh, _, ok := v.wirePts(w)
+	return sh, ok
+}
+
+// wirePts is the shape wire w takes now, and points along it, worked
+// out once for each change to where the boxes stand; false where an
+// end is missing.
+func (v *View) wirePts(w Wire) (wireShape, []geom.Point, bool) {
+	if c, ok := v.shapes[w.ID]; ok && c.seq == v.seq {
+		return c.sh, c.pts, c.pts != nil
+	}
 	a, okA := v.endAt(portKey{w.From, true})
 	b, okB := v.endAt(portKey{w.To, false})
-	return curve(a, b), okA && okB
+	if !okA || !okB {
+		v.shapes[w.ID] = wirePoints{seq: v.seq}
+		return wireShape{}, nil, false
+	}
+	sh := curve(a, b)
+	pts := sh.points()
+	v.shapes[w.ID] = wirePoints{seq: v.seq, sh: sh, pts: pts}
+	return sh, pts, true
 }
 
 // lengths are the distances along pts to each point.
@@ -150,14 +168,14 @@ func (v *View) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 			// Its end held, it is drawn where that is.
 			continue
 		}
-		sh, ok := v.shapeOf(w)
+		sh, pts, ok := v.wirePts(w)
 		if !ok || !meets(sh.bounds(), view) {
 			continue
 		}
-		v.paintWire(p, th, w, sh, ls)
+		v.paintWire(p, th, w, pts, ls)
 	}
 	for _, id := range v.order {
-		n := v.g.Node(id)
+		n := v.node(id)
 		if n == nil || !meets(v.rectOf(n), view) {
 			continue
 		}
@@ -229,8 +247,7 @@ func (v *View) portColor(th *theme.Live, k portKey) color.NRGBA {
 
 // paintWire draws wire w along sh: a glow, its core, solid or in
 // dashes, and the dots its Flow runs along it.
-func (v *View) paintWire(p *paint.Painter, th *theme.Live, w Wire, sh wireShape, ls float32) {
-	pts := sh.points()
+func (v *View) paintWire(p *paint.Painter, th *theme.Live, w Wire, pts []geom.Point, ls float32) {
 	c := v.wireColor(th, w)
 	lit := float32(0)
 	switch {
@@ -261,7 +278,7 @@ func (v *View) paintWire(p *paint.Painter, th *theme.Live, w Wire, sh wireShape,
 	lens := lengths(pts)
 	total := lens[len(lens)-1]
 	if w.Flow > 0.02 && total > 1 && !w.Dim {
-		gap := 30 * ls
+		gap := dotGap * ls
 		dot := mix(c, TitleInk.Get(th), 0.55)
 		for d := float32(math.Mod(float64(v.phase[w.ID]*ls), float64(gap))); d < total; d += gap {
 			at := along(pts, lens, d)
@@ -299,7 +316,7 @@ func (v *View) paintNode(p *paint.Painter, th *theme.Live, n *Node, content *gun
 	}
 	p.ShadowRRect(r, radius, paint.Solid(NodeFill.Get(th)), paint.Shadow{Blur: 14, Offset: geom.Pt(0, 4), Color: NodeShadow.Get(th)})
 	// The head: a bar of the box's colour across its top.
-	headH := HeadHeight.Get(th)
+	headH := v.m.head
 	p.RRect(geom.Rc(r.Min.X+radius, r.Min.Y+1, r.Size().W-2*radius, 3), 1.5, paint.Solid(faded(c, 0.9)))
 	edge := NodeEdge.Get(th)
 	switch {
