@@ -218,6 +218,14 @@ type Event struct {
 	// says the host counts none, as for a note played live, and the
 	// instrument counts for itself.
 	Turn int64
+	// Length is a NoteOn's frames from its frame to its NoteOff's, as
+	// the music has it, for an instrument that shapes a note by how
+	// long it lasts, as a riser that reaches its top as the note ends.
+	// Zero says the host knows none, as for a note played live. It is
+	// news, not a promise: an edit, a stop or a jump may end the note
+	// sooner, and its NoteOff still comes, as for every note. The
+	// NoteOff is what ends it.
+	Length int
 }
 
 // EventKind is what an [Event] does.
@@ -347,10 +355,11 @@ type Upcoming struct {
 	Note int32
 	// Group is the lane it plays in, as an [Event]'s.
 	Group int32
-	// Pitch, Velocity and Turn are its NoteOn's.
+	// Pitch, Velocity, Turn and Length are its NoteOn's.
 	Pitch    float64
 	Velocity float64
 	Turn     int64
+	Length   int
 }
 
 // UpcomingKind is what an [Upcoming] tells.
@@ -359,10 +368,11 @@ type UpcomingKind uint8
 // The kinds of news.
 const (
 	// Coming tells of a note that lands at Frame, at Pitch and
-	// Velocity.
+	// Velocity, to last Length frames.
 	Coming UpcomingKind = iota
 	// Moved tells that a note told of lands at Frame now, at Pitch and
-	// Velocity, as an edit moved or changed it.
+	// Velocity, as an edit moved or changed it. An edit that changes
+	// only how long the note lasts sends one too, with the new Length.
 	Moved
 	// Removed takes back a note told of, as an edit took it out of the
 	// music: its NoteOn is called off. A plugin passes over a Removed

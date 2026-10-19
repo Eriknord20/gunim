@@ -41,7 +41,7 @@ func TestNotesReachAPluginAsItsEvents(t *testing.T) {
 	}
 	b := stereoBlock(128)
 	b.Events = []plug.Event{
-		{Frame: 10, Kind: plug.NoteOn, Note: 7, Group: 3, Pitch: 60.25, Velocity: 0.5},
+		{Frame: 10, Kind: plug.NoteOn, Note: 7, Group: 3, Pitch: 60.25, Velocity: 0.5, Length: 4800},
 		{Frame: 20, Kind: plug.NoteOn, Note: 8, Group: 4, Pitch: 64, Velocity: 1},
 		{Frame: 30, Kind: plug.Expression, Note: 7, Expr: plug.Bend, Value: 1},
 		{Frame: 40, Kind: plug.Expression, Note: 8, Expr: plug.Pressure, Value: 0.3},
@@ -58,12 +58,14 @@ func TestNotesReachAPluginAsItsEvents(t *testing.T) {
 	}
 	on, on2, press, off := got.events[0], got.events[1], got.events[2], got.events[3]
 	if on.kind != evNoteOn || on.offset != 10 || on.channel() != 0 || on.pitch() != 60 || on.f32(4) != 25 ||
-		on.f32(8) != 0.5 || on.i32(16) != 7 {
-		t.Errorf("the first note came as kind %d at %d, channel %d, key %d, %v cents, velocity %v, ID %d",
-			on.kind, on.offset, on.channel(), on.pitch(), on.f32(4), on.f32(8), on.i32(16))
+		on.f32(8) != 0.5 || on.i32(12) != 4800 || on.i32(16) != 7 {
+		t.Errorf("the first note came as kind %d at %d, channel %d, key %d, %v cents, velocity %v, length %d, ID %d",
+			on.kind, on.offset, on.channel(), on.pitch(), on.f32(4), on.f32(8), on.i32(12), on.i32(16))
 	}
-	if on2.kind != evNoteOn || on2.offset != 20 || on2.channel() != 1 || on2.pitch() != 64 || on2.i32(16) != 8 {
-		t.Errorf("the second note, of another group, came at %d on channel %d, key %d", on2.offset, on2.channel(), on2.pitch())
+	if on2.kind != evNoteOn || on2.offset != 20 || on2.channel() != 1 || on2.pitch() != 64 || on2.i32(12) != 0 ||
+		on2.i32(16) != 8 {
+		t.Errorf("the second note, of another group and no length, came at %d on channel %d, key %d, length %d",
+			on2.offset, on2.channel(), on2.pitch(), on2.i32(12))
 	}
 	if press.kind != evPolyPressure || press.offset != 40 || press.channel() != 1 || press.pitch() != 64 ||
 		math.Abs(float64(press.f32(4))-0.3) > 1e-6 || press.i32(8) != 8 {

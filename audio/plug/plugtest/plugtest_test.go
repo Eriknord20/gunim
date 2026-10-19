@@ -421,6 +421,16 @@ func TestAnnounceTellsANotesTurn(t *testing.T) {
 	}
 }
 
+// TestAnnounceTellsHowLongANoteLasts checks that the news Announce makes
+// of a note carries the Length its NoteOn does, as a host's news does.
+func TestAnnounceTellsHowLongANoteLasts(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, Length: 4800})
+	if len(ahead) != 1 || ahead[0].Length != 4800 {
+		t.Fatalf("Announce gave %+v, want news of note 1 lasting 4800 frames", ahead)
+	}
+}
+
 func TestPulsesReadEachHitOnATrigger(t *testing.T) {
 	values := []float32{0, 0.5, 0, 0, 1, 0.25, 0}
 	got := Pulses(t, values)
