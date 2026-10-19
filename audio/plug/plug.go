@@ -70,7 +70,8 @@ type Descriptor struct {
 	// that lands on the next change. The host tells it of the chords of
 	// each lane that plays it, in [Block.Chords]. It may be longer than
 	// LookAhead: a riser of four bars at 120 beats a minute needs 8
-	// seconds. Zero asks for none. It needs Notes.
+	// seconds. It is at most [MaxChordAhead]. Zero asks for none. It
+	// needs Notes.
 	ChordAhead time.Duration
 	// AuxIn and AuxOut are the plugin's audio ports beyond its main
 	// input and output, as VST3's aux (auxiliary) buses: a sidechain
@@ -474,8 +475,9 @@ func check(d *Descriptor) error {
 	if d.LookAhead < 0 || d.LookAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead %v, which takes Notes and a duration of zero or more", d.ID, d.LookAhead)
 	}
-	if d.ChordAhead < 0 || d.ChordAhead > 0 && !d.Notes {
-		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration of zero or more", d.ID, d.ChordAhead)
+	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead || d.ChordAhead > 0 && !d.Notes {
+		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration from zero to %v", d.ID,
+			d.ChordAhead, MaxChordAhead)
 	}
 	if d.Generator() && len(d.ControlOut) == 0 {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)

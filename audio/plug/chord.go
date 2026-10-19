@@ -1,10 +1,18 @@
 package plug
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 // MaxChordTones is the most tones a [ChordNews] carries: more than a
 // thirteenth chord's seven.
 const MaxChordTones = 8
+
+// MaxChordAhead is the longest [Descriptor.ChordAhead]: a riser of
+// eight bars at 120 beats a minute. It bounds the news a host keeps
+// room for.
+const MaxChordAhead = 16 * time.Second
 
 // ChordNews is news of the chords a plugin's notes play over, for a
 // plugin with a [Descriptor.ChordAhead].
@@ -15,25 +23,39 @@ const MaxChordTones = 8
 // ChordAhead, and with Moved or Removed as an edit changes it. A chord
 // has no event of its own as it starts: it starts at its Coming's
 // Frame, or its last Moved's, and sounds for Length frames, or until
-// the next chord of its Group starts. As a loop runs on from its start,
-// the chord sounding there comes as a Coming that starts there, though
-// it started before.
+// the next chord of its Group starts. Unlike a note's news in
+// [Block.Upcoming], a Coming or a Moved may start the chord in the very
+// block it comes in.
+//
+// A loop sends a Coming each time it runs on from its start, for the
+// chord sounding there, though that chord started before and may be the
+// one the plugin has: the chord at the loop's end. A plugin that
+// strikes anew at each change, as a root sub or a riser that lands on
+// the change, compares the tones, and goes on where they match. The
+// host tells of a loop's chords at most one pass ahead, whatever
+// ChordAhead asks: each pass is told of as it comes.
 //
 // Now tells the chord sounding, so a plugin always knows it, for notes
 // played live too. The host sends one for each lane as playing starts
 // or jumps, after a [Processor.Reset], after an edit, as playing stops,
 // and while the song stands still, as the playhead moves to another
-// chord. A Now of no tones says no chord sounds there. A Now may tell
-// of the chord the plugin has already; a plugin that strikes anew at
-// each change compares the tones.
+// chord. A Now of no tones says no chord sounds there; its key is still
+// the key there. A Now may tell of the chord the plugin has already:
+// compare the tones here too.
+//
+// The news comes in the order the host sends it: by the frame it is
+// sent at, then by lane. For one lane at one frame, Removed and Moved
+// come before Now, and Now before Coming, so a Now and the Comings after
+// it say what sounds from there on.
 //
 // Its one pointer is Name's, to a name the host keeps: a host fills a
 // block's news, and a plugin keeps it, with nothing allocated.
 type ChordNews struct {
 	Kind ChordKind
 	// Frame is where the chord starts, counted from the block's start:
-	// in this block or a later one. A Now's is where in this block the
-	// chord it tells of holds from, and a Removed's is 0.
+	// in this block, as a note's news never is, or a later one. A Now's
+	// is where in this block the chord it tells of holds from, and a
+	// Removed's is 0.
 	Frame int
 	// ID is the chord's, from its Coming on: a Moved or a Removed names
 	// the chord by it. The same chord, played again, as a loop repeats,

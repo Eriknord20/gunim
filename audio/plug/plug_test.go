@@ -83,6 +83,8 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"chords ahead without notes": {ID: "test.chords", Name: "X", New: newer, ChordAhead: time.Second},
 		"chords ahead below zero": {ID: "test.chordsbehind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			ChordAhead: -time.Millisecond},
+		"chords too far ahead": {ID: "test.chordsfar", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
+			ChordAhead: MaxChordAhead + time.Millisecond},
 		"controls of one name": {ID: "test.ctls", Name: "X", New: newer,
 			ControlIn: []ControlPort{{Name: "A", Max: 1}, {Name: "A", Max: 1}}},
 		"trigger of another range": {ID: "test.trig", Name: "X", New: newer,
