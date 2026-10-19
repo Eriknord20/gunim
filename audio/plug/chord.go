@@ -70,6 +70,16 @@ type ChordNews struct {
 	// not a promise: an edit, a stop or a jump may end it sooner, and
 	// the news after says so. A Now's is 0 while the song stands still.
 	Length int
+	// Beat is where the chord starts in the music, in quarter notes from
+	// the start of the track, as [Position.Beat] counts them, and
+	// BarBeats how many quarter notes a bar of the meter holds there: 4
+	// in 4/4, 3 in 3/4, 3.5 in 7/8. A plugin that times itself to the
+	// chord, as a riser some bars long into it, measures in beats, and
+	// follows the beat of each block on the way, so whatever the tempo
+	// does it lands as the song has it, from any place play starts. A
+	// Now's Beat is where its Frame falls. A Removed's are 0.
+	Beat     float64
+	BarBeats float64
 	// Tones are the chord's notes, as MIDI note numbers, lowest first,
 	// voiced as the host voices the lane's notes from it. Count of them
 	// hold: [ChordNews.Pitches] returns them.
