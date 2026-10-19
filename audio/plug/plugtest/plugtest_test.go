@@ -367,6 +367,100 @@ func TestHearingNewsAllocatesNothing(t *testing.T) {
 	}
 }
 
+// chordNews is news of a chord as an instrument heard it: the block's
+// first frame, and where the chord starts, counted from the start.
+type chordNews struct {
+	block  int
+	kind   plug.ChordKind
+	id     int32
+	starts int
+	bass   float64
+	tones  int
+}
+
+// chordListener is an instrument that keeps the chord news it hears, in
+// room made before it plays.
+type chordListener struct {
+	recorder
+	news []chordNews
+}
+
+func (l *chordListener) Prepare(s plug.Setup) {
+	l.recorder.Prepare(s)
+	l.news = make([]chordNews, 0, 64)
+}
+
+func (l *chordListener) Process(b *plug.Block) {
+	at := int(b.Position.Frame)
+	for i := range b.Chords {
+		c := &b.Chords[i]
+		starts := at + c.Frame
+		if c.Kind == plug.ChordRemoved {
+			starts = -1
+		}
+		l.news = append(l.news, chordNews{at, c.Kind, c.ID, starts, c.Bass, len(c.Pitches())})
+	}
+	for _, ch := range b.Out {
+		clear(ch[:b.Frames])
+	}
+}
+
+func TestChordNewsReachesTheBlockItIsSentIn(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	l := &chordListener{}
+	d := plug.Descriptor{Notes: true, ChordAhead: time.Second}
+	Drive(t, &d, l, s, 512, Ports{Chords: []ChordAhead{
+		{At: 0, ChordNews: Chord(plug.ChordNow, 0, 0, 1, "C", 60, 64, 67)},
+		{At: 10, ChordNews: Chord(plug.ChordComing, 300, 1, 1, "Am", 57, 60, 64)},
+		{At: 200, ChordNews: Chord(plug.ChordMoved, 320, 1, 1, "Am7", 57, 60, 64, 67)},
+		{At: 130, ChordNews: Chord(plug.ChordComing, 400, 2, 1, "F", 53, 57, 60)},
+		{At: 260, ChordNews: Chord(plug.ChordRemoved, 400, 2, 1, "")},
+		// The playhead moved to where no chord sounds.
+		{At: 450, ChordNews: Chord(plug.ChordNow, 0, 0, 1, "")},
+	}})
+	want := []chordNews{
+		{0, plug.ChordNow, 0, 0, 36, 3},
+		{0, plug.ChordComing, 1, 300, 45, 3},
+		{128, plug.ChordComing, 2, 400, 41, 3},
+		{192, plug.ChordMoved, 1, 320, 45, 4},
+		{256, plug.ChordRemoved, 2, -1, 0, 0},
+		{448, plug.ChordNow, 0, 450, 0, 0},
+	}
+	if !slices.Equal(l.news, want) {
+		t.Fatalf("the instrument heard %+v, want %+v", l.news, want)
+	}
+}
+
+func TestHearingChordNewsAllocatesNothing(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates of its own")
+	}
+	s := plug.Setup{Rate: 48000, MaxBlock: 128, Channels: 2}
+	chords := make([]ChordAhead, 0, 32)
+	for i := range 32 {
+		chords = append(chords, ChordAhead{At: i * 300, ChordNews: Chord(plug.ChordComing, i*300+200, int32(i+1), 1, "C", 60, 64, 67)})
+	}
+	made := AllocsUnder(t, "plugtest.playBlocks", func() {
+		Drive(t, &plug.Descriptor{Notes: true, ChordAhead: time.Second}, &chordListener{}, s, 32*300+200,
+			Ports{Chords: chords})
+	})
+	if made != 0 {
+		t.Errorf("hearing chord news made %d things", made)
+	}
+}
+
+func TestAChordTellsWhatIsInItsKey(t *testing.T) {
+	c := Chord(plug.ChordComing, 0, 1, 1, "C", 60, 64, 67)
+	for p, want := range map[float64]bool{60: true, 61: false, 62.2: true, 66: false, 71: true, -1: true, 13: false} {
+		if c.InKey(p) != want {
+			t.Errorf("C major holds %v: %v, want %v", p, c.InKey(p), want)
+		}
+	}
+	if got := c.Pitches(); !slices.Equal(got, []float64{60, 64, 67}) {
+		t.Errorf("the chord's pitches are %v", got)
+	}
+}
+
 // ramp is a generator whose one control output counts the frames from
 // the start, whose second holds the tempo it was given, and whose third
 // the beat its block starts on.

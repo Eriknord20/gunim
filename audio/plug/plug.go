@@ -64,6 +64,15 @@ type Descriptor struct {
 	// the note comes within LookAhead, in [Block.Upcoming]. Zero asks
 	// for none. It needs Notes.
 	LookAhead time.Duration
+	// ChordAhead is how long before a chord starts the plugin asks to
+	// hear of it, for an instrument that plays to the chords under its
+	// notes: a sub on the chord's bass, unison on its tones, a riser
+	// that lands on the next change. The host tells it of the chords of
+	// each lane that plays it, in [Block.Chords]. It may be longer than
+	// LookAhead: a riser of four bars at 120 beats a minute needs 8
+	// seconds. It is at most [MaxChordAhead]. Zero asks for none. It
+	// needs Notes.
+	ChordAhead time.Duration
 	// AuxIn and AuxOut are the plugin's audio ports beyond its main
 	// input and output, as VST3's aux (auxiliary) buses: a sidechain
 	// in, or an output for each drum of a drum synth. A project names a
@@ -465,6 +474,10 @@ func check(d *Descriptor) error {
 	}
 	if d.LookAhead < 0 || d.LookAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead %v, which takes Notes and a duration of zero or more", d.ID, d.LookAhead)
+	}
+	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead || d.ChordAhead > 0 && !d.Notes {
+		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration from zero to %v", d.ID,
+			d.ChordAhead, MaxChordAhead)
 	}
 	if d.Generator() && len(d.ControlOut) == 0 {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)
