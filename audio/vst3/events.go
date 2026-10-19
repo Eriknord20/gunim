@@ -40,14 +40,16 @@ const (
 	defaultBendRange = 2.0
 )
 
-// noteOn returns the event that starts a note.
-func noteOn(offset int32, channel, pitch int16, tuning, velocity float32, id int32) vstEvent {
+// noteOn returns the event that starts a note, to last length frames,
+// or 0 where that is unknown.
+func noteOn(offset int32, channel, pitch int16, tuning, velocity float32, length, id int32) vstEvent {
 	e := vstEvent{offset: offset, kind: evNoteOn}
 	le := binary.LittleEndian
 	le.PutUint16(e.data[0:], uint16(channel))
 	le.PutUint16(e.data[2:], uint16(pitch))
 	le.PutUint32(e.data[4:], math.Float32bits(tuning))
 	le.PutUint32(e.data[8:], math.Float32bits(velocity))
+	le.PutUint32(e.data[12:], uint32(length))
 	le.PutUint32(e.data[16:], uint32(id))
 	return e
 }
@@ -416,7 +418,13 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 			n = &k.notes[0]
 		}
 		*n = sounding{id: e.Note, group: e.Group, channel: ch, pitch: pitch, tuning: tuning, used: true}
-		p.events.add(noteOn(f, ch, pitch, tuning, float32(e.Velocity), e.Note))
+		// VST3 counts a note's length in 32 bits: one longer, over six
+		// hours even at 96 kHz, is told as unknown.
+		length := int32(0)
+		if e.Length > 0 && e.Length <= math.MaxInt32 {
+			length = int32(e.Length)
+		}
+		p.events.add(noteOn(f, ch, pitch, tuning, float32(e.Velocity), length, e.Note))
 	case plug.NoteOff:
 		n := k.find(e.Note)
 		if n == nil {
