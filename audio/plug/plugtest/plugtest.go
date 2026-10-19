@@ -94,6 +94,8 @@ type Ports struct {
 	// Upcoming is news of notes, for a plugin that looks ahead, as
 	// [Announce] makes it.
 	Upcoming []Ahead
+	// Chords is news of chords, for a plugin that looks ahead to them.
+	Chords []ChordAhead
 	// Tempo is each block's [plug.Position.Tempo] and EndTempo, in
 	// quarter notes a minute: zero where none is known. Each block's [plug.Position.Beat]
 	// counts the beats at that tempo from the start.
@@ -106,6 +108,30 @@ type Ports struct {
 type Ahead struct {
 	At int
 	plug.Upcoming
+}
+
+// ChordAhead is news of a chord as [Drive] sends it: in the block
+// holding frame At, with Frame, where the chord starts, counted from the
+// start too. Drive turns it into the block's own count. A Now holds
+// from At, and a Removed's Frame is 0.
+type ChordAhead struct {
+	At int
+	plug.ChordNews
+}
+
+// Chord returns news of kind k of chord id of group, named name, with
+// the given tones, lowest first, in C major, for a test to send. Its
+// root is the lowest tone's pitch class, and its bass that pitch class
+// in the octave from C2.
+func Chord(k plug.ChordKind, frame int, id, group int32, name string, tones ...float64) plug.ChordNews {
+	c := plug.ChordNews{Kind: k, Frame: frame, ID: id, Group: group, Name: name, Scale: 0b1010_1011_0101}
+	c.Count = copy(c.Tones[:], tones)
+	if c.Count > 0 {
+		low := int(tones[0])
+		c.Root = ((low % 12) + 12) % 12
+		c.Bass = float64(36 + c.Root)
+	}
+	return c
 }
 
 // Announce returns the news a host sends of the NoteOns in events, for
@@ -208,6 +234,16 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 			t.Fatalf("plugtest: news sent at frame %d of note %d landing at %d, which is in its own block", u.At, u.Note, u.Frame)
 		}
 	}
+	chords := slices.Clone(p.Chords)
+	slices.SortStableFunc(chords, func(a, b ChordAhead) int { return a.At - b.At })
+	for _, c := range chords {
+		if c.At < 0 || c.At >= frames {
+			t.Fatalf("plugtest: chord news sent at frame %d falls outside the %d run", c.At, frames)
+		}
+		if (c.Kind == plug.ChordComing || c.Kind == plug.ChordMoved) && c.Frame < c.At {
+			t.Fatalf("plugtest: chord news sent at frame %d of chord %d starting at %d, before it is sent", c.At, c.ID, c.Frame)
+		}
+	}
 
 	// What comes out, and the room each block writes to.
 	res := Result{Out: channels(s.Channels, frames), AuxOut: make([][][]float32, len(d.AuxOut)),
@@ -256,6 +292,19 @@ func Drive(t *testing.T, d *plug.Descriptor, pr plug.Processor, s plug.Setup, fr
 			}
 			b.Upcoming = append(b.Upcoming, u)
 			news = news[1:]
+		}
+		for len(chords) > 0 && chords[0].At < at+n {
+			c := chords[0].ChordNews
+			switch c.Kind {
+			case plug.ChordRemoved:
+				c.Frame = 0
+			case plug.ChordNow:
+				c.Frame = chords[0].At - at
+			default:
+				c.Frame -= at
+			}
+			b.Chords = append(b.Chords, c)
+			chords = chords[1:]
 		}
 		for len(changes) > 0 && changes[0].Frame < at+n {
 			c := changes[0]
