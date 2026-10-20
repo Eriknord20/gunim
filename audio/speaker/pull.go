@@ -7,6 +7,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/asio"
 	"github.com/marrasen/gunim/audio/internal/duplex"
+	"github.com/marrasen/gunim/audio/rt"
 )
 
 // A pullDevice is a device that asks for its sound, as an ASIO driver
@@ -148,9 +149,13 @@ func (r *ringOutput) recording() bool {
 }
 
 // feed keeps the ring filled to its target, reading the mixer a chunk
-// at a time, until the output closes.
+// at a time, until the output closes. The device waits on it, so it
+// runs on a thread of its own at the system's audio priority, as
+// package audio/rt gives it.
 func (r *ringOutput) feed() {
 	defer close(r.done)
+	leave := rt.Enter()
+	defer leave()
 	t := time.NewTicker(2 * time.Millisecond)
 	defer t.Stop()
 	most := max(1, int(audio.FramesAt(chunk, r.info.Rate)))
