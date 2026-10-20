@@ -31,12 +31,19 @@ type Trace struct {
 }
 
 // Put keeps v for frame f, as Process does, a frame at a time.
+//
+// It stores only where the run's least changes: a store a view may read
+// at once costs the processor as much as the rest of a frame's work, and
+// most frames change nothing.
 func (t *Trace) Put(f int64, v float32) {
 	r := f >> traceShift
 	if !t.open || r != t.run {
 		t.run, t.least, t.open = r, v, true
 	} else {
-		t.least = min(t.least, v)
+		if v >= t.least {
+			return
+		}
+		t.least = v
 	}
 	t.runs[r%traceRuns].Store(uint64(uint32(r)+1)<<32 | uint64(math.Float32bits(t.least)))
 }
