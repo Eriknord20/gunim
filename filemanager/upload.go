@@ -420,15 +420,9 @@ func (a *app) uploaded(id int, k copyKey, local, dst string, li, ri fs.FileInfo,
 		delete(a.ops.running, id)
 		r.cancel()
 		a.dropDialogs(id)
-		if r.visible {
-			a.patch(OpDone{ID: id, OK: err == nil})
-			if err == nil {
-				r.title = "Uploaded " + name
-				a.cheer(id, r)
-			}
-			a.publishOps()
-		}
 	}
+	n := Notice{Title: "Uploaded " + name, Body: "to " + a.uploadWhere(dst), Kind: "success"}
+	carded := ok && a.endCard(r, err == nil, n)
 	switch {
 	case stopped || errors.Is(err, context.Canceled):
 		c.release(k, a, false)
@@ -438,7 +432,9 @@ func (a *app) uploaded(id int, k copyKey, local, dst string, li, ri fs.FileInfo,
 		a.offerUpload(k)
 	default:
 		c.synced(k, local, li, ri, dst)
-		a.patch(Notice{Title: "Uploaded " + name, Body: "to " + a.uploadWhere(dst), Kind: "success"})
+		if !carded {
+			a.patch(n)
+		}
 		dir := a.ps.Dir(dst)
 		if a.ps.Same(dir, a.nav.path) {
 			a.relist()

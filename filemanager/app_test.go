@@ -318,7 +318,13 @@ func TestPasteAsksAboutAClash(t *testing.T) {
 	if !ok || ask.Name != "a.txt" || !ask.SameKind {
 		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
 	}
+	if r := h.a.ops.running[ask.Op]; r == nil || r.tick(time.Now()).Waiting == "" {
+		t.Fatal("the copy does not say it waits for the answer")
+	}
 	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceKeepBoth})
+	if r := h.a.ops.running[ask.Op]; r != nil && r.asking != "" {
+		t.Fatal("the copy still waits once answered")
+	}
 	h.until("both are kept", func() bool { return slices.Equal(h.shown(), []string{"a (2).txt", "a.txt"}) })
 	if contents(t, filepath.Join(h.dir, "sub", "a.txt")) != "sub/a.txt" {
 		t.Fatal("keeping both overwrote the file there")

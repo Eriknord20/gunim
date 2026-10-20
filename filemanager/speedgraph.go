@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
 	"io/fs"
 	"math"
@@ -24,9 +25,13 @@ const (
 	speedSpan  = 50
 )
 
-// cheerFor is how long a finished operation's card stays, showing
-// it went well.
-const cheerFor = 1300 * time.Millisecond
+// cheerFor is how long a finished operation's card stays, showing it
+// went well, and stayAfter how long an operation runs before its card
+// stays until the user closes it.
+const (
+	cheerFor  = 4 * time.Second
+	stayAfter = 15 * time.Second
+)
 
 // Success is the colour of something that went well.
 var Success = theme.Color("files.success", color.NRGBA{R: 0x4f, G: 0xd6, B: 0x9c, A: 0xff})
@@ -157,13 +162,56 @@ func (a *app) bigCopy(mbps string) {
 	a.ops.limit = 0
 }
 
+// manyCopy copies many files slowly from a folder Holiday photos to a
+// folder Backup, beside the folder showing: 60 photos of a few megabytes
+// at 40 MB a second, or with small 3,000 small files at 1 MB a second,
+// making them first where they are not there.
+func (a *app) manyCopy(small bool) {
+	if a.fs.ID() != "" {
+		a.fail("many-copy makes its files on the computer's own disk only.")
+		return
+	}
+	n, rate, size := 60, 40.0, func(i int) int64 {
+		if i%15 == 0 {
+			return 120 << 20
+		}
+		return 200<<10 + int64(i%7)*3<<20
+	}
+	if small {
+		n, rate, size = 3000, 1, func(i int) int64 { return 2<<10 + int64(i%5)*3<<10 }
+	}
+	from, to := a.ps.Join(a.nav.path, "Holiday photos"), a.ps.Join(a.nav.path, "Backup")
+	srcs := make([]string, n)
+	for i := range n {
+		srcs[i] = a.ps.Join(from, fmt.Sprintf("IMG_%04d.jpg", 4100+i))
+	}
+	for _, dir := range []string{from, to} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			a.fail("Making the folders: " + err.Error())
+			return
+		}
+	}
+	for i, src := range srcs {
+		if _, err := os.Stat(src); err == nil {
+			continue
+		}
+		if err := makeBig(src, size(i)); err != nil {
+			a.fail("Making the files: " + err.Error())
+			return
+		}
+	}
+	a.ops.limit = rate * (1 << 20)
+	a.startOp(job{kind: OpCopy, srcs: srcs, dest: to}, "Copying "+a.what(srcs)+" to "+a.ps.placeName(to))
+	a.ops.limit = 0
+}
+
 func registerSpeed(w *gunim.Window) {
 	gunim.RegisterPatch(w, "browser", func(b *browser, s OpSpeed, u *gunim.UI) { b.ops.speed(s, u) })
 	gunim.RegisterPatch(w, "browser", func(b *browser, d OpDone, u *gunim.UI) { b.ops.done(d, u) })
 }
 
-// doneBadge holds an operation's buttons, and once the operation has
-// gone well, a check mark that draws itself in their place.
+// doneBadge holds an operation's icon, and once the operation has gone
+// well, a check mark that draws itself in its place.
 type doneBadge struct {
 	anim.Group
 	child gunim.Node
@@ -221,8 +269,8 @@ func (b *doneBadge) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	return s
 }
 
-// Paint implements [gunim.Node]: the button shrinks away as the disc
-// pops up in its place and the check draws itself on it.
+// Paint implements [gunim.Node]: the icon shrinks away as the disc pops
+// up in its place and the check draws itself on it.
 func (b *doneBadge) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	pop := b.pop.Value()
 	if gone := min(max(pop*1.6, 0), 1); gone < 1 {
@@ -237,8 +285,8 @@ func (b *doneBadge) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 		return
 	}
 	th := f.Theme
-	d := min(box.H, 28) * max(pop, 0)
-	mid := geom.Pt(box.W-min(box.H, 28)/2, box.H/2)
+	d := badgeDisc * max(pop, 0)
+	mid := geom.Pt(box.W/2, box.H/2)
 	disc := geom.Rc(mid.X-d/2, mid.Y-d/2, d, d)
 	green := Success.Get(th)
 	glow := green
@@ -249,6 +297,9 @@ func (b *doneBadge) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	pts := []geom.Point{mid.Add(geom.Pt(-6.5*s, 0.5*s)), mid.Add(geom.Pt(-2*s, 5*s)), mid.Add(geom.Pt(7*s, -5*s))}
 	drawTrail(p, pts, min(max(b.stroke.Value(), 0), 1), 2.6*s, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
 }
+
+// badgeDisc is the width of the disc a check mark is drawn on.
+const badgeDisc = 22
 
 // drawTrail draws the line through pts, as far as share of its length.
 func drawTrail(p *paint.Painter, pts []geom.Point, share, width float32, c color.NRGBA) {

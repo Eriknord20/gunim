@@ -22,8 +22,8 @@ const showAfter = 250 * time.Millisecond
 type opsState struct {
 	next    int
 	running map[int]*opRun
-	// cheering holds the operations that went well and show so a moment
-	// in the panel.
+	// cheering holds the operations that went well and show so in the
+	// corner, a moment or, after a long one, until the user closes them.
 	cheering map[int]*opRun
 	// records holds what finished operations did, by their ID, and undo
 	// their IDs in the order Ctrl+Z takes them back.
@@ -59,7 +59,8 @@ type opRun struct {
 	cancel  context.CancelFunc
 	visible bool
 	last    progress
-	meter   speedometer
+	// meter measures the bytes it moves a second, and items the items.
+	meter, items speedometer
 	// from names the folder the items come from, where known.
 	from string
 	// pause pauses the operation, where it can be, and paused says it is.
@@ -67,6 +68,22 @@ type opRun struct {
 	paused bool
 	// undoes is the finished operation an undo reverses.
 	undoes int
+	// started is when it started, to, where known, names the folder
+	// its items go to, and asking says what the user is asked, while a
+	// dialog of the operation waits for an answer.
+	started time.Time
+	to      string
+	asking  string
+	// end is what its card says once it went well.
+	end *opEnd
+}
+
+// opEnd is what the card of an operation that went well says.
+type opEnd struct {
+	note  string
+	undo  int
+	stays bool
+	took  float64
 }
 
 // finished is what a finished operation did, and how to say it.
@@ -95,6 +112,8 @@ func (a *app) handleOps(in gunim.Intent) bool {
 		a.pauseOp(v.ID, !v.Resume)
 	case UndoOp:
 		a.undo(v.ID)
+	case DismissOp:
+		a.dismissOp(v.ID)
 	case ClashAnswered, Confirmed, Prompted, PasswordGiven, DialogClosed, FavouriteEdited:
 		a.answered(in)
 	case NoticeAnswered:
@@ -313,7 +332,7 @@ func (a *app) newOp(title string, kind OpKind) (id int, ctx context.Context, can
 	a.ops.next++
 	id = a.ops.next
 	ctx, cancel = context.WithCancel(a.ctx)
-	a.ops.running[id] = &opRun{id: id, title: title, kind: kind, cancel: cancel}
+	a.ops.running[id] = &opRun{id: id, title: title, kind: kind, cancel: cancel, started: time.Now()}
 	time.AfterFunc(showAfter, func() {
 		a.post(func() {
 			if r, ok := a.ops.running[id]; ok {
@@ -333,6 +352,9 @@ func (a *app) startOp(j job, title string) {
 	r.pause = &pauseGate{}
 	if len(j.srcs) > 0 && (j.kind == OpCopy || j.kind == OpMove || j.kind == OpZip) {
 		r.from = a.placeLabel(a.fs.ID(), a.ps.Dir(j.srcs[0]))
+	}
+	if j.kind == OpCopy || j.kind == OpMove {
+		r.to = a.ps.placeName(j.dest)
 	}
 	e := env{
 		pause:  r.pause,
@@ -355,16 +377,37 @@ func (a *app) startOp(j job, title string) {
 	})
 }
 
-// cheer keeps finished operation id in the panel while it shows it went
-// well.
-func (a *app) cheer(id int, r *opRun) {
-	a.ops.cheering[id] = r
-	time.AfterFunc(cheerFor, func() {
-		a.post(func() {
-			delete(a.ops.cheering, id)
-			a.publishOps()
-		})
-	})
+// endCard ends the card of operation r, which went well with ok. One
+// that went well stays a while saying n, or after a long operation until
+// the user closes it, and endCard reports true; else the card goes, and
+// it reports false, for the caller to say how it ended some other way.
+func (a *app) endCard(r *opRun, ok bool, n Notice) bool {
+	if !r.visible {
+		return false
+	}
+	a.patch(OpDone{ID: r.id, OK: ok})
+	if ok {
+		took := time.Since(r.started)
+		r.title = n.Title
+		r.end = &opEnd{note: n.Body, undo: n.Undo, stays: took >= stayAfter, took: took.Seconds()}
+		a.ops.cheering[r.id] = r
+		if !r.end.stays {
+			time.AfterFunc(cheerFor, func() {
+				a.post(func() { a.dismissOp(r.id) })
+			})
+		}
+	}
+	a.publishOps()
+	return ok
+}
+
+// dismissOp takes the card of finished operation id away.
+func (a *app) dismissOp(id int) {
+	if _, ok := a.ops.cheering[id]; !ok {
+		return
+	}
+	delete(a.ops.cheering, id)
+	a.publishOps()
 }
 
 // progressed takes how far operation id has got.
@@ -375,12 +418,15 @@ func (a *app) progressed(id int, p progress) {
 	}
 	now := time.Now()
 	sampled := !r.paused && r.meter.add(now, p.bytes)
+	if !r.paused {
+		r.items.add(now, int64(p.items))
+	}
 	r.last = p
 	if r.visible {
 		t := r.tick(now)
 		a.patch(t)
 		if sampled && p.bytesTotal > 0 {
-			a.patch(OpSpeed{ID: id, Rate: r.meter.rate, Done: t.Done})
+			a.patch(OpSpeed{ID: id, Rate: r.meter.smooth, Done: t.Done})
 		}
 	}
 }
@@ -396,7 +442,7 @@ func (a *app) pauseOp(id int, on bool) {
 	if !on {
 		// The time paused is no part of the speed, and the time left
 		// counts down from where it stopped.
-		r.meter.at = time.Time{}
+		r.meter.at, r.items.at = time.Time{}, time.Time{}
 		r.meter.etaAt = time.Now()
 	}
 	if r.visible {
@@ -417,8 +463,9 @@ func (r *opRun) tick(now time.Time) OpTick {
 		t.Waiting = p.waiting
 	case p.bytesTotal > 0:
 		t.Done = float32(float64(p.bytes) / float64(p.bytesTotal))
-		if !r.paused {
+		if !r.paused && r.asking == "" {
 			t.Speed = r.meter.shown
+			t.ItemSpeed = r.items.shown
 			if t.Speed > 0 {
 				t.Left = r.meter.left(now, p.bytes, p.bytesTotal)
 			}
@@ -427,6 +474,9 @@ func (r *opRun) tick(now time.Time) OpTick {
 		t.Done = float32(p.items) / float32(p.itemsTotal)
 	default:
 		t.Unknown = true
+	}
+	if r.asking != "" {
+		t.Waiting = r.asking
 	}
 	return t
 }
@@ -450,12 +500,14 @@ func (a *app) publishOps() {
 			continue
 		}
 		t := r.tick(time.Now())
+		v := OpView{ID: id, Title: r.title, Kind: r.kind, From: r.from, To: r.to, CanPause: ok && r.pause != nil}
 		if !ok {
 			t.OpProgress = OpProgress{Done: 1, Bytes: t.BytesTotal, BytesTotal: t.BytesTotal,
 				Items: t.ItemsTotal, ItemsTotal: t.ItemsTotal}
+			v.Ended, v.Note, v.Undo, v.Stays, v.Took = true, r.end.note, r.end.undo != 0, r.end.stays, r.end.took
 		}
-		s.Ops = append(s.Ops, OpView{ID: id, Title: r.title, Kind: r.kind, From: r.from, CanPause: ok && r.pause != nil,
-			OpProgress: t.OpProgress})
+		v.OpProgress = t.OpProgress
+		s.Ops = append(s.Ops, v)
 	}
 	a.patch(s)
 }
@@ -472,13 +524,8 @@ func (a *app) finish(id int, j job, rec record, err error) {
 	if j.kind == OpUndo {
 		a.undone(r.undoes, rec)
 	}
-	if r.visible {
-		a.patch(OpDone{ID: id, OK: err == nil})
-		if err == nil {
-			r.title = a.doneTitle(j, rec)
-			a.cheer(id, r)
-		}
-		a.publishOps()
+	if err != nil {
+		a.endCard(r, false, Notice{})
 	}
 	done := plural(len(rec.steps), "item")
 	keep := undoable(rec, a.trash != nil)
@@ -500,7 +547,9 @@ func (a *app) finish(id int, j job, rec record, err error) {
 			Body: "There is no trash here, so they cannot come back.", OK: "Delete"},
 			func() { a.startOp(job{kind: OpDelete, srcs: paths}, "Deleting "+a.what(paths)) })
 	case err == nil && j.kind == OpUndo:
-		a.patch(Notice{Title: "Undone", Body: r.title, Kind: "success"})
+		if n := (Notice{Title: "Undone", Body: r.title, Kind: "success"}); !a.endCard(r, true, n) {
+			a.patch(n)
+		}
 	case err == nil:
 		if j.worked != nil {
 			j.worked()
@@ -514,7 +563,9 @@ func (a *app) finish(id int, j job, rec record, err error) {
 			n.Undo = 0
 			n.Body = "Restore from the system's trash to bring them back."
 		}
-		a.patch(n)
+		if !a.endCard(r, true, n) {
+			a.patch(n)
+		}
 	case errors.Is(err, context.Canceled):
 		a.patch(Notice{Title: "Stopped: " + r.title, Body: done + " done before it stopped.", Undo: undo, Kind: "warning"})
 	case errors.Is(err, errStopped):
@@ -611,6 +662,7 @@ func (a *app) undo(id int) {
 		return
 	}
 	a.ops.undo = slices.DeleteFunc(a.ops.undo, func(v int) bool { return v == id })
+	a.dismissOp(id)
 	rec := f.rec
 	a.startOp(job{kind: OpUndo, undo: &rec}, "Undoing: "+f.title)
 	a.ops.running[a.ops.next].undoes = id
@@ -644,7 +696,9 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 		if ask.New == "" {
 			ask.New = describe(a.fs, c.src)
 		}
+		a.asking(op, "Waiting for you to choose")
 		a.showDialog(&dialog{view: "clash", state: ask, op: op, answer: func(in gunim.Intent) {
+			a.asking(op, "")
 			if v, ok := in.(ClashAnswered); ok {
 				reply <- v
 				return
@@ -660,6 +714,24 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 		return answer{choice: choice(v.Choice), all: v.All}, nil
 	case <-ctx.Done():
 		return answer{}, ctx.Err()
+	}
+}
+
+// asking says operation op waits for the user to answer what, or with
+// what empty, that it no longer does.
+func (a *app) asking(op int, what string) {
+	r, ok := a.ops.running[op]
+	if !ok || r.asking == what {
+		return
+	}
+	r.asking = what
+	if what == "" {
+		// The time spent asking is no part of the speed.
+		r.meter.at, r.items.at = time.Time{}, time.Time{}
+		r.meter.etaAt = time.Now()
+	}
+	if r.visible {
+		a.patch(r.tick(time.Now()))
 	}
 }
 
