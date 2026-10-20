@@ -74,6 +74,10 @@ type opRun struct {
 	started time.Time
 	to      string
 	asking  string
+	// idle is how long it has stood still, paused or asking, before
+	// idleSince, when it stood still last, if it still does.
+	idle      time.Duration
+	idleSince time.Time
 	// end is what its card says once it went well.
 	end *opEnd
 }
@@ -84,6 +88,20 @@ type opEnd struct {
 	undo  int
 	stays bool
 	took  float64
+	// speed and itemSpeed are how many bytes and items it moved a
+	// second on average, while it was not standing still.
+	speed, itemSpeed float64
+}
+
+// still notes whether r stands still now, paused or asking.
+func (r *opRun) still(now time.Time) {
+	switch on := r.paused || r.asking != ""; {
+	case on && r.idleSince.IsZero():
+		r.idleSince = now
+	case !on && !r.idleSince.IsZero():
+		r.idle += now.Sub(r.idleSince)
+		r.idleSince = time.Time{}
+	}
 }
 
 // finished is what a finished operation did, and how to say it.
@@ -387,9 +405,16 @@ func (a *app) endCard(r *opRun, ok bool, n Notice) bool {
 	}
 	a.patch(OpDone{ID: r.id, OK: ok})
 	if ok {
-		took := time.Since(r.started)
+		now := time.Now()
+		took := now.Sub(r.started)
+		r.paused, r.asking = false, ""
+		r.still(now)
 		r.title = n.Title
 		r.end = &opEnd{note: n.Body, undo: n.Undo, stays: took >= stayAfter, took: took.Seconds()}
+		if moving := (took - r.idle).Seconds(); moving > 0 {
+			r.end.speed = float64(r.last.bytesTotal) / moving
+			r.end.itemSpeed = float64(r.last.itemsTotal) / moving
+		}
 		a.ops.cheering[r.id] = r
 		if !r.end.stays {
 			time.AfterFunc(cheerFor, func() {
@@ -438,6 +463,7 @@ func (a *app) pauseOp(id int, on bool) {
 		return
 	}
 	r.paused = on
+	r.still(time.Now())
 	r.pause.set(on)
 	if !on {
 		// The time paused is no part of the speed, and the time left
@@ -505,6 +531,7 @@ func (a *app) publishOps() {
 			t.OpProgress = OpProgress{Done: 1, Bytes: t.BytesTotal, BytesTotal: t.BytesTotal,
 				Items: t.ItemsTotal, ItemsTotal: t.ItemsTotal}
 			v.Ended, v.Note, v.Undo, v.Stays, v.Took = true, r.end.note, r.end.undo != 0, r.end.stays, r.end.took
+			t.Speed, t.ItemSpeed = r.end.speed, r.end.itemSpeed
 		}
 		v.OpProgress = t.OpProgress
 		s.Ops = append(s.Ops, v)
@@ -725,6 +752,7 @@ func (a *app) asking(op int, what string) {
 		return
 	}
 	r.asking = what
+	r.still(time.Now())
 	if what == "" {
 		// The time spent asking is no part of the speed.
 		r.meter.at, r.items.at = time.Time{}, time.Time{}

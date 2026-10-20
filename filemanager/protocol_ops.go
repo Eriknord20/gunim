@@ -21,7 +21,9 @@ type OpView struct {
 	OpProgress
 	// Ended says the operation went well, and Title then says what it
 	// did. Note says more, Undo offers to undo it, Stays keeps the card
-	// until the user closes it, and Took is how many seconds it took.
+	// until the user closes it, and Took is how many seconds it took;
+	// Speed and ItemSpeed are then its speeds on average, leaving out
+	// the time it was paused or waited on the user.
 	Ended, Undo, Stays bool
 	Note               string
 	Took               float64

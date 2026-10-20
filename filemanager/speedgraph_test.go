@@ -61,7 +61,7 @@ func TestACopyDrawsItsSpeedAndCheersAsItEnds(t *testing.T) {
 		t.Fatalf("the running card says %q and %q", c.big.Text, c.moved.Text)
 	}
 	h.until("the copy ends with a cheer", func() bool { return card() != nil && card().badge.cheering })
-	if c := card(); c.big.Text != "Done" || c.title.Text != "Copied 1 item" || c.file.Text != "" || c.moved.Text != "3.0 MB of 3.0 MB" {
+	if c := card(); c.big.Text != "Done" || c.title.Text != "Copied 1 item" || !strings.HasPrefix(c.file.Text, "Average ") || c.moved.Text != "3.0 MB" {
 		t.Fatalf("the finished card says %q, %q, %q and %q", c.title.Text, c.big.Text, c.file.Text, c.moved.Text)
 	}
 	if c := card(); !c.ended.on || c.running.on || !c.undos.on {
@@ -92,6 +92,9 @@ func TestALongOperationsCardStaysUntilClosed(t *testing.T) {
 	h.until("the copy ends with a cheer", func() bool { return card() != nil && card().badge.cheering && card().view.Stays })
 	if c := card(); !c.view.Undo || c.left.Text == "" || h.b.toasts.Len() != toasts {
 		t.Fatalf("the card offers Undo %v and says %q; %d toasts came", c.view.Undo, c.left.Text, h.b.toasts.Len()-toasts)
+	}
+	if c := card(); !strings.HasPrefix(c.file.Text, "Average ") || !strings.HasSuffix(c.file.Text, "B/s") || c.ratesRow.on {
+		t.Fatalf("the card says its speed was %q", c.file.Text)
 	}
 	h.do(UndoOp{ID: id})
 	h.until("undoing takes the card away", func() bool { return card() == nil })
@@ -130,5 +133,37 @@ func TestTheTimeLeftHoldsStillAsTheSpeedSwings(t *testing.T) {
 	}
 	if changes > 21 {
 		t.Fatalf("the speed shown changed %d times in 20 seconds", changes)
+	}
+}
+
+func TestTheCardSaysBothSpeeds(t *testing.T) {
+	p := OpProgress{BytesTotal: 100 << 20, ItemsTotal: 60, Speed: 40 << 20, ItemSpeed: 2.44}
+	if got := speeds(p, true); got != "40.0 MB/s · 2.4 items/s" {
+		t.Fatalf("many items go at %q", got)
+	}
+	p.ItemSpeed = 129.4
+	if got := speeds(p, true); got != "40.0 MB/s · 129 items/s" {
+		t.Fatalf("many small items go at %q", got)
+	}
+	if got := speeds(p, false); got != "40.0 MB/s" {
+		t.Fatalf("one item goes at %q", got)
+	}
+}
+
+// The time an operation stood still, paused or asking, is no part of its
+// average speed.
+func TestStandingStillIsNoPartOfTheAverage(t *testing.T) {
+	now := time.Now()
+	r := &opRun{}
+	r.paused = true
+	r.still(now)
+	r.paused = false
+	r.still(now.Add(3 * time.Second))
+	r.asking = "Waiting"
+	r.still(now.Add(4 * time.Second))
+	r.asking = ""
+	r.still(now.Add(6 * time.Second))
+	if r.idle != 5*time.Second {
+		t.Fatalf("it stood still %v, want 5s", r.idle)
 	}
 }

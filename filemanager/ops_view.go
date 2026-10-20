@@ -201,7 +201,7 @@ type opCard struct {
 
 	icon                     *widget.Icon
 	title, from, big, left   *widget.Label
-	moved, file, note        *widget.Label
+	moved, file, note, rates *widget.Label
 	pause, fold, cancel      *widget.IconButton
 	close, slimClose         *widget.IconButton
 	undo, slimUndo           *widget.Link
@@ -212,6 +212,7 @@ type opCard struct {
 	slimBadge                *doneBadge
 	ring                     *opRing
 	fromRow, noteRow, pauses *shownIf
+	ratesRow                 *shownIf
 	undos, slimUndos         *shownIf
 	running, ended           *shownIf
 	slimRunning, slimEnded   *shownIf
@@ -233,6 +234,7 @@ func newOpCard(v OpView) *opCard {
 	c.title = widget.NewLabel("")
 	c.title.Face, c.title.MaxLines = widget.BoldFont, 1
 	c.from, c.moved, c.file, c.note = small(Faint), small(Faint), small(Faint), small(Faint)
+	c.rates = small(Faint)
 	c.note.MaxLines = 2
 	c.big = widget.NewLabel("")
 	c.big.Face, c.big.Size, c.big.MaxLines = widget.BoldFont, OpSpeedSize, 1
@@ -266,7 +268,8 @@ func newOpCard(v OpView) *opCard {
 	foot.Gap = cardGap
 	c.fromRow = &shownIf{child: c.from, top: -2}
 	c.noteRow = &shownIf{child: c.note, top: 0}
-	full := widget.Column(head, c.fromRow, speed, c.graph, foot, c.noteRow)
+	c.ratesRow = &shownIf{child: c.rates, top: -4}
+	full := widget.Column(head, c.fromRow, speed, c.graph, foot, c.ratesRow, c.noteRow)
 	full.Cross, full.Gap = widget.CrossStretch, cardGap
 	c.full = &padded{child: full, pad: geom.Insets{Left: 14, Top: 10, Right: 10, Bottom: 12}}
 
@@ -336,10 +339,6 @@ func (c *opCard) set(v OpView, u *gunim.UI) {
 	}
 }
 
-// smallFiles is the size an operation's items are on the whole under
-// which its card says how many items go a second, not how many bytes.
-const smallFiles = 1 << 20
-
 // progress takes how far the operation has got.
 func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	c.view.OpProgress = p
@@ -354,7 +353,7 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	cheered := c.badge.cheering
 	// Many items are counted: how many are done is what the user waits on.
 	many := p.ItemsTotal > 1
-	var big, left, file, moved, note string
+	var big, left, file, moved, rates, note string
 	switch {
 	case cheered:
 		big = "Done"
@@ -393,12 +392,21 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 		}
 		if p.BytesTotal > 0 {
 			moved = humanBytes(p.Bytes) + " of " + humanBytes(p.BytesTotal)
-			if many && !cheered && !p.Paused && !waiting {
-				if rate := c.rate(p); rate != "" {
-					moved += " · " + rate
-				}
-			}
 		}
+	}
+	// The speeds: while many items go, in bytes and in items a second
+	// under the item it is on, and once done, both on average beside
+	// all it moved.
+	switch {
+	case cheered:
+		if r := speeds(p, many); r != "" {
+			file = "Average " + r
+		}
+		if p.BytesTotal > 0 {
+			moved = humanBytes(p.BytesTotal)
+		}
+	case many && !p.Paused && !waiting && !p.Unknown:
+		rates = speeds(p, true)
 	}
 	switch {
 	case cheered:
@@ -420,7 +428,8 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 			note += " · " + left
 		}
 	}
-	c.big.Text, c.left.Text, c.moved.Text, c.file.Text = big, left, moved, file
+	c.big.Text, c.left.Text, c.moved.Text, c.file.Text, c.rates.Text = big, left, moved, file, rates
+	c.ratesRow.on = rates != ""
 	c.noteRow.on = c.note.Text != "" && (cheered || waiting)
 	c.slimNote.Text = note
 	c.pause.Icon, c.pause.Tooltip = icon.Pause, "Pause"
@@ -432,16 +441,21 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	}
 }
 
-// rate says how fast the operation goes: in items a second where its
-// items are small, else in bytes.
-func (c *opCard) rate(p OpProgress) string {
-	if p.ItemSpeed > 0 && p.BytesTotal/int64(p.ItemsTotal) < smallFiles {
-		return fmt.Sprintf("%.0f items/s", p.ItemSpeed)
+// speeds says p's speed in bytes a second, and with items in items a
+// second too, as far as they are known.
+func speeds(p OpProgress, items bool) string {
+	var out []string
+	if p.Speed > 0 && p.BytesTotal > 0 {
+		out = append(out, humanBytes(int64(p.Speed))+"/s")
 	}
-	if p.Speed > 0 {
-		return humanBytes(int64(p.Speed)) + "/s"
+	if items && p.ItemSpeed > 0 {
+		f := "%.0f items/s"
+		if p.ItemSpeed < 10 {
+			f = "%.1f items/s"
+		}
+		out = append(out, fmt.Sprintf(f, p.ItemSpeed))
 	}
-	return ""
+	return strings.Join(out, " · ")
 }
 
 // cheer shows the operation went well: the icon turns to a check, and
@@ -460,6 +474,8 @@ func (c *opCard) cheer(u *gunim.UI) {
 	c.graph.cheer(u)
 	p := c.view.OpProgress
 	p.Done, p.Bytes, p.Items, p.Paused, p.Waiting = 1, p.BytesTotal, p.ItemsTotal, false, ""
+	// The averages come with the card's view once the operation ended.
+	p.Speed, p.ItemSpeed = 0, 0
 	c.progress(p, u)
 }
 
