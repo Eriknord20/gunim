@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,5 +189,237 @@ func TestAFLACWritersCloseLeavesTheFileOpen(t *testing.T) {
 	}
 	if at != st.Size() {
 		t.Fatalf("Close left the file at %d of %d bytes", at, st.Size())
+	}
+}
+
+// streamOnly is a writer that can't seek, and counts its closes.
+type streamOnly struct {
+	b      bytes.Buffer
+	closed int
+}
+
+func (s *streamOnly) Write(p []byte) (int, error) { return s.b.Write(p) }
+func (s *streamOnly) Close() error                { s.closed++; return nil }
+
+// fullScaleInts is n frames of channels of bits: every channel starts
+// with the loudest samples there are, each way, then holds a sine at
+// full scale in its first channel and quieter sines with a little noise
+// in the rest.
+func fullScaleInts(n, channels, bits int) []int32 {
+	hi := int32(1)<<(bits-1) - 1
+	rng := rand.New(rand.NewPCG(1, 2))
+	out := make([]int32, n*channels)
+	for i := range n {
+		for c := range channels {
+			var v int32
+			switch {
+			case i < 6:
+				v = []int32{hi, -hi - 1, -hi, hi, 0, -hi - 1}[(i+c)%6]
+			case c == 0:
+				v = int32(math.Round(float64(hi) * math.Sin(2*math.Pi*440*float64(i)/48000)))
+			default:
+				x := 0.9 * float64(hi) * math.Sin(2*math.Pi*float64(220*(c+1))*float64(i)/48000)
+				v = int32(math.Round(x)) + int32(rng.IntN(256)) - 128
+			}
+			out[i*channels+c] = v
+		}
+	}
+	return out
+}
+
+// TestAFLACStreamRoundTripsBitExactWithoutSeeking writes 24-bit mono,
+// stereo and six channels, as whole samples and as floats without
+// dither, to a writer that can't seek, and reads back the very samples
+// written, the loudest ones too, with the header counting them.
+func TestAFLACStreamRoundTripsBitExactWithoutSeeking(t *testing.T) {
+	for _, channels := range []int{1, 2, 6} {
+		for _, floats := range []bool{false, true} {
+			n := 3*flacBlock + 1234
+			in := fullScaleInts(n, channels, 24)
+			var out streamOnly
+			w, err := NewFLACStream(&out, 48000, 24, channels, int64(n), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < len(in); i += 1000 * channels {
+				part := in[i:min(len(in), i+1000*channels)]
+				if floats {
+					f := make([]float32, len(part))
+					for j, v := range part {
+						f[j] = float32(v) / (1 << 23)
+					}
+					err = w.Write(f)
+				} else {
+					err = w.WriteInts(part)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if w.Clipped != 0 || out.closed != 0 {
+				t.Fatalf("%d channels: %d clipped, closed %d times", channels, w.Clipped, out.closed)
+			}
+			s, err := flac.Parse(bytes.NewReader(out.b.Bytes()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Info.NSamples != uint64(n) || s.Info.MD5sum != [16]byte{} {
+				t.Fatalf("%d channels: the header says %d frames and checksum %x", channels, s.Info.NSamples, s.Info.MD5sum)
+			}
+			got, err := DecodeFLACInts(bytes.NewReader(out.b.Bytes()), int64(n))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Rate != 48000 || got.Bits != 24 || got.Channels != channels || len(got.Samples) != len(in) {
+				t.Fatalf("%d channels: read back %d Hz, %d bits, %d channels, %d samples", channels, got.Rate, got.Bits, got.Channels, len(got.Samples))
+			}
+			for i := range in {
+				if got.Samples[i] != in[i] {
+					t.Fatalf("%d channels, floats %v, sample %d: read %d, wrote %d", channels, floats, i, got.Samples[i], in[i])
+				}
+			}
+			if len(out.b.Bytes()) >= n*channels*3 {
+				t.Fatalf("%d channels: %d bytes for %d of raw samples", channels, len(out.b.Bytes()), n*channels*3)
+			}
+		}
+	}
+}
+
+// TestAFLACStreamFlowsThroughAPipe writes a stereo stream into a pipe
+// while the other end decodes it.
+func TestAFLACStreamFlowsThroughAPipe(t *testing.T) {
+	n := 2*flacBlock + 77
+	in := fullScaleInts(n, 2, 24)
+	r, pw := io.Pipe()
+	go func() {
+		w, err := NewFLACStream(pw, 44100, 24, 2, int64(n), false)
+		if err == nil {
+			err = w.WriteInts(in)
+		}
+		if err == nil {
+			err = w.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	got, err := DecodeFLACInts(r, int64(n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Samples) != len(in) {
+		t.Fatalf("read %d samples, wrote %d", len(got.Samples), len(in))
+	}
+	for i := range in {
+		if got.Samples[i] != in[i] {
+			t.Fatalf("sample %d: read %d, wrote %d", i, got.Samples[i], in[i])
+		}
+	}
+}
+
+// TestAShortFLACStreamIsOneBlock writes streams of no frames, of fewer
+// than 16 and of fewer than a block, at 16 bits, and reads them back
+// as they were, from the decoder FLAC files are opened with too.
+func TestAShortFLACStreamIsOneBlock(t *testing.T) {
+	for _, n := range []int{0, 5, 100} {
+		in := fullScaleInts(n, 2, 16)
+		var out streamOnly
+		w, err := NewFLACStream(&out, 48000, 16, 2, int64(n), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.WriteInts(in); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		got, err := DecodeFLACInts(bytes.NewReader(out.b.Bytes()), int64(n))
+		if err != nil {
+			t.Fatalf("%d frames: %v", n, err)
+		}
+		if len(got.Samples) != len(in) {
+			t.Fatalf("%d frames: read %d samples", n, len(got.Samples))
+		}
+		for i := range in {
+			if got.Samples[i] != in[i] {
+				t.Fatalf("%d frames, sample %d: read %d, wrote %d", n, i, got.Samples[i], in[i])
+			}
+		}
+		if n == 0 {
+			continue
+		}
+		_, floats := readBack(t, out.b.Bytes())
+		for i := range in {
+			if want := float32(in[i]) / (1 << 15); floats[i] != want {
+				t.Fatalf("%d frames, sample %d: opened as %v, want %v", n, i, floats[i], want)
+			}
+		}
+	}
+}
+
+// TestAFLACStreamHoldsToItsCount writes more frames than a stream was
+// started with, and fewer, and gets errors.
+func TestAFLACStreamHoldsToItsCount(t *testing.T) {
+	w, err := NewFLACStream(&streamOnly{}, 48000, 24, 1, 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteInts(make([]int32, 11)); err == nil {
+		t.Fatal("11 frames went into a stream of 10")
+	}
+	if err := w.WriteInts(make([]int32, 9)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err == nil {
+		t.Fatal("a stream of 10 closed with 9")
+	}
+}
+
+// TestAFLACStreamTakesItsChannelsAndSamples asks for no channels, nine,
+// and samples past 24 bits, and gets errors.
+func TestAFLACStreamTakesItsChannelsAndSamples(t *testing.T) {
+	for _, ch := range []int{0, 9} {
+		if _, err := NewFLACStream(&streamOnly{}, 48000, 24, ch, 0, false); err == nil {
+			t.Fatalf("%d channels gave a stream", ch)
+		}
+	}
+	w, err := NewFLACStream(&streamOnly{}, 48000, 24, 1, 2, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []int32{1 << 23, -1<<23 - 1} {
+		if err := w.WriteInts([]int32{v}); err == nil {
+			t.Fatalf("%d went into 24 bits", v)
+		}
+	}
+}
+
+// TestDecodeFLACIntsStopsAtItsCap reads a stream longer than the cap,
+// and one whose header undercounts it, and gets errors.
+func TestDecodeFLACIntsStopsAtItsCap(t *testing.T) {
+	n := 2*flacBlock + 10
+	var out streamOnly
+	w, err := NewFLACStream(&out, 48000, 16, 1, int64(n), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteInts(fullScaleInts(n, 1, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeFLACInts(bytes.NewReader(out.b.Bytes()), int64(n-1)); err == nil {
+		t.Fatal("a stream past the cap decoded")
+	}
+	// The header's count, 36 bits from byte 21, set to 1.
+	b := bytes.Clone(out.b.Bytes())
+	b[21] &^= 0x0f
+	clear(b[22:26])
+	b[25] = 1
+	if _, err := DecodeFLACInts(bytes.NewReader(b), int64(n)); err == nil {
+		t.Fatal("a stream past its header's count decoded")
 	}
 }
