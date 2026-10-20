@@ -9,7 +9,9 @@ package decibel
 import "math"
 
 // Of returns v, a ratio, in decibels: 20·log10(v), for v no less than
-// 1e-9, which is -180 dB; less reads as 1e-9.
+// 1e-9, which is -180 dB; less reads as 1e-9. It is for real levels: NaN
+// and +Inf give a meaningless large number, where math.Log10 gives NaN
+// and +Inf.
 func Of(v float64) float64 {
 	v = max(v, 1e-9)
 	// v is m·2^e, m from 1 to 2; m is c·(1+r), c where m's 128th of the
@@ -39,8 +41,8 @@ var logs = func() (t [1 << logBits]struct{ inv, ln float64 }) {
 	return t
 }()
 
-// Gain returns db decibels as a ratio: 10^(db/20). Under -6000 dB it is
-// 0, and over 6000 dB it is as at 6000.
+// Gain returns db decibels as a ratio: 10^(db/20). Under about -6020 dB
+// it is 0, and over 6000 dB it is as at 6000.
 func Gain(db float64) float64 {
 	// 2^x, x = n/64 + f, n whole and f from 0 to 1/64: 2^(n/64) by its
 	// bits and a table of 64ths of an octave, and 2^f = e^y, y = f·ln 2
