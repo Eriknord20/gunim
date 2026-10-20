@@ -21,7 +21,9 @@ import (
 	"math"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/internal/least"
 )
 
 // The parameters' IDs, by part.
@@ -239,6 +241,15 @@ func dbOf(v float64) float64 { return 20 * math.Log10(max(v, 1e-9)) }
 
 func gainOf(db float64) float64 { return math.Pow(10, db/20) }
 
+// fastDB is dbOf for every frame: exact where v is 1, no reduction, the
+// commonest, and otherwise to a ten-millionth of a decibel.
+func fastDB(v float64) float64 {
+	if v == 1 {
+		return 0
+	}
+	return decibel.Of(v)
+}
+
 // processor shapes the sound. Every part works on both channels as one,
 // by the louder, so the stereo image holds.
 type processor struct {
@@ -262,6 +273,10 @@ type processor struct {
 	// pending holds the gate's and compressor's reductions until the
 	// frames they shape come out, lookahead later.
 	pending []float32
+	// run is what a run of frames holds between the stages, and the
+	// least gains are each part's so far this block.
+	run                            runs
+	gateLeast, compLeast, limLeast float64
 }
 
 // gate turns the sound down by Range where it falls under Threshold,
@@ -273,6 +288,10 @@ type gate struct {
 	env, fall          float64
 	open               bool
 	gain               float64 // in decibels, 0 open
+	// openAt and shutAt are the threshold, and the threshold less the
+	// hysteresis, as ratios, which the envelope is held against: as
+	// ratios, not decibels, so no sample needs its logarithm.
+	openAt, shutAt float64
 }
 
 // comp turns the sound down where it rises over Threshold, by Ratio,
@@ -283,6 +302,9 @@ type comp struct {
 	attack, release, makeup float64
 	makeupTo                float64
 	gr                      float64 // in decibels, 0 or less
+	// kneeAt is where the knee starts, as a ratio: a peak no louder is
+	// not turned down.
+	kneeAt float64
 }
 
 // side is the compressor's sidechain: a filter on each channel, of the
@@ -339,13 +361,8 @@ type limiter struct {
 	ahead int
 	delay []float32
 	at    int
-	// The least gain over the last ahead+1 frames, as a queue of the
-	// frames that may yet be the least: their counts and gains, from
-	// head, n of them, in rings of ahead+1.
-	minAt   []int64
-	minGain []float64
-	head, n int
-	count   int64
+	// need is the gains the last ahead+1 frames need, for their least.
+	need *least.Window
 	// The average of the least gains over the last ahead frames: their
 	// ring, where the next goes, and their sum.
 	avg    []float64
@@ -365,9 +382,10 @@ func (p *processor) Prepare(s plug.Setup) {
 	l := &p.lim
 	l.ahead = max(1, int(math.Round(s.Rate*lookahead)))
 	l.delay = make([]float32, 2*l.ahead)
-	l.minAt, l.minGain = make([]int64, l.ahead+1), make([]float64, l.ahead+1)
+	l.need = least.New(l.ahead + 1)
 	l.avg = make([]float64, l.ahead)
 	p.pending = make([]float32, 2*l.ahead)
+	p.run.make(s.MaxBlock)
 	p.gate.fall = coef(10, s.Rate)
 	for _, prm := range Descriptor.Params {
 		if prm.Flags&plug.ReadOnly == 0 {
@@ -394,6 +412,7 @@ func (p *processor) take(c plug.Change) {
 		g.on = v > 0.5
 	case GateThresholdID:
 		g.threshold = v
+		g.openAt, g.shutAt = gainOf(v), gainOf(v-gateHysteresis)
 	case GateRangeID:
 		g.rangeDB = v
 	case GateAttackID:
@@ -404,10 +423,12 @@ func (p *processor) take(c plug.Change) {
 		k.on = v > 0.5
 	case CompThresholdID:
 		k.threshold = v
+		k.kneeAt = gainOf(k.threshold - k.knee/2)
 	case CompRatioID:
 		k.ratio = v
 	case CompKneeID:
 		k.knee = v
+		k.kneeAt = gainOf(k.threshold - k.knee/2)
 	case CompAttackID:
 		k.attack = coef(v, rate)
 	case CompReleaseID:
@@ -435,6 +456,15 @@ func (p *processor) take(c plug.Change) {
 }
 
 // Process implements [plug.Processor].
+//
+// It runs the block a stage at a time, between the frames parameters
+// change at: the input's gain and what the gate and the compressor
+// hear, over every frame; then the gate over every frame; then the
+// compressor; then the gain they shape the sound by; then the limiter.
+// Each frame's work through every stage is a long chain, each step
+// waiting on the last, and a processor can only work a frame or two
+// ahead; a stage at a time, its frames are many short chains side by
+// side, and it works them all at once.
 func (p *processor) Process(b *plug.Block) {
 	if len(b.In) == 0 || len(b.Out) == 0 || len(p.pending) == 0 {
 		return
@@ -447,88 +477,166 @@ func (p *processor) Process(b *plug.Block) {
 	}
 	// The sidechain, where one is connected, is what the gate and the
 	// compressor listen to.
-	keyL, keyR := inL, inR
-	keyed := false
+	var keyL, keyR []float32
 	if key := b.AuxInput(SidechainPort); key != nil {
-		keyL, keyR, keyed = key[0], key[min(1, len(key)-1)], true
+		keyL, keyR = key[0], key[min(1, len(key)-1)]
 	}
 	next := 0
-	gateLeast, compLeast, limLeast := 0.0, 0.0, 1.0
-	g, k, l := &p.gate, &p.comp, &p.lim
-	for i := range b.Frames {
+	p.gateLeast, p.compLeast, p.limLeast = 0, 0, 1
+	for i := 0; i < b.Frames; {
 		for next < len(b.Changes) && b.Changes[next].Frame <= i {
 			p.take(b.Changes[next])
 			next++
 		}
-		p.in += (p.inTo - p.in) * p.glide
-		p.out += (p.outTo - p.out) * p.glide
-		k.makeup += (k.makeupTo - k.makeup) * p.glide
-		left, right := float64(inL[i])*p.in, float64(inR[i])*p.in
-		peak := max(math.Abs(left), math.Abs(right))
-
-		// The gate listens to the sound, or the sidechain where one is
-		// connected; the compressor to that, whole or a band of it.
-		sl, sr, keyPeak := left, right, peak
-		if keyed {
-			sl, sr = float64(keyL[i]), float64(keyR[i])
-			keyPeak = max(math.Abs(sl), math.Abs(sr))
+		e := min(b.Frames, i+len(p.run.xl))
+		if next < len(b.Changes) {
+			e = min(e, b.Changes[next].Frame)
 		}
-		heard := keyPeak
-		if p.side.mode != SideFull {
-			sl, sr = p.side.run(0, sl), p.side.run(1, sr)
-			heard = max(math.Abs(sl), math.Abs(sr))
+		var kl, kr []float32
+		if keyL != nil {
+			kl, kr = keyL[i:e], keyR[i:e]
 		}
-		gdb := g.step(keyPeak)
-		cdb := k.step(dbOf(heard) + gdb)
-		shape := gainOf(gdb+cdb) * k.makeup
-		left, right = left*shape, right*shape
-		if p.side.listen {
-			// What the compressor listens to, in place of the sound.
-			left, right = sl, sr
-		}
-
-		// The gate's and compressor's reductions of this frame come out
-		// with it, lookahead later; those of the frame coming out now go
-		// on the traces.
-		at := 2 * l.at
-		gOut, cOut := p.pending[at], p.pending[at+1]
-		p.pending[at], p.pending[at+1] = float32(gdb), float32(cdb)
-
-		dl, dr, lg := l.step(left, right)
-		f := b.Position.Frame + int64(i)
-		p.gateTrace.Put(f, gOut)
-		p.compTrace.Put(f, cOut)
-		p.limitTrace.Put(f, float32(dbOf(lg)))
-		outL[i] = float32(dl * p.out)
+		var or []float32
 		if stereo {
-			outR[i] = float32(dr * p.out)
+			or = outR[i:e]
 		}
-		gateLeast, compLeast, limLeast = min(gateLeast, gdb), min(compLeast, cdb), min(limLeast, lg)
+		p.stages(inL[i:e], inR[i:e], kl, kr, outL[i:e], or, b.Position.Frame+int64(i))
+		i = e
 	}
 	for ; next < len(b.Changes); next++ {
 		p.take(b.Changes[next])
 	}
 	p.fresh = false
-	p.gateGR.Set(gateLeast)
-	p.compGR.Set(compLeast)
-	p.limGR.Set(dbOf(limLeast))
+	p.gateGR.Set(p.gateLeast)
+	p.compGR.Set(p.compLeast)
+	p.limGR.Set(dbOf(p.limLeast))
+}
+
+// runs is what a run of frames holds between the stages.
+type runs struct {
+	// xl and xr are the sound, gained in, then shaped; key the peaks the
+	// gate hears, heard the compressor's; sl and sr what the compressor
+	// listens to, for Listen; gdb and cdb the gate's and compressor's
+	// gains; out the output's gain, frame by frame.
+	xl, xr, key, heard, sl, sr, gdb, cdb, out []float64
+}
+
+// make makes room for runs of up to n frames.
+func (r *runs) make(n int) {
+	n = max(n, 1)
+	for _, s := range []*[]float64{&r.xl, &r.xr, &r.key, &r.heard, &r.sl, &r.sr, &r.gdb, &r.cdb, &r.out} {
+		*s = make([]float64, n)
+	}
+}
+
+// stages runs a run of frames, inL and inR, through each part in turn
+// into outL and outR, outR nil where the plugin is mono; keyL and keyR
+// are the sidechain's, or nil; f is the run's first frame.
+func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, f int64) {
+	n := len(inL)
+	r := &p.run
+	xl, xr, key, heard := r.xl[:n], r.xr[:n], r.key[:n], r.heard[:n]
+	sl, sr, gdb, cdb, out := r.sl[:n], r.sr[:n], r.gdb[:n], r.cdb[:n], r.out[:n]
+	inR = inR[:n]
+	g, k, l := &p.gate, &p.comp, &p.lim
+	for i := range n {
+		p.in += (p.inTo - p.in) * p.glide
+		p.out += (p.outTo - p.out) * p.glide
+		out[i] = p.out
+		xl[i], xr[i] = float64(inL[i])*p.in, float64(inR[i])*p.in
+	}
+	// The gate listens to the sound, or the sidechain where one is
+	// connected; the compressor to that, whole or a band of it.
+	if keyL != nil {
+		keyL, keyR = keyL[:n], keyR[:n]
+		for i := range key {
+			sl[i], sr[i] = float64(keyL[i]), float64(keyR[i])
+			key[i] = max(math.Abs(sl[i]), math.Abs(sr[i]))
+		}
+	} else {
+		copy(sl, xl)
+		copy(sr, xr)
+		for i := range key {
+			key[i] = max(math.Abs(xl[i]), math.Abs(xr[i]))
+		}
+	}
+	if p.side.mode != SideFull {
+		for i := range heard {
+			sl[i], sr[i] = p.side.run(0, sl[i]), p.side.run(1, sr[i])
+			heard[i] = max(math.Abs(sl[i]), math.Abs(sr[i]))
+		}
+	} else {
+		copy(heard, key)
+	}
+	for i, v := range key {
+		gdb[i] = g.step(v)
+	}
+	for i, v := range heard {
+		cdb[i] = k.step(v, gdb[i])
+	}
+	for i := range xl {
+		k.makeup += (k.makeupTo - k.makeup) * p.glide
+		// No reduction, the commonest, needs no gain worked out.
+		shape := k.makeup
+		if d := gdb[i] + cdb[i]; d != 0 {
+			shape *= decibel.Gain(d)
+		}
+		xl[i], xr[i] = xl[i]*shape, xr[i]*shape
+	}
+	if p.side.listen {
+		// What the compressor listens to, in place of the sound.
+		copy(xl, sl)
+		copy(xr, sr)
+	}
+	gateLeast, compLeast, limLeast := p.gateLeast, p.compLeast, p.limLeast
+	for i := range xl {
+		// The gate's and compressor's reductions of this frame come out
+		// with it, lookahead later; those of the frame coming out now go
+		// on the traces.
+		at := 2 * l.at
+		gOut, cOut := p.pending[at], p.pending[at+1]
+		p.pending[at], p.pending[at+1] = float32(gdb[i]), float32(cdb[i])
+
+		dl, dr, lg := l.step(xl[i], xr[i])
+		p.gateTrace.Put(f+int64(i), gOut)
+		p.compTrace.Put(f+int64(i), cOut)
+		p.limitTrace.Put(f+int64(i), float32(fastDB(lg)))
+		outL[i] = float32(dl * out[i])
+		if outR != nil {
+			outR[i] = float32(dr * out[i])
+		}
+		gateLeast, compLeast, limLeast = min(gateLeast, gdb[i]), min(compLeast, cdb[i]), min(limLeast, lg)
+	}
+	p.gateLeast, p.compLeast, p.limLeast = gateLeast, compLeast, limLeast
+	// The sidechain's filter, fed silence, falls away for good too.
+	for c := range p.side.z {
+		for j, v := range p.side.z[c] {
+			if math.Abs(v) < 1e-30 {
+				p.side.z[c][j] = 0
+			}
+		}
+	}
 }
 
 // step takes the next frame's peak and returns the gate's gain for it,
 // in decibels: 0 open, -Range shut.
 func (g *gate) step(peak float64) float64 {
-	if peak > g.env {
-		g.env = peak
-	} else {
-		g.env += (peak - g.env) * g.fall
+	// Up to the peak at once, or down toward it by the fall: the more of
+	// the two.
+	g.env = max(peak, g.env+(peak-g.env)*g.fall)
+	// Numbers falling away toward 0 for good sink, in time, into ones so
+	// small the processor works them out slowly: after seconds of
+	// silence, the envelope, and after a second open, the gain. Each is
+	// let go to 0 at -600 dB and -1e-9 dB, far under hearing.
+	if g.env < 1e-30 {
+		g.env = 0
 	}
-	level := dbOf(g.env)
 	switch {
 	case !g.on:
 		g.open = true
-	case g.open && level < g.threshold-gateHysteresis:
+	case g.open && g.env < g.shutAt:
 		g.open = false
-	case !g.open && level >= g.threshold:
+	case !g.open && g.env >= g.openAt:
 		g.open = true
 	}
 	to, c := -g.rangeDB, g.release
@@ -536,21 +644,32 @@ func (g *gate) step(peak float64) float64 {
 		to, c = 0, g.attack
 	}
 	g.gain += (to - g.gain) * c
+	if g.gain > -1e-9 {
+		g.gain = 0
+	}
 	return g.gain
 }
 
-// step takes the next frame's level, in decibels, and returns the
-// compressor's gain for it, in decibels.
-func (k *comp) step(level float64) float64 {
+// step takes the next frame's peak, as a ratio, and the gate's gain on
+// it, in decibels, and returns the compressor's gain for it, in
+// decibels.
+func (k *comp) step(peak, gate float64) float64 {
+	// A peak under the knee, as most are, is not turned down: it needs
+	// no decibels worked out. The gate only takes it further under.
 	want := 0.0
-	if k.on {
-		want = k.curve(level)
+	if k.on && peak > k.kneeAt {
+		want = k.curve(decibel.Of(peak) + gate)
 	}
-	c := k.release
-	if want < k.gr {
-		c = k.attack
+	// The attack where the gain is to fall, the release where it is to
+	// rise: picked by the sign of the step, not asked, as on loud sound
+	// it changes from frame to frame.
+	d := want - k.gr
+	k.gr += d * [2]float64{k.release, k.attack}[math.Float64bits(d)>>63]
+	// Let go to 0 as the gate's gain is, so it never sinks into numbers
+	// too small to work out fast.
+	if k.gr > -1e-9 {
+		k.gr = 0
 	}
-	k.gr += (want - k.gr) * c
 	return k.gr
 }
 
@@ -576,10 +695,13 @@ func (l *limiter) step(left, right float64) (outL, outR, gain float64) {
 	if peak := max(math.Abs(left), math.Abs(right)); l.on && peak > l.ceiling {
 		need = l.ceiling / peak
 	}
-	g := l.smooth(l.leastOf(need))
+	g := l.smooth(l.need.Push(need))
 	dl, dr := float64(l.delay[2*l.at]), float64(l.delay[2*l.at+1])
 	l.delay[2*l.at], l.delay[2*l.at+1] = float32(left), float32(right)
-	l.at = (l.at + 1) % l.ahead
+	l.at++
+	if l.at == l.ahead {
+		l.at = 0
+	}
 	dl, dr = dl*g, dr*g
 	if l.on {
 		// Rounding may take a sample a hair past the ceiling.
@@ -588,31 +710,11 @@ func (l *limiter) step(left, right float64) (outL, outR, gain float64) {
 	return dl, dr, g
 }
 
-// leastOf adds need, the gain a frame needs, and returns the least of
-// the last ahead+1.
-func (l *limiter) leastOf(need float64) float64 {
-	size := len(l.minGain)
-	// Those no less than need can no longer be the least.
-	for l.n > 0 && l.minGain[(l.head+l.n-1)%size] >= need {
-		l.n--
-	}
-	tail := (l.head + l.n) % size
-	l.minAt[tail], l.minGain[tail] = l.count, need
-	l.n++
-	// Those older than the window go.
-	if l.minAt[l.head] <= l.count-int64(size) {
-		l.head = (l.head + 1) % size
-		l.n--
-	}
-	l.count++
-	return l.minGain[l.head]
-}
-
-// smooth averages least over the last ahead frames, and lets the gain
+// smooth averages low, the least gain, over the last ahead frames, and lets the gain
 // rise from there no faster than the release.
-func (l *limiter) smooth(least float64) float64 {
-	l.avgSum += least - l.avg[l.avgAt]
-	l.avg[l.avgAt] = least
+func (l *limiter) smooth(low float64) float64 {
+	l.avgSum += low - l.avg[l.avgAt]
+	l.avg[l.avgAt] = low
 	l.avgAt++
 	if l.avgAt == len(l.avg) {
 		l.avgAt = 0
@@ -622,12 +724,11 @@ func (l *limiter) smooth(least float64) float64 {
 			l.avgSum += v
 		}
 	}
+	// Down at once to a, or up toward it by the release: the lesser of
+	// the two, which is which as a is under the gain or not, without
+	// asking which.
 	a := l.avgSum / float64(len(l.avg))
-	if a < l.gain {
-		l.gain = a
-	} else {
-		l.gain += (a - l.gain) * l.release
-	}
+	l.gain = min(a, l.gain+(a-l.gain)*l.release)
 	return l.gain
 }
 
@@ -647,7 +748,8 @@ func (p *processor) Reset() {
 		l.avg[i] = 1
 	}
 	l.avgSum, l.avgAt = float64(len(l.avg)), 0
-	l.head, l.n, l.count, l.at = 0, 0, 0, 0
+	l.need.Reset()
+	l.at = 0
 	l.gain = 1
 	p.gate.env, p.gate.open, p.gate.gain = 0, true, 0
 	p.comp.gr = 0

@@ -34,28 +34,67 @@ var tpFilter = func() [tpPhases][tpTaps]float64 {
 }()
 
 // truePeak finds a channel's true peaks: the last tpTaps samples, at
-// in a ring.
+// in a ring held twice over, end to end, so the last tpTaps are always
+// side by side, from at on.
 type truePeak struct {
-	ring [tpTaps]float64
+	ring [2 * tpTaps]float64
 	at   int
 }
 
 // push takes the next sample, and returns the true peak about the one
 // tpDelay before it, a ratio of full scale.
+//
+// The filter is symmetric: its fourth phase is its first backwards, and
+// its third its second. So each pair of phases is worked out from the
+// sums and differences of the samples, each a pair of them as far from
+// the middle of the window: half the products.
 func (t *truePeak) push(x float64) float64 {
-	t.ring[t.at] = x
-	t.at = (t.at + 1) % tpTaps
-	peak := 0.0
-	for p := range tpPhases {
-		var y float64
-		taps := &tpFilter[p]
-		for k := range tpTaps {
-			// The newest sample under the last tap.
-			y += taps[tpTaps-1-k] * t.ring[(t.at-1-k+2*tpTaps)%tpTaps]
-		}
-		peak = max(peak, math.Abs(y))
+	w := t.add(x)
+	h := &tpHalves
+	var e0, o0, e1, o1 float64
+	for k := range tpTaps / 2 {
+		s, d := w[k]+w[tpTaps-1-k], w[k]-w[tpTaps-1-k]
+		e0 += h[0][k] * s
+		o0 += h[1][k] * d
+		e1 += h[2][k] * s
+		o1 += h[3][k] * d
 	}
-	return peak
+	return max(math.Abs(e0+o0), math.Abs(e0-o0), math.Abs(e1+o1), math.Abs(e1-o1))
+}
+
+// tpHalves are the first and second phases of the filter, halved: each
+// tap's mean with the one as far from the other end, and half their
+// difference. A phase's sum is the means times the sums of the samples
+// they stand for, plus the half differences times their differences;
+// its mirror's, minus.
+var tpHalves = func() (h [4][tpTaps / 2]float64) {
+	for k := range tpTaps / 2 {
+		for p := range 2 {
+			a, b := tpFilter[p][k], tpFilter[p][tpTaps-1-k]
+			h[2*p][k], h[2*p+1][k] = (a+b)/2, (a-b)/2
+		}
+	}
+	return h
+}()
+
+// add takes the next sample in, and returns the last tpTaps samples,
+// oldest first.
+func (t *truePeak) add(x float64) *[tpTaps]float64 {
+	t.ring[t.at], t.ring[t.at+tpTaps] = x, x
+	t.at++
+	if t.at == tpTaps {
+		t.at = 0
+	}
+	return (*[tpTaps]float64)(t.ring[t.at : t.at+tpTaps])
+}
+
+// run pushes each of x in turn, and puts the true peak each returns in
+// out, as long as x.
+func (t *truePeak) run(x, out []float64) {
+	out = out[:len(x)]
+	for i, v := range x {
+		out[i] = t.push(v)
+	}
 }
 
 // reset forgets the samples before.

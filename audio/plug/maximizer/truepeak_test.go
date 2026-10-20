@@ -27,3 +27,36 @@ func TestTheTruePeakFindsPeaksBetweenTheSamples(t *testing.T) {
 		t.Errorf("a low sine of 0.5 reads a true peak of %.3f", most)
 	}
 }
+
+func TestTheTruePeakIsTheFiltersEveryPhase(t *testing.T) {
+	// The filter is symmetric, phase by phase, as push takes it to be.
+	for p := range tpPhases {
+		for k := range tpTaps {
+			a, b := tpFilter[p][k], tpFilter[tpPhases-1-p][tpTaps-1-k]
+			if math.Abs(a-b) > 1e-15 {
+				t.Fatalf("phase %d, tap %d: %g, its mirror %g", p, k, a, b)
+			}
+		}
+	}
+	// And push finds the loudest of the four phases' sums, written out.
+	var tp truePeak
+	w := make([]float64, 0, 3000)
+	for i := range 3000 {
+		v := math.Sin(float64(i)*0.37) * math.Cos(float64(i)*0.011)
+		w = append(w, v)
+		got := tp.push(v)
+		want := 0.0
+		for p := range tpPhases {
+			y := 0.0
+			for k := range tpTaps {
+				if j := len(w) - tpTaps + k; j >= 0 {
+					y += tpFilter[p][k] * w[j]
+				}
+			}
+			want = max(want, math.Abs(y))
+		}
+		if math.Abs(got-want) > 1e-14 {
+			t.Fatalf("sample %d: %g, not %g", i, got, want)
+		}
+	}
+}

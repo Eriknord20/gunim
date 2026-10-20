@@ -226,7 +226,10 @@ its views are built from, and `audio/plug/plugtest` runs a plugin
 through its ports in tests. The plugins themselves are packages beside
 it: `dynamics`, which has a sidechain input, `enhancer`, `eq`,
 `imager`, `maximizer`, `trim` and `xover`, a crossover the others split
-bands with.
+bands with. Package `audio/decibel` turns ratios into decibels and back
+fast enough for every sample, to a ten-millionth of a decibel, where
+`math.Log10` and `math.Pow` would cost a plugin as much as the rest of
+its work.
 
 Package `audio/midi` sends and receives MIDI through the computer's
 ports: notes and the MIDI clock out to hardware synths, and notes in

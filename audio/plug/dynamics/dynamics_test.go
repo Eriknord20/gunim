@@ -605,7 +605,7 @@ func TestTheCompressorsAttackRunsToFourHundredMilliseconds(t *testing.T) {
 		k := comp{on: true, threshold: -20, ratio: 1e9, attack: coef(c.attack, 48000), release: coef(100, 48000)}
 		var gr float64
 		for range 19200 {
-			gr = k.step(0)
+			gr = k.step(1, 0)
 		}
 		if got := gr / -20; math.Abs(got-c.want) > 0.02 {
 			t.Errorf("at an attack of %v ms, after 400 ms it has turned down %.2f of the way, want %.2f", c.attack, got, c.want)
