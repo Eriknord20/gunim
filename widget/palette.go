@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -53,6 +54,14 @@ type PaletteItem struct {
 	// ticks an item: for a command that switches something, such as
 	// Show Sidebar, to say which way it stands.
 	Checked bool
+	// Chips are what the item can open, shown at the end of its row while
+	// it is highlighted, and Chip the one lit at first: for an item such
+	// as a machine, with a terminal or its files to open on it. Tab and
+	// Shift+Tab move the light round them, and Right and Left along them
+	// once the field's caret has gone as far as it goes. A pick says
+	// which is lit, to OnChip.
+	Chips []string
+	Chip  int
 }
 
 // Palette finds one of a list of items as the user types part of its
@@ -84,6 +93,9 @@ type Palette struct {
 	OnSearch func(query string, u *gunim.UI) gunim.Intent
 	// OnCtrlPick, when set, runs in place of OnPick for Ctrl+Enter.
 	OnCtrlPick func(i int, u *gunim.UI) gunim.Intent
+	// OnChip, when set, runs in place of OnPick and OnCtrlPick for an
+	// item with chips, with the index of the chip lit.
+	OnChip func(i, chip int, u *gunim.UI) gunim.Intent
 	// Status is a line under the field, such as how far a search has got.
 	Status string
 	// OnHighlight, when set, hears the item the highlight has moved to, by
@@ -195,10 +207,15 @@ func (p *Palette) SetQuery(q string, u *gunim.UI) {
 	p.card.filter(q, u)
 }
 
-func (p *Palette) choose(i int, ctrl bool, u *gunim.UI) {
+func (p *Palette) choose(i, chip int, ctrl bool, u *gunim.UI) {
 	p.picking = true
 	p.Close(u)
 	p.picking = false
+	if p.OnChip != nil && len(p.item(i).Chips) > 0 {
+		u.Cue(gunim.CuePress, p.opener)
+		send(u, p.opener, p.OnChip(i, chip, u))
+		return
+	}
 	pick := p.OnPick
 	if ctrl && p.OnCtrlPick != nil {
 		pick = p.OnCtrlPick
@@ -248,18 +265,80 @@ type paletteCard struct {
 	// opener's space: the card keeps centred on centre, on the screen.
 	centre float32
 	at     geom.Point
+	// chip is the chip lit on the item highlighted, chipKey that item's key and chipSet whether one was lit there.
+	// chipAt and chipW carry the light, and chipOff how far the chips are scrolled to show it; chipJump has them go
+	// there at once, for an item lit anew.
+	chip     int
+	chipKey  Key
+	chipSet  bool
+	chipAt   *anim.Float
+	chipW    *anim.Float
+	chipOff  *anim.Float
+	chipJump bool
 }
 
 func newPaletteCard(p *Palette) *paletteCard {
-	c := &paletteCard{p: p, field: NewTextField(), in: anim.NewFloat(0), height: anim.NewFloat(0), shown: paletteRows}
+	c := &paletteCard{p: p, field: NewTextField(), in: anim.NewFloat(0), height: anim.NewFloat(0), shown: paletteRows,
+		chipAt: anim.NewFloat(0), chipW: anim.NewFloat(0), chipOff: anim.NewFloat(0)}
 	c.list = NewVirtualList(func(k Key) gunim.Node { return newPaletteRow(c, k) })
 	c.field.Placeholder = p.Placeholder
 	c.field.OnChange = func(q string, u *gunim.UI) gunim.Intent {
 		c.filter(q, u)
 		return nil
 	}
-	c.Add(c.in, c.height)
+	c.field.Keys = c.chipKeys
+	c.Add(c.in, c.height, c.chipAt, c.chipW, c.chipOff)
 	return c
+}
+
+// chips are the chips of the item highlighted, and the one lit among them, lit afresh for an item lit anew.
+func (c *paletteCard) chips() (chips []string, lit int) {
+	i := c.hotIndex()
+	if i < 0 {
+		return nil, 0
+	}
+	it := c.p.item(i)
+	if len(it.Chips) == 0 {
+		return nil, 0
+	}
+	if k := c.p.keyOf(i); !c.chipSet || c.chipKey != k {
+		c.chipKey, c.chipSet, c.chipJump = k, true, true
+		c.chip = it.Chip
+	}
+	c.chip = min(max(c.chip, 0), len(it.Chips)-1)
+	return it.Chips, c.chip
+}
+
+// chipKeys takes the keys that move along the chips of the item highlighted from the field: Tab and Shift+Tab
+// round them, and Right with the caret at the end and Left with it at the start along them, as far as the last or
+// the first.
+func (c *paletteCard) chipKeys(e input.KeyPress, u *gunim.UI) bool {
+	chips, _ := c.chips()
+	if len(chips) == 0 {
+		return false
+	}
+	switch {
+	case e.Key == input.KeyTab && e.Mods&^input.ModShift == 0:
+		step := 1
+		if e.Mods.Has(input.ModShift) {
+			step = len(chips) - 1
+		}
+		c.chip = (c.chip + step) % len(chips)
+	case e.Mods == 0 && (e.Key == input.KeyRight || e.Key == input.KeyLeft):
+		start, end := c.field.Selection()
+		at, to := 0, c.chip-1
+		if e.Key == input.KeyRight {
+			at, to = utf8.RuneCountInString(c.field.Text()), c.chip+1
+		}
+		if start != end || end != at || to < 0 || to >= len(chips) {
+			return false
+		}
+		c.chip = to
+	default:
+		return false
+	}
+	u.Invalidate()
+	return true
 }
 
 // Children implements [gunim.Composite].
@@ -463,7 +542,8 @@ func (c *paletteCard) move(by int, u *gunim.UI) {
 
 func (c *paletteCard) pick(ctrl bool, u *gunim.UI) {
 	if c.hot >= 0 && c.hot < len(c.found) {
-		c.p.choose(c.found[c.hot].Index, ctrl, u)
+		_, chip := c.chips()
+		c.p.choose(c.found[c.hot].Index, chip, ctrl, u)
 	}
 }
 
@@ -613,6 +693,9 @@ type paletteRow struct {
 	title  shapedText
 	detail shapedText
 	hint   shapedText
+	// chipText are the chips shaped, and chipHits where they were drawn, for a click, while the row is lit.
+	chipText []shapedText
+	chipHits []geom.Rect
 	// size is the row's size at its last layout, for telling a release
 	// on it from one off it.
 	size  geom.Size
@@ -680,6 +763,13 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	if item.Checked {
 		end -= IconSize.Get(th) + pad
 	}
+	r.chipHits = r.chipHits[:0]
+	if r.index >= 0 && r.index == r.c.hotIndex() {
+		if chips, lit := r.c.chips(); len(chips) > 0 {
+			// The chips take the end of the row, as far as the title leaves room, and scroll where they need more.
+			end = r.paintChips(p, th, chips, lit, min(lead+run.Advance, end/2)+pad, end, box.H)
+		}
+	}
 	if run.Advance > end-lead {
 		run = cutRunWith(run, face.Shape("…", size), end-lead)
 	}
@@ -723,6 +813,85 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 }
 
+// Chips: the room inside each, and between them.
+const (
+	paletteChipPad = 8
+	paletteChipGap = 4
+)
+
+// paintChips draws the chips of the row lit between from and to, against to, or where they are too many to fit,
+// from its start and scrolled to show the one lit. The light slides from chip to chip. It returns where the room left
+// for the title and its detail ends.
+func (r *paletteRow) paintChips(p *paint.Painter, th *theme.Live, chips []string, lit int, from, to, rowH float32) float32 {
+	c := r.c
+	room := to - from
+	if room <= 0 {
+		return to
+	}
+	face := faceIn(Font, th)
+	size := TextSize.Get(th) * 0.85
+	if len(r.chipText) < len(chips) {
+		r.chipText = append(r.chipText, make([]shapedText, len(chips)-len(r.chipText))...)
+	}
+	runs := make([]text.Run, len(chips))
+	xs := make([]float32, len(chips))
+	ws := make([]float32, len(chips))
+	var all float32
+	for i, s := range chips {
+		runs[i] = r.chipText[i].shape(face, s, size)
+		if i > 0 {
+			all += paletteChipGap
+		}
+		xs[i], ws[i] = all, runs[i].Advance+2*paletteChipPad
+		all += ws[i]
+	}
+	start := from
+	if all < room {
+		start, room = to-all, all
+	}
+	// Scrolled as little as shows the chip lit whole.
+	off := c.chipOff.Target()
+	off = min(off, xs[lit])
+	off = max(off, xs[lit]+ws[lit]-room)
+	off = min(max(off, 0), max(all-room, 0))
+	if c.chipJump {
+		c.chipJump = false
+		c.chipOff.Jump(off)
+		c.chipAt.Jump(xs[lit])
+		c.chipW.Jump(ws[lit])
+	} else {
+		spring := Quick.Get(th)
+		c.chipOff.Animate(off, spring)
+		c.chipAt.Animate(xs[lit], spring)
+		c.chipW.Animate(ws[lit], spring)
+	}
+	h := min(22, rowH-6)
+	top := (rowH - h) / 2
+	o := start - c.chipOff.Value()
+	area := geom.Rc(start, 0, room, rowH)
+	defer p.Layer(paint.LayerOpts{Bounds: area, Opacity: 1, Clip: true})()
+	p.RRect(geom.Rc(o+c.chipAt.Value(), top, c.chipW.Value(), h), h/2, paint.Solid(ButtonPrimaryFill.Get(th)))
+	faint, onLit := PaletteHint.Get(th), ButtonPrimaryInk.Get(th)
+	edge := faint
+	edge.A = uint8(float32(edge.A) * 0.35)
+	at, upto := c.chipAt.Value(), c.chipAt.Value()+c.chipW.Value()
+	for i, run := range runs {
+		cr := geom.Rc(o+xs[i], top, ws[i], h)
+		// Clicked only where it shows.
+		r.chipHits = append(r.chipHits, geom.Rect{Min: geom.Pt(max(cr.Min.X, area.Min.X), cr.Min.Y), Max: geom.Pt(min(cr.Max.X, area.Max.X), cr.Max.Y)})
+		// As lit as the light covers it, so its text brightens and its edge fades as the light slides onto it, and
+		// back as it leaves.
+		on := min(max((min(upto, xs[i]+ws[i])-max(at, xs[i]))/ws[i], 0), 1)
+		if on < 1 {
+			e := edge
+			e.A = uint8(float32(e.A) * (1 - on))
+			p.RRectStroke(cr.Inset(geom.Uniform(0.5)), h/2, paint.Fill{}, paint.Stroke{Width: 1, Color: e})
+		}
+		run.Paint(p, geom.Pt(cr.Min.X+paletteChipPad, top+(h-run.Height())/2), anim.Mix(anim.ColorCodec, faint, onLit, on))
+	}
+	return start - paletteChipGap
+}
+
 // Handle implements [gunim.Handler]: the pointer highlights and picks.
 func (r *paletteRow) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
@@ -743,7 +912,17 @@ func (r *paletteRow) Handle(e input.Event, u *gunim.UI) bool {
 		// holds it.
 		_, held := r.c.place[r.key]
 		if r.click.Release(e, over(e.Pos, r.size)) && held {
-			r.c.p.choose(r.index, e.Mods.Has(input.ModControl), u)
+			// A click on a chip of the row lit picks that chip, and on the rest of a row its chip lit.
+			chip := r.c.p.item(r.index).Chip
+			if r.index == r.c.hotIndex() {
+				_, chip = r.c.chips()
+				for i, h := range r.chipHits {
+					if h.Contains(e.Pos) {
+						chip = i
+					}
+				}
+			}
+			r.c.p.choose(r.index, chip, e.Mods.Has(input.ModControl), u)
 		}
 		return true
 	}
