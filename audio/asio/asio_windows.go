@@ -733,6 +733,11 @@ func (d *Device) resetIfMoved() {
 // makeCallbacks makes the functions the driver calls. A long, 32 bits,
 // comes in a register of 64, the top half of which is left as it was:
 // each is cut to its 32 bits.
+//
+// bufferSwitch and bufferSwitchTimeInfo come on the driver's own
+// thread, which the driver has raised to the priority it plays at:
+// they leave its priority as it is. The goroutine that fills the ring
+// they take from raises its own, by package audio/rt.
 func makeCallbacks() {
 	cbs = callbacks{
 		bufferSwitch: syscall.NewCallback(func(half, _ uintptr) uintptr {
