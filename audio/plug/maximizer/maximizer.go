@@ -17,7 +17,9 @@ import (
 	"math"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/internal/least"
 )
 
 // The parameters' IDs.
@@ -201,6 +203,16 @@ type processor struct {
 	reduction, peak, peakHold plug.Meter
 	held                      float64
 	trace                     plug.Trace
+	// charMS is the release the character sets, in milliseconds, and
+	// fixed the release of the modes whose release holds still, worked
+	// out by releases.
+	charMS, fixed float64
+	// run is what a run of frames holds between the stages; least and
+	// blockPeak are the least gain and the most true peak out so far
+	// this block; slow is how fast the slow reduction follows.
+	run              runs
+	least, blockPeak float64
+	slow             float64
 }
 
 // core is one channel's limiter: for each frame the gain that keeps it
@@ -211,20 +223,19 @@ type processor struct {
 // release says. The needs wait ahead less avgLen frames first, in lag,
 // so a shorter attack starts falling later.
 type core struct {
-	lag     []float64
-	lagAt   int
-	minAt   []int64
-	minGain []float64
-	head, n int
-	count   int64
-	avg     []float64
-	avgLen  int
-	avgAt   int
-	avgSum  float64
-	gain    float64
+	lag   []float64
+	lagAt int
+	// need is the needs of the last avgLen+1 frames, for their least.
+	need   *least.Window
+	avg    []float64
+	avgLen int
+	avgAt  int
+	avgSum float64
+	gain   float64
 	// slow is how far the gain has been down over the last second and a
-	// half, in decibels, for Transparent's release.
-	slow float64
+	// half, in decibels, for Transparent's release; down how far it is
+	// down now.
+	slow, down float64
 }
 
 // Prepare implements [plug.Processor]: everything the maximizer keeps is
@@ -233,10 +244,11 @@ func (p *processor) Prepare(s plug.Setup) {
 	p.rate = s.Rate
 	p.glide = coef(5, s.Rate)
 	p.ahead = max(2, int(math.Round(s.Rate*lookahead)))
+	p.slow = coef(1500, s.Rate)
+	p.run.make(s.MaxBlock)
 	for c := range p.delay {
 		p.delay[c] = make([]float32, p.ahead+tpDelay)
-		p.cores[c] = core{lag: make([]float64, p.ahead), minAt: make([]int64, p.ahead+1),
-			minGain: make([]float64, p.ahead+1), avg: make([]float64, p.ahead)}
+		p.cores[c] = core{lag: make([]float64, p.ahead), need: least.New(p.ahead + 1), avg: make([]float64, p.ahead)}
 	}
 	for _, prm := range Descriptor.Params {
 		if prm.Flags&plug.ReadOnly == 0 {
@@ -299,7 +311,8 @@ func (p *processor) setAttack() {
 		for i := range k.lag {
 			k.lag[i] = 1
 		}
-		k.lagAt, k.head, k.n = 0, 0, 0
+		k.lagAt = 0
+		k.need.Resize(n + 1)
 	}
 }
 
@@ -307,22 +320,44 @@ func (p *processor) setAttack() {
 // frame: by the character, from 10 ms to about a second; faster for
 // Punchy and Loud; and for Transparent, fast after a lone peak and slow
 // through a loud passage, as far down as the gain has been a while.
+//
+// Only Transparent's changes from frame to frame; the others' are worked
+// out once a block, in releases.
 func (p *processor) release(k *core) float64 {
-	ms := 10 * math.Exp2(p.character*0.65)
+	if p.mode != Transparent {
+		return p.fixed
+	}
+	sustained := 0.0
+	if k.down > 0.01 {
+		sustained = min(max(k.slow/k.down, 0), 1)
+	}
+	return fastCoef(p.charMS*(0.4+1.1*sustained)*p.rate/1000, p.rate)
+}
+
+// releases works out the release of the modes whose release holds still,
+// for the block: fixed.
+func (p *processor) releases() {
+	p.charMS = 10 * math.Exp2(p.character*0.65)
+	ms := p.charMS
 	switch p.mode {
-	case Transparent:
-		down := -dbOf(k.gain)
-		sustained := 0.0
-		if down > 0.01 {
-			sustained = min(max(k.slow/down, 0), 1)
-		}
-		ms *= 0.4 + 1.1*sustained
 	case Punchy:
 		ms *= 0.7
 	case Loud:
 		ms *= 0.8
 	}
-	return coef(ms, p.rate)
+	p.fixed = coef(ms, p.rate)
+}
+
+// fastCoef is coef for a release of n frames, ms milliseconds at rate:
+// as a series where the step is small, as it is for any release, to the
+// sixth power, which leaves out under a part in ten billion.
+func fastCoef(n, rate float64) float64 {
+	x := 1 / n
+	if x > 0.03 {
+		return coef(n/rate*1000, rate)
+	}
+	// 1 - e^-x.
+	return x * (1 - x*(1.0/2-x*(1.0/6-x*(1.0/24-x*(1.0/120-x*(1.0/720))))))
 }
 
 // softClip rounds x's peaks off as they near the ceiling, as tape does,
@@ -338,6 +373,11 @@ func softClip(x, ceiling float64) float64 {
 }
 
 // Process implements [plug.Processor].
+//
+// It runs the block a stage at a time, between the frames parameters
+// change at: the gain, and the true peaks in; then the limiter; then the
+// true peaks out. A true peak is four sums of twelve products each; a
+// stage at a time, a processor works out many frames' side by side.
 func (p *processor) Process(b *plug.Block) {
 	if len(b.In) == 0 || len(b.Out) == 0 || len(p.delay[0]) == 0 {
 		return
@@ -349,24 +389,81 @@ func (p *processor) Process(b *plug.Block) {
 		inR, outR = b.In[1], b.Out[1]
 	}
 	next := 0
-	least, peak := 1.0, 0.0
-	slow := coef(1500, p.rate)
-	for i := range b.Frames {
-		for next < len(b.Changes) && b.Changes[next].Frame <= i {
-			p.take(b.Changes[next])
-			next++
+	p.least, p.blockPeak = 1, 0
+	p.releases()
+	for i := 0; i < b.Frames; {
+		if next < len(b.Changes) && b.Changes[next].Frame <= i {
+			for next < len(b.Changes) && b.Changes[next].Frame <= i {
+				p.take(b.Changes[next])
+				next++
+			}
+			p.releases()
 		}
+		e := min(b.Frames, i+len(p.run.x[0]))
+		if next < len(b.Changes) {
+			e = min(e, b.Changes[next].Frame)
+		}
+		var or []float32
+		if stereo {
+			or = outR[i:e]
+		}
+		p.stages(inL[i:e], inR[i:e], outL[i:e], or, b.Position.Frame+int64(i))
+		i = e
+	}
+	for ; next < len(b.Changes); next++ {
+		p.take(b.Changes[next])
+	}
+	p.fresh = false
+	p.reduction.Set(dbOf(p.least))
+	p.peak.Set(dbOf(p.blockPeak))
+	p.held = max(p.held, p.blockPeak)
+	p.peakHold.Set(dbOf(p.held))
+}
+
+// runs is what a run of frames holds between the stages, a channel
+// each: the sound gained, its true peaks, and the sound out.
+type runs struct {
+	x, tp, out [2][]float64
+}
+
+// make makes room for runs of up to n frames.
+func (r *runs) make(n int) {
+	n = max(n, 1)
+	for c := range 2 {
+		r.x[c], r.tp[c], r.out[c] = make([]float64, n), make([]float64, n), make([]float64, n)
+	}
+}
+
+// stages runs a run of frames, inL and inR, through each stage in turn
+// into outL and outR, outR nil where the plugin is mono; f is the run's
+// first frame.
+func (p *processor) stages(inL, inR, outL, outR []float32, f int64) {
+	n := len(inL)
+	r := &p.run
+	x0, x1 := r.x[0][:n], r.x[1][:n]
+	inR = inR[:n]
+	for i := range n {
 		p.gain += (p.gainTo - p.gain) * p.glide
-		x := [2]float64{float64(inL[i]) * p.gain, float64(inR[i]) * p.gain}
-		var need [2]float64
-		for c := range x {
-			if p.mode == Loud {
-				x[c] = softClip(x[c], p.ceiling)
-			}
-			need[c] = 1
-			if tp := p.peaks[c].push(x[c]); tp > p.ceiling {
-				need[c] = p.ceiling / tp
-			}
+		x0[i], x1[i] = float64(inL[i])*p.gain, float64(inR[i])*p.gain
+	}
+	if p.mode == Loud {
+		for i := range x0 {
+			x0[i], x1[i] = softClip(x0[i], p.ceiling), softClip(x1[i], p.ceiling)
+		}
+	}
+	for c := range 2 {
+		p.peaks[c].run(r.x[c][:n], r.tp[c][:n])
+	}
+	tp0, tp1 := r.tp[0][:n], r.tp[1][:n]
+	o0, o1 := r.out[0][:n], r.out[1][:n]
+	slow := p.slow
+	for i := range n {
+		need := [2]float64{1, 1}
+		if tp0[i] > p.ceiling {
+			need[0] = p.ceiling / tp0[i]
+		}
+		if tp1[i] > p.ceiling {
+			need[1] = p.ceiling / tp1[i]
 		}
 		linked := min(need[0], need[1])
 		var g [2]float64
@@ -374,32 +471,44 @@ func (p *processor) Process(b *plug.Block) {
 			k := &p.cores[c]
 			n := p.link*linked + (1-p.link)*need[c]
 			g[c] = k.step(n, p.release(k))
-			k.slow += (-dbOf(g[c]) - k.slow) * slow
+			k.down = 0
+			if g[c] != 1 {
+				k.down = -decibel.Of(g[c])
+			}
+			k.slow += (k.down - k.slow) * slow
+			// Let go to 0 far under anything heard, so after a long
+			// silence it never sinks into numbers too small to work out
+			// fast.
+			if k.slow < 1e-9 {
+				k.slow = 0
+			}
 		}
 		// Out comes the frame held back as long as the true peaks'
 		// filter lags and the limiter looks ahead, at the gain worked
 		// out for it, never over the ceiling.
 		dl, dr := float64(p.delay[0][p.at]), float64(p.delay[1][p.at])
-		p.delay[0][p.at], p.delay[1][p.at] = float32(x[0]), float32(x[1])
-		p.at = (p.at + 1) % len(p.delay[0])
+		p.delay[0][p.at], p.delay[1][p.at] = float32(x0[i]), float32(x1[i])
+		p.at++
+		if p.at == len(p.delay[0]) {
+			p.at = 0
+		}
 		l := max(-p.ceiling, min(dl*g[0], p.ceiling))
 		r := max(-p.ceiling, min(dr*g[1], p.ceiling))
+		o0[i], o1[i] = l, r
 		outL[i] = float32(l)
-		if stereo {
+		if outR != nil {
 			outR[i] = float32(r)
 		}
-		peak = max(peak, p.outs[0].push(l), p.outs[1].push(r))
-		least = min(least, g[0], g[1])
-		p.trace.Put(b.Position.Frame+int64(i), float32(dbOf(min(g[0], g[1]))))
+		p.least = min(p.least, g[0], g[1])
+		p.trace.Put(f+int64(i), float32(-max(p.cores[0].down, p.cores[1].down)))
 	}
-	for ; next < len(b.Changes); next++ {
-		p.take(b.Changes[next])
+	for c := range 2 {
+		tp := r.tp[c][:n]
+		p.outs[c].run(r.out[c][:n], tp)
+		for _, v := range tp {
+			p.blockPeak = max(p.blockPeak, v)
+		}
 	}
-	p.fresh = false
-	p.reduction.Set(dbOf(least))
-	p.peak.Set(dbOf(peak))
-	p.held = max(p.held, peak)
-	p.peakHold.Set(dbOf(p.held))
 }
 
 // step adds need, the gain a frame needs, and returns the gain for the
@@ -408,26 +517,14 @@ func (k *core) step(need, release float64) float64 {
 	// The need waits as long as the lookahead is longer than the attack.
 	if wait := len(k.lag) - k.avgLen; wait > 0 {
 		need, k.lag[k.lagAt] = k.lag[k.lagAt], need
-		k.lagAt = (k.lagAt + 1) % wait
+		k.lagAt++
+		if k.lagAt >= wait {
+			k.lagAt = 0
+		}
 	}
-	size := k.avgLen + 1
-	ring := len(k.minGain)
-	// Those no less than need can no longer be the least.
-	for k.n > 0 && k.minGain[(k.head+k.n-1)%ring] >= need {
-		k.n--
-	}
-	tail := (k.head + k.n) % ring
-	k.minAt[tail], k.minGain[tail] = k.count, need
-	k.n++
-	// Those older than the window go.
-	if k.minAt[k.head] <= k.count-int64(size) {
-		k.head = (k.head + 1) % ring
-		k.n--
-	}
-	k.count++
-	least := k.minGain[k.head]
-	k.avgSum += least - k.avg[k.avgAt]
-	k.avg[k.avgAt] = least
+	low := k.need.Push(need)
+	k.avgSum += low - k.avg[k.avgAt]
+	k.avg[k.avgAt] = low
 	k.avgAt++
 	if k.avgAt == k.avgLen {
 		k.avgAt = 0
@@ -456,8 +553,8 @@ func (k *core) reset() {
 	}
 	k.lagAt = 0
 	k.avgSum, k.avgAt = float64(k.avgLen), 0
-	k.head, k.n, k.count = 0, 0, 0
-	k.gain, k.slow = 1, 0
+	k.need.Reset()
+	k.gain, k.slow, k.down = 1, 0, 0
 }
 
 // Latency implements [plug.Processor]: the sound comes as late as the
