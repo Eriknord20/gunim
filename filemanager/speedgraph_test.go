@@ -61,10 +61,44 @@ func TestACopyDrawsItsSpeedAndCheersAsItEnds(t *testing.T) {
 		t.Fatalf("the running card says %q and %q", c.big.Text, c.moved.Text)
 	}
 	h.until("the copy ends with a cheer", func() bool { return card() != nil && card().badge.cheering })
-	if c := card(); c.big.Text != "Done" || c.title.Text != "Copied 1 item to sub" || c.moved.Text != "100%  ·  3.0 MB of 3.0 MB" {
-		t.Fatalf("the finished card says %q, %q and %q", c.title.Text, c.big.Text, c.moved.Text)
+	if c := card(); c.big.Text != "Done" || c.title.Text != "Copied 1 item" || c.file.Text != "" || c.moved.Text != "3.0 MB of 3.0 MB" {
+		t.Fatalf("the finished card says %q, %q, %q and %q", c.title.Text, c.big.Text, c.file.Text, c.moved.Text)
 	}
+	if c := card(); !c.ended.on || c.running.on || !c.undos.on {
+		t.Fatalf("the finished card shows its Close %v, its running buttons %v and Undo %v", c.ended.on, c.running.on, c.undos.on)
+	}
+	if c := card(); c.view.Stays {
+		t.Fatal("the card of a short copy stays until closed")
+	}
+	h.do(DismissOp{ID: h.a.ops.next})
 	h.until("the card leaves", func() bool { return card() == nil })
+}
+
+// The card of an operation that ran a long time stays once it went well,
+// with no toast saying it again, until the user closes it or undoes it.
+func TestALongOperationsCardStaysUntilClosed(t *testing.T) {
+	h := newHarness(t, "sub/")
+	if err := os.WriteFile(filepath.Join(h.dir, "big.bin"), make([]byte, 2<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.a.ops.limit = 4 << 20
+	h.a.startOp(job{kind: OpCopy, srcs: []string{filepath.Join(h.dir, "big.bin")}, dest: filepath.Join(h.dir, "sub")},
+		"Copying big.bin")
+	h.a.ops.limit = 0
+	id := h.a.ops.next
+	h.a.ops.running[id].started = time.Now().Add(-stayAfter)
+	card := func() *opCard { return h.b.ops.card(id) }
+	toasts := h.b.toasts.Len()
+	h.until("the copy ends with a cheer", func() bool { return card() != nil && card().badge.cheering && card().view.Stays })
+	if c := card(); !c.view.Undo || c.left.Text == "" || h.b.toasts.Len() != toasts {
+		t.Fatalf("the card offers Undo %v and says %q; %d toasts came", c.view.Undo, c.left.Text, h.b.toasts.Len()-toasts)
+	}
+	h.do(UndoOp{ID: id})
+	h.until("undoing takes the card away", func() bool { return card() == nil })
+	h.until("undo takes the copy back", func() bool {
+		_, err := os.Stat(filepath.Join(h.dir, "sub", "big.bin"))
+		return os.IsNotExist(err)
+	})
 }
 
 // The time left counts down steadily while the speed swings, rather than

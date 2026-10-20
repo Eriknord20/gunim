@@ -227,14 +227,7 @@ func (a *app) fetchedToOpen(id int, what string, err error, stopped bool) {
 	delete(a.ops.running, id)
 	r.cancel()
 	a.dropDialogs(id)
-	if r.visible {
-		a.patch(OpDone{ID: id, OK: err == nil})
-		if err == nil {
-			r.title = "Fetched " + what
-			a.cheer(id, r)
-		}
-		a.publishOps()
-	}
+	a.endCard(r, err == nil, Notice{Title: "Fetched " + what})
 	switch {
 	case stopped || errors.Is(err, context.Canceled):
 		a.patch(Notice{Title: "Stopped: " + r.title, Kind: "warning"})

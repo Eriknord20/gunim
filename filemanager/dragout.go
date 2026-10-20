@@ -115,15 +115,10 @@ func (a *app) fetchedForDrag(id, drag int, what string, local []string, err erro
 	delete(a.ops.running, id)
 	r.cancel()
 	a.dropDialogs(id)
+	a.endCard(r, err == nil, Notice{Title: "Fetched " + what})
 	if !r.visible {
 		return
 	}
-	a.patch(OpDone{ID: id, OK: err == nil})
-	if err == nil {
-		r.title = "Fetched " + what
-		a.cheer(id, r)
-	}
-	a.publishOps()
 	if err != nil && !stopped && !errors.Is(err, context.Canceled) {
 		a.fail("Fetching " + what + " to drag out: " + err.Error() + ".")
 	}

@@ -22,7 +22,7 @@ func TestPausingHoldsACopyUntilItCarriesOn(t *testing.T) {
 	id := h.a.ops.next
 	r := h.a.ops.running[id]
 	h.until("a card shows the copy", func() bool { return h.b.ops.card(id) != nil && r.last.bytes > 0 })
-	if c := h.b.ops.card(id); !c.pauses.on || c.from.Text != "From "+filepath.Base(h.dir) {
+	if c := h.b.ops.card(id); !c.pauses.on || c.from.Text != filepath.Base(h.dir)+" → sub" {
 		t.Fatalf("the card offers pause %v and says %q", c.pauses.on, c.from.Text)
 	}
 	h.do(PauseOp{ID: id})
@@ -66,6 +66,30 @@ func TestCancellingAPausedCopyStopsIt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(h.dir, "sub", "big.bin")); err == nil {
 		t.Fatal("the stopped copy left its file")
 	}
+}
+
+// A card that says its operation went well folds as another starts, and
+// is no part of the two cards of running operations kept open.
+func TestAnEndedCardFoldsAndLeavesRoom(t *testing.T) {
+	h := newDndHarness(t)
+	op := func(id int) OpView {
+		return OpView{ID: id, Title: "Copying", OpProgress: OpProgress{Done: 0.5, BytesTotal: 10, Bytes: 5}}
+	}
+	done := OpView{ID: 1, Title: "Copied", Ended: true, Stays: true, OpProgress: OpProgress{Done: 1}}
+	h.ui(func(b *browser, u *gunim.UI) { b.ops.set(Ops{Ops: []OpView{done, op(2)}}, u) })
+	h.ui(func(b *browser, u *gunim.UI) {
+		b.ops.set(Ops{Ops: []OpView{done, op(2), op(3)}}, u)
+	})
+	h.ui(func(b *browser, u *gunim.UI) {
+		for id, want := range map[int]float32{1: 1, 2: 0, 3: 0} {
+			if got := b.ops.card(id).folded.Target(); got != want {
+				t.Errorf("card %d folds to %v, want %v", id, got, want)
+			}
+		}
+		if c := b.ops.card(1); !c.badge.cheering || !c.slimEnded.on || c.slimRunning.on {
+			t.Error("the ended card shows the buttons of a running one")
+		}
+	})
 }
 
 func TestAThirdOperationFoldsTheOldest(t *testing.T) {

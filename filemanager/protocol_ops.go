@@ -13,9 +13,18 @@ type OpView struct {
 	Kind  OpKind
 	// From names the folder the items come from, where that is known.
 	From string
+	// To names the folder the items go to, where that is known; a title
+	// that ends " to " and it leaves that to the line under it.
+	To string
 	// CanPause says the operation can be paused.
 	CanPause bool
 	OpProgress
+	// Ended says the operation went well, and Title then says what it
+	// did. Note says more, Undo offers to undo it, Stays keeps the card
+	// until the user closes it, and Took is how many seconds it took.
+	Ended, Undo, Stays bool
+	Note               string
+	Took               float64
 }
 
 // OpProgress is how far an operation has got.
@@ -32,10 +41,11 @@ type OpProgress struct {
 	Items, ItemsTotal int
 	// File is the name of the item it is on.
 	File string
-	// Speed is the speed to show, in bytes a second, which changes once
-	// a second at most, and Left the seconds left; zero where unknown.
-	Speed, Left float64
-	Paused      bool
+	// Speed is the speed to show, in bytes a second, and ItemSpeed in
+	// items a second, which change once a second at most, and Left the
+	// seconds left; zero where unknown.
+	Speed, ItemSpeed, Left float64
+	Paused                 bool
 }
 
 // Ops is the running file operations.
@@ -90,6 +100,11 @@ type CancelOp struct {
 type PauseOp struct {
 	ID     int
 	Resume bool
+}
+
+// DismissOp takes the card of a finished operation away.
+type DismissOp struct {
+	ID int
 }
 
 // UndoOp asks to reverse a finished operation.
@@ -194,6 +209,7 @@ func init() {
 	gunim.RegisterType[CancelOp]("files.cancel-op")
 	gunim.RegisterType[PauseOp]("files.pause-op")
 	gunim.RegisterType[UndoOp]("files.undo-op")
+	gunim.RegisterType[DismissOp]("files.dismiss-op")
 	gunim.RegisterType[ClashAsk]("files.clash")
 	gunim.RegisterType[ClashAnswered]("files.clash-answered")
 	gunim.RegisterType[Confirm]("files.confirm")

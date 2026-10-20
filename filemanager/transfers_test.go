@@ -347,7 +347,7 @@ func TestATransferRunsAsAnOperationWithItsProgress(t *testing.T) {
 	if tick := r.tick(time.Now()); tick.Done != 0.5 || tick.File != "x.txt" || tick.Bytes != 50 || tick.BytesTotal != 100 {
 		t.Fatalf("the transfer shows %+v", tick)
 	}
-	if c := h.b.ops.card(id); !c.fromRow.on || c.from.Text != "From srv" {
+	if c := h.b.ops.card(id); !c.fromRow.on || c.from.Text != "srv → sub" {
 		t.Fatalf("the card says it comes from %q, shown %v", c.from.Text, c.fromRow.on)
 	}
 	h.do(Command{Name: CmdCloseApp})

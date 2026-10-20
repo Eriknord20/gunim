@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -54,7 +55,7 @@ var (
 	OpCardGap   = theme.Length("files.op.gap", 10)
 	// OpGraphHeight is the height of a card's speed graph, and OpBarHeight
 	// that of the bar an operation without one shows.
-	OpGraphHeight = theme.Length("files.op.graph", 64)
+	OpGraphHeight = theme.Length("files.op.graph", 40)
 	OpBarHeight   = theme.Length("files.op.bar", 6)
 	// OpSpeedSize is the size of the speed, the big words on a card.
 	OpSpeedSize = theme.Length("files.op.speed", 22)
@@ -62,8 +63,9 @@ var (
 	OpLeftSize = theme.Length("files.op.left", 16)
 )
 
-// opsKeep is how many cards stay open at once: an operation starting
-// while as many are open folds the oldest.
+// opsKeep is how many cards of running operations stay open at once: an
+// operation starting while as many are open folds the oldest, and the
+// cards of operations that ended fold too.
 const opsKeep = 2
 
 // opsStack is the cards of the operations running, stacked over the
@@ -101,6 +103,10 @@ func (s *opsStack) set(ops Ops, u *gunim.UI) {
 			if c.folded.Target() == 1 {
 				continue
 			}
+			if c.badge.cheering {
+				c.setFold(true, u)
+				continue
+			}
 			open++
 			if open >= opsKeep {
 				c.setFold(true, u)
@@ -109,6 +115,9 @@ func (s *opsStack) set(ops Ops, u *gunim.UI) {
 		c := newOpCard(v)
 		s.cards = append(s.cards, c)
 		u.Insert(s, c)
+		if v.Ended {
+			c.cheer(u)
+		}
 	}
 	s.cards = slices.DeleteFunc(s.cards, func(c *opCard) bool {
 		if live[c.id] {
@@ -146,7 +155,8 @@ func (s *opsStack) done(d OpDone, u *gunim.UI) {
 func (s *opsStack) Children() []gunim.Node { return nil }
 
 // Layout implements [gunim.Node]: the newest card on top, each taking
-// room as far as it has come in.
+// room as far as it has come in. A card coming or going keeps its place
+// at the bottom of its room, so it never hangs out under the stack.
 func (s *opsStack) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	w := min(OpCardWidth.Get(f.Theme), c.Max.W)
 	gap := OpCardGap.Get(f.Theme)
@@ -154,11 +164,11 @@ func (s *opsStack) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	for i := kids.Len() - 1; i >= 0; i-- {
 		k := kids.At(i)
 		size := k.Layout(gunim.Constraints{Min: geom.Sz(w, 0), Max: geom.Sz(w, c.Max.H)})
-		k.Place(geom.Pt(0, y))
 		in := float32(1)
 		if card, ok := k.Node().(*opCard); ok {
 			in = ease(card.appear.Value())
 		}
+		k.Place(geom.Pt(0, y-(size.H+gap)*(1-in)))
 		y += (size.H + gap) * in
 	}
 	s.height = max(0, y-gap)
@@ -191,15 +201,20 @@ type opCard struct {
 
 	icon                     *widget.Icon
 	title, from, big, left   *widget.Label
-	moved, items, file       *widget.Label
+	moved, file, note        *widget.Label
 	pause, fold, cancel      *widget.IconButton
+	close, slimClose         *widget.IconButton
+	undo, slimUndo           *widget.Link
 	badge                    *doneBadge
 	graph                    *opGraph
 	slimTitle, slimNote      *widget.Label
 	unfold, slimCancel       *widget.IconButton
 	slimBadge                *doneBadge
 	ring                     *opRing
-	fromRow, fileRow, pauses *shownIf
+	fromRow, noteRow, pauses *shownIf
+	undos, slimUndos         *shownIf
+	running, ended           *shownIf
+	slimRunning, slimEnded   *shownIf
 	full, slim               gunim.Node
 }
 
@@ -211,12 +226,14 @@ func newOpCard(v OpView) *opCard {
 		l.Size, l.Color, l.MaxLines = SmallText, ink, 1
 		return l
 	}
+	dismiss := func(*gunim.UI) gunim.Intent { return DismissOp{ID: c.id} }
+	undo := func(*gunim.UI) gunim.Intent { return UndoOp{ID: c.id} }
 	c.icon = widget.NewIcon(opIcon(v.Kind), "")
 	c.icon.Color = widget.Accent
 	c.title = widget.NewLabel("")
 	c.title.Face, c.title.MaxLines = widget.BoldFont, 1
-	c.from, c.moved, c.items, c.file = small(Faint), small(widget.Ink), small(Faint), small(Faint)
-	c.file.MaxLines = 2
+	c.from, c.moved, c.file, c.note = small(Faint), small(Faint), small(Faint), small(Faint)
+	c.note.MaxLines = 2
 	c.big = widget.NewLabel("")
 	c.big.Face, c.big.Size, c.big.MaxLines = widget.BoldFont, OpSpeedSize, 1
 	c.left = widget.NewLabel("")
@@ -227,21 +244,29 @@ func newOpCard(v OpView) *opCard {
 	c.fold.OnClick = func(u *gunim.UI) gunim.Intent { c.setFold(true, u); return nil }
 	c.cancel = widget.NewIconButton(icon.X, "Cancel")
 	c.cancel.OnClick = widget.Sends(CancelOp{ID: v.ID})
+	c.undo = widget.NewLink("Undo")
+	c.undo.OnClick = undo
+	c.close = widget.NewIconButton(icon.X, "Close")
+	c.close.OnClick = dismiss
 	c.graph = newOpGraph(&c.done)
 	c.pauses = &shownIf{child: c.pause}
-	buttons := widget.Row(c.pauses, c.fold, c.cancel)
-	buttons.Gap = smallGap
-	c.badge = newDoneBadge(buttons)
-	head := widget.Row(c.icon, c.title, c.badge).Grow(c.title, 1)
+	runButtons := widget.Row(c.pauses, c.fold, c.cancel)
+	runButtons.Gap = smallGap
+	c.undos = &shownIf{child: c.undo}
+	endButtons := widget.Row(c.undos, c.close)
+	endButtons.Cross, endButtons.Gap = widget.CrossCenter, cardGap
+	c.running, c.ended = &shownIf{child: runButtons, on: true}, &shownIf{child: endButtons}
+	c.badge = newDoneBadge(c.icon)
+	head := widget.Row(c.badge, c.title, c.running, c.ended).Grow(c.title, 1)
 	head.Cross = widget.CrossCenter
 	head.Gap = cardGap
 	speed := widget.Row(c.big, c.left).Grow(c.big, 1)
 	speed.Cross = widget.CrossEnd
-	foot := widget.Row(c.moved, c.items).Grow(c.moved, 1)
+	foot := widget.Row(c.file, c.moved).Grow(c.file, 1)
 	foot.Gap = cardGap
 	c.fromRow = &shownIf{child: c.from, top: -2}
-	c.fileRow = &shownIf{child: c.file, top: 0}
-	full := widget.Column(head, c.fromRow, speed, c.graph, foot, c.fileRow)
+	c.noteRow = &shownIf{child: c.note, top: 0}
+	full := widget.Column(head, c.fromRow, speed, c.graph, foot, c.noteRow)
 	full.Cross, full.Gap = widget.CrossStretch, cardGap
 	c.full = &padded{child: full, pad: geom.Insets{Left: 14, Top: 10, Right: 10, Bottom: 12}}
 
@@ -253,10 +278,18 @@ func newOpCard(v OpView) *opCard {
 	c.unfold.OnClick = func(u *gunim.UI) gunim.Intent { c.setFold(false, u); return nil }
 	c.slimCancel = widget.NewIconButton(icon.X, "Cancel")
 	c.slimCancel.OnClick = widget.Sends(CancelOp{ID: v.ID})
-	slimButtons := widget.Row(c.unfold, c.slimCancel)
-	slimButtons.Gap = smallGap
-	c.slimBadge = newDoneBadge(slimButtons)
-	slim := widget.Row(c.ring, c.slimTitle, c.slimNote, c.slimBadge).Grow(c.slimTitle, 1)
+	c.slimUndo = widget.NewLink("Undo")
+	c.slimUndo.OnClick = undo
+	c.slimClose = widget.NewIconButton(icon.X, "Close")
+	c.slimClose.OnClick = dismiss
+	slimRun := widget.Row(c.unfold, c.slimCancel)
+	slimRun.Gap = smallGap
+	c.slimUndos = &shownIf{child: c.slimUndo}
+	slimEnd := widget.Row(c.slimUndos, c.slimClose)
+	slimEnd.Cross, slimEnd.Gap = widget.CrossCenter, cardGap
+	c.slimRunning, c.slimEnded = &shownIf{child: slimRun, on: true}, &shownIf{child: slimEnd}
+	c.slimBadge = newDoneBadge(c.ring)
+	slim := widget.Row(c.slimBadge, c.slimTitle, c.slimNote, c.slimRunning, c.slimEnded).Grow(c.slimTitle, 1)
 	slim.Cross, slim.Gap = widget.CrossCenter, cardGap
 	c.slim = &padded{child: slim, pad: geom.Insets{Left: 12, Top: 6, Right: 6, Bottom: 6}}
 	c.set(v, nil)
@@ -279,36 +312,60 @@ func opIcon(kind OpKind) *icon.Icon {
 }
 
 func (c *opCard) set(v OpView, u *gunim.UI) {
-	c.view.ID, c.view.Title, c.view.From, c.view.CanPause = v.ID, v.Title, v.From, v.CanPause
-	c.title.Text, c.slimTitle.Text = v.Title, v.Title
+	c.view = v
+	title := v.Title
+	if v.To != "" {
+		title = strings.TrimSuffix(title, " to "+v.To)
+	}
+	c.title.Text, c.slimTitle.Text = title, title
 	c.icon.Icon = opIcon(v.Kind)
-	c.from.Text = "From " + v.From
-	c.fromRow.on = v.From != ""
+	switch {
+	case v.From != "" && v.To != "":
+		c.from.Text = v.From + " → " + v.To
+	case v.From != "":
+		c.from.Text = "From " + v.From
+	case v.To != "":
+		c.from.Text = "To " + v.To
+	}
+	c.fromRow.on = v.From != "" || v.To != ""
 	c.pauses.on = v.CanPause
+	c.undos.on, c.slimUndos.on = v.Undo, v.Undo
 	c.progress(v.OpProgress, u)
+	if v.Ended && u != nil {
+		c.cheer(u)
+	}
 }
+
+// smallFiles is the size an operation's items are on the whole under
+// which its card says how many items go a second, not how many bytes.
+const smallFiles = 1 << 20
 
 // progress takes how far the operation has got.
 func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	c.view.OpProgress = p
-	c.done.to(float64(p.Done), p.Unknown, p.Paused)
+	waiting := p.Waiting != ""
+	c.done.to(float64(p.Done), p.Unknown, p.Paused || waiting)
 	c.graph.unknown = p.Unknown
-	c.graph.paused = p.Paused
+	c.graph.paused = p.Paused || waiting
 	c.graph.bar = p.BytesTotal == 0
 	if !p.Paused {
 		c.graph.speed = p.Speed
 	}
 	cheered := c.badge.cheering
-	var big, left, note string
+	// Many items are counted: how many are done is what the user waits on.
+	many := p.ItemsTotal > 1
+	var big, left, file, moved, note string
 	switch {
 	case cheered:
 		big = "Done"
 	case p.Paused:
 		big = "Paused"
-	case p.Waiting != "":
+	case waiting:
 		big = "Waiting"
 	case p.Unknown:
 		big = "Counting…"
+	case many:
+		big = count(p.Items) + " of " + count(p.ItemsTotal)
 	case p.BytesTotal > 0 && p.Speed > 0:
 		big = humanBytes(int64(p.Speed)) + "/s"
 	case p.Done > 0:
@@ -316,40 +373,55 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	default:
 		big = "Starting…"
 	}
-	if !cheered && !p.Paused && !p.Unknown && p.Left >= 1 {
-		left = timeLeft(p.Left)
-	}
-	moved := ""
-	if !p.Unknown {
-		moved = percent(p.Done)
-		if p.BytesTotal > 0 {
-			moved += "  ·  " + humanBytes(p.Bytes) + " of " + humanBytes(p.BytesTotal)
+	switch {
+	case cheered:
+		if c.view.Took >= 1 {
+			left = "took " + duration(c.view.Took)
 		}
+	case !p.Paused && !waiting && !p.Unknown && p.Left >= 1:
+		left = timeLeft(p.Left)
+	case many && !p.Unknown:
+		left = percent(p.Done)
 	}
-	items := ""
-	if p.ItemsTotal > 1 {
-		items = count(p.Items) + " of " + plural(p.ItemsTotal, "item")
-	}
-	file := p.File
-	if p.Waiting != "" {
-		file = p.Waiting
+	if !p.Unknown {
+		switch {
+		case cheered:
+		case many:
+			file = p.File
+		default:
+			file = percent(p.Done)
+		}
+		if p.BytesTotal > 0 {
+			moved = humanBytes(p.Bytes) + " of " + humanBytes(p.BytesTotal)
+			if many && !cheered && !p.Paused && !waiting {
+				if rate := c.rate(p); rate != "" {
+					moved += " · " + rate
+				}
+			}
+		}
 	}
 	switch {
 	case cheered:
-		note = "Done"
+		c.note.Text = c.view.Note
+	case waiting:
+		c.note.Text = p.Waiting
+	}
+	switch {
+	case cheered:
 	case p.Paused:
 		note = "Paused"
+	case waiting:
+		note = "Waiting"
 	case p.Unknown:
 		note = "Counting…"
 	default:
 		note = percent(p.Done)
-		if left != "" {
+		if left != "" && left != note {
 			note += " · " + left
 		}
 	}
-	c.big.Text, c.left.Text, c.moved.Text, c.items.Text, c.file.Text = big, left, moved, items, file
-	// One item is named in the title already.
-	c.fileRow.on = file != "" && !cheered && (p.ItemsTotal > 1 || p.Waiting != "")
+	c.big.Text, c.left.Text, c.moved.Text, c.file.Text = big, left, moved, file
+	c.noteRow.on = c.note.Text != "" && (cheered || waiting)
 	c.slimNote.Text = note
 	c.pause.Icon, c.pause.Tooltip = icon.Pause, "Pause"
 	if p.Paused {
@@ -360,20 +432,34 @@ func (c *opCard) progress(p OpProgress, u *gunim.UI) {
 	}
 }
 
-// cheer shows the operation went well.
+// rate says how fast the operation goes: in items a second where its
+// items are small, else in bytes.
+func (c *opCard) rate(p OpProgress) string {
+	if p.ItemSpeed > 0 && p.BytesTotal/int64(p.ItemsTotal) < smallFiles {
+		return fmt.Sprintf("%.0f items/s", p.ItemSpeed)
+	}
+	if p.Speed > 0 {
+		return humanBytes(int64(p.Speed)) + "/s"
+	}
+	return ""
+}
+
+// cheer shows the operation went well: the icon turns to a check, and
+// the buttons that steer it give way to Undo, where it can be undone,
+// and one to close the card.
 func (c *opCard) cheer(u *gunim.UI) {
 	if c.badge.cheering {
 		return
 	}
 	c.done.to(1, false, false)
 	c.done.finish()
-	c.pause.OnClick, c.fold.OnClick, c.cancel.OnClick = widget.Sends(nil), widget.Sends(nil), widget.Sends(nil)
-	c.unfold.OnClick, c.slimCancel.OnClick = widget.Sends(nil), widget.Sends(nil)
+	c.running.on, c.slimRunning.on = false, false
+	c.ended.on, c.slimEnded.on = true, true
 	c.badge.cheer(u)
 	c.slimBadge.cheer(u)
 	c.graph.cheer(u)
 	p := c.view.OpProgress
-	p.Done, p.Bytes, p.Items, p.Paused = 1, p.BytesTotal, p.ItemsTotal, false
+	p.Done, p.Bytes, p.Items, p.Paused, p.Waiting = 1, p.BytesTotal, p.ItemsTotal, false, ""
 	c.progress(p, u)
 }
 
@@ -449,15 +535,17 @@ func (c *opCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	p.RRectStroke(r, radius, paint.Fill{}, paint.Stroke{Width: 1, Color: widget.DialogBorder.Get(th)})
 	t := ease(c.folded.Value())
 	defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: 1, Clip: true, Radius: radius})()
-	if t < 0.999 {
+	// One side fades out before the other fades in, so their words never
+	// lie over each other.
+	if out := ease(1 - 2*t); out > 0.001 {
 		func() {
-			defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: 1 - t})()
+			defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: out})()
 			kids.At(0).Paint(p)
 		}()
 	}
-	if t > 0.001 {
+	if in := ease(2*t - 1); in > 0.001 {
 		func() {
-			defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: t})()
+			defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: in})()
 			kids.At(1).Paint(p)
 		}()
 	}
@@ -473,20 +561,23 @@ func percent(d float32) string {
 	return fmt.Sprintf("%d%%", n)
 }
 
-// timeLeft says secs as the time left, to the second under a minute,
-// to the minute under an hour, and in hours and minutes beyond.
-func timeLeft(secs float64) string {
+// timeLeft says secs as the time left.
+func timeLeft(secs float64) string { return duration(secs) + " left" }
+
+// duration says secs to the second under a minute, to the minute under
+// an hour, and in hours and minutes beyond.
+func duration(secs float64) string {
 	s := int(math.Round(secs))
 	switch {
 	case s < 60:
-		return fmt.Sprintf("%d s left", s)
+		return fmt.Sprintf("%d s", s)
 	case s < 3600:
 		if m, r := s/60, s%60; m < 10 && r != 0 {
-			return fmt.Sprintf("%d min %d s left", m, r)
+			return fmt.Sprintf("%d min %d s", m, r)
 		}
-		return fmt.Sprintf("%d min left", (s+30)/60)
+		return fmt.Sprintf("%d min", (s+30)/60)
 	default:
-		return fmt.Sprintf("%d h %d min left", s/3600, (s%3600+30)/60)
+		return fmt.Sprintf("%d h %d min", s/3600, (s%3600+30)/60)
 	}
 }
 

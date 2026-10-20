@@ -134,6 +134,9 @@ func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
 	}
 	id, ctx, cancel := a.newOp(title, kind)
 	a.ops.running[id].from = a.placeLabel(t.FromFS, ps.Dir(t.Paths[0]))
+	if t.Zip == "" {
+		a.ops.running[id].to = where
+	}
 	p := &TransferProgress{a: a, id: id, cancel: cancel}
 	do, w := a.opts.Transfer, a.win
 	a.ops.wg.Go(func() {
@@ -159,17 +162,14 @@ func (a *app) transferred(id int, t Transfer, ps PathStyle, done string, err err
 	delete(a.ops.running, id)
 	r.cancel()
 	a.dropDialogs(id)
-	if r.visible {
-		a.patch(OpDone{ID: id, OK: err == nil})
-		if err == nil {
-			r.title = done
-			a.cheer(id, r)
-		}
-		a.publishOps()
+	if err != nil {
+		a.endCard(r, false, Notice{})
 	}
 	switch {
 	case err == nil:
-		a.patch(Notice{Title: done, Kind: "success"})
+		if n := (Notice{Title: done, Kind: "success"}); !a.endCard(r, true, n) {
+			a.patch(n)
+		}
 	case stopped || errors.Is(err, errTransferStopped) || errors.Is(err, context.Canceled):
 		n := Notice{Title: "Stopped: " + r.title, Kind: "warning"}
 		if r.last.items > 0 {
