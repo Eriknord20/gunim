@@ -315,6 +315,59 @@ type Position struct {
 	// moved before: a tempo-synced LFO. It holds where Tempo is above
 	// zero.
 	Beat float64
+	// Groove is the swing the music plays in at Frame: a host whose
+	// notes swing tells it here, so a plugin that keeps time, as a
+	// tempo-synced LFO or a gate does, can swing with them. The zero
+	// Groove is straight.
+	Groove Groove
+}
+
+// Groove is a swing: the music's grid steps, each Grid quarter notes
+// long, pair up from the beat From, and the first step of each pair
+// takes the share Swing of the pair, 0.5 being straight and 2/3 a
+// triplet's feel. A note written on a pair's second step plays Swing
+// of the way into the pair, and one between moves along the same line,
+// so the groove is a warp of time that never reorders the music.
+//
+// A plugin that keeps time on its own reads the beat it plays at
+// through Written: a step it plays every grid step from the beat
+// Written gives lands where the host's swung notes do.
+type Groove struct {
+	Grid, Swing, From float64
+}
+
+// straight reports whether g moves nothing.
+func (g Groove) straight() bool {
+	return g.Grid <= 0 || g.Swing <= 0 || g.Swing >= 1 || g.Swing == 0.5
+}
+
+// Written returns where beat, a place in quarter notes as the music
+// plays it, is written on the straight grid: Played's inverse.
+func (g Groove) Written(beat float64) float64 {
+	if g.straight() {
+		return beat
+	}
+	pair := 2 * g.Grid
+	a := g.From + math.Floor((beat-g.From)/pair)*pair
+	split := a + pair*g.Swing
+	if beat < split {
+		return a + (beat-a)/(2*g.Swing)
+	}
+	return a + g.Grid + (beat-split)/(2*(1-g.Swing))
+}
+
+// Played returns where beat, a place in quarter notes as it is written
+// on the straight grid, plays in the groove.
+func (g Groove) Played(beat float64) float64 {
+	if g.straight() {
+		return beat
+	}
+	pair := 2 * g.Grid
+	a := g.From + math.Floor((beat-g.From)/pair)*pair
+	if x := beat - a; x < g.Grid {
+		return a + x*2*g.Swing
+	}
+	return a + pair*g.Swing + (beat-a-g.Grid)*2*(1-g.Swing)
 }
 
 // BeatAt returns where frame f of a block n frames long falls, in
