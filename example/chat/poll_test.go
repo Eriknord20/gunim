@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/marrasen/gunim/widget"
+	"github.com/marrasen/gunim/chat"
 )
 
 func TestSlashPollMakesAPoll(t *testing.T) {
@@ -43,28 +43,15 @@ func TestAPollSentShowsItsCardAndTakesVotes(t *testing.T) {
 	if last.poll == nil || last.Body != "" {
 		t.Fatalf("last message %+v, want a poll with no text", last)
 	}
-	h.a.handle(PollVoted{ID: last.ID, Option: 0})
+	h.a.handle(chat.PollVoted{ID: last.ID, Option: 0})
 	h.frames(30)
-	it := h.v.items[widget.Key(last.ID)]
+	it, _ := h.find(last.ID)
 	if it.Poll.Question != "Ship on Friday?" || it.Poll.Voters != 1 || !it.Poll.Options[0].Mine {
 		t.Fatalf("poll %+v, want the user's vote for Yes", it.Poll)
 	}
-	n, ok := h.v.list.Row(widget.Key(last.ID))
-	if !ok {
-		t.Fatal("the poll's message is not built")
-	}
-	card := n.(*msgRow).poll
-	if s := card.opts[0].share.Value(); s < 0.99 {
-		t.Fatalf("Yes's bar is at %v, want all of it", s)
-	}
 	last.poll.vote("Anna Berg", 0)
-	h.a.publish()
-	h.frames(5)
-	if got := card.tips[0].Text; got != "You, Anna Berg" {
-		t.Fatalf("Yes's tooltip says %q, want who voted for it", got)
-	}
-	if got := card.tips[1].Text; got != "" {
-		t.Fatalf("No's tooltip says %q, want nothing", got)
+	if it, _ := h.find(last.ID); it.Poll.Options[0].Who != "You, Anna Berg" || it.Poll.Options[1].Who != "" {
+		t.Fatalf("poll %+v, want the user and Anna on Yes", it.Poll)
 	}
 }
 

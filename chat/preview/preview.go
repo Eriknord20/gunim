@@ -1,4 +1,7 @@
-package main
+// Package preview fetches what a web page says of itself, its title, description, site and picture, for the card
+// a chat shows under a message with a link. The sender's app fetches it, so neither the server nor the readers ask
+// the page.
+package preview
 
 import (
 	"bytes"
@@ -30,48 +33,49 @@ const (
 	thumbSide    = 160
 )
 
-// page is what a page says of itself: its title, description and site, and its picture, shrunk to a thumbnail.
-type page struct {
-	url, site, title, description string
-	picture                       image.Image
+// Page is what a page says of itself: its address, title, description and site, and its picture, shrunk to a
+// thumbnail.
+type Page struct {
+	URL, Site, Title, Description string
+	Picture                       image.Image
 }
 
 // linkPattern finds web addresses in a message's text.
 var linkPattern = regexp.MustCompile(`https?://[^\s<>()\[\]]+`)
 
-// firstLink returns the first web address in text, without the punctuation that ends a sentence, or "".
-func firstLink(text string) string {
+// FirstLink returns the first web address in text, without the punctuation that ends a sentence, or "".
+func FirstLink(text string) string {
 	return strings.TrimRight(linkPattern.FindString(text), ".,;:!?'\"")
 }
 
-// fetchPage reads the page at link and returns what it says of itself: its Open Graph title, description, site name
+// Fetch reads the page at link and returns what it says of itself: its Open Graph title, description, site name
 // and picture, or else its title and description. It fails for a page that says nothing of itself.
-func fetchPage(ctx context.Context, client *http.Client, link string) (page, error) {
+func Fetch(ctx context.Context, client *http.Client, link string) (Page, error) {
 	ctx, cancel := context.WithTimeout(ctx, previewWait)
 	defer cancel()
 	base, err := url.Parse(link)
 	if err != nil {
-		return page{}, err
+		return Page{}, err
 	}
 	body, typ, err := get(ctx, client, link, pageLimit)
 	if err != nil {
-		return page{}, err
+		return Page{}, err
 	}
 	if mt, _, _ := mime.ParseMediaType(typ); mt != "text/html" {
-		return page{}, fmt.Errorf("%s is %s, not a page", link, typ)
+		return Page{}, fmt.Errorf("%s is %s, not a page", link, typ)
 	}
 	p, pictureURL := readHead(string(body))
-	p.url = link
-	if p.site == "" {
-		p.site = strings.TrimPrefix(base.Hostname(), "www.")
+	p.URL = link
+	if p.Site == "" {
+		p.Site = strings.TrimPrefix(base.Hostname(), "www.")
 	}
-	if p.title == "" {
-		return page{}, fmt.Errorf("%s has no title", link)
+	if p.Title == "" {
+		return Page{}, fmt.Errorf("%s has no title", link)
 	}
 	if pictureURL != "" {
 		if ref, err := base.Parse(pictureURL); err == nil {
 			// A page without its picture still makes a card.
-			p.picture, _ = fetchPicture(ctx, client, ref.String())
+			p.Picture, _ = fetchPicture(ctx, client, ref.String())
 		}
 	}
 	return p, nil
@@ -118,7 +122,7 @@ func fetchPicture(ctx context.Context, client *http.Client, link string) (image.
 }
 
 // readHead reads what a page's head says of the page, and where its picture is.
-func readHead(doc string) (p page, pictureURL string) {
+func readHead(doc string) (p Page, pictureURL string) {
 	z := html.NewTokenizer(strings.NewReader(doc))
 	var title strings.Builder
 	inTitle := false
@@ -160,11 +164,11 @@ func readHead(doc string) (p page, pictureURL string) {
 				}
 				switch key {
 				case "og:title":
-					p.title = content
+					p.Title = content
 				case "og:description":
-					p.description = content
+					p.Description = content
 				case "og:site_name":
-					p.site = content
+					p.Site = content
 				case "og:image":
 					pictureURL = content
 				case "twitter:image":
@@ -182,12 +186,12 @@ func readHead(doc string) (p page, pictureURL string) {
 }
 
 // finish fills what the Open Graph tags left out from the page's title and description.
-func finish(p page, title, desc string) page {
-	if p.title == "" {
-		p.title = strings.Join(strings.Fields(title), " ")
+func finish(p Page, title, desc string) Page {
+	if p.Title == "" {
+		p.Title = strings.Join(strings.Fields(title), " ")
 	}
-	if p.description == "" {
-		p.description = desc
+	if p.Description == "" {
+		p.Description = desc
 	}
 	return p
 }

@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/marrasen/gunim/chat"
 )
 
 // transfer is a file on its way up to a project's files: its name, the folder it goes to, how many of its bytes
@@ -15,7 +17,7 @@ import (
 type transfer struct {
 	id, name, folder string
 	size, done       int64
-	state            TransferState
+	state            chat.TransferState
 	reason           string
 	// seq changes with each start, so a tick from an attempt given up does nothing.
 	seq int
@@ -38,13 +40,13 @@ func (a *app) upload(p *project, folder string, paths []string) {
 		info, err := os.Stat(path)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			t.state, t.reason = TransferFailed, "the file is not there"
+			t.state, t.reason = chat.TransferFailed, "the file is not there"
 			continue
 		case err != nil:
-			t.state, t.reason = TransferFailed, err.Error()
+			t.state, t.reason = chat.TransferFailed, err.Error()
 			continue
 		case info.IsDir():
-			t.state, t.reason = TransferFailed, "folders cannot be uploaded yet"
+			t.state, t.reason = chat.TransferFailed, "folders cannot be uploaded yet"
 			continue
 		}
 		t.size = info.Size()
@@ -57,22 +59,22 @@ func (a *app) upload(p *project, folder string, paths []string) {
 func (a *app) startTransfer(p *project, t *transfer) {
 	t.seq++
 	t.done, t.reason = 0, ""
-	if a.link != Online {
-		t.state = TransferWaiting
+	if a.link != chat.Online {
+		t.state = chat.TransferWaiting
 		return
 	}
-	t.state = TransferEncrypting
+	t.state = chat.TransferEncrypting
 	seq := t.seq
 	a.after(encryptFor, func() {
-		if t.seq != seq || t.state != TransferEncrypting {
+		if t.seq != seq || t.state != chat.TransferEncrypting {
 			return
 		}
-		if a.link != Online {
-			t.state = TransferWaiting
+		if a.link != chat.Online {
+			t.state = chat.TransferWaiting
 			a.publish()
 			return
 		}
-		t.state = TransferUploading
+		t.state = chat.TransferUploading
 		a.tickTransfer(p, t, seq)
 		a.publish()
 	})
@@ -81,14 +83,14 @@ func (a *app) startTransfer(p *project, t *transfer) {
 // tickTransfer sends the next part of t, and when all of it has gone, puts the file in its folder.
 func (a *app) tickTransfer(p *project, t *transfer, seq int) {
 	a.after(uploadTick, func() {
-		if t.seq != seq || t.state != TransferUploading {
+		if t.seq != seq || t.state != chat.TransferUploading {
 			return
 		}
 		switch {
-		case a.link != Online:
-			t.state = TransferWaiting
+		case a.link != chat.Online:
+			t.state = chat.TransferWaiting
 		case a.rng.Float64() < a.failRate/20:
-			t.state, t.reason = TransferFailed, "the connection dropped"
+			t.state, t.reason = chat.TransferFailed, "the connection dropped"
 		default:
 			// Somewhere from 2 to 6 MB a second.
 			t.done = min(t.size, t.done+int64(200_000+a.rng.IntN(400_000)))
@@ -96,7 +98,7 @@ func (a *app) tickTransfer(p *project, t *transfer, seq int) {
 				a.tickTransfer(p, t, seq)
 				break
 			}
-			t.state = TransferUploaded
+			t.state = chat.TransferUploaded
 			a.store(p, t)
 			a.after(uploadedShown, func() {
 				if t.seq == seq {
@@ -128,7 +130,7 @@ func (a *app) store(p *project, t *transfer) {
 func (a *app) resumeTransfers() {
 	for _, p := range a.projects {
 		for _, t := range p.transfers {
-			if t.state == TransferWaiting {
+			if t.state == chat.TransferWaiting {
 				a.startTransfer(p, t)
 			}
 		}
@@ -136,10 +138,10 @@ func (a *app) resumeTransfers() {
 }
 
 // transfersOf returns p's transfers as the view shows them.
-func transfersOf(p *project) []Transfer {
-	out := make([]Transfer, 0, len(p.transfers))
+func transfersOf(p *project) []chat.Transfer {
+	out := make([]chat.Transfer, 0, len(p.transfers))
 	for _, t := range p.transfers {
-		out = append(out, Transfer{ID: t.id, Name: t.name, Folder: t.folder, Size: t.size, Done: t.done,
+		out = append(out, chat.Transfer{ID: t.id, Name: t.name, Folder: t.folder, Size: t.size, Done: t.done,
 			State: t.state, Reason: t.reason})
 	}
 	return out

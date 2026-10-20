@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/marrasen/gunim/chat"
 )
 
 // folder is a folder of a project's files.
@@ -98,7 +100,7 @@ func (a *app) share(w *window, v FileShared) {
 		return
 	}
 	m := a.add(p.convs[c], me, "", time.Now().Round(0))
-	m.file = FileRef{Folder: v.Folder, Name: v.Name, Size: f.files[i].size}
+	m.file = chat.FileRef{Folder: v.Folder, Name: v.Name, Size: f.files[i].size}
 	p.convs[c].readTo = m.ID
 	a.send(m)
 	w.area = ""

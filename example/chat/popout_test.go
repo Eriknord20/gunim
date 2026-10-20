@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/widget"
@@ -19,17 +20,17 @@ func TestAConversationPopsOutIntoAWindowOfItsOwn(t *testing.T) {
 		return w.Client(), nil
 	}
 	general := h.a.current
-	h.a.handle(PopOut{})
+	h.a.handle(chat.PopOut{})
 	if len(opened) != 1 || len(h.a.windows) != 2 {
 		t.Fatalf("%d windows opened and %d open, want one popped out", len(opened), len(h.a.windows))
 	}
 	pop := h.a.windows[1]
-	if s := h.a.stateOf(pop); !s.Solo || s.Current != general.ID {
-		t.Fatalf("the popped out window shows %q, solo %v; want %q alone", s.Current, s.Solo, general.ID)
+	if s := h.a.stateOf(pop); !s.Solo || s.ID != general.ID {
+		t.Fatalf("the popped out window shows %q, solo %v; want %q alone", s.ID, s.Solo, general.ID)
 	}
 
 	// A message written in the popped out window shows in the main one too.
-	h.a.handleIn(pop, Submitted{Text: "From the other window"})
+	h.a.handleIn(pop, chat.Submitted{Text: "From the other window"})
 	h.frames(5)
 	if _, ok := h.item("From the other window"); !ok {
 		t.Fatal("the main window does not show the message sent from the popped out one")

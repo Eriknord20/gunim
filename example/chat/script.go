@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -39,7 +40,7 @@ func (a *app) scriptStep(step string) {
 	switch verb {
 	case "reply":
 		if n := len(a.current.msgs); n >= 2 {
-			a.handle(ReplyAsked{ID: a.current.msgs[n-2].ID})
+			a.handle(chat.ReplyAsked{ID: a.current.msgs[n-2].ID})
 		}
 	case "type":
 		err = a.c.Input(a.ctx, input.TextInput{Text: unquote(arg)})
@@ -48,7 +49,7 @@ func (a *app) scriptStep(step string) {
 	case "paste":
 		err = a.c.Input(a.ctx, input.KeyPress{Key: input.KeyV, Mods: input.ModControl})
 	case "offline", "online":
-		if (a.link == Online) == (verb == "offline") {
+		if (a.link == chat.Online) == (verb == "offline") {
 			a.handle(LinkToggled{})
 		}
 	case "typing":
@@ -56,11 +57,11 @@ func (a *app) scriptStep(step string) {
 	case "vote":
 		if n := len(a.current.msgs); n > 0 {
 			i, _ := strconv.Atoi(arg)
-			a.handle(PollVoted{ID: a.current.msgs[n-1].ID, Option: i})
+			a.handle(chat.PollVoted{ID: a.current.msgs[n-1].ID, Option: i})
 		}
 	case "react":
 		if n := len(a.current.msgs); n > 0 {
-			a.handle(ReactionToggled{ID: a.current.msgs[n-1].ID, Emoji: unquote(arg)})
+			a.handle(chat.ReactionToggled{ID: a.current.msgs[n-1].ID, Emoji: unquote(arg)})
 		}
 	case "click":
 		at := points(arg)[0]
@@ -90,7 +91,7 @@ func (a *app) scriptStep(step string) {
 	case "drop":
 		a.handle(FilesDropped{Folder: a.path, Paths: strings.Split(arg, "|")})
 	case "popout":
-		a.handle(PopOut{})
+		a.handle(chat.PopOut{})
 	case "shot":
 		err = writeShot(a.ctx, a.windows[len(a.windows)-1].c, arg)
 	case "theme":
