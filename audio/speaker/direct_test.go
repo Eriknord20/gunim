@@ -3,6 +3,7 @@ package speaker
 import (
 	"math"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,4 +166,101 @@ func TestSetChangesDirect(t *testing.T) {
 		t.Fatalf("after Direct was cleared the driver opened %d times, direct %v", f.opens, ringOf(t, s).direct)
 	}
 	waitFor(t, "the ring to fill", ringOf(t, s).primed.Load)
+}
+
+// gate is a source that, once held, stops in its next Read until let
+// go, and says on in that it stopped there.
+type gate struct {
+	hold    atomic.Bool
+	in, out chan struct{}
+}
+
+func (g *gate) Read(dst []float32) (int, error) {
+	if g.hold.CompareAndSwap(true, false) {
+		g.in <- struct{}{}
+		<-g.out
+	}
+	clear(dst)
+	return len(dst) / 2, nil
+}
+
+// TestClosingADirectDriverWaitsOutItsMix closes a direct output while
+// the driver's thread mixes a buffer: Close waits for the buffer to be
+// done, and a buffer the driver takes after it is silent, the mixer
+// left unread, so no two threads ever mix at once.
+func TestClosingADirectDriverWaitsOutItsMix(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32})
+	m := audio.NewMixer()
+	g := &gate{in: make(chan struct{}), out: make(chan struct{})}
+	m.Play(g, audio.Options{})
+	s, err := Open(m, Options{Driver: "Fake", Direct: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.take()
+	g.hold.Store(true)
+	go f.take()
+	<-g.in
+	closed := make(chan error)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while the driver's thread mixed", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(g.out)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close never returned once the mix was done")
+	}
+	was := m.Mixed()
+	if out := f.take(); slices.ContainsFunc(out, func(v float32) bool { return v != 0 }) || m.Mixed() != was {
+		t.Fatalf("a buffer taken after Close mixed %d frames", m.Mixed()-was)
+	}
+}
+
+// slow is a source that, while on, takes longer to read than a buffer
+// of 64 frames at 48 kHz plays.
+type slow struct{ on atomic.Bool }
+
+func (s *slow) Read(dst []float32) (int, error) {
+	if s.on.Load() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	clear(dst)
+	return len(dst) / 2, nil
+}
+
+// TestADirectBufferMixedLateIsADropout has the mixer take longer than
+// a buffer plays to mix one: it counts as a dropout, and the speaker
+// works no further ahead for it.
+func TestADirectBufferMixedLateIsADropout(t *testing.T) {
+	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
+	m := audio.NewMixer()
+	src := &slow{}
+	m.Play(src, audio.Options{})
+	s, err := Open(m, Options{Driver: "Fake", Direct: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f.take()
+	if d := s.State().Dropouts; d != 0 {
+		t.Fatalf("%d dropouts before any buffer was late", d)
+	}
+	was := s.Latency()
+	src.on.Store(true)
+	f.take()
+	src.on.Store(false)
+	if d := s.State().Dropouts; d != 1 {
+		t.Fatalf("a buffer mixed late counts %d dropouts, want 1", d)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if s.Latency() != was {
+		t.Fatalf("a late buffer had the speaker work %v ahead, from %v", s.Latency(), was)
+	}
 }
