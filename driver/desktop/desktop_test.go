@@ -314,7 +314,11 @@ func TestAFixedWindowStillReshapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dw.Close()
+	defer func() {
+		if err := dw.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	w := dw.(*Window)
 	// As a plugin's editor that sizes itself, with a grip of its own,
 	// grows the window it is in.
