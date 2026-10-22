@@ -5,6 +5,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -74,7 +75,7 @@ func (r *rail) button(i int) geom.Rect {
 // Paint implements [gunim.Node].
 func (r *rail) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
-	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(RailFill.Get(th)))
+	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(chat.RailFill.Get(th)))
 	white := widget.ButtonStrongInk.Get(th)
 	for i, pr := range r.projects {
 		b := r.button(i)
@@ -84,7 +85,7 @@ func (r *rail) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 			p.RRect(bar, 2, paint.Solid(widget.Ink.Get(th)))
 		}
 		radius := 12 + (railButton/2-12)*min(max(round, 0), 1)
-		p.RRect(b, radius, paint.Solid(avatarTint(pr.Name)))
+		p.RRect(b, radius, paint.Solid(chat.AvatarTint(pr.Name)))
 		s := r.shorts[i]
 		c := b.Center()
 		s.Paint(p, geom.Pt(c.X-s.Advance/2, c.Y-s.Height()/2), white)
@@ -92,7 +93,7 @@ func (r *rail) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 			n := r.counts[i]
 			w := max(18, n.Advance+10)
 			badge := geom.Rc(b.Max.X-w+4, b.Max.Y-14, w, 18)
-			p.RRectStroke(badge, 9, paint.Solid(BadgeFill.Get(th)), paint.Stroke{Width: 2, Color: RailFill.Get(th)})
+			p.RRectStroke(badge, 9, paint.Solid(chat.BadgeFill.Get(th)), paint.Stroke{Width: 2, Color: chat.RailFill.Get(th)})
 			n.Paint(p, geom.Pt(badge.Center().X-n.Advance/2, badge.Center().Y-n.Height()/2), white)
 		}
 	}
@@ -178,29 +179,29 @@ func (r *convRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	th := f.Theme
 	full := geom.Rect{Max: box.Point()}
 	if h := min(r.hover.Value(), 1); h > 0.01 {
-		p.RRect(full, 7, paint.Solid(fade(SidebarHot.Get(th), h)))
+		p.RRect(full, 7, paint.Solid(fade(chat.SidebarHot.Get(th), h)))
 	}
 	if on := min(r.on.Value(), 1); on > 0.01 {
-		p.RRect(full, 7, paint.Solid(fade(SidebarOn.Get(th), on)))
+		p.RRect(full, 7, paint.Solid(fade(chat.SidebarOn.Get(th), on)))
 	}
-	ink := Faint.Get(th)
+	ink := chat.Faint.Get(th)
 	if r.conv.Unread > 0 || r.on.Target() > 0 {
 		ink = widget.Ink.Get(th)
 	}
 	mid := box.H / 2
 	if ic := areaIcon(r.conv.Area); ic != nil {
-		widget.PaintIcon(p, th, ic, geom.Rc(11, mid-8, 16, 16), Faint.Get(th))
+		widget.PaintIcon(p, th, ic, geom.Rc(11, mid-8, 16, 16), chat.Faint.Get(th))
 	} else if r.conv.Direct {
-		p.RRect(geom.Rc(14, mid-5, 10, 10), 5, paint.Solid(avatarTint(r.conv.Name)))
+		p.RRect(geom.Rc(14, mid-5, 10, 10), 5, paint.Solid(chat.AvatarTint(r.conv.Name)))
 	} else {
 		hash := widget.Font.Get(th).Shape("#", widget.TextSize.Get(th))
-		hash.Paint(p, geom.Pt(19-hash.Advance/2, mid-hash.Height()/2), Faint.Get(th))
+		hash.Paint(p, geom.Pt(19-hash.Advance/2, mid-hash.Height()/2), chat.Faint.Get(th))
 	}
 	r.name.Paint(p, geom.Pt(34, mid-r.name.Height()/2), ink)
 	if r.conv.Unread > 0 {
 		w := max(20, r.count.Advance+12)
 		badge := geom.Rc(box.W-w-8, mid-9, w, 18)
-		p.RRect(badge, 9, paint.Solid(BadgeFill.Get(th)))
+		p.RRect(badge, 9, paint.Solid(chat.BadgeFill.Get(th)))
 		r.count.Paint(p, geom.Pt(badge.Center().X-r.count.Advance/2, mid-r.count.Height()/2), widget.ButtonStrongInk.Get(th))
 	}
 }

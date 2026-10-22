@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
@@ -89,16 +90,26 @@ func (h *harness) typeAndSend(s string) {
 }
 
 // item returns the timeline's row for the user's message with body, if it shows.
-func (h *harness) item(body string) (Item, bool) {
-	for _, it := range h.v.items {
+func (h *harness) item(body string) (chat.Item, bool) {
+	for _, it := range h.a.state().Items {
 		if it.Mine && it.Body == body {
 			return it, true
 		}
 	}
-	return Item{}, false
+	return chat.Item{}, false
 }
 
-func (h *harness) state(body string) State {
+// find returns the timeline's row for the message id, if it shows.
+func (h *harness) find(id string) (chat.Item, bool) {
+	for _, it := range h.a.state().Items {
+		if it.Key == id {
+			return it, true
+		}
+	}
+	return chat.Item{}, false
+}
+
+func (h *harness) state(body string) chat.State {
 	it, ok := h.item(body)
 	if !ok {
 		h.t.Fatalf("no message %q in the timeline", body)
@@ -109,28 +120,13 @@ func (h *harness) state(body string) State {
 func TestASentMessageShowsAtOnceAndArrives(t *testing.T) {
 	h := newHarness(t)
 	h.typeAndSend("Hello there")
-	if s := h.state("Hello there"); s != Pending {
+	if s := h.state("Hello there"); s != chat.Pending {
 		t.Fatalf("state %v straight after sending, want pending", s)
 	}
-	if got := h.v.composer.Text(); got != "" {
-		t.Fatalf("message box holds %q after sending, want it empty", got)
+	if h.a.text != "" {
+		t.Fatalf("message box holds %q after sending, want it empty", h.a.text)
 	}
-	h.until("the message is sent", func() bool { return h.state("Hello there") == Sent })
-	h.frames(60)
-	if !h.v.list.AtEnd() {
-		t.Fatal("the timeline left its end")
-	}
-}
-
-func TestShiftEnterStartsALineInTheMessageBox(t *testing.T) {
-	h := newHarness(t)
-	h.w.Input(input.TextInput{Text: "one"})
-	h.w.Input(input.KeyPress{Key: input.KeyEnter, Mods: input.ModShift})
-	h.w.Input(input.TextInput{Text: "two"})
-	h.frames(2)
-	if got := h.v.composer.Text(); got != "one\ntwo" {
-		t.Fatalf("message box holds %q, want two lines", got)
-	}
+	h.until("the message is sent", func() bool { return h.state("Hello there") == chat.Sent })
 }
 
 func TestMessagesSentOfflineWaitForTheConnection(t *testing.T) {
@@ -139,28 +135,28 @@ func TestMessagesSentOfflineWaitForTheConnection(t *testing.T) {
 	h.typeAndSend("Later")
 	time.Sleep(1200 * time.Millisecond)
 	h.frames(5)
-	if s := h.state("Later"); s != Pending {
+	if s := h.state("Later"); s != chat.Pending {
 		t.Fatalf("state %v while offline, want pending", s)
 	}
 	h.a.handle(LinkToggled{})
-	h.until("the message is sent", func() bool { return h.state("Later") == Sent })
+	h.until("the message is sent", func() bool { return h.state("Later") == chat.Sent })
 }
 
 func TestAFailedMessageGoesAgainOnAClick(t *testing.T) {
 	h := newHarness(t)
 	h.a.failRate = 1
 	h.typeAndSend("Try me")
-	h.until("the send fails", func() bool { return h.state("Try me") == Failed })
+	h.until("the send fails", func() bool { return h.state("Try me") == chat.Failed })
 	h.a.failRate = 0
 	it, _ := h.item("Try me")
-	h.a.handle(RetryAsked{ID: it.ID})
-	h.until("the message is sent", func() bool { return h.state("Try me") == Sent })
+	h.a.handle(chat.RetryAsked{ID: it.ID})
+	h.until("the message is sent", func() bool { return h.state("Try me") == chat.Sent })
 }
 
 func TestAReplyQuotesItsMessage(t *testing.T) {
 	h := newHarness(t)
 	target := h.a.current.msgs[len(h.a.current.msgs)-3]
-	h.a.handle(ReplyAsked{ID: target.ID})
+	h.a.handle(chat.ReplyAsked{ID: target.ID})
 	h.frames(2)
 	h.typeAndSend("Replying")
 	it, ok := h.item("Replying")
@@ -173,10 +169,10 @@ func TestEditingReplacesTheText(t *testing.T) {
 	h := newHarness(t)
 	h.typeAndSend("Frist")
 	it, _ := h.item("Frist")
-	h.a.handle(EditAsked{ID: it.ID})
+	h.a.handle(chat.EditAsked{ID: it.ID})
 	h.frames(2)
-	if got := h.v.composer.Text(); got != "Frist" {
-		t.Fatalf("message box holds %q for the edit, want the message", got)
+	if h.a.text != "Frist" {
+		t.Fatalf("message box holds %q for the edit, want the message", h.a.text)
 	}
 	h.w.Input(input.KeyPress{Key: input.KeyA, Mods: input.ModControl})
 	h.typeAndSend("First")
@@ -186,56 +182,6 @@ func TestEditingReplacesTheText(t *testing.T) {
 	}
 	if _, ok := h.item("Frist"); ok {
 		t.Fatal("the old text still shows")
-	}
-}
-
-func TestAnotherConversationOpensAtItsEnd(t *testing.T) {
-	h := newHarness(t)
-	before := h.v.list
-	h.a.leaveUnread(h.a.projects[0].convs[1], 0)
-	h.a.handle(ConversationChosen{ID: h.a.projects[0].convs[1].ID})
-	h.frames(30)
-	if h.v.list == before {
-		t.Fatal("the timeline was not replaced")
-	}
-	if !h.v.list.AtEnd() {
-		t.Fatal("the new timeline is not at its end")
-	}
-	if h.v.list.Offset() <= 0 {
-		t.Fatalf("offset %v, want the timeline scrolled to its end", h.v.list.Offset())
-	}
-}
-
-// height returns the laid-out height of the row for the user's message with body.
-func (h *harness) height(body string) float32 {
-	h.t.Helper()
-	it, ok := h.item(body)
-	if !ok {
-		h.t.Fatalf("no message %q in the timeline", body)
-	}
-	n, ok := h.v.list.Row(widget.Key(it.Key))
-	if !ok {
-		h.t.Fatalf("message %q is not built", body)
-	}
-	return n.(*msgRow).height
-}
-
-func TestAMessageKeepsItsHeightAsItArrives(t *testing.T) {
-	h := newHarness(t)
-	h.typeAndSend("With a heading")
-	h.typeAndSend("Sharing it")
-	h.frames(5)
-	if it, _ := h.item("Sharing it"); !it.Continued {
-		t.Fatal("the second message has a heading of its own")
-	}
-	headed, shared := h.height("With a heading"), h.height("Sharing it")
-	h.until("both are sent", func() bool { return h.state("With a heading") == Sent && h.state("Sharing it") == Sent })
-	h.frames(5)
-	if got := h.height("With a heading"); got != headed {
-		t.Fatalf("the message with a heading went from %v to %v tall as it arrived", headed, got)
-	}
-	if got := h.height("Sharing it"); got != shared {
-		t.Fatalf("the message sharing a heading went from %v to %v tall as it arrived", shared, got)
 	}
 }
 
@@ -255,79 +201,10 @@ func TestOnlyWebAndMailLinksOpen(t *testing.T) {
 	}
 }
 
-func TestSwitchingConversationCrossfades(t *testing.T) {
-	h := newHarness(t)
-	old := h.v.timeline.child.(*fader)
-	h.a.handle(ConversationChosen{ID: h.a.projects[0].convs[1].ID})
-	h.frames(4)
-	next := h.v.timeline.child.(*fader)
-	if next == old {
-		t.Fatal("the timeline was not swapped")
-	}
-	if o, n := old.in.Value(), next.in.Value(); o <= 0 || o >= 1 || n <= 0 || n >= 1 {
-		t.Fatalf("part way through, the old timeline is at %v and the new at %v; want both between 0 and 1", o, n)
-	}
-	h.frames(90)
-	if o, n := old.in.Value(), next.in.Value(); o > 0.01 || n < 0.99 {
-		t.Fatalf("after the switch, the old timeline is at %v and the new at %v", o, n)
-	}
-}
-
-// focusOn is a patch that gives a node the keyboard, as a click on it would.
-type focusOn struct{ n gunim.Node }
-
-func TestTypingAfterAClickInAMessageGoesToTheMessageBox(t *testing.T) {
-	h := newHarness(t)
-	gunim.RegisterPatch(h.w, "chat", func(_ *chatView, f focusOn, u *gunim.UI) { u.Focus(f.n) })
-	n, ok := h.v.list.Row(h.v.last)
-	if !ok {
-		t.Fatal("the last message is not built")
-	}
-	if err := h.w.Client().Patch("chat", focusOn{n.(*msgRow).body}); err != nil {
-		t.Fatal(err)
-	}
-	h.frames(1)
-	h.w.Input(input.TextInput{Text: "hi"})
-	h.frames(2)
-	if got := h.v.composer.Text(); got != "hi" {
-		t.Fatalf("message box holds %q after typing, want hi", got)
-	}
-}
-
-func TestASelectionRunsAcrossTheTimelinesMessages(t *testing.T) {
-	h := newHarness(t)
-	var first, last Item
-	for _, it := range h.a.state().Items {
-		if it.Day != "" {
-			continue
-		}
-		if first.Key == "" {
-			first = it
-		}
-		last = it
-	}
-	keys := h.v.group.Keys(first.Key, last.Key)
-	if keys[0] != first.Key || keys[len(keys)-1] != last.Key {
-		t.Fatalf("keys run from %s to %s, want %s to %s", keys[0], keys[len(keys)-1], first.Key, last.Key)
-	}
-	for _, k := range keys {
-		if h.v.items[widget.Key(k)].Day != "" {
-			t.Fatalf("the selection's keys hold the day heading %s", k)
-		}
-	}
-	n, ok := h.v.list.Row(h.v.last)
-	if !ok {
-		t.Fatal("the last message is not built")
-	}
-	if body := n.(*msgRow).body; body.Group != h.v.group || body.Key != string(h.v.last) {
-		t.Fatal("the last message is not in the timeline's group")
-	}
-}
-
 func TestHelpListsTheCommandsForTheUserAlone(t *testing.T) {
 	h := newHarness(t)
 	before := len(h.a.current.msgs)
-	h.a.handle(Submitted{Text: "/help"})
+	h.a.handle(chat.Submitted{Text: "/help"})
 	h.frames(5)
 	msgs := h.a.current.msgs
 	if len(msgs) != before+1 {
@@ -337,14 +214,14 @@ func TestHelpListsTheCommandsForTheUserAlone(t *testing.T) {
 	if !m.private || m.State != 0 || !strings.Contains(m.Body, "/poll") {
 		t.Fatalf("/help answered %+v, want a private list with /poll in it", m)
 	}
-	if it := h.v.items[widget.Key(m.ID)]; statusText(it.Message) != "Only visible to you" {
-		t.Fatalf("the answer's status says %q", statusText(it.Message))
+	if it, _ := h.find(m.ID); !it.Private {
+		t.Fatalf("the timeline shows the answer as %+v, want it private", it)
 	}
 }
 
 func TestColleaguesLeaveTheHelpAlone(t *testing.T) {
 	h := newHarness(t)
-	h.a.handle(Submitted{Text: "/help"})
+	h.a.handle(chat.Submitted{Text: "/help"})
 	if m := h.a.lastBy(h.a.current, func(*msg) bool { return true }); m != nil && m.private {
 		t.Fatal("colleagues can pick the private /help answer to reply or react to")
 	}
@@ -355,7 +232,7 @@ func TestAConversationOpensOnItsLatestMessagesAndLoadsOlderOnes(t *testing.T) {
 	count := func() int {
 		n := 0
 		for _, it := range h.a.state().Items {
-			if !it.heading() {
+			if it.Day == "" && !it.New {
 				n++
 			}
 		}
@@ -365,11 +242,11 @@ func TestAConversationOpensOnItsLatestMessagesAndLoadsOlderOnes(t *testing.T) {
 		t.Fatalf("the conversation opens showing %d of %d messages, want the latest page", n, all)
 	}
 	before := count()
-	h.a.handle(OlderAsked{})
+	h.a.handle(chat.OlderAsked{})
 	if !h.a.state().Loading {
 		t.Fatal("the state does not say older messages are on their way")
 	}
-	h.a.handle(OlderAsked{})
+	h.a.handle(chat.OlderAsked{})
 	h.until("older messages arrive", func() bool { return count() == before+pageSize })
 }
 

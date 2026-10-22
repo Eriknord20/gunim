@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/marrasen/gunim/chat"
 )
 
 func TestTheFilesAreaOpensFromTheSidebarAndWalksFolders(t *testing.T) {
@@ -53,10 +55,10 @@ func TestDroppedFilesUploadIntoTheFolderOpen(t *testing.T) {
 	if len(s.Transfers) != 3 {
 		t.Fatalf("%d transfers, want one for each file dropped", len(s.Transfers))
 	}
-	if s.Transfers[1].State != TransferFailed || s.Transfers[1].Reason == "" {
+	if s.Transfers[1].State != chat.TransferFailed || s.Transfers[1].Reason == "" {
 		t.Fatalf("a file that is not there stands at %+v, want failed with the reason", s.Transfers[1])
 	}
-	if s.Transfers[2].State != TransferFailed {
+	if s.Transfers[2].State != chat.TransferFailed {
 		t.Fatalf("a folder dropped stands at %+v, want failed", s.Transfers[2])
 	}
 	h.until("the file is uploaded", func() bool {
@@ -65,7 +67,7 @@ func TestDroppedFilesUploadIntoTheFolderOpen(t *testing.T) {
 		})
 	})
 
-	h.a.handle(TransferDismissed{ID: s.Transfers[1].ID})
+	h.a.handle(chat.TransferDismissed{ID: s.Transfers[1].ID})
 	if n := len(h.a.state().Files.Transfers); n != 2 {
 		t.Fatalf("%d transfers after taking a failed one away, want two", n)
 	}
@@ -81,7 +83,7 @@ func TestUploadsWaitForTheConnection(t *testing.T) {
 	h.a.handle(LinkToggled{})
 	h.a.handle(AreaChosen{Area: "files"})
 	h.a.handle(FilesDropped{Paths: []string{path}})
-	if st := h.a.state().Files.Transfers[0].State; st != TransferWaiting {
+	if st := h.a.state().Files.Transfers[0].State; st != chat.TransferWaiting {
 		t.Fatalf("offline, the upload stands at %v, want waiting", st)
 	}
 	h.a.handle(LinkToggled{})
@@ -97,15 +99,15 @@ func TestASharedFileShowsInTheConversationAndOpensFromIt(t *testing.T) {
 	h.a.handle(FileShared{Folder: "Design", Name: "Colours.pdf", Conversation: general.ID})
 	h.frames(5)
 	s := h.a.state()
-	if s.Area != "" || s.Current != general.ID {
-		t.Fatalf("after sharing, the pane shows %q %q, want the conversation shared in", s.Area, s.Current)
+	if s.Area != "" || s.ID != general.ID {
+		t.Fatalf("after sharing, the pane shows %q %q, want the conversation shared in", s.Area, s.ID)
 	}
 	last := s.Items[len(s.Items)-1]
 	if last.File.Name != "Colours.pdf" || last.File.Folder != "Design" || last.File.Size != 1_204_551 || !last.Mine {
 		t.Fatalf("the last message shares %+v, want the file", last.File)
 	}
 
-	h.a.handle(FileOpened{Folder: last.File.Folder, Name: last.File.Name})
+	h.a.handle(chat.FileOpened{Folder: last.File.Folder, Name: last.File.Name})
 	h.frames(5)
 	s = h.a.state()
 	if s.Area != "files" || s.Files.Path != "Design" || s.Files.Selected != "Colours.pdf" {

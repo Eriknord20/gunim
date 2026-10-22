@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/chat"
+	"github.com/marrasen/gunim/chat/preview"
 	"github.com/marrasen/gunim/markdown"
 	"github.com/marrasen/gunim/paint"
 )
@@ -39,7 +41,7 @@ type app struct {
 	in chan windowIntent
 
 	projects []*project
-	link     Link
+	link     chat.Link
 	light    bool
 	nextID   int
 	// failRate is the share of sends the server turns down.
@@ -64,10 +66,10 @@ type window struct {
 	replying, editing string
 	// text is what the message box holds, and draft what the application last put there.
 	text   string
-	draft  Draft
+	draft  chat.Draft
 	typing string
 	// pending are the pictures waiting to go with the next message.
-	pending []Picture
+	pending []chat.Picture
 	// newFrom is the first message of the conversation not read when it opened, and unread how many messages
 	// from others it had then.
 	newFrom string
@@ -119,21 +121,21 @@ type msg struct {
 	ID, Author string
 	At         time.Time
 	Body       string
-	State      State
+	State      chat.State
 	Edited     bool
 	Withdrawn  bool
 	ReplyTo    string
-	Pictures   []Picture
+	Pictures   []chat.Picture
 	// reactions are the emoji people reacted with, in the order they first came, each with who reacted.
 	reactions []reaction
 	// preview is the card for the first link in the text, once the sender's app has fetched it.
-	preview Preview
+	preview chat.Preview
 	// poll is the message's poll, or nil.
 	poll *poll
 	// private says only the user sees the message, as the answer to a command.
 	private bool
 	// file is a file of the project's the message shares, or has no name.
-	file FileRef
+	file chat.FileRef
 }
 
 // commands are the commands the message box takes, for /help to list.
@@ -197,13 +199,13 @@ func (p *poll) vote(who string, i int) {
 }
 
 // pollOf returns m's poll as the timeline shows it.
-func pollOf(m *msg) Poll {
+func pollOf(m *msg) chat.Poll {
 	if m.poll == nil {
-		return Poll{}
+		return chat.Poll{}
 	}
-	out := Poll{Question: m.poll.question, Voters: len(m.poll.votes)}
+	out := chat.Poll{Question: m.poll.question, Voters: len(m.poll.votes)}
 	for i, text := range m.poll.options {
-		o := PollOption{Text: text}
+		o := chat.PollOption{Text: text}
 		var who []string
 		for _, v := range m.poll.order {
 			if m.poll.votes[v] != i {
@@ -249,8 +251,8 @@ func (m *msg) toggle(emoji, who string) {
 }
 
 // reactionsOf returns m's reactions as the timeline shows them.
-func reactionsOf(m *msg) []Reaction {
-	out := make([]Reaction, 0, len(m.reactions))
+func reactionsOf(m *msg) []chat.Reaction {
+	out := make([]chat.Reaction, 0, len(m.reactions))
 	for _, r := range m.reactions {
 		names := make([]string, len(r.who))
 		for i, w := range r.who {
@@ -259,7 +261,7 @@ func reactionsOf(m *msg) []Reaction {
 				names[i] = "You"
 			}
 		}
-		out = append(out, Reaction{Emoji: r.emoji, Count: len(r.who), Mine: slices.Contains(r.who, me), Who: strings.Join(names, ", ")})
+		out = append(out, chat.Reaction{Emoji: r.emoji, Count: len(r.who), Mine: slices.Contains(r.who, me), Who: strings.Join(names, ", ")})
 	}
 	return out
 }
@@ -537,62 +539,62 @@ func (a *app) handleIn(w *window, v gunim.Intent) {
 		}
 	case FileShared:
 		a.share(w, v)
-	case FileOpened:
+	case chat.FileOpened:
 		if _, ok := a.projects[w.project].folderAt(v.Folder); ok {
 			w.area, w.path, w.selected = "files", v.Folder, v.Name
 		}
 	case FilesDropped:
 		a.upload(a.projects[w.project], v.Folder, v.Paths)
-	case TransferRetried:
+	case chat.TransferRetried:
 		p := a.projects[w.project]
 		if i := slices.IndexFunc(p.transfers, func(t *transfer) bool { return t.id == v.ID }); i >= 0 &&
-			p.transfers[i].state == TransferFailed && p.transfers[i].size > 0 {
+			p.transfers[i].state == chat.TransferFailed && p.transfers[i].size > 0 {
 			a.startTransfer(p, p.transfers[i])
 		}
-	case TransferDismissed:
+	case chat.TransferDismissed:
 		p := a.projects[w.project]
 		p.transfers = slices.DeleteFunc(p.transfers, func(t *transfer) bool {
-			return t.id == v.ID && t.state == TransferFailed
+			return t.id == v.ID && t.state == chat.TransferFailed
 		})
-	case OlderAsked:
+	case chat.OlderAsked:
 		a.loadOlder(w)
-	case PopOut:
+	case chat.PopOut:
 		a.popOut(w.current)
 		return
-	case Drafted:
+	case chat.Drafted:
 		w.text = v.Text
 		return
-	case ImagePasted:
+	case chat.ImagePasted:
 		a.pastePicture(w, v.PNG)
-	case PollVoted:
+	case chat.PollVoted:
 		if m, ok := w.current.byID[v.ID]; ok && m.poll != nil && !m.Withdrawn {
 			m.poll.vote(me, v.Option)
 		}
-	case ReactionToggled:
+	case chat.ReactionToggled:
 		if m, ok := w.current.byID[v.ID]; ok && !m.Withdrawn {
 			m.toggle(v.Emoji, me)
 		}
-	case PictureRemoved:
-		w.pending = slices.DeleteFunc(w.pending, func(p Picture) bool { return p.ID == v.ID })
-	case Submitted:
+	case chat.PictureRemoved:
+		w.pending = slices.DeleteFunc(w.pending, func(p chat.Picture) bool { return p.ID == v.ID })
+	case chat.Submitted:
 		a.submit(w, v.Text)
-	case ReplyAsked:
+	case chat.ReplyAsked:
 		w.replying, w.editing = v.ID, ""
 		w.setDraft(w.text)
-	case EditAsked:
+	case chat.EditAsked:
 		if m, ok := w.current.byID[v.ID]; ok && m.Author == me && !m.Withdrawn {
 			w.editing, w.replying = v.ID, ""
 			w.setDraft(m.Body)
 		}
-	case WithdrawAsked:
+	case chat.WithdrawAsked:
 		if m, ok := w.current.byID[v.ID]; ok && m.Author == me {
 			m.Withdrawn = true
 		}
-	case RetryAsked:
-		if m, ok := w.current.byID[v.ID]; ok && m.State == Failed {
+	case chat.RetryAsked:
+		if m, ok := w.current.byID[v.ID]; ok && m.State == chat.Failed {
 			a.send(m)
 		}
-	case Cancelled:
+	case chat.Cancelled:
 		if w.editing != "" {
 			w.setDraft("")
 		}
@@ -676,23 +678,23 @@ func (a *app) post(fn func()) {
 // fetchPreview fetches the card for the first link in m, as the sender's app does, and puts it in m when it comes.
 // A link with no card to make, or a fetch that fails, leaves m without one.
 func (a *app) fetchPreview(m *msg) {
-	link := firstLink(m.Body)
-	if link == "" || a.link != Online {
+	link := preview.FirstLink(m.Body)
+	if link == "" || a.link != chat.Online {
 		return
 	}
 	web := a.web
 	go func() {
-		p, err := fetchPage(a.ctx, web, link)
+		p, err := preview.Fetch(a.ctx, web, link)
 		if err != nil {
 			log.Printf("preview of %s: %v", link, err)
 			return
 		}
 		a.post(func() {
-			pv := Preview{URL: p.url, Site: p.site, Title: p.title, Description: p.description}
-			if p.picture != nil {
+			pv := chat.Preview{URL: p.URL, Site: p.Site, Title: p.Title, Description: p.Description}
+			if p.Picture != nil {
 				a.nextID++
 				pv.Picture = "p" + strconv.Itoa(a.nextID)
-				a.images[pv.Picture] = paint.NewImage(p.picture)
+				a.images[pv.Picture] = paint.NewImage(p.Picture)
 			}
 			m.preview = pv
 			a.publish()
@@ -711,7 +713,7 @@ func (a *app) pastePicture(w *window, b []byte) {
 	id := "p" + strconv.Itoa(a.nextID)
 	a.images[id] = paint.NewImage(img)
 	size := img.Bounds().Size()
-	w.pending = append(w.pending, Picture{ID: id, W: size.X, H: size.Y})
+	w.pending = append(w.pending, chat.Picture{ID: id, W: size.X, H: size.Y})
 }
 
 // open makes c the conversation w shows.
@@ -728,7 +730,7 @@ func (a *app) open(w *window, c *conv) {
 // setDraft puts s in w's message box.
 func (w *window) setDraft(s string) {
 	w.text = s
-	w.draft = Draft{Text: s, Seq: w.draft.Seq + 1}
+	w.draft = chat.Draft{Text: s, Seq: w.draft.Seq + 1}
 }
 
 // submit sends w's message box's text as a new message, a reply or an edit.
@@ -773,17 +775,17 @@ func (a *app) submit(w *window, text string) {
 // send hands one of the user's messages to the server, which takes it after a while, or turns it down. While
 // offline it waits, and goes when the connection is back.
 func (a *app) send(m *msg) {
-	m.State = Pending
-	if a.link != Online {
+	m.State = chat.Pending
+	if a.link != chat.Online {
 		return
 	}
 	a.after(a.between(150*time.Millisecond, 900*time.Millisecond), func() {
-		if a.link != Online || m.State != Pending {
+		if a.link != chat.Online || m.State != chat.Pending {
 			return // the connection dropped with the outcome unknown: it goes again on reconnecting
 		}
-		m.State = Sent
+		m.State = chat.Sent
 		if a.rng.Float64() < a.failRate {
-			m.State = Failed
+			m.State = chat.Failed
 		}
 		a.publish()
 	})
@@ -791,21 +793,21 @@ func (a *app) send(m *msg) {
 
 // toggleLink drops the connection, or starts connecting again and sends what waited.
 func (a *app) toggleLink() {
-	if a.link == Online {
-		a.link = Offline
+	if a.link == chat.Online {
+		a.link = chat.Offline
 		for _, w := range a.windows {
 			w.setTyping("")
 		}
 		return
 	}
-	a.link = Reconnecting
+	a.link = chat.Reconnecting
 	a.after(a.between(800*time.Millisecond, 1600*time.Millisecond), func() {
-		a.link = Online
+		a.link = chat.Online
 		a.resumeTransfers()
 		for _, p := range a.projects {
 			for _, c := range p.convs {
 				for _, m := range c.msgs {
-					if m.State == Pending {
+					if m.State == chat.Pending {
 						a.send(m)
 					}
 				}
@@ -818,7 +820,7 @@ func (a *app) toggleLink() {
 // colleague has somebody do something, and comes back after a while to do the next thing.
 func (a *app) colleague() {
 	defer a.after(a.between(4*time.Second, 11*time.Second), a.colleague)
-	if a.link != Online {
+	if a.link != chat.Online {
 		return
 	}
 	c := a.current
@@ -886,13 +888,13 @@ func (a *app) lastBy(c *conv, keep func(*msg) bool) *msg {
 
 // say has who type for a moment in c, then send body, replying to replyTo when it is set.
 func (a *app) say(c *conv, who, body, replyTo string) {
-	if a.link != Online {
+	if a.link != chat.Online {
 		return // nobody's typing reaches a user who is offline
 	}
 	a.typingIn(c, who)
 	a.after(a.between(1200*time.Millisecond, 3500*time.Millisecond), func() {
 		a.typingIn(c, "")
-		if a.link != Online {
+		if a.link != chat.Online {
 			return
 		}
 		m := a.add(c, who, body, time.Now().Round(0))
@@ -947,8 +949,9 @@ func (a *app) state() Chat { return a.stateOf(a.window) }
 
 // stateOf returns what w shows, in values of its own.
 func (a *app) stateOf(w *window) Chat {
-	s := Chat{Solo: w.solo, Project: w.project, Current: w.current.ID, Title: w.current.Name, Link: a.link,
-		Editing: w.editing, Draft: w.draft, Picks: w.picks}
+	c := w.current
+	s := Chat{Solo: w.solo, Project: w.project, Picks: w.picks, Conversation: chat.Conversation{ID: c.ID,
+		Title: c.Name, Direct: c.Direct, Link: a.link, Editing: w.editing, Draft: w.draft}}
 	for _, p := range a.projects {
 		unread := 0
 		for _, c := range p.convs {
@@ -972,82 +975,42 @@ func (a *app) stateOf(w *window) Chat {
 		s.Area, s.Files = w.area, Files{Path: w.path, Entries: entriesOf(f), Transfers: transfersOf(p),
 			Selected: w.selected}
 	}
-	if m, ok := w.current.byID[w.replying]; ok {
+	if m, ok := c.byID[w.replying]; ok {
 		s.Replying = quote(m)
 	}
-	s.People = w.current.people
-	s.Members = a.membersOf(w.current, time.Now())
-	from := w.shownFrom(w.current)
-	s.Items = timeline(w.current, time.Now(), w.newFrom, from)
+	s.People = c.people
+	s.Members = a.membersOf(c, time.Now())
+	s.Items = timeline(c, time.Now(), w.newFrom, w.shownFrom(c))
 	s.Loading = w.loading
 	if w.newFrom != "" {
-		s.NewKey, s.Unread = newKey(w.current), w.unread
+		s.Unread = w.unread
 	}
 	s.Pending, s.Images = slices.Clone(w.pending), maps.Clone(a.images)
 	return s
 }
 
-// groupFor is how long a message shares the heading of the one that started its group, by the same author.
-const groupFor = 5 * time.Minute
-
-// newKey is the key of the line over c's new messages.
-func newKey(c *conv) string { return "new:" + c.ID }
-
-// timeline returns c's messages as the timeline's rows, with a heading for each day. A message shares the heading
-// of the one before when both are by the same author and its group started under groupFor ago, so even a steady
-// stream from one person shows a heading every few minutes. The line over new messages goes before newFrom.
-func timeline(c *conv, now time.Time, newFrom string, from int) []Item {
-	out := make([]Item, 0, len(c.msgs)-from+(len(c.msgs)-from)/20)
-	var prev *msg
-	var groupAt time.Time
-	day := ""
+// timeline returns c's messages from the one at from as the timeline's rows, with the line over new messages
+// before newFrom.
+func timeline(c *conv, now time.Time, newFrom string, from int) []chat.Item {
+	msgs := make([]chat.Message, 0, len(c.msgs)-from)
 	for _, m := range c.msgs[from:] {
-		if d := m.At.Format(time.DateOnly); d != day {
-			day, prev = d, nil
-			// Keyed by the day's first message shown, so the heading that older messages push up is a new one, and
-			// the timeline holds the message the user was reading still.
-			out = append(out, Item{Key: "day:" + m.ID, Day: dayName(m.At, now)})
-		}
-		if m.ID == newFrom {
-			out = append(out, Item{Key: newKey(c), New: true})
-			prev = nil
-		}
-		it := Item{Key: m.ID, Message: Message{ID: m.ID, Author: m.Author, Mine: m.Author == me, At: m.At, Body: m.Body,
+		cm := chat.Message{ID: m.ID, Author: m.Author, Mine: m.Author == me, At: m.At, Body: m.Body,
 			State: m.State, Edited: m.Edited, Withdrawn: m.Withdrawn, Pictures: slices.Clone(m.Pictures),
-			Reactions: reactionsOf(m), Preview: m.preview, Poll: pollOf(m), Private: m.private, File: m.file}}
-		it.Continued = prev != nil && prev.Author == m.Author && m.At.Sub(groupAt) < groupFor && m.ReplyTo == "" &&
-			!m.private
-		if !it.Continued {
-			groupAt = m.At
-		}
+			Reactions: reactionsOf(m), Preview: m.preview, Poll: pollOf(m), Private: m.private, File: m.file}
 		if q, ok := c.byID[m.ReplyTo]; ok {
-			it.Reply = quote(q)
+			cm.Reply = quote(q)
 		}
-		out = append(out, it)
-		prev = m
+		msgs = append(msgs, cm)
 	}
-	return out
+	return chat.Timeline(msgs, now, newFrom)
 }
 
-func quote(m *msg) Quote {
+func quote(m *msg) chat.Quote {
 	text := m.Body
 	if text == "" && m.file.Name != "" {
 		text = "File: " + m.file.Name
 	}
-	return Quote{ID: m.ID, Author: m.Author, Text: text, Gone: m.Withdrawn}
-}
-
-// dayName names the day of t: today, yesterday, or its weekday and date.
-func dayName(t, now time.Time) string {
-	y1, m1, d1 := t.Date()
-	y2, m2, d2 := now.Date()
-	switch {
-	case y1 == y2 && m1 == m2 && d1 == d2:
-		return "Today"
-	case t.Add(24*time.Hour).Format(time.DateOnly) == now.Format(time.DateOnly):
-		return "Yesterday"
-	}
-	return t.Format("Monday 2 January")
+	return chat.Quote{ID: m.ID, Author: m.Author, Text: text, Gone: m.Withdrawn}
 }
 
 var chatter = []string{

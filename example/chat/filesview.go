@@ -1,12 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -75,7 +75,7 @@ func newFilesPane() *filesPane {
 	f.transfers = widget.NewList()
 	body := widget.Column(widget.NewPad(header), drop, widget.NewPad(f.transfers)).Grow(drop, 1)
 	body.Cross, body.Gap = widget.CrossStretch, zeroGap
-	f.root = &panel{child: body, fill: PaneFill}
+	f.root = &panel{child: body, fill: chat.PaneFill}
 	return f
 }
 
@@ -108,9 +108,9 @@ func (f *filesPane) set(project string, files Files, convs []Conversation, u *gu
 	f.address.SetPath("/"+files.Path, crumbs, u)
 	f.grid.SetRows(len(files.Entries), u)
 	widget.Sync(f.transfers, u, files.Transfers,
-		func(t Transfer) widget.Key { return widget.Key(t.ID) },
-		newTransferRow,
-		func(r *transferRow, t Transfer, u *gunim.UI) { r.set(t, u) })
+		func(t chat.Transfer) widget.Key { return widget.Key(t.ID) },
+		chat.NewTransferRow,
+		(*chat.TransferRow).Set)
 	if moved {
 		f.grid.JumpTo(0, false, u)
 	}
@@ -133,7 +133,7 @@ func (f *filesPane) row(i int) (widget.GridRow, bool) {
 	}
 	e := f.files.Entries[i]
 	name := widget.GridSpan{Text: e.Name, Icon: fileIcon(e)}
-	size := widget.GridSpan{Text: sizeText(e.Size), Faint: true}
+	size := widget.GridSpan{Text: chat.SizeText(e.Size), Faint: true}
 	if e.Folder {
 		size.Text = itemsText(e.Items)
 	}
@@ -144,31 +144,12 @@ func (f *filesPane) row(i int) (widget.GridRow, bool) {
 	return widget.GridRow{Cells: [][]widget.GridSpan{{name}, {size}, {changed}, {{Text: e.By, Faint: true}}}}, true
 }
 
-// fileIcon returns the icon for an entry: a folder, a picture, a text, or any other file.
+// fileIcon returns the icon for an entry: a folder, or the file's own.
 func fileIcon(e FileEntry) *icon.Icon {
 	if e.Folder {
 		return icon.Folder
 	}
-	switch ext := strings.ToLower(e.Name[strings.LastIndexByte(e.Name, '.')+1:]); ext {
-	case "png", "jpg", "jpeg", "gif", "svg", "webp":
-		return icon.FileImage
-	case "md", "txt", "pdf":
-		return icon.FileText
-	}
-	return icon.File
-}
-
-// sizeText writes a size in bytes the way people read it.
-func sizeText(n int64) string {
-	switch {
-	case n < 1000:
-		return strconv.FormatInt(n, 10) + " B"
-	case n < 1000*1000:
-		return fmt.Sprintf("%.0f kB", float64(n)/1000)
-	case n < 1000*1000*1000:
-		return fmt.Sprintf("%.1f MB", float64(n)/1e6)
-	}
-	return fmt.Sprintf("%.1f GB", float64(n)/1e9)
+	return chat.FileIcon(e.Name)
 }
 
 // itemsText says how many things a folder holds.

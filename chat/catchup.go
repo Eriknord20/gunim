@@ -1,4 +1,4 @@
-package main
+package chat
 
 import (
 	"strconv"
@@ -18,29 +18,30 @@ import (
 // read once the view gets there.
 type catchUp struct {
 	anim.Group
-	v     *chatView
+	// list is the timeline the pill counts for, which a new conversation replaces.
+	list  *widget.VirtualList
 	count int
 	in    *anim.Float
 	hover *anim.Float
 	run   text.Run
 }
 
-func newCatchUp(v *chatView) *catchUp {
-	c := &catchUp{v: v, in: anim.NewFloat(0), hover: anim.NewFloat(0)}
+func newCatchUp() *catchUp {
+	c := &catchUp{in: anim.NewFloat(0), hover: anim.NewFloat(0)}
 	c.Add(c.in, c.hover)
 	return c
 }
 
-// set makes n the number of new messages below.
-func (c *catchUp) set(n int, u *gunim.UI) {
-	c.count = n
+// set makes n the number of new messages below list.
+func (c *catchUp) set(list *widget.VirtualList, n int, u *gunim.UI) {
+	c.list, c.count = list, n
 	u.Invalidate()
 }
 
 // Layout implements [gunim.Node]. The view at the end has seen what was new.
 func (c *catchUp) Layout(_ gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
 	th := f.Theme
-	if c.count > 0 && c.v.list.AtEnd() {
+	if c.count > 0 && c.list != nil && c.list.AtEnd() {
 		c.count = 0
 	}
 	c.in.Animate(map[bool]float32{false: 0, true: 1}[c.count > 0], widget.Quick.Get(th))
@@ -85,8 +86,8 @@ func (c *catchUp) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerLeave:
 		c.hover.Animate(0, widget.Settle.Get(u.Theme()))
 	case input.PointerDown:
-		if e.Button == input.ButtonPrimary {
-			c.v.list.ScrollToEnd(widget.Settle.Get(u.Theme()))
+		if e.Button == input.ButtonPrimary && c.list != nil {
+			c.list.ScrollToEnd(widget.Settle.Get(u.Theme()))
 			return true
 		}
 	}

@@ -1,4 +1,4 @@
-package main
+package chat
 
 import (
 	"github.com/marrasen/gunim"
@@ -92,7 +92,7 @@ func (c *previewCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 	defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: min(max(c.in.Value(), 0), 1), Clip: true})()
 	r := c.card
 	p.RRect(r, 8, paint.Solid(QuoteFill.Get(th)))
-	p.RRect(geom.Rc(r.Min.X, r.Min.Y, cardBarW, r.Size().H), 1.5, paint.Solid(avatarTint(c.p.Site)))
+	p.RRect(geom.Rc(r.Min.X, r.Min.Y, cardBarW, r.Size().H), 1.5, paint.Solid(AvatarTint(c.p.Site)))
 	x, y := r.Min.X+cardBarW+cardPad, r.Min.Y+cardPad
 	c.site.Paint(p, geom.Pt(x, y), Faint.Get(th))
 	y += c.site.Height() + 2

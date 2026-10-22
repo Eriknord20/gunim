@@ -1,4 +1,4 @@
-package main
+package chat
 
 import (
 	"github.com/marrasen/gunim"
@@ -11,9 +11,9 @@ import (
 	"github.com/marrasen/gunim/widget"
 )
 
-// transferRow is a file on its way up: its name, how it stands, and a bar for how much has gone. A failed one tries
+// TransferRow is a file on its way up: its name, how it stands, and a bar for how much has gone. A failed one tries
 // again when clicked, and its cross takes it away.
-type transferRow struct {
+type TransferRow struct {
 	anim.Group
 	t     Transfer
 	hover *anim.Float
@@ -23,21 +23,23 @@ type transferRow struct {
 	box          geom.Size
 }
 
-func newTransferRow(t Transfer) *transferRow {
-	r := &transferRow{t: t, hover: anim.NewFloat(0), done: anim.NewFloat(0)}
+// NewTransferRow makes the row for t.
+func NewTransferRow(t Transfer) *TransferRow {
+	r := &TransferRow{t: t, hover: anim.NewFloat(0), done: anim.NewFloat(0)}
 	r.Add(r.hover, r.done)
 	r.done.Jump(r.fraction())
 	return r
 }
 
-func (r *transferRow) set(t Transfer, u *gunim.UI) {
+// Set shows t, the bar running on to how much of it has gone.
+func (r *TransferRow) Set(t Transfer, u *gunim.UI) {
 	r.t = t
 	r.done.Animate(r.fraction(), widget.Quick.Get(u.Theme()))
 	u.Invalidate()
 }
 
 // fraction is how much of the file has gone, from 0 to 1.
-func (r *transferRow) fraction() float32 {
+func (r *TransferRow) fraction() float32 {
 	if r.t.State == TransferUploaded || r.t.Size == 0 {
 		return map[bool]float32{false: 0, true: 1}[r.t.State == TransferUploaded]
 	}
@@ -50,7 +52,7 @@ func transferText(t Transfer) string {
 	case TransferEncrypting:
 		return "Encrypting…"
 	case TransferUploading:
-		return sizeText(t.Done) + " of " + sizeText(t.Size)
+		return SizeText(t.Done) + " of " + SizeText(t.Size)
 	case TransferWaiting:
 		return "Waiting for the connection"
 	case TransferUploaded:
@@ -68,7 +70,7 @@ func transferText(t Transfer) string {
 func retryable(t Transfer) bool { return t.Size > 0 }
 
 // Layout implements [gunim.Node].
-func (r *transferRow) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
+func (r *TransferRow) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
 	th := f.Theme
 	r.name = widget.Font.Get(th).Shape(r.t.Name, widget.TextSize.Get(th))
 	r.box = geom.Sz(c.Max.W, 46)
@@ -77,15 +79,15 @@ func (r *transferRow) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Childre
 }
 
 // cross is where the cross that takes a failed transfer away sits.
-func (r *transferRow) cross() geom.Rect { return geom.Rc(r.box.W-36, r.box.H/2-12, 24, 24) }
+func (r *TransferRow) cross() geom.Rect { return geom.Rc(r.box.W-36, r.box.H/2-12, 24, 24) }
 
 // Paint implements [gunim.Node].
-func (r *transferRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+func (r *TransferRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	if h := min(r.hover.Value(), 1); h > 0.01 {
 		p.RRect(geom.Rect{Max: box.Point()}, 7, paint.Solid(fade(SidebarHot.Get(th), h)))
 	}
-	ic := fileIcon(FileEntry{Name: r.t.Name})
+	ic := FileIcon(r.t.Name)
 	widget.PaintIcon(p, th, ic, geom.Rc(12, box.H/2-9, 18, 18), Faint.Get(th))
 	r.name.Paint(p, geom.Pt(42, 6), widget.Ink.Get(th))
 	ink := Faint.Get(th)
@@ -108,7 +110,7 @@ func (r *transferRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 
 // Handle implements [gunim.Handler]: the row lights under the pointer; a click on a failed one tries again, and on
 // its cross takes it away.
-func (r *transferRow) Handle(e input.Event, u *gunim.UI) bool {
+func (r *TransferRow) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerEnter:
 		if r.t.State == TransferFailed {
@@ -131,7 +133,7 @@ func (r *transferRow) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 // Cursor implements [gunim.CursorShaper].
-func (r *transferRow) Cursor(geom.Point) input.Cursor {
+func (r *TransferRow) Cursor(geom.Point) input.Cursor {
 	if r.t.State == TransferFailed {
 		return input.CursorHand
 	}

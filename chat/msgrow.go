@@ -1,7 +1,6 @@
-package main
+package chat
 
 import (
-	"hash/fnv"
 	"image/color"
 	"strings"
 	"unicode"
@@ -322,7 +321,7 @@ func (r *msgRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	}
 	ink, faint := widget.Ink.Get(th), Faint.Get(th)
 	if !m.Continued {
-		r.paintAvatar(p, geom.Rc(16, rowPad+2, avatarSize, avatarSize), avatarTint(m.Author))
+		r.paintAvatar(p, geom.Rc(16, rowPad+2, avatarSize, avatarSize), AvatarTint(m.Author))
 		r.name.Paint(p, geom.Pt(gutter, rowPad), ink)
 		r.time.Paint(p, geom.Pt(gutter+r.name.Advance+8, rowPad+r.name.Ascent-r.time.Ascent), faint)
 	} else if h := min(r.hover.Value(), 1); h > 0.01 && r.statusBox.Empty() {
@@ -332,7 +331,7 @@ func (r *msgRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	if !r.quoteBox.Empty() {
 		q := r.quoteBox
 		p.RRect(q, 6, paint.Solid(QuoteFill.Get(th)))
-		p.RRect(geom.Rc(q.Min.X, q.Min.Y, 3, q.Size().H), 1.5, paint.Solid(avatarTint(m.Reply.Author)))
+		p.RRect(geom.Rc(q.Min.X, q.Min.Y, 3, q.Size().H), 1.5, paint.Solid(AvatarTint(m.Reply.Author)))
 		func() {
 			defer p.Layer(paint.LayerOpts{Bounds: q, Opacity: 1, Clip: true})()
 			r.quote.Paint(p, geom.Pt(q.Min.X+12, q.Min.Y+(quoteH-r.quote.Height())/2), faint)
@@ -495,19 +494,6 @@ func (r *msgRow) Cursor(p geom.Point) input.Cursor {
 		return input.CursorHand
 	}
 	return input.CursorArrow
-}
-
-// fade returns c with its alpha scaled by t.
-func fade(c color.NRGBA, t float32) color.NRGBA {
-	c.A = uint8(float32(c.A) * max(0, min(t, 1)))
-	return c
-}
-
-// avatarTint returns the colour of an author's avatar.
-func avatarTint(author string) color.NRGBA {
-	h := fnv.New32a()
-	h.Write([]byte(author))
-	return avatarTints[h.Sum32()%uint32(len(avatarTints))]
 }
 
 // initials returns the first letters of the first two words of a name.

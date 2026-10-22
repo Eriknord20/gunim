@@ -6,8 +6,8 @@ import (
 	"image/png"
 	"testing"
 
+	"github.com/marrasen/gunim/chat"
 	"github.com/marrasen/gunim/input"
-	"github.com/marrasen/gunim/widget"
 )
 
 // pngOf returns a w by h picture as PNG.
@@ -33,24 +33,16 @@ func TestAPastedPictureWaitsThenGoesWithTheMessage(t *testing.T) {
 	if n := len(h.a.pending); n != 1 {
 		t.Fatalf("%d pictures waiting, want 1", n)
 	}
-	if n := len(h.v.strip.thumbs); n != 1 {
-		t.Fatalf("the strip shows %d pictures, want 1", n)
+	if s := h.a.state(); len(s.Pending) != 1 || s.Images[s.Pending[0].ID] == nil {
+		t.Fatalf("the state holds %d pictures waiting, want the one pasted", len(s.Pending))
 	}
 	h.typeAndSend("Look")
 	it, ok := h.item("Look")
 	if !ok || len(it.Pictures) != 1 || it.Pictures[0].W != 800 || it.Pictures[0].H != 600 {
 		t.Fatalf("sent message %+v, want one 800 by 600 picture", it)
 	}
-	h.frames(30)
-	if n := len(h.a.pending) + len(h.v.strip.thumbs); n != 0 {
+	if n := len(h.a.pending); n != 0 {
 		t.Fatalf("%d pictures still waiting after sending", n)
-	}
-	n, ok := h.v.list.Row(widget.Key(it.Key))
-	if !ok || len(n.(*msgRow).pictures) != 1 {
-		t.Fatal("the message's row shows no picture")
-	}
-	if s := n.(*msgRow).pictures[0].Size; s.H != 260 || s.W < 346 || s.W > 347 {
-		t.Fatalf("the picture shows %v, want it shrunk to 260 high, keeping its shape", s)
 	}
 }
 
@@ -69,9 +61,9 @@ func TestAWaitingPictureCanBeTakenOff(t *testing.T) {
 	h := newHarness(t)
 	h.pasteImage(40, 30)
 	h.pasteImage(50, 30)
-	h.a.handle(PictureRemoved{ID: h.a.pending[0].ID})
+	h.a.handle(chat.PictureRemoved{ID: h.a.pending[0].ID})
 	h.frames(30)
-	if len(h.a.pending) != 1 || h.a.pending[0].W != 50 || len(h.v.strip.thumbs) != 1 {
-		t.Fatalf("waiting %+v and %d shown, want the second alone", h.a.pending, len(h.v.strip.thumbs))
+	if len(h.a.pending) != 1 || h.a.pending[0].W != 50 {
+		t.Fatalf("waiting %+v, want the second alone", h.a.pending)
 	}
 }

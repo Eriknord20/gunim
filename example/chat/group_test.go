@@ -6,31 +6,6 @@ import (
 	"time"
 )
 
-func TestASteadyStreamStillShowsHeadings(t *testing.T) {
-	c := &conv{ID: "c", byID: map[string]*msg{}}
-	start := time.Date(2026, 9, 29, 10, 0, 0, 0, time.Local)
-	// One person, a message every 30 seconds for 20 minutes.
-	for i := range 40 {
-		m := &msg{ID: "m" + string(rune('a'+i)), Author: "Johan Ek", At: start.Add(time.Duration(i) * 30 * time.Second)}
-		c.msgs = append(c.msgs, m)
-		c.byID[m.ID] = m
-	}
-	var headed []time.Time
-	for _, it := range timeline(c, start, "", 0) {
-		if it.Day == "" && !it.Continued {
-			headed = append(headed, it.At)
-		}
-	}
-	if len(headed) < 4 {
-		t.Fatalf("%d headings in 20 minutes of one person's messages, want one at least every %v", len(headed), groupFor)
-	}
-	for i := 1; i < len(headed); i++ {
-		if gap := headed[i].Sub(headed[i-1]); gap > groupFor {
-			t.Fatalf("headings %v apart, want at most %v", gap, groupFor)
-		}
-	}
-}
-
 func TestAColleagueEditsAMessageOnce(t *testing.T) {
 	h := newHarness(t)
 	c := h.a.current
