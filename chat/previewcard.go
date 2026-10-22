@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"image/color"
+
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
@@ -26,6 +28,8 @@ type previewCard struct {
 	anim.Group
 	p     Preview
 	image func(id string) *paint.Image
+	// tint colours the card's bar by its site.
+	tint  func(string) color.NRGBA
 	hover *anim.Float
 	in    *anim.Float
 
@@ -35,8 +39,8 @@ type previewCard struct {
 	card, thumb geom.Rect
 }
 
-func newPreviewCard(p Preview, image func(id string) *paint.Image) *previewCard {
-	c := &previewCard{p: p, image: image, hover: anim.NewFloat(0), in: anim.NewFloat(0)}
+func newPreviewCard(p Preview, image func(id string) *paint.Image, tint func(string) color.NRGBA) *previewCard {
+	c := &previewCard{p: p, image: image, tint: tint, hover: anim.NewFloat(0), in: anim.NewFloat(0)}
 	c.Add(c.hover, c.in)
 	if p.URL != "" {
 		c.in.Jump(1)
@@ -92,7 +96,7 @@ func (c *previewCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 	defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: min(max(c.in.Value(), 0), 1), Clip: true})()
 	r := c.card
 	p.RRect(r, 8, paint.Solid(QuoteFill.Get(th)))
-	p.RRect(geom.Rc(r.Min.X, r.Min.Y, cardBarW, r.Size().H), 1.5, paint.Solid(AvatarTint(c.p.Site)))
+	p.RRect(geom.Rc(r.Min.X, r.Min.Y, cardBarW, r.Size().H), 1.5, paint.Solid(tintOf(c.tint, c.p.Site)))
 	x, y := r.Min.X+cardBarW+cardPad, r.Min.Y+cardPad
 	c.site.Paint(p, geom.Pt(x, y), Faint.Get(th))
 	y += c.site.Height() + 2

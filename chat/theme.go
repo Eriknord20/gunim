@@ -40,6 +40,14 @@ var avatarTints = []color.NRGBA{
 	{R: 0x3f, G: 0xb0, B: 0xc8, A: 0xff},
 }
 
+// tintOf returns the colour of a name's avatar as tint says, or as [AvatarTint] does where tint is nil.
+func tintOf(tint func(string) color.NRGBA, name string) color.NRGBA {
+	if tint == nil {
+		return AvatarTint(name)
+	}
+	return tint(name)
+}
+
 // AvatarTint returns the colour of a name's avatar, the same each time for the same name.
 func AvatarTint(name string) color.NRGBA {
 	h := fnv.New32a()
