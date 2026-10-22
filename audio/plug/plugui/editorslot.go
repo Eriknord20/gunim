@@ -16,7 +16,9 @@ import (
 // the gunim window the slot stands in, over the room the slot is given:
 // the window's title bar and what shows beside the editor are gunim's.
 // The editor opens as the slot is first drawn, and hides while the slot
-// is not.
+// is not. The editor takes every press over it, so a slot at the
+// window's edges keeps [gunim.ResizeEdge] in from them, for the window
+// to be sized by its edges.
 //
 // The slot closes the editor as its window closes, before the window
 // goes: a plugin whose windows go under it may end the program, as
@@ -137,6 +139,10 @@ func (s *EditorSlot) embed(u *gunim.UI) bool {
 		if v := s.sized.Swap(0); v != 0 {
 			s.want = geom.Sz(float32(v>>32), float32(uint32(v)))
 			s.refit = s.Fit
+			// The editor took the size of itself, as with a handle of
+			// its own, so the slot stands where it stood and hears of no
+			// place: the window fits it here.
+			s.fitWindow(s.at, u)
 			u.Invalidate()
 		}
 		u.After(sizedPoll, poll)

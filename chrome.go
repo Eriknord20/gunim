@@ -29,6 +29,14 @@ type titleBar struct {
 // press sizes a chromeless window, where the system does not.
 const resizeMargin = 6
 
+// ResizeEdge is how near a chromeless window's edge, in logical pixels,
+// a press may size it, on any system: Windows takes its frame's
+// thickness, 8 pixels at 100%, and elsewhere gunim takes resizeMargin.
+// A child window of the system's, as a plugin's own editor, takes every
+// press over it, so one kept this far in from the edges leaves the
+// window its edges to size it by.
+const ResizeEdge = 8
+
 // startChrome looks at whether the window's driver has taken the title
 // bar away, and gives the window bar, or the registered title bar when
 // bar is nil.
