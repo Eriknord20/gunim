@@ -35,6 +35,9 @@ func TestAnEditorEmbeds(t *testing.T) {
 	if err != nil {
 		t.Skip("no X:", err)
 	}
+	// Whether a host may size it, asked before it opens, is what the
+	// editor open says.
+	before := p.EditorResizable()
 	sizes := make(chan [2]int, 8)
 	w, h, err := p.EmbedEditor(parent, func(w, h int) { sizes <- [2]int{w, h} })
 	if err != nil {
@@ -46,6 +49,10 @@ func TestAnEditorEmbeds(t *testing.T) {
 	if !p.EditorOpen() {
 		t.Fatal("embedded, the editor says it is closed")
 	}
+	if open := p.EditorResizable(); open != before {
+		t.Fatalf("closed, the editor says it may be sized %v, and open %v", before, open)
+	}
+	t.Logf("a host may size the editor: %v", before)
 	pw, ph := p.PlaceEditor(image.Rect(20, 40, 20+w, 40+h))
 	if pw != w || ph != h {
 		t.Fatalf("placed at its own size, the editor took %dx%d, want %dx%d", pw, ph, w, h)
