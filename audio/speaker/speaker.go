@@ -15,6 +15,8 @@
 // Through an ASIO driver, [Options].Outputs picks the driver's outputs
 // to play on, and [Options].Aux fills those past the mixer's two, in
 // step with it.
+// [Options].Direct has the driver's own thread mix each buffer as it
+// takes it, so the sound is heard a buffer sooner.
 //
 // Package audio/capture records the inputs of the ASIO driver the
 // speakers play through, where [Options].Record is set, and stamps
@@ -72,6 +74,16 @@ type Options struct {
 	// control panel sets. The latency is never less than a buffer and
 	// the driver's own latency, whatever Latency asks for.
 	Buffer int
+	// Direct mixes each buffer an ASIO driver takes on the driver's own
+	// thread, as it takes it, in place of reading the mixer ahead into a
+	// ring on a thread of the speaker's. The sound is then heard the
+	// driver's latency after it is mixed, a buffer sooner than through
+	// the ring, and no hand-over between threads can make a buffer late;
+	// but the mixer must fill each buffer in the time a buffer plays,
+	// with nothing to spare. Latency and Fixed are let be, and the
+	// speaker never works further ahead: choose the Buffer to fit.
+	// Through the system's own sound it changes nothing.
+	Direct bool
 	// Record opens the inputs of the ASIO driver too, for package
 	// audio/capture to record. A driver may then open a device of its
 	// own to record from, as FlexASIO and ASIO4ALL open Windows'
@@ -393,7 +405,7 @@ func (s *Speaker) SetLatency(d time.Duration) {
 }
 
 // Set changes how the speakers play. A change of driver or rate, or of
-// Buffer, Record or Outputs while a driver plays, opens the output
+// Buffer, Record, Direct or Outputs while a driver plays, opens the output
 // again, with a moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
 // far ahead the mixer works from where it is.
@@ -410,7 +422,8 @@ func (s *Speaker) Set(o Options) error {
 		s.setAhead(o.latency())
 	}
 	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
-		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
+		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || o.Direct != prev.Direct ||
+			!slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil

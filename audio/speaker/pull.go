@@ -30,7 +30,8 @@ var openPull = func(c asio.Config) (pullDevice, error) {
 // ringOutput plays through a device that asks for its sound. The device
 // asks on a thread of its own and must have its answer at once, so a
 // goroutine reads the mixer ahead into a ring, and the device takes
-// from the ring.
+// from the ring; or, where Options.Direct says, the device's thread
+// mixes each buffer itself as it takes it, and there is no ring.
 type ringOutput struct {
 	s    *Speaker
 	dev  pullDevice
@@ -60,10 +61,19 @@ type ringOutput struct {
 	wake   chan struct{}
 	quit   chan struct{}
 	done   chan struct{}
+	// direct mixes on the device's thread, as Options.Direct says: live
+	// says it may, once started; drawn counts the frames it mixed, as
+	// the ring's reads count them; and main and aux are its room for
+	// the mixer's pair and Options.Aux's channels, where it fills more.
+	direct    bool
+	live      atomic.Bool
+	drawn     atomic.Int64
+	main, aux []float32
 }
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
-	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
+		direct: o.Direct}
 	c := asio.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
 	if len(o.Outputs) > 2 {
 		r.chans = len(o.Outputs)
@@ -82,6 +92,11 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r.dev, r.info = dev, dev.Info()
 	s.logf("%s takes %d frames at a time (asked %d; it allows %d to %d, prefers %d), and reports %d frames of output latency and %d of input",
 		r.info.Driver, r.info.Buffer, o.Buffer, r.info.MinBuffer, r.info.MaxBuffer, r.info.PreferredBuffer, r.info.Latency, r.info.InputLatency)
+	if r.direct {
+		r.main = make([]float32, 2*r.info.Buffer)
+		r.aux = make([]float32, (r.chans-2)*r.info.Buffer)
+		return r, nil
+	}
 	r.q.Store(newRing(int(audio.FramesAt(MaxLatency, r.info.Rate))+2*r.info.Buffer+4096, r.chans))
 	return r, nil
 }
@@ -96,6 +111,13 @@ func (r *ringOutput) start(ahead time.Duration) {
 		r.tap.Store(tap)
 		duplex.Publish(tap)
 	}
+	if r.direct {
+		// The device's thread reads the mixer from here on.
+		r.primed.Store(true)
+		r.live.Store(true)
+		close(r.done)
+		return
+	}
 	go r.feed()
 }
 
@@ -103,6 +125,10 @@ func (r *ringOutput) start(ahead time.Duration) {
 // where the ring runs short.
 func (r *ringOutput) take(frames []float32) {
 	r.taken.Store(time.Now().UnixNano())
+	if r.direct {
+		r.mix(frames)
+		return
+	}
 	n := 0
 	q := r.q.Load()
 	if q != nil && !r.paused.Load() {
@@ -116,6 +142,27 @@ func (r *ringOutput) take(frames []float32) {
 	case r.wake <- struct{}{}:
 	default:
 	}
+}
+
+// mix fills frames, of all the channels the device plays, from the
+// mixer, on the device's thread, as Options.Direct has it: silence
+// before the output starts, while it is suspended, and for a buffer
+// larger than the driver said it takes.
+func (r *ringOutput) mix(frames []float32) {
+	n := len(frames) / r.chans
+	if !r.live.Load() || r.paused.Load() || n > r.info.Buffer {
+		clear(frames)
+		return
+	}
+	if r.chans == 2 {
+		r.s.pull(frames)
+	} else {
+		m, a := r.main[:2*n], r.aux[:(r.chans-2)*n]
+		r.s.pull(m)
+		r.s.pullAux(a, r.chans-2, r.base.Load()+r.drawn.Load())
+		interleave(frames, m, a, r.chans)
+	}
+	r.drawn.Add(int64(n))
 }
 
 // takeN fills frames of all the channels the device plays, as take
@@ -134,11 +181,20 @@ func (r *ringOutput) takeN(frames []float32, channels int) {
 // now, and the inputs reached the driver InputLatency frames ago.
 func (r *ringOutput) record(in []float32, channels int) {
 	tap := r.tap.Load()
-	q := r.q.Load()
-	if tap == nil || q == nil {
+	if tap == nil {
 		return
 	}
-	heard := r.base.Load() + q.r.Load() - int64(r.info.Latency+r.info.InputLatency)
+	// The frame the device takes next: the next the device's thread
+	// mixes, or the ring's next.
+	var next int64
+	if r.direct {
+		next = r.drawn.Load()
+	} else if q := r.q.Load(); q != nil {
+		next = q.r.Load()
+	} else {
+		return
+	}
+	heard := r.base.Load() + next - int64(r.info.Latency+r.info.InputLatency)
 	tap.Deliver(in, channels, heard)
 }
 
@@ -237,6 +293,9 @@ func (r *ringOutput) setAhead(d time.Duration) {
 }
 
 func (r *ringOutput) latency() time.Duration {
+	if r.direct {
+		return audio.DurationAt(int64(r.info.Latency), r.info.Rate)
+	}
 	return audio.DurationAt(r.target.Load()+int64(r.info.Latency), r.info.Rate)
 }
 
