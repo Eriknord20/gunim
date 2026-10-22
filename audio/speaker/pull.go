@@ -1,6 +1,7 @@
 package speaker
 
 import (
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -30,14 +31,16 @@ var openPull = func(c asio.Config) (pullDevice, error) {
 // ringOutput plays through a device that asks for its sound. The device
 // asks on a thread of its own and must have its answer at once, so a
 // goroutine reads the mixer ahead into a ring, and the device takes
-// from the ring.
+// from the ring; or, where Options.Direct says, the device's thread
+// mixes each buffer itself as it takes it, and there is no ring.
 type ringOutput struct {
 	s    *Speaker
 	dev  pullDevice
 	info asio.Info
 	q    atomic.Pointer[ring]
-	// base is the mixer frame the ring's first frame is: the feed alone
-	// reads the mixer, so frame i of the ring is the mixer's base+i.
+	// base is the mixer frame the output's first frame is: the feed, or
+	// the device's thread where it mixes, alone reads the mixer, so
+	// frame i the device takes is the mixer's base+i.
 	base atomic.Int64
 	// tap hands the driver's inputs to package audio/capture, once the
 	// output has started.
@@ -60,10 +63,22 @@ type ringOutput struct {
 	wake   chan struct{}
 	quit   chan struct{}
 	done   chan struct{}
+	// direct mixes on the device's thread, as Options.Direct says: live
+	// says it may, from start until close, and mixing that it mixes now,
+	// so close can wait the buffer out; drawn counts the frames it mixed,
+	// as the ring's reads count them; period is how long a buffer plays,
+	// in nanoseconds; and main and aux are its room for the mixer's pair
+	// and Options.Aux's channels, where it fills more.
+	direct       bool
+	live, mixing atomic.Bool
+	drawn        atomic.Int64
+	period       int64
+	main, aux    []float32
 }
 
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
-	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
+	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
+		direct: o.Direct}
 	c := asio.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
 	if len(o.Outputs) > 2 {
 		r.chans = len(o.Outputs)
@@ -82,6 +97,12 @@ func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r.dev, r.info = dev, dev.Info()
 	s.logf("%s takes %d frames at a time (asked %d; it allows %d to %d, prefers %d), and reports %d frames of output latency and %d of input",
 		r.info.Driver, r.info.Buffer, o.Buffer, r.info.MinBuffer, r.info.MaxBuffer, r.info.PreferredBuffer, r.info.Latency, r.info.InputLatency)
+	if r.direct {
+		r.period = int64(r.info.Buffer) * int64(time.Second) / int64(max(r.info.Rate, 1))
+		r.main = make([]float32, 2*r.info.Buffer)
+		r.aux = make([]float32, (r.chans-2)*r.info.Buffer)
+		return r, nil
+	}
 	r.q.Store(newRing(int(audio.FramesAt(MaxLatency, r.info.Rate))+2*r.info.Buffer+4096, r.chans))
 	return r, nil
 }
@@ -96,6 +117,13 @@ func (r *ringOutput) start(ahead time.Duration) {
 		r.tap.Store(tap)
 		duplex.Publish(tap)
 	}
+	if r.direct {
+		// The device's thread reads the mixer from here on.
+		r.primed.Store(true)
+		r.live.Store(true)
+		close(r.done)
+		return
+	}
 	go r.feed()
 }
 
@@ -103,6 +131,10 @@ func (r *ringOutput) start(ahead time.Duration) {
 // where the ring runs short.
 func (r *ringOutput) take(frames []float32) {
 	r.taken.Store(time.Now().UnixNano())
+	if r.direct {
+		r.mix(frames)
+		return
+	}
 	n := 0
 	q := r.q.Load()
 	if q != nil && !r.paused.Load() {
@@ -118,6 +150,45 @@ func (r *ringOutput) take(frames []float32) {
 	}
 }
 
+// mix fills frames, of all the channels the device plays, from the
+// mixer, on the device's thread, as Options.Direct has it: silence
+// before the output starts, after it closes, and while it is
+// suspended. A buffer that takes longer to mix than it plays counts as
+// a dropout, as the driver plays on without it; so does a buffer
+// larger than the driver said it takes, played silent, as the driver
+// is opened again to say anew.
+func (r *ringOutput) mix(frames []float32) {
+	// Marked before live is read, as close clears live before it reads
+	// the mark: one of the two sees the other.
+	r.mixing.Store(true)
+	defer r.mixing.Store(false)
+	n := len(frames) / r.chans
+	if !r.live.Load() || r.paused.Load() {
+		clear(frames)
+		return
+	}
+	if n > r.info.Buffer {
+		clear(frames)
+		r.s.dropouts.Add(1)
+		r.s.askReset()
+		return
+	}
+	t0 := nanotime()
+	if r.chans == 2 {
+		r.s.pull(frames)
+	} else {
+		m, a := r.main[:2*n], r.aux[:(r.chans-2)*n]
+		r.s.pull(m)
+		r.s.pullAux(a, r.chans-2, r.base.Load()+r.drawn.Load())
+		interleave(frames, m, a, r.chans)
+	}
+	r.drawn.Add(int64(n))
+	if nanotime()-t0 > r.period {
+		// Not a dry read: the ring that grows on those is not there.
+		r.s.dropouts.Add(1)
+	}
+}
+
 // takeN fills frames of all the channels the device plays, as take
 // does.
 func (r *ringOutput) takeN(frames []float32, channels int) {
@@ -130,15 +201,25 @@ func (r *ringOutput) takeN(frames []float32, channels int) {
 
 // record hands the driver's inputs on, as the device takes a buffer,
 // with the mixer frame at the speakers as they came in: the first frame
-// the device takes now, the ring's next, is heard Latency frames from
-// now, and the inputs reached the driver InputLatency frames ago.
+// the device takes now, the ring's next or the next mixed, is heard
+// Latency frames from now, and the inputs reached the driver
+// InputLatency frames ago.
 func (r *ringOutput) record(in []float32, channels int) {
 	tap := r.tap.Load()
-	q := r.q.Load()
-	if tap == nil || q == nil {
+	if tap == nil {
 		return
 	}
-	heard := r.base.Load() + q.r.Load() - int64(r.info.Latency+r.info.InputLatency)
+	// The frame the device takes next: the next the device's thread
+	// mixes, or the ring's next.
+	var next int64
+	if r.direct {
+		next = r.drawn.Load()
+	} else if q := r.q.Load(); q != nil {
+		next = q.r.Load()
+	} else {
+		return
+	}
+	heard := r.base.Load() + next - int64(r.info.Latency+r.info.InputLatency)
 	tap.Deliver(in, channels, heard)
 }
 
@@ -231,12 +312,16 @@ func (r *ringOutput) held() int64 {
 }
 
 // setAhead keeps the ring at what d leaves after the driver's own
-// latency, and a buffer of the driver's at least.
+// latency, and a buffer of the driver's at least. Where the device's
+// thread mixes, nothing reads it.
 func (r *ringOutput) setAhead(d time.Duration) {
 	r.target.Store(max(audio.FramesAt(d, r.info.Rate)-int64(r.info.Latency), int64(r.info.Buffer)))
 }
 
 func (r *ringOutput) latency() time.Duration {
+	if r.direct {
+		return audio.DurationAt(int64(r.info.Latency), r.info.Rate)
+	}
 	return audio.DurationAt(r.target.Load()+int64(r.info.Latency), r.info.Rate)
 }
 
@@ -269,8 +354,25 @@ func (r *ringOutput) close() error {
 	}
 	close(r.quit)
 	<-r.done
+	if r.direct {
+		// The device's thread mixes no more once the buffer it mixes now,
+		// if any, is done: the next output reads the mixer alone. One that
+		// never finishes is let go, as a driver that stopped answering.
+		r.live.Store(false)
+		deadline := time.Now().Add(mixWait)
+		for r.mixing.Load() {
+			if time.Now().After(deadline) {
+				return errors.Join(asio.ErrNotAnswering, r.dev.Close())
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+	}
 	return r.dev.Close()
 }
+
+// mixWait is how long close waits for the device's thread to finish
+// the buffer it mixes.
+const mixWait = 3 * time.Second
 
 // stoppedTaking says the device has taken no buffer for a while, as it
 // would while it plays, the first time it is asked after it stopped.

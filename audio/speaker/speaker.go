@@ -15,6 +15,8 @@
 // Through an ASIO driver, [Options].Outputs picks the driver's outputs
 // to play on, and [Options].Aux fills those past the mixer's two, in
 // step with it.
+// [Options].Direct has the driver's own thread mix each buffer as it
+// takes it, so the sound is heard sooner, by a buffer at the least.
 //
 // Package audio/capture records the inputs of the ASIO driver the
 // speakers play through, where [Options].Record is set, and stamps
@@ -72,6 +74,17 @@ type Options struct {
 	// control panel sets. The latency is never less than a buffer and
 	// the driver's own latency, whatever Latency asks for.
 	Buffer int
+	// Direct mixes each buffer an ASIO driver takes on the driver's own
+	// thread, as it takes it, in place of reading the mixer ahead into a
+	// ring on a thread of the speaker's. The sound is then heard the
+	// driver's latency after it is mixed, sooner by the ring's length, a
+	// buffer at the least, and no hand-over between threads can make a
+	// buffer late; but the mixer must fill each buffer in the time a
+	// buffer plays, with nothing to spare, and a buffer that takes longer
+	// counts in [State].Dropouts. Latency and Fixed are let be, and the
+	// speaker never works further ahead: choose the Buffer to fit.
+	// Through the system's own sound it changes nothing.
+	Direct bool
 	// Record opens the inputs of the ASIO driver too, for package
 	// audio/capture to record. A driver may then open a device of its
 	// own to record from, as FlexASIO and ASIO4ALL open Windows'
@@ -88,9 +101,10 @@ type Options struct {
 	// Outputs names more than two: dst holds frames of channels
 	// interleaved samples, cleared, one for each output past the first
 	// two named, in order. at is the mixer frame of dst's first frame,
-	// as [audio.Mixer.Mixed] counts them: the speaker calls Aux on the
-	// goroutine that reads the mixer, right after it mixed those same
-	// frames, with each [audio.Mixer.Mix] call it makes. It must be as
+	// as [audio.Mixer.Mixed] counts them: the speaker calls Aux where it
+	// reads the mixer, on a goroutine of its own or, where Direct is set,
+	// on the driver's thread, right after it mixed those same frames,
+	// with each [audio.Mixer.Mix] call it makes. It must be as
 	// quick as a voice's Read, and must not allocate. Bits and Dither round the mixer's pair alone, and
 	// the fades of Suspend and Resume fade it alone.
 	Aux func(dst []float32, channels int, at int64)
@@ -153,8 +167,8 @@ type Speaker struct {
 	stopped, faded bool
 	asked          int
 	// q rounds the sound as it leaves, as bits and dither say: q is
-	// the goroutine's that pulls, and the settings anyone's, so neither
-	// waits.
+	// the one thread's that pulls, the feed's or the driver's, and the
+	// settings anyone's, so neither waits.
 	bits   atomic.Int64
 	dither atomic.Bool
 	q      audio.Quantizer
@@ -393,7 +407,7 @@ func (s *Speaker) SetLatency(d time.Duration) {
 }
 
 // Set changes how the speakers play. A change of driver or rate, or of
-// Buffer, Record or Outputs while a driver plays, opens the output
+// Buffer, Record, Direct or Outputs while a driver plays, opens the output
 // again, with a moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
 // far ahead the mixer works from where it is.
@@ -410,7 +424,8 @@ func (s *Speaker) Set(o Options) error {
 		s.setAhead(o.latency())
 	}
 	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
-		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
+		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || o.Direct != prev.Direct ||
+			!slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil
@@ -471,7 +486,8 @@ type State struct {
 	Frames  int64
 	Fixed   bool
 	// Dropouts counts the times the sound ran dry since the speakers
-	// opened.
+	// opened: where Direct is set, the buffers that took longer to mix
+	// than they play.
 	Dropouts int64
 	// ASIO is what the driver says of itself, while one plays; its
 	// Played tells the output each channel plays on.
