@@ -17,7 +17,7 @@ var (
 	qpcAddr, qpcFreq = findCounter()
 )
 
-func findCounter() (uintptr, int64) {
+func findCounter() (addr uintptr, freq int64) {
 	qpc, qpf := kernel32.NewProc("QueryPerformanceCounter"), kernel32.NewProc("QueryPerformanceFrequency")
 	if qpc.Find() != nil || qpf.Find() != nil {
 		return 0, 0
