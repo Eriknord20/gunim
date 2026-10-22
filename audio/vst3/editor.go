@@ -108,6 +108,31 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 	return w, h, ok
 }
 
+// EditorResizable says whether the host may size the plugin's editor,
+// as its view says: one that may not keeps its own size, or takes one
+// of itself, as with a resize grip of its own, and a host keeps the
+// window it shows in from being sized round it. It asks the editor
+// open, or else one made for the question.
+func (p *Plugin) EditorResizable() bool {
+	var ok bool
+	onUI(func() {
+		if p.ed != nil {
+			ok = p.ed.resizable
+			return
+		}
+		if p.ctrl == 0 {
+			return
+		}
+		v := p.createView()
+		if v == 0 {
+			return
+		}
+		ok = result(call(v, mCanResize)) == resultOK
+		release(v)
+	})
+	return ok
+}
+
 // OpenEditor shows the plugin's editor, in a window titled title, or
 // brings it to the front where it is open.
 func (p *Plugin) OpenEditor(title string) error {

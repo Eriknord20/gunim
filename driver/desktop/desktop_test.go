@@ -305,3 +305,39 @@ func TestAFixedWindowIsNotResizable(t *testing.T) {
 		}
 	}
 }
+
+func TestAFixedWindowStillReshapes(t *testing.T) {
+	if display == nil {
+		t.Skip("no display")
+	}
+	dw, err := display.NewWindow(driver.Options{Title: "gunim fixed reshape", Size: geom.Sz(200, 120), Fixed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := dw.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	w := dw.(*Window)
+	// As a plugin's editor that sizes itself, with a grip of its own,
+	// grows the window it is in.
+	if err := w.Reshape(geom.Insets{Right: 40, Bottom: 30}); err != nil {
+		t.Fatal(err)
+	}
+	var ww, wh int
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if err := display.call(func() error {
+			var err error
+			ww, wh, err = w.gw.GetSize()
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f := w.coordsPerLogical()
+		if ww == int(240*f+0.5) && wh == int(150*f+0.5) {
+			return
+		}
+	}
+	t.Fatalf("a fixed window of 200×120 reshaped by 40×30 is %d×%d", ww, wh)
+}
