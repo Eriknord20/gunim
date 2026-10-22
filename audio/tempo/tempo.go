@@ -118,8 +118,9 @@ type Line struct {
 	Pos Pos
 }
 
-// MaxLines is the most lines [Map.Lines] returns, so a range asked for
-// in error cannot eat the memory of the machine.
+// MaxLines is the most lines [Map.Lines] returns, and [Map.AppendLines]
+// appends, so a range asked for in error cannot eat the memory of the
+// machine.
 const MaxLines = 1 << 20
 
 // A Map is a recording's musical time: its tempo changes, its meter
@@ -560,10 +561,16 @@ func (m *Map) Ticks(p Pos) Ticks {
 // Lines are the beats from one position to another, for a ruler to
 // draw, the first at or after from and the last before to. At most
 // [MaxLines] come back.
-func (m *Map) Lines(from, to Ticks) []Line {
+func (m *Map) Lines(from, to Ticks) []Line { return m.AppendLines(nil, from, to) }
+
+// AppendLines appends to dst the beats [Map.Lines] returns, and returns
+// the longer slice: a ruler drawn each frame keeps one slice, and, on a
+// map made by [New] or changed since, allocates nothing once the slice
+// has grown to the beats in view.
+func (m *Map) AppendLines(dst []Line, from, to Ticks) []Line {
 	r := m.ready()
-	var out []Line
-	for i := r.meterIndex(from); i < len(r.meters) && len(out) < MaxLines; i++ {
+	out, n := dst, len(dst)
+	for i := r.meterIndex(from); i < len(r.meters) && len(out)-n < MaxLines; i++ {
 		x := r.meters[i]
 		end := to
 		if i+1 < len(r.meters) {
@@ -577,7 +584,7 @@ func (m *Map) Lines(from, to Ticks) []Line {
 		if from > t || i == 0 {
 			t -= floorDiv(t-from, beat) * beat
 		}
-		for ; t < end && len(out) < MaxLines; t += beat {
+		for ; t < end && len(out)-n < MaxLines; t += beat {
 			out = append(out, Line{At: t, Pos: r.Pos(t)})
 		}
 		if end == to {

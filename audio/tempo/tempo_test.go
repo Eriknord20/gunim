@@ -3,6 +3,7 @@ package tempo
 import (
 	"encoding/json"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -149,6 +150,25 @@ func TestAMeterChangeStartsItsOwnBar(t *testing.T) {
 		if got := m.Pos(c.at); got != c.want {
 			t.Errorf("tick %d is %v, want %v", c.at, got, c.want)
 		}
+	}
+}
+
+// TestAppendLinesAppendsWhatLinesReturns appends the lines of a map
+// with a meter change to a slice holding one already: they follow it,
+// as Lines returns them, and a slice with room enough takes them with
+// no allocation.
+func TestAppendLinesAppendsWhatLinesReturns(t *testing.T) {
+	m := New(120, 4, 4)
+	m.SetMeter(Meter{At: 4 * PPQ, Beats: 3, Unit: 4})
+	want := m.Lines(-PPQ, 12*PPQ)
+	first := Line{At: -1}
+	got := m.AppendLines([]Line{first}, -PPQ, 12*PPQ)
+	if len(got) != len(want)+1 || got[0] != first || !slices.Equal(got[1:], want) {
+		t.Fatalf("AppendLines gave %v, want %v after %v", got, want, first)
+	}
+	buf := make([]Line, 0, len(want))
+	if allocs := testing.AllocsPerRun(100, func() { buf = m.AppendLines(buf[:0], -PPQ, 12*PPQ) }); allocs != 0 {
+		t.Errorf("AppendLines into a slice with room allocates %v times", allocs)
 	}
 }
 
