@@ -153,8 +153,6 @@ func TestAMeterChangeStartsItsOwnBar(t *testing.T) {
 	}
 }
 
-// TestLinesAreABeatEachAndMarkTheBars: a ruler asks for the beats in
-// a stretch and is told which of them start a bar.
 // TestAppendLinesAppendsWhatLinesReturns appends the lines of a map
 // with a meter change to a slice holding one already: they follow it,
 // as Lines returns them, and a slice with room enough takes them with
@@ -174,6 +172,8 @@ func TestAppendLinesAppendsWhatLinesReturns(t *testing.T) {
 	}
 }
 
+// TestLinesAreABeatEachAndMarkTheBars: a ruler asks for the beats in
+// a stretch and is told which of them start a bar.
 func TestLinesAreABeatEachAndMarkTheBars(t *testing.T) {
 	m := New(120, 4, 4)
 	m.SetMeter(Meter{At: 8 * PPQ, Beats: 3, Unit: 4})

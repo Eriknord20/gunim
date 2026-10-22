@@ -564,8 +564,9 @@ func (m *Map) Ticks(p Pos) Ticks {
 func (m *Map) Lines(from, to Ticks) []Line { return m.AppendLines(nil, from, to) }
 
 // AppendLines appends to dst the beats [Map.Lines] returns, and returns
-// the longer slice: a ruler drawn each frame keeps one slice, and
-// allocates nothing once it has grown to the beats in view.
+// the longer slice: a ruler drawn each frame keeps one slice, and, on a
+// map made by [New] or changed since, allocates nothing once the slice
+// has grown to the beats in view.
 func (m *Map) AppendLines(dst []Line, from, to Ticks) []Line {
 	r := m.ready()
 	out, n := dst, len(dst)
