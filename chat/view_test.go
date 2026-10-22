@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"image/color"
 	"slices"
 	"strconv"
 	"testing"
@@ -386,5 +387,27 @@ func TestAViewCanSitOnGlass(t *testing.T) {
 	h.frames(60)
 	if !blurs(h) {
 		t.Fatal("the view does not blur what is behind it with a Backdrop")
+	}
+}
+
+// The host's Tint colours the people it knows, in the suggestions, their rows and the bars of their quotes and
+// cards; the rest keep the colour their name picks.
+func TestTintColoursThePeopleTheHostKnows(t *testing.T) {
+	sara := color.NRGBA{R: 0x10, G: 0x20, B: 0x30, A: 0xff}
+	v := NewView(Options{Tint: func(name string) (color.NRGBA, bool) { return sara, name == "Sara" }})
+	v.people = []string{"Sara", "Ola"}
+	got := map[string]color.NRGBA{}
+	for _, c := range v.complete('@', "") {
+		got[c.Label] = c.Swatch
+	}
+	if got["Sara"] != sara || got["Ola"] != AvatarTint("Ola") {
+		t.Fatalf("the suggestions are in %v", got)
+	}
+	r := newMsgRow(Item{Key: "m1", Message: Message{ID: "m1", Author: "Sara", Body: "Hej"}}, nil, nil, nil, nil, v.tint)
+	if tintOf(r.tint, "Sara") != sara || tintOf(r.tint, "Ola") != AvatarTint("Ola") || tintOf(nil, "Sara") != AvatarTint("Sara") {
+		t.Fatal("a row colours people other than the host says")
+	}
+	if c := newPreviewCard(Preview{URL: "x", Site: "Sara"}, nil, v.tint); tintOf(c.tint, c.p.Site) != sara {
+		t.Fatal("a card from Sara is not in her colour")
 	}
 }

@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"image/color"
+
 	"strconv"
 
 	"github.com/marrasen/gunim"
@@ -18,10 +20,12 @@ type membersPanel struct {
 	root  gunim.Node
 	title *widget.Label
 	list  *widget.List
+	// tint colours a person by name.
+	tint func(string) color.NRGBA
 }
 
-func newMembersPanel(shut func(*gunim.UI)) *membersPanel {
-	m := &membersPanel{title: widget.NewLabel("Members"), list: widget.NewList()}
+func newMembersPanel(shut func(*gunim.UI), tint func(string) color.NRGBA) *membersPanel {
+	m := &membersPanel{title: widget.NewLabel("Members"), list: widget.NewList(), tint: tint}
 	m.title.Face = widget.BoldFont
 	closer := widget.NewIconButton(icon.X, "Close")
 	closer.OnClick = func(u *gunim.UI) gunim.Intent {
@@ -42,7 +46,7 @@ func (m *membersPanel) set(members []Member, u *gunim.UI) {
 	m.title.Text = "Members · " + strconv.Itoa(len(members))
 	widget.Sync(m.list, u, members,
 		memberKey,
-		newMemberRow,
+		func(p Member) *memberRow { return newMemberRow(p, m.tint) },
 		func(r *memberRow, p Member, u *gunim.UI) { r.set(p, u) })
 }
 
@@ -59,12 +63,13 @@ func memberKey(m Member) widget.Key {
 type memberRow struct {
 	anim.Group
 	m                      Member
+	tint                   func(string) color.NRGBA
 	active, hover          *anim.Float
 	name, status, initials text.Run
 }
 
-func newMemberRow(m Member) *memberRow {
-	r := &memberRow{m: m, active: anim.NewFloat(0), hover: anim.NewFloat(0)}
+func newMemberRow(m Member, tint func(string) color.NRGBA) *memberRow {
+	r := &memberRow{m: m, tint: tint, active: anim.NewFloat(0), hover: anim.NewFloat(0)}
 	r.Add(r.active, r.hover)
 	if m.Active {
 		r.active.Jump(1)
@@ -95,7 +100,7 @@ func (r *memberRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		p.RRect(geom.Rect{Max: box.Point()}, 7, paint.Solid(fade(SidebarHot.Get(th), h)))
 	}
 	av := geom.Rc(8, (box.H-30)/2, 30, 30)
-	p.RRect(av, 15, paint.Solid(AvatarTint(r.m.Name)))
+	p.RRect(av, 15, paint.Solid(tintOf(r.tint, r.m.Name)))
 	c := av.Center()
 	r.initials.Paint(p, geom.Pt(c.X-r.initials.Advance/2, c.Y-r.initials.Height()/2), widget.ButtonStrongInk.Get(th))
 	// The dot turns green as they become active, and grey as they go.

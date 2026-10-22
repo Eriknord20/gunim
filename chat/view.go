@@ -47,6 +47,10 @@ type Options struct {
 	// emoji. Complete is asked for those too, and its suggestions follow the view's own.
 	Triggers string
 	Complete func(trigger rune, query string) []widget.Completion
+	// Tint colours a person by name: their avatar, the bar of a reply quoting them, their swatch among the
+	// suggestions, and the bar of a link card from a site of that name. Where it is nil, or reports false, the
+	// colour is [AvatarTint]'s, picked by the name.
+	Tint func(name string) (color.NRGBA, bool)
 }
 
 // View is a conversation: its timeline and its message box, and as [Options] say, a header, the members, and the
@@ -141,7 +145,7 @@ func NewView(o Options) *View {
 	main.Cross, main.Gap = widget.CrossStretch, zeroGap
 	v.root = &pane{child: main, fill: PaneFill}
 	if o.Header && o.Members {
-		v.members = newMembersPanel(func(u *gunim.UI) { v.openMembers(false, u) })
+		v.members = newMembersPanel(func(u *gunim.UI) { v.openMembers(false, u) }, v.tint)
 		v.drawer = widget.NewDrawer(v.root, v.members.root)
 		v.root = v.drawer
 	}
@@ -203,7 +207,7 @@ func (v *View) complete(trigger rune, query string) []widget.Completion {
 	case '@':
 		for _, p := range v.people {
 			if matchesName(p, q) {
-				out = append(out, widget.Completion{Text: "@" + p, Label: p, Swatch: AvatarTint(p)})
+				out = append(out, widget.Completion{Text: "@" + p, Label: p, Swatch: v.tint(p)})
 			}
 		}
 	case ':':
@@ -246,13 +250,23 @@ func (v *View) newList() *widget.VirtualList {
 		return ""
 	})
 	l := widget.NewVirtualList(func(k widget.Key) gunim.Node {
-		return newMsgRow(v.items[k], v.jump, v.group, func(id string) *paint.Image { return v.images[id] }, v.react)
+		return newMsgRow(v.items[k], v.jump, v.group, func(id string) *paint.Image { return v.images[id] }, v.react, v.tint)
 	})
 	l.StickToEnd, l.HoldOnPrepend = true, true
 	l.OnReachStart = func(u *gunim.UI) gunim.Intent { return OlderAsked{} }
 	l.Estimate = 44
 	l.Spacing = TimelineSpacing
 	return l
+}
+
+// tint is the colour of name, as the options' Tint says, or [AvatarTint] where it says nothing.
+func (v *View) tint(name string) color.NRGBA {
+	if v.opts.Tint != nil {
+		if c, ok := v.opts.Tint(name); ok {
+			return c
+		}
+	}
+	return AvatarTint(name)
 }
 
 // react opens the emoji picker below opener, to react to the message id.

@@ -48,6 +48,8 @@ type msgRow struct {
 	reactions *reactionBar
 	tools     gunim.Node
 	toolsAt   geom.Point
+	// tint colours a person by name.
+	tint func(string) color.NRGBA
 	// react opens the emoji picker for a message, and menu is the menu of
 	// what to do with this one, while it is open.
 	react    func(opener gunim.Node, id string, u *gunim.UI)
@@ -72,9 +74,9 @@ type msgRow struct {
 }
 
 func newMsgRow(item Item, jump func(string, *gunim.UI), group *markdown.Group, image func(id string) *paint.Image,
-	react func(opener gunim.Node, id string, u *gunim.UI),
+	react func(opener gunim.Node, id string, u *gunim.UI), tint func(string) color.NRGBA,
 ) *msgRow {
-	r := &msgRow{item: item, jump: jump, react: react, hover: anim.NewFloat(0), flash: anim.NewFloat(0)}
+	r := &msgRow{item: item, jump: jump, react: react, tint: tint, hover: anim.NewFloat(0), flash: anim.NewFloat(0)}
 	r.Add(r.hover, r.flash)
 	if !item.heading() {
 		r.body = markdown.New("")
@@ -89,7 +91,7 @@ func newMsgRow(item Item, jump func(string, *gunim.UI), group *markdown.Group, i
 			}
 		}
 		r.poll = newPollCard(item.ID, item.Poll)
-		r.preview = newPreviewCard(item.Preview, image)
+		r.preview = newPreviewCard(item.Preview, image, tint)
 		r.file = newFileCard(item.File)
 		r.reactions = newReactionBar(item.ID, item.Reactions, react)
 		r.tools = newTools(item.Message, react)
@@ -321,7 +323,7 @@ func (r *msgRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	}
 	ink, faint := widget.Ink.Get(th), Faint.Get(th)
 	if !m.Continued {
-		r.paintAvatar(p, geom.Rc(16, rowPad+2, avatarSize, avatarSize), AvatarTint(m.Author))
+		r.paintAvatar(p, geom.Rc(16, rowPad+2, avatarSize, avatarSize), tintOf(r.tint, m.Author))
 		r.name.Paint(p, geom.Pt(gutter, rowPad), ink)
 		r.time.Paint(p, geom.Pt(gutter+r.name.Advance+8, rowPad+r.name.Ascent-r.time.Ascent), faint)
 	} else if h := min(r.hover.Value(), 1); h > 0.01 && r.statusBox.Empty() {
@@ -331,7 +333,7 @@ func (r *msgRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	if !r.quoteBox.Empty() {
 		q := r.quoteBox
 		p.RRect(q, 6, paint.Solid(QuoteFill.Get(th)))
-		p.RRect(geom.Rc(q.Min.X, q.Min.Y, 3, q.Size().H), 1.5, paint.Solid(AvatarTint(m.Reply.Author)))
+		p.RRect(geom.Rc(q.Min.X, q.Min.Y, 3, q.Size().H), 1.5, paint.Solid(tintOf(r.tint, m.Reply.Author)))
 		func() {
 			defer p.Layer(paint.LayerOpts{Bounds: q, Opacity: 1, Clip: true})()
 			r.quote.Paint(p, geom.Pt(q.Min.X+12, q.Min.Y+(quoteH-r.quote.Height())/2), faint)

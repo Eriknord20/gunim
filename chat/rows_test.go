@@ -43,7 +43,7 @@ func TestReactionsArriveAsChipsInTheOrderTheyCame(t *testing.T) {
 func TestAMessageBuiltWithReactionsShowsThem(t *testing.T) {
 	it := Item{Key: "m1", Message: Message{ID: "m1", Author: "Erik Lund", Body: "Shipped",
 		Reactions: []Reaction{{Emoji: party, Count: 3, Who: "Anna Berg, Sara Nyström, Erik Lund"}}}}
-	r := newMsgRow(it, nil, nil, nil, nil)
+	r := newMsgRow(it, nil, nil, nil, nil, nil)
 	bar := r.reactions
 	if len(bar.chips) != 1 || len(bar.Children()) != 2 {
 		t.Fatalf("%d chips and %d children, want the party popper and the chip that adds", len(bar.chips),
