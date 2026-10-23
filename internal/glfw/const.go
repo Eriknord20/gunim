@@ -123,6 +123,11 @@ const (
 	// put. A gunim change.
 	Popup = Hint(0x00025001)
 
+	// ContextOnly makes a window that only lends its GL context: on
+	// Windows it takes no drops and never hears whether it is covered. A
+	// gunim change.
+	ContextOnly = Hint(0x00025002)
+
 	// Win32NoRedirectionBitmap specifies whether the window is created without a redirection surface
 	// (WS_EX_NOREDIRECTIONBITMAP). Only set this when the content is presented through
 	// DirectComposition, as such a window shows nothing otherwise.

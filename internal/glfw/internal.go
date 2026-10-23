@@ -46,7 +46,8 @@ type wndconfig struct {
 
 	noRedirectionBitmap bool // Win32
 
-	popup bool // gunim change
+	popup       bool // gunim change
+	contextOnly bool // gunim change
 }
 
 type ctxconfig struct {

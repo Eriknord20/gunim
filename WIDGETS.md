@@ -198,6 +198,10 @@ and `StateDisabled` while disabled (`Control.accessState` gives it). A view of r
   frames. `painted(node, size)` returns what a node paints. `click`, `doubleClick`, `rightClick` and `fingerScroll`
   send pointer input. `spills` finds paint outside a box. For popups, send input with `popup.Input(...)` and set the
   screen's room with `w.Offscreen().SetWorkArea(rect)`.
+- **Pixels.** `w.Pixels()`, or `gunimtest.Pixels(t, w)`, draws an offscreen window's last frame with the real
+  renderer, in a hidden window, and returns the picture; `gunimtest.WritePNG` saves it to look at. Where no display or
+  OpenGL is at hand, and on macOS and Android, the test skips. Assert on state first: a GPU rounds edges and blurs its
+  own way, so a pixel check allows a little either side.
 
 ## Checklist for a new widget
 

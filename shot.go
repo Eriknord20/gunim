@@ -12,7 +12,8 @@ import (
 )
 
 // ErrNoPixels is returned by [Client.Shot] for a window whose driver
-// draws nothing to read back, such as one from [NewOffscreen].
+// draws nothing to read back, such as one from [NewOffscreen], and by
+// [Window.Pixels] where it cannot draw.
 var ErrNoPixels = errors.New("gunim: this window draws no pixels to read")
 
 // shotWait is how long a shot waits for a window's next frame. A test may shorten it.

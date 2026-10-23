@@ -267,6 +267,8 @@ func WindowHint(hint Hint, value int) error {
 		_glfw.hints.window.noRedirectionBitmap = intToBool(value)
 	case Popup:
 		_glfw.hints.window.popup = intToBool(value)
+	case ContextOnly:
+		_glfw.hints.window.contextOnly = intToBool(value)
 	case ClientAPI:
 		_glfw.hints.context.client = value
 	case ContextCreationAPI:
