@@ -9,6 +9,10 @@
 package gunimtest
 
 import (
+	"errors"
+	"image"
+	"image/png"
+	"os"
 	"testing"
 
 	"github.com/marrasen/gunim"
@@ -42,5 +46,34 @@ func Check(t testing.TB, w *gunim.Window) {
 	t.Helper()
 	for _, s := range w.Strays() {
 		t.Error(s)
+	}
+}
+
+// Pixels returns w's last frame drawn, as [gunim.Window.Pixels] does, and skips t where nothing can draw it.
+func Pixels(t testing.TB, w *gunim.Window) *image.RGBA {
+	t.Helper()
+	img, err := w.Pixels()
+	if errors.Is(err, gunim.ErrNoPixels) {
+		t.Skipf("no pixels to look at: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+// WritePNG writes img to path as a PNG, for a person to look at, and fails t where it cannot.
+func WritePNG(t testing.TB, path string, img image.Image) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
