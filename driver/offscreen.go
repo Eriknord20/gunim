@@ -41,6 +41,9 @@ type OffscreenWindow struct {
 	zoom float32
 	rate float64
 	ops  []paint.Op
+	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
+	drawnSize             geom.Size
+	drawnScale, drawnZoom float32
 	// damage is the part of the window the last frame changed.
 	damage geom.Rect
 	// cursor is the pointer's shape last set.
@@ -227,6 +230,7 @@ func (w *OffscreenWindow) Present(ops []paint.Op, damage geom.Rect) error {
 	// The engine reuses its buffers, the ops themselves among them, two
 	// frames on, so keep a copy for Ops to return.
 	w.ops = keepOps(ops)
+	w.drawnSize, w.drawnScale, w.drawnZoom = w.size, w.scale, w.zoom
 	w.damage = damage
 	return nil
 }

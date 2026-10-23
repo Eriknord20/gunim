@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
 )
@@ -36,7 +37,7 @@ func pixelsOf(t *testing.T, w *Window) *image.RGBA {
 
 // closeTo reports whether c is within a little of want, as a GPU may round.
 func closeTo(c, want color.RGBA) bool {
-	d := func(a, b uint8) bool { return a-b < 3 || b-a < 3 }
+	d := func(a, b uint8) bool { return int(a)-int(b) <= 2 && int(b)-int(a) <= 2 }
 	return d(c.R, want.R) && d(c.G, want.G) && d(c.B, want.B) && d(c.A, want.A)
 }
 
@@ -83,5 +84,68 @@ func TestAnOffscreenWindowsPixelsFollowItsSizeAndZoom(t *testing.T) {
 	}
 	if got := img.RGBAAt(40, 35); !closeTo(got, pxBlue) {
 		t.Errorf("zoomed twice, where the bar was holds %v", got)
+	}
+}
+
+func TestCloseToTellsColoursApart(t *testing.T) {
+	if closeTo(pxRed, pxBlue) || closeTo(color.RGBA{}, pxRed) || !closeTo(pxRed, color.RGBA{R: 0xfd, B: 2, A: 0xff}) {
+		t.Fatal("closeTo takes colours apart for the same, or the same for apart")
+	}
+}
+
+// A window resized since its last frame draws that frame at the size it was laid out in.
+func TestAFrameDrawsAtTheSizeItWasLaidOutIn(t *testing.T) {
+	w := NewOffscreen(geom.Sz(200, 100), &flag{})
+	pixelsOf(t, w)
+	w.Offscreen().Resize(geom.Sz(300, 150))
+	img, err := w.Pixels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := img.Bounds(); b != image.Rect(0, 0, 200, 100) {
+		t.Fatalf("resized after its frame, the picture is %v", b)
+	}
+}
+
+// A zoomed window's picture is the window's own size, its zoom rounding it no larger.
+func TestAZoomedWindowsPictureIsItsOwnSize(t *testing.T) {
+	w := NewOffscreen(geom.Sz(79, 41), &flag{})
+	w.ui.SetZoom(1.1)
+	if b := pixelsOf(t, w).Bounds(); b != image.Rect(0, 0, 79, 41) {
+		t.Fatalf("zoomed 1.1, a window 79 by 41 draws %v", b)
+	}
+}
+
+// What no op covers shows the window's background.
+func TestTheWindowsBackgroundShowsWhereNothingDraws(t *testing.T) {
+	w := NewOffscreen(geom.Sz(60, 40), nil)
+	w.Frame(time.Second / 60)
+	green := color.NRGBA{G: 0xff, A: 0xff}
+	w.Offscreen().SetBackground(green)
+	img, err := w.Pixels()
+	if errors.Is(err, ErrNoPixels) {
+		t.Skipf("no pixels to look at: %v", err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := img.RGBAAt(30, 20); !closeTo(got, color.RGBA{G: 0xff, A: 0xff}) {
+		t.Fatalf("over a green background, an empty frame holds %v", got)
+	}
+}
+
+// A window that has drawn nothing fails to draw, and the failure is no skip.
+func TestPixelsBeforeAFrameFailsWithoutSkipping(t *testing.T) {
+	w := NewOffscreen(geom.Sz(60, 40), nil)
+	if _, err := w.Pixels(); err == nil || errors.Is(err, ErrNoPixels) {
+		t.Fatalf("before a frame, Pixels fails with %v", err)
+	}
+}
+
+// Once offscreen windows draw with GLFW, no window opens on a display in the same run.
+func TestPixelsKeepGLFWFromTheDesktop(t *testing.T) {
+	pixelsOf(t, NewOffscreen(geom.Sz(60, 40), &flag{}))
+	if err := driver.ClaimGLFWForDesktop(); err == nil {
+		t.Fatal("the desktop takes GLFW from the offscreen windows")
 	}
 }

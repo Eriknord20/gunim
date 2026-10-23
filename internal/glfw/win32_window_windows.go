@@ -1496,7 +1496,7 @@ func (w *Window) createNativeWindow(wndconfig *wndconfig, fbconfig *fbconfig) er
 		}
 	}
 
-	if !microsoftgdk.IsXbox() {
+	if !microsoftgdk.IsXbox() && !wndconfig.contextOnly {
 		// gunim change: a drop target, which hears files as they are
 		// dragged over the window.
 		w.acceptDrops()

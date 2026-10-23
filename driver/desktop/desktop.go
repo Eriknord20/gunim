@@ -86,6 +86,9 @@ type Driver struct {
 // Open initialises GLFW and loads the GL library. Call it on the main
 // goroutine.
 func Open() (*Driver, error) {
+	if err := driver.ClaimGLFWForDesktop(); err != nil {
+		return nil, err
+	}
 	if err := glfw.Init(); err != nil {
 		return nil, fmt.Errorf("desktop: %w", err)
 	}
