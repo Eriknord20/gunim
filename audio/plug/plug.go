@@ -76,21 +76,20 @@ type Descriptor struct {
 	// AuxIn and AuxOut are the plugin's audio ports beyond its main
 	// input and output, as VST3's aux (auxiliary) buses: a sidechain
 	// in, or an output for each drum of a drum synth. A project names a
-	// port by its place in the list, as VST3 names a bus by its index,
-	// so a plugin adds new ports at the end. [Block.AuxIn] and
-	// [Block.AuxOut] carry their sound.
+	// port by its key ([AudioPort.PortKey]), so a plugin may add, move
+	// and take out ports. [Block.AuxIn] and [Block.AuxOut] carry their
+	// sound, by the port's place in the list.
 	AuxIn, AuxOut []AudioPort
 	// ControlIn and ControlOut are the plugin's control ports: one value
 	// a frame, in the blocks the sound comes in, as an LFO puts out.
-	// They are named by their place in the list too, and
-	// [Block.ControlIn] and [Block.ControlOut] carry their values.
+	// They are named by their keys too, and [Block.ControlIn] and
+	// [Block.ControlOut] carry their values by place.
 	ControlIn, ControlOut []ControlPort
 	// Ports, where set, says which of the ports above a plugin has in
 	// a state, as a synth has an output for each part of the drum kit
-	// it plays, and only its main output for a melodic sound. The ports
-	// keep their places in the lists, so a project's connections keep
-	// naming them, and a port a state lacks comes back with a state
-	// that has it. The host gives a port the plugin lacks nothing, as it
+	// it plays, and only its main output for a melodic sound, by the
+	// ports' places in the lists. A port a state lacks comes back with
+	// a state that has it. The host gives a port the plugin lacks nothing, as it
 	// gives a port left unconnected: the plugin mixes such an output
 	// into its main one. Ports is a pure function of the state, as
 	// [Plugin.State] writes it: the host asks it again whenever the
@@ -187,6 +186,10 @@ func (p Ports) HasControlOut(i int) bool { return has(p.ControlOut, i) }
 type AudioPort struct {
 	// Name is what the host shows it as: "Sidechain", or "Kick".
 	Name string
+	// Key names the port in a project, which keeps the port's
+	// connections by it: empty uses Name. A key never changes once a
+	// plugin ships it, so to rename a port, set Key to its old name.
+	Key string
 	// Channels is how many channels it has. Zero gives it as many as the
 	// main sound, [Setup.Channels].
 	Channels int
@@ -206,6 +209,8 @@ type AudioPort struct {
 type ControlPort struct {
 	// Name is what the host shows it as: "Cutoff", or "LFO".
 	Name string
+	// Key names the port in a project, as [AudioPort.Key] does.
+	Key string
 	// Unit is what the value counts, as "Hz", or empty for a plain
 	// number.
 	Unit string
@@ -233,6 +238,45 @@ type ControlPort struct {
 	// falls past the block's end. A host joins a trigger output only to
 	// a trigger input, and the other way round.
 	Trigger bool
+}
+
+// PortKey is the key a project names p by: its Key, or its Name.
+func (p AudioPort) PortKey() string { return portKey(p.Key, p.Name) }
+
+// PortKey is the key a project names p by: its Key, or its Name.
+func (p ControlPort) PortKey() string { return portKey(p.Key, p.Name) }
+
+// portKey is key, or name where key is empty.
+func portKey(key, name string) string {
+	if key == "" {
+		return name
+	}
+	return key
+}
+
+// AuxInAt returns the place of the aux input of key in d.AuxIn, or -1.
+func (d *Descriptor) AuxInAt(key string) int { return audioAt(d.AuxIn, key) }
+
+// AuxOutAt returns the place of the aux output of key in d.AuxOut, or
+// -1.
+func (d *Descriptor) AuxOutAt(key string) int { return audioAt(d.AuxOut, key) }
+
+// ControlInAt returns the place of the control input of key in
+// d.ControlIn, or -1.
+func (d *Descriptor) ControlInAt(key string) int { return controlAt(d.ControlIn, key) }
+
+// ControlOutAt returns the place of the control output of key in
+// d.ControlOut, or -1.
+func (d *Descriptor) ControlOutAt(key string) int { return controlAt(d.ControlOut, key) }
+
+// audioAt returns the place of the port of key in ports, or -1.
+func audioAt(ports []AudioPort, key string) int {
+	return slices.IndexFunc(ports, func(p AudioPort) bool { return p.PortKey() == key })
+}
+
+// controlAt returns the place of the port of key in ports, or -1.
+func controlAt(ports []ControlPort, key string) int {
+	return slices.IndexFunc(ports, func(p ControlPort) bool { return p.PortKey() == key })
 }
 
 // Param is one of a plugin's parameters: a value the host keeps, shows,
@@ -514,29 +558,35 @@ func check(d *Descriptor) error {
 }
 
 // checkPorts returns what is wrong with d's ports, if anything: each
-// needs a name of its own among those going its way, an audio port a
+// needs a name and a key of its own among those going its way, an audio port a
 // channel count of zero or more, and a control port a range holding its
 // default: from 0 to 1, from 0, for a trigger.
 func checkPorts(d *Descriptor) error {
 	for way, ports := range map[string][]AudioPort{"aux input": d.AuxIn, "aux output": d.AuxOut} {
-		names := map[string]bool{}
+		names, keys := map[string]bool{}, map[string]bool{}
 		for _, p := range ports {
 			if p.Name == "" || names[p.Name] {
 				return fmt.Errorf("%s has an %s named %q twice, or unnamed", d.ID, way, p.Name)
 			}
-			names[p.Name] = true
+			if keys[p.PortKey()] {
+				return fmt.Errorf("%s has two %ss of key %q", d.ID, way, p.PortKey())
+			}
+			names[p.Name], keys[p.PortKey()] = true, true
 			if p.Channels < 0 {
 				return fmt.Errorf("%s: %s %q has %d channels", d.ID, way, p.Name, p.Channels)
 			}
 		}
 	}
 	for way, ports := range map[string][]ControlPort{"control input": d.ControlIn, "control output": d.ControlOut} {
-		names := map[string]bool{}
+		names, keys := map[string]bool{}, map[string]bool{}
 		for _, p := range ports {
 			if p.Name == "" || names[p.Name] {
 				return fmt.Errorf("%s has a %s named %q twice, or unnamed", d.ID, way, p.Name)
 			}
-			names[p.Name] = true
+			if keys[p.PortKey()] {
+				return fmt.Errorf("%s has two %ss of key %q", d.ID, way, p.PortKey())
+			}
+			names[p.Name], keys[p.PortKey()] = true, true
 			if p.Max <= p.Min || p.Default < p.Min || p.Default > p.Max {
 				return fmt.Errorf("%s: %s %q runs from %g to %g, from %g", d.ID, way, p.Name, p.Min, p.Max, p.Default)
 			}

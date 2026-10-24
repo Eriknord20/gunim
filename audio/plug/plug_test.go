@@ -85,6 +85,10 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			ChordAhead: -time.Millisecond},
 		"chords too far ahead": {ID: "test.chordsfar", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			ChordAhead: MaxChordAhead + time.Millisecond},
+		"aux outputs of one key": {ID: "test.auxkeys", Name: "X", New: newer,
+			AuxOut: []AudioPort{{Name: "Kick"}, {Name: "Bass drum", Key: "Kick"}}},
+		"controls of one key": {ID: "test.ctlkeys", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "A", Key: "lfo", Max: 1}, {Name: "B", Key: "lfo", Max: 1}}},
 		"controls of one name": {ID: "test.ctls", Name: "X", New: newer,
 			ControlIn: []ControlPort{{Name: "A", Max: 1}, {Name: "A", Max: 1}}},
 		"trigger of another range": {ID: "test.trig", Name: "X", New: newer,
@@ -102,6 +106,35 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			}()
 			Register(d)
 		}()
+	}
+}
+
+// A port is found by its key, else its name, wherever it stands in its
+// list.
+func TestPortsAreFoundByKey(t *testing.T) {
+	d := Descriptor{
+		AuxIn:      []AudioPort{{Name: "Sidechain"}},
+		AuxOut:     []AudioPort{{Name: "Snare"}, {Name: "Bass drum", Key: "Kick"}},
+		ControlIn:  []ControlPort{{Name: "Rate"}},
+		ControlOut: []ControlPort{{Name: "LFO 90°", Key: "90"}, {Name: "LFO"}},
+	}
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"the sidechain", d.AuxInAt("Sidechain"), 0},
+		{"the kick", d.AuxOutAt("Kick"), 1},
+		{"the bass drum by name", d.AuxOutAt("Bass drum"), -1},
+		{"the snare", d.AuxOutAt("Snare"), 0},
+		{"the rate", d.ControlInAt("Rate"), 0},
+		{"90", d.ControlOutAt("90"), 0},
+		{"the LFO", d.ControlOutAt("LFO"), 1},
+		{"a port it lacks", d.ControlOutAt("180"), -1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s is at %d, want %d", c.name, c.got, c.want)
+		}
 	}
 }
 
