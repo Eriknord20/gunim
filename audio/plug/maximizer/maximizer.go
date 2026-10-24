@@ -96,9 +96,9 @@ func param(id uint32) plug.Param {
 	return p
 }
 
-// lookahead and lateBy are how late the sound comes, in seconds and then
-// frames more, the same in every mode; the limiter looks ahead that long
-// less the true peaks' filter's delay.
+// lookahead and lateBy set how late the sound comes in every mode: lookahead
+// seconds, then lateBy frames more. The limiter looks ahead that long, less
+// the true peaks' filter's delay.
 const (
 	lookahead = 0.005
 	lateBy    = 6
@@ -217,6 +217,8 @@ type processor struct {
 	run              runs
 	least, blockPeak float64
 	slow             float64
+	// unmetered skips the true peaks out, for Learn, which never reads them.
+	unmetered bool
 }
 
 // core is one channel's limiter: for each frame the gain that keeps it
@@ -505,6 +507,9 @@ func (p *processor) stages(inL, inR, outL, outR []float32, f int64) {
 		}
 		p.least = min(p.least, g[0], g[1])
 		p.trace.Put(f+int64(i), float32(-max(p.cores[0].down, p.cores[1].down)))
+	}
+	if p.unmetered {
+		return
 	}
 	for c := range 2 {
 		tp := r.tp[c][:n]

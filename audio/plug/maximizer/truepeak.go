@@ -5,17 +5,21 @@ import "math"
 // True peaks: the peaks of the sound as it would be between its samples,
 // as a converter rebuilds it, which can rise over every sample, as ITU-R
 // BS.1770 measures them: the sound eight times over, through a filter
-// that draws the curve between the samples, its loudest of the eight.
+// that draws the curve between the samples, and the peak of a parabola
+// through its loudest point.
 
 // The oversampling filter: tpTaps taps for each of tpPhases phases, a
-// Kaiser-windowed sinc; it delays the sound tpDelay frames. push is
+// Kaiser-windowed sinc; it delays the sound tpDelay frames. phases is
 // written out for eight phases.
 const (
 	tpPhases = 8
 	tpTaps   = 64
-	tpBeta   = 8.0
+	tpBeta   = 7.0
 	tpDelay  = tpTaps / 2
 )
+
+// Fail to build unless tpPhases is the eight phases is written out for.
+var _ = [1]struct{}{}[tpPhases-8]
 
 // tpFilter is the filter's taps, by phase: phase p draws the sound
 // p/tpPhases of a frame after the middle sample, each phase scaled to
@@ -58,16 +62,42 @@ func bessel0(x float64) float64 {
 type truePeak struct {
 	ring [2 * tpTaps]float64
 	at   int
+	// last is the last phase of the frame before.
+	last float64
 }
 
 // push takes the next sample, and returns the true peak from the sample
 // tpDelay before it to the next, a ratio of full scale.
+func (t *truePeak) push(x float64) float64 {
+	v := t.phases(x)
+	m := 1
+	for i := 2; i <= tpPhases; i++ {
+		if math.Abs(v[i]) > math.Abs(v[m]) {
+			m = i
+		}
+	}
+	// A parabola through the loudest point and its neighbours finds the
+	// peak between them.
+	s := 1.0
+	if v[m] < 0 {
+		s = -1
+	}
+	y0, a, b := s*v[m], s*v[m-1], s*v[m+1]
+	if c := a - 2*y0 + b; c < 0 && a <= y0 && b <= y0 {
+		return y0 - (a-b)*(a-b)/(8*c)
+	}
+	return y0
+}
+
+// phases takes the next sample, and returns the sound drawn from the
+// sample tpDelay before it to the next, at every phase in turn, after
+// the last phase before it.
 //
 // The filter is symmetric: phase tpPhases-q is phase q backwards, and
 // phase 0 is the middle sample itself. So each pair of phases is worked
 // out from the sums and differences of the samples, each a pair of them
 // as far from the middle of the window: half the products.
-func (t *truePeak) push(x float64) float64 {
+func (t *truePeak) phases(x float64) (v [tpPhases + 2]float64) {
 	w := t.add(x)
 	var e1, o1, e2, o2, e3, o3, e4 float64
 	for k := range tpTaps / 2 {
@@ -81,8 +111,10 @@ func (t *truePeak) push(x float64) float64 {
 		o3 += h[5] * d
 		e4 += h[6] * s
 	}
-	return max(math.Abs(w[tpTaps/2-1]), math.Abs(e1+o1), math.Abs(e1-o1), math.Abs(e2+o2), math.Abs(e2-o2),
-		math.Abs(e3+o3), math.Abs(e3-o3), math.Abs(e4))
+	v = [tpPhases + 2]float64{t.last, w[tpTaps/2-1], e1 + o1, e2 + o2, e3 + o3, e4, e3 - o3, e2 - o2, e1 - o1,
+		w[tpTaps/2]}
+	t.last = v[tpPhases]
+	return v
 }
 
 // tpHalves are phases 1 to tpPhases/2 of the filter, halved, by tap: for

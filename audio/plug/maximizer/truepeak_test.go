@@ -32,26 +32,28 @@ func TestTheTruePeakFindsPeaksBetweenTheSamples(t *testing.T) {
 }
 
 func TestTheTruePeakReadsHighTonesBetweenTheSamples(t *testing.T) {
-	// Tones up to 20 kHz, peaking half a frame from a sample, read once the
-	// filter is full of them.
+	// Tones up to 20 kHz, peaking between the samples and between the
+	// phases too, read once the filter is full of them.
 	for _, f := range []float64{1000, 8000, 12000, 16000, 18000, 20000} {
-		w := 2 * math.Pi * f / 48000
-		var tp truePeak
-		most := 0.0
-		for i := range 4 * tpTaps {
-			if p := tp.push(math.Cos(w * (float64(i) - 0.5))); i >= tpTaps {
-				most = max(most, p)
+		for _, off := range []float64{0.5, 1.0 / 16, 0.1, 0.3} {
+			w := 2 * math.Pi * f / 48000
+			var tp truePeak
+			most := 0.0
+			for i := range 4 * tpTaps {
+				if p := tp.push(math.Cos(w * (float64(i) - off))); i >= tpTaps {
+					most = max(most, p)
+				}
 			}
-		}
-		if db := 20 * math.Log10(most); math.Abs(db) > 0.01 {
-			t.Errorf("a %.0f Hz tone of full scale reads %.4f dBTP", f, db)
+			if db := 20 * math.Log10(most); math.Abs(db) > 0.01 {
+				t.Errorf("a %.0f Hz tone of full scale, peaking %.3f of a frame off, reads %.4f dBTP", f, off, db)
+			}
 		}
 	}
 }
 
 func TestTheTruePeakIsTheFiltersEveryPhase(t *testing.T) {
 	// Phase 0 is the middle sample, and each other phase is its mirror's
-	// backwards, as push takes it to be.
+	// backwards, as phases takes it to be.
 	for k := range tpTaps {
 		want := 0.0
 		if k == tpTaps/2-1 {
@@ -69,25 +71,28 @@ func TestTheTruePeakIsTheFiltersEveryPhase(t *testing.T) {
 			}
 		}
 	}
-	// And push finds the loudest of the phases' sums, written out.
+	// And phases finds the phases' sums, written out, between the frame
+	// before's last phase and the next sample.
 	var tp truePeak
 	w := make([]float64, 0, 3000)
+	last := 0.0
 	for i := range 3000 {
-		v := math.Sin(float64(i)*0.37) * math.Cos(float64(i)*0.011)
-		w = append(w, v)
-		got := tp.push(v)
-		want := 0.0
-		for p := range tpPhases {
-			y := 0.0
+		x := math.Sin(float64(i)*0.37) * math.Cos(float64(i)*0.011)
+		w = append(w, x)
+		got := tp.phases(x)
+		want := [tpPhases + 2]float64{last}
+		for p := range tpPhases + 1 {
 			for k := range tpTaps {
-				if j := len(w) - tpTaps + k; j >= 0 {
-					y += tpFilter[p][k] * w[j]
+				if j := len(w) - tpTaps + k + p/tpPhases; j >= 0 && j < len(w) {
+					want[p+1] += tpFilter[p%tpPhases][k] * w[j]
 				}
 			}
-			want = max(want, math.Abs(y))
 		}
-		if math.Abs(got-want) > 1e-14 {
-			t.Fatalf("sample %d: %g, not %g", i, got, want)
+		last = want[tpPhases]
+		for p := range want {
+			if math.Abs(got[p]-want[p]) > 1e-14 {
+				t.Fatalf("sample %d, phase %d: %g, not %g", i, p-1, got[p], want[p])
+			}
 		}
 	}
 }

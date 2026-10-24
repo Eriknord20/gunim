@@ -111,14 +111,6 @@ func run(pr plug.Processor, in [2][]float32, changes []plug.Change) [2][]float32
 // oversampled through a Kaiser-windowed sinc, away from the ends.
 func truePeakOf(ch [2][]float32) float64 {
 	const over, taps, beta = 8, 32, 8.0
-	bessel := func(x float64) float64 {
-		s, term := 1.0, 1.0
-		for k := 1; k < 30; k++ {
-			term *= (x / 2 / float64(k)) * (x / 2 / float64(k))
-			s += term
-		}
-		return s
-	}
 	var kernel [over][2*taps + 1]float64
 	for k := range over {
 		for j := -taps; j <= taps; j++ {
@@ -128,7 +120,7 @@ func truePeakOf(ch [2][]float32) float64 {
 			if d != 0 {
 				sinc = math.Sin(math.Pi*d) / (math.Pi * d)
 			}
-			kernel[k][j+taps] = sinc * bessel(beta*math.Sqrt(1-r*r)) / bessel(beta)
+			kernel[k][j+taps] = sinc * bessel0(beta*math.Sqrt(1-r*r)) / bessel0(beta)
 		}
 	}
 	peak := 0.0
@@ -231,8 +223,10 @@ func TestTruePeaksStayUnderTheCeilingInEveryMode(t *testing.T) {
 			pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
 			out := run(pr, in, set(float64(GainID), 12, float64(CeilingID), -1, float64(ModeID), float64(mode),
 				float64(LinkID), link))
-			if tp := truePeakOf(out); tp > -1+0.25 {
-				t.Errorf("%s, linked %v%%: the true peak comes out at %.2f dBTP, over the ceiling of -1", name, link, tp)
+			// A little over 0.01 dB, as music's lone spikes turn the gain down fast.
+			if tp := truePeakOf(out); tp > -1+0.02 {
+				t.Errorf("%s, linked %v%%: the true peak comes out at %.3f dBTP, over the ceiling of -1", name, link,
+					tp)
 			}
 			if gain := rmsOf(out[0][24000:]) - rmsOf(in[0][24000:]); gain < 4 {
 				t.Errorf("%s, linked %v%%: 12 dB of gain made the sound only %.1f dB louder", name, link, gain)
