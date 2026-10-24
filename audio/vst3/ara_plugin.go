@@ -181,20 +181,14 @@ func (x *Extension) Regions() []*PlaybackRegion {
 	return out
 }
 
-// forget takes region r out of the instance's, as the region goes. It
-// runs on the plugins' thread.
-func (x *Extension) forget(r *PlaybackRegion) {
+// forget takes region r out of the instance's, as the region goes in
+// edit e, which stops the renderer until it ends. It runs on the
+// plugins' thread.
+func (x *Extension) forget(r *PlaybackRegion, e *Edit) {
 	if slices.Contains(x.regions, r) {
-		p := x.p
-		was := p.active && !p.closed
-		if was {
-			p.deactivate()
-		}
+		e.pause(x.p)
 		x.pr.call(1, r.ref)
 		x.regions = slices.DeleteFunc(x.regions, func(q *PlaybackRegion) bool { return q == r })
-		if was {
-			_ = p.activate()
-		}
 	}
 	if slices.Contains(x.editorRegions, r) {
 		x.er.call(1, r.ref)

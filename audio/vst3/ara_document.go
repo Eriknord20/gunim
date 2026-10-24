@@ -317,6 +317,10 @@ const (
 	dcGetPlaybackRegionHeadAndTailTime
 	dcRestoreObjectsFromArchive
 	dcStoreObjectsToArchive
+	dcGetProcessingAlgorithmsCount
+	dcGetProcessingAlgorithmProperties
+	dcGetProcessingAlgorithmForAudioSource
+	dcRequestProcessingAlgorithmForAudioSource
 )
 
 // NewDocument makes a document named name, with its controller, for
@@ -377,6 +381,7 @@ func (d *Document) Edit(fn func(e *Edit)) error {
 		d.dc.call(dcBeginEditing)
 		fn(e)
 		d.dc.call(dcEndEditing)
+		e.resume()
 	})
 	return e.err
 }
@@ -385,6 +390,27 @@ func (d *Document) Edit(fn func(e *Edit)) error {
 type Edit struct {
 	d   *Document
 	err error
+	// paused are the renderers the edit stopped to take regions out of,
+	// started again once it ends.
+	paused []*Plugin
+}
+
+// pause stops p, a renderer, until the edit ends, once.
+func (e *Edit) pause(p *Plugin) {
+	if p.active && !p.closed {
+		p.deactivate()
+		e.paused = append(e.paused, p)
+	}
+}
+
+// resume starts the renderers the edit stopped again.
+func (e *Edit) resume() {
+	for _, p := range e.paused {
+		if !p.closed {
+			_ = p.activate()
+		}
+	}
+	e.paused = nil
 }
 
 func (e *Edit) fail(err error) {
@@ -714,14 +740,14 @@ func (e *Edit) UpdateRegion(r *PlaybackRegion, p RegionProps) {
 }
 
 // RemoveRegion takes a playback region out. The renderers playing it
-// let it go first.
+// let it go first, stopped until the edit ends.
 func (e *Edit) RemoveRegion(r *PlaybackRegion) {
 	if r == nil || r.removed {
 		return
 	}
 	for _, p := range e.d.livePlugins() {
 		if x := p.ara; x != nil {
-			x.forget(r)
+			x.forget(r, e)
 		}
 	}
 	e.d.dc.call(dcDestroyPlaybackRegion, r.ref)
@@ -976,6 +1002,7 @@ func (d *Document) Close() {
 			}
 		}
 		d.dc.call(dcEndEditing)
+		e.resume()
 		d.dc.call(dcDestroy)
 		d.closed = true
 		d.f.close()

@@ -191,6 +191,7 @@ func (r readStruct) get(i int) uint64 {
 func (r readStruct) ptr(i int) uintptr  { return uintptr(r.get(i)) }
 func (r readStruct) i32(i int) int32    { return int32(uint32(r.get(i))) }
 func (r readStruct) f64(i int) float64  { return math.Float64frombits(r.get(i)) }
+func (r readStruct) f32(i int) float32  { return math.Float32frombits(uint32(r.get(i))) }
 func (r readStruct) str(i int) string   { return cstringAt(r.ptr(i)) }
 func (r readStruct) at(i int) uintptr   { return r.p + uintptr(r.off[i]) }
 func (r readStruct) bytes(i int) []byte { return unsafe.Slice(ptr[byte](r.at(i)), -r.sizes[i]) }
