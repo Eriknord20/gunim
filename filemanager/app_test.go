@@ -47,8 +47,10 @@ func newHarnessWith(t *testing.T, set func(o *Options), spec ...string) *harness
 	RegisterViews(h.w)
 	gunim.RegisterPatch(h.w, "browser", func(b *browser, _ grab, _ *gunim.UI) { h.b = b })
 	ctx, cancel := context.WithCancel(context.Background())
+	// The places are fixed, so the machine's own drives say nothing in a test.
 	o := Options{Dir: h.dir, PrefsPath: filepath.Join(h.root, "prefs.json"), Poll: -1,
-		defaults: func() []Favourite { return nil }}
+		defaults: func() []Favourite { return nil },
+		Places:   func() ([]Place, error) { return []Place{{Name: "Home", Path: h.root, Kind: "home"}}, nil }}
 	if set != nil {
 		set(&o)
 	}
