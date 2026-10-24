@@ -193,7 +193,7 @@ func loudnessOf(ctx context.Context, src plug.Source, s *settings, progress func
 	meter := audio.NewLoudnessMeter(rate)
 	var proc *processor
 	if s != nil {
-		proc = &processor{}
+		proc = &processor{unmetered: true}
 		proc.Prepare(plug.Setup{Rate: src.Rate(), MaxBlock: learnBlock, Channels: 2, Offline: true})
 		proc.take(plug.Change{ID: GainID, Value: s.gain})
 		proc.take(plug.Change{ID: CeilingID, Value: s.ceiling})

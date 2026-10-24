@@ -96,9 +96,13 @@ func param(id uint32) plug.Param {
 	return p
 }
 
-// lookahead is how far ahead the limiter looks, in seconds, the same in
-// every mode, so the sound comes as late whatever the mode.
-const lookahead = 0.005
+// lookahead and lateBy set how late the sound comes in every mode: lookahead
+// seconds, then lateBy frames more. The limiter looks ahead that long, less
+// the true peaks' filter's delay.
+const (
+	lookahead = 0.005
+	lateBy    = 6
+)
 
 // plugin is one maximizer.
 type plugin struct {
@@ -213,6 +217,8 @@ type processor struct {
 	run              runs
 	least, blockPeak float64
 	slow             float64
+	// unmetered skips the true peaks out, for Learn, which never reads them.
+	unmetered bool
 }
 
 // core is one channel's limiter: for each frame the gain that keeps it
@@ -243,7 +249,7 @@ type core struct {
 func (p *processor) Prepare(s plug.Setup) {
 	p.rate = s.Rate
 	p.glide = coef(5, s.Rate)
-	p.ahead = max(2, int(math.Round(s.Rate*lookahead)))
+	p.ahead = max(2, int(math.Round(s.Rate*lookahead))+lateBy-tpDelay)
 	p.slow = coef(1500, s.Rate)
 	p.run.make(s.MaxBlock)
 	for c := range p.delay {
@@ -376,7 +382,7 @@ func softClip(x, ceiling float64) float64 {
 //
 // It runs the block a stage at a time, between the frames parameters
 // change at: the gain, and the true peaks in; then the limiter; then the
-// true peaks out. A true peak is four sums of twelve products each; a
+// true peaks out. A true peak is seven sums of 32 products each; a
 // stage at a time, a processor works out many frames' side by side.
 func (p *processor) Process(b *plug.Block) {
 	if len(b.In) == 0 || len(b.Out) == 0 || len(p.delay[0]) == 0 {
@@ -501,6 +507,9 @@ func (p *processor) stages(inL, inR, outL, outR []float32, f int64) {
 		}
 		p.least = min(p.least, g[0], g[1])
 		p.trace.Put(f+int64(i), float32(-max(p.cores[0].down, p.cores[1].down)))
+	}
+	if p.unmetered {
+		return
 	}
 	for c := range 2 {
 		tp := r.tp[c][:n]
