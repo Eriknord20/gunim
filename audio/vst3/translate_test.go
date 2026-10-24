@@ -252,8 +252,8 @@ func TestAVST3PluginRunsBehindPlugsInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.ID != PlugID(c) || !d.Instrument() || !d.Notes || len(d.AuxIn) != 1 || d.AuxIn[0] != (plug.AudioPort{Name: "Sidechain", Channels: 2}) ||
-		len(d.AuxOut) != 1 || d.AuxOut[0] != (plug.AudioPort{Name: "Kick", Channels: 1}) {
+	if d.ID != PlugID(c) || !d.Instrument() || !d.Notes || len(d.AuxIn) != 1 || d.AuxIn[0] != (plug.AudioPort{Name: "Sidechain", Key: "bus 0", Channels: 2}) ||
+		len(d.AuxOut) != 1 || d.AuxOut[0] != (plug.AudioPort{Name: "Kick", Key: "bus 1", Channels: 1}) {
 		t.Fatalf("the fake is described as %+v", d)
 	}
 	if id, ok := ClassID(d.ID); !ok || id != c.IDString() {

@@ -164,11 +164,12 @@ func describe(c Class, open func(cfg Config) (*Plugin, error)) (plug.Descriptor,
 	d := plug.Descriptor{ID: PlugID(c), Name: c.Name, Vendor: c.Vendor, Version: c.Version, Kind: kind,
 		Notes: p.Notes() || c.Instrument()}
 	ins, outs := p.Buses()
+	first := 0
 	if len(ins) > 0 && ins[0].Main {
-		ins = ins[1:]
+		ins, first = ins[1:], 1
 	}
-	d.AuxIn = ports(ins, "Sidechain")
-	d.AuxOut = ports(outs[1:], "Output")
+	d.AuxIn = ports(ins, "Sidechain", first)
+	d.AuxOut = ports(outs[1:], "Output", 1)
 	seen := map[uint32]bool{}
 	for _, q := range p.Params() {
 		if seen[q.ID] {
@@ -202,8 +203,8 @@ func describe(c Class, open func(cfg Config) (*Plugin, error)) (plug.Descriptor,
 
 // ports returns buses as package plug's audio ports, each named apart:
 // one unnamed is named from base, and one named as another before it
-// takes its number.
-func ports(buses []Bus, base string) []plug.AudioPort {
+// takes its number. Each is keyed by its VST3 bus index, from first.
+func ports(buses []Bus, base string, first int) []plug.AudioPort {
 	out := make([]plug.AudioPort, 0, len(buses))
 	names := map[string]bool{}
 	for i, b := range buses {
@@ -215,7 +216,9 @@ func ports(buses []Bus, base string) []plug.AudioPort {
 			name = fmt.Sprintf("%s %d", b.Name, n)
 		}
 		names[name] = true
-		out = append(out, plug.AudioPort{Name: name, Channels: b.Channels})
+		// VST3 names a bus by its index, so the key is the index: a
+		// plugin may rename a bus, or translate its name.
+		out = append(out, plug.AudioPort{Name: name, Key: fmt.Sprintf("bus %d", first+i), Channels: b.Channels})
 	}
 	return out
 }
