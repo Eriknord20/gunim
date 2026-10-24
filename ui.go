@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
@@ -464,6 +465,8 @@ type Window struct {
 	// Client.Input.
 	shots    chan shotRequest
 	injected chan input.Event
+	// accesses carries Client.Access's requests.
+	accesses chan chan *access.Tree
 	// leave asks the window to animate out and close, and fade to fade
 	// out, or back in, and stay open; see Client.Fade.
 	leave chan struct{}
@@ -562,6 +565,7 @@ func newWindow(dw driver.Window, root Node) *Window {
 		leave:    make(chan struct{}, 1),
 		fade:     make(chan bool, 1),
 		injected: make(chan input.Event),
+		accesses: make(chan chan *access.Tree),
 		dragIn:   make(chan dragMsg, 64),
 		blends:   true,
 	}
@@ -1271,6 +1275,8 @@ func (w *Window) wait() bool {
 	case ev := <-w.injected:
 		w.inject(ev)
 		w.ui.focusNow()
+	case got := <-w.accesses:
+		got <- w.ui.clientAccess()
 	case f, ok := <-w.dw.Presented():
 		if !ok {
 			return false

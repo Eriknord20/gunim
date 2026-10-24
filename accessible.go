@@ -1,6 +1,7 @@
 package gunim
 
 import (
+	"context"
 	"slices"
 
 	"github.com/marrasen/gunim/access"
@@ -272,4 +273,54 @@ func (u *UI) accessRequest(r access.Request) {
 		u.on(s, func() { a.AccessAct(r, u) })
 	}
 	u.invalid = true
+}
+
+// Access returns what the window and the popups open over it say for assistive technology, as the last frame drew
+// them: each node's role, name and state, and its bounds in the window's space, where [Client.Input] takes them. The
+// popups' trees follow the window's own among the root's children. It is for a tool that drives the window through a
+// script, to find a control by its name. It waits for the window to answer, or for ctx to end.
+func (c Client) Access(ctx context.Context) (*access.Tree, error) {
+	got := make(chan *access.Tree, 1)
+	select {
+	case c.w.accesses <- got:
+	case <-c.w.done:
+		return nil, ErrWindowClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case t := <-got:
+		return t, nil
+	case <-c.w.done:
+		return nil, ErrWindowClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// clientAccess builds [Client.Access]'s tree, with each open popup's moved into the window's space.
+func (u *UI) clientAccess() *access.Tree {
+	top := u.accessTree(u.root, u.w.title).Root
+	ws, ok := u.w.dw.(driver.Screener)
+	for _, s := range u.popups {
+		if s.closing || s.dw == nil || !ok {
+			continue
+		}
+		ps, pok := s.dw.(driver.Screener)
+		if !pok {
+			continue
+		}
+		pop := u.accessTree(s.root, "").Root
+		moveAccess(pop, ws.FromScreen(ps.ToScreen(geom.Point{})))
+		top.Children = append(top.Children, pop)
+	}
+	return access.NewTree(top)
+}
+
+// moveAccess moves n and the nodes under it by d.
+func moveAccess(n *access.Node, d geom.Point) {
+	n.Bounds = n.Bounds.Add(d)
+	for _, k := range n.Children {
+		moveAccess(k, d)
+	}
 }

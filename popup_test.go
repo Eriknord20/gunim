@@ -601,3 +601,19 @@ func TestACoveredWindowDrawsToOpenAPopup(t *testing.T) {
 		t.Fatal("covered with its popup covered too, the window draws")
 	}
 }
+
+// Client.Access gives an open popup's tree in the window's space, where a script's click lands on it.
+func TestAccessGivesAPopupInTheWindowsSpace(t *testing.T) {
+	w, _, _, _ := openMenu(t, func(*UI) {})
+	pw := popupWindow(t, w)
+	main := w.dw.(*driver.OffscreenWindow)
+	tree := w.ui.clientAccess()
+	kids := tree.Root.Children
+	if len(kids) == 0 {
+		t.Fatal("the tree has no popup")
+	}
+	pop := kids[len(kids)-1]
+	if want := main.FromScreen(pw.ToScreen(geom.Point{})); !near(pop.Bounds.Min, want) {
+		t.Fatalf("the popup's tree starts at %v, want %v", pop.Bounds.Min, want)
+	}
+}
