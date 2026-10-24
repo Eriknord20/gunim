@@ -96,9 +96,13 @@ func param(id uint32) plug.Param {
 	return p
 }
 
-// lookahead is how far ahead the limiter looks, in seconds, the same in
-// every mode, so the sound comes as late whatever the mode.
-const lookahead = 0.005
+// lookahead and lateBy are how late the sound comes, in seconds and then
+// frames more, the same in every mode; the limiter looks ahead that long
+// less the true peaks' filter's delay.
+const (
+	lookahead = 0.005
+	lateBy    = 6
+)
 
 // plugin is one maximizer.
 type plugin struct {
@@ -243,7 +247,7 @@ type core struct {
 func (p *processor) Prepare(s plug.Setup) {
 	p.rate = s.Rate
 	p.glide = coef(5, s.Rate)
-	p.ahead = max(2, int(math.Round(s.Rate*lookahead)))
+	p.ahead = max(2, int(math.Round(s.Rate*lookahead))+lateBy-tpDelay)
 	p.slow = coef(1500, s.Rate)
 	p.run.make(s.MaxBlock)
 	for c := range p.delay {
@@ -376,7 +380,7 @@ func softClip(x, ceiling float64) float64 {
 //
 // It runs the block a stage at a time, between the frames parameters
 // change at: the gain, and the true peaks in; then the limiter; then the
-// true peaks out. A true peak is four sums of twelve products each; a
+// true peaks out. A true peak is seven sums of 32 products each; a
 // stage at a time, a processor works out many frames' side by side.
 func (p *processor) Process(b *plug.Block) {
 	if len(b.In) == 0 || len(b.Out) == 0 || len(p.delay[0]) == 0 {
