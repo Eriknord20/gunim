@@ -41,6 +41,9 @@ func TestARALayoutsMatchTheHeaders(t *testing.T) {
 		{"ARAFactory", araFactoryFields, []int{0, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 124},
 			[]int{0, 8, 12, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 124}, 128, 128},
 		{"ARAColor", []int{fF32, fF32, fF32}, []int{0, 4, 8}, []int{0, 4, 8}, 12, 12},
+		{"ARAContentNote", noteFields, []int{0, 4, 8, 12, 20, 28, 36}, []int{0, 4, 8, 16, 24, 32, 40}, 44, 48},
+		{"ARAContentTempoEntry", []int{fF64, fF64}, []int{0, 8}, []int{0, 8}, 16, 16},
+		{"ARAProcessingAlgorithmProperties", algorithmFields, []int{0, 8, 16}, []int{0, 8, 16}, 24, 24},
 	}
 	old := araPack
 	defer func() { araPack = old }()
@@ -132,7 +135,7 @@ func TestAFactoryIsInitializedWhileADocumentIsOpen(t *testing.T) {
 	}
 	if f.Name != "Fake" || f.Vendor != "gunim" || f.Version != "1.0" || f.ID != "org.gunim.fake" ||
 		f.ArchiveID != fakeArchiveID || !slices.Equal(f.Compatible, []string{"org.gunim.fake.old"}) ||
-		!slices.Equal(f.Analyzes, []ContentType{ContentNotes}) || f.Transforms != Timestretch {
+		!slices.Equal(f.Analyzes, []ContentType{ContentNotes}) || f.Transforms != Timestretch|FadeAtHead|FadeAtTail {
 		t.Fatalf("factory %+v", f)
 	}
 	if !f.Reads("org.gunim.fake.old") || f.Reads("other") {

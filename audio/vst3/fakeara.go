@@ -1,6 +1,8 @@
 package vst3
 
 import (
+	"cmp"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -15,11 +17,28 @@ import (
 // ARA plugin to hand. It keeps ARA's rules as the ARA library's debug
 // builds check them, and Broken lists each it saw broken. Its analysis
 // reads each source whole through the host, on a goroutine of its own,
-// reading a source whose ID ends in "64" as doubles; its renderers play
-// the regions they hold where the process context says the song is,
-// each sample of the source times its modification's gain, which Edit
-// sets as a user does in a plugin's editor; its archives are JSON.
+// reading a source whose ID ends in "64" as doubles, with one of the
+// algorithms of fakeAlgorithms, and finds a note, an A4, in each stretch
+// of sound between silences of 10 ms or more; Detect adds a tempo and
+// chords to what it finds. Its renderers play the regions they hold
+// where the process context says the song is, stretched and faded as
+// their transforms ask, each sample of the source times its
+// modification's gain, which Edit sets as a user does in a plugin's
+// editor; its archives are JSON, and an instance's state holds its
+// view's zoom.
 type FakeARA struct{ a *fakeARAPlugin }
+
+// fakeAlgorithms are the fake's processing algorithms; a source starts
+// with the first.
+var fakeAlgorithms = []Algorithm{
+	{"org.gunim.fake.melodic", "Melodic"},
+	{"org.gunim.fake.percussive", "Percussive"},
+	{"org.gunim.fake.polyphonic", "Polyphonic"},
+}
+
+// fakeFade is how long the fake's fades at a region's head and tail
+// last, in seconds.
+const fakeFade = 0.002
 
 // NewFakeARA makes a fake ARA plugin.
 func NewFakeARA() *FakeARA { return &FakeARA{a: makeFakeARA()} }
@@ -58,6 +77,90 @@ func (f *FakeARA) Gain(d *Document, id string) float64 {
 		}
 	}
 	return 0
+}
+
+// Detect has the fake's analysis of each source of document d find a
+// constant tempo of bpm and chords too, graded as detected; a bpm of 0
+// finds no tempo. The host hears that each source analysed changed.
+func (f *FakeARA) Detect(d *Document, bpm float64, chords []Chord) {
+	fd := f.a.docOf(d)
+	if fd == nil {
+		return
+	}
+	fd.mu.Lock()
+	fd.bpm, fd.chords = bpm, slices.Clone(chords)
+	var changed []*fakeSource
+	for _, s := range fd.sources {
+		if s.analysed {
+			changed = append(changed, s)
+		}
+	}
+	fd.mu.Unlock()
+	for _, s := range changed {
+		fd.later(func() { fd.host.model.call(1, s.host, 0, uintptr(SignalUnchanged|NotesUnchanged)) })
+	}
+}
+
+// Regions returns the properties of the regions of document d as the
+// fake read them, in the order of their places in the song: each with
+// its transforms, times, sequence and name.
+func (f *FakeARA) Regions(d *Document) []RegionProps {
+	fd := f.a.docOf(d)
+	if fd == nil {
+		return nil
+	}
+	var out []RegionProps
+	onUI(func() {
+		fd.mu.Lock()
+		defer fd.mu.Unlock()
+		for _, r := range fd.regions {
+			p := r.props
+			if q := fd.seqs[r.seq]; q != nil {
+				p.Sequence = handle[RegionSequence](q.host)
+			}
+			out = append(out, p)
+		}
+	})
+	slices.SortFunc(out, func(a, b RegionProps) int {
+		if a.At != b.At {
+			return cmp.Compare(a.At, b.At)
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+// SetView sets the zoom of the view of p, an instance of the fake, as a
+// user does in its editor; the instance's state holds it.
+func (f *FakeARA) SetView(p *Plugin, zoom float64) {
+	if fi := f.a.instanceOf(p); fi != nil {
+		fi.mu.Lock()
+		fi.view = zoom
+		fi.mu.Unlock()
+	}
+}
+
+// View returns the zoom of the view of p, an instance of the fake.
+func (f *FakeARA) View(p *Plugin) float64 {
+	fi := f.a.instanceOf(p)
+	if fi == nil {
+		return 0
+	}
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	return fi.view
+}
+
+// instanceOf returns the fake's instance that is p.
+func (a *fakeARAPlugin) instanceOf(p *Plugin) *fakeInstance {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, fi := range a.instances {
+		if fi.comp == p.comp {
+			return fi
+		}
+	}
+	return nil
 }
 
 // Broken lists the rules of ARA's the fake saw broken.
@@ -132,6 +235,8 @@ type fakeARAPlugin struct {
 	violations []string
 	// instances are the fake's instances, as made.
 	instances []*fakeInstance
+	// algorithms are fakeAlgorithms, as the host reads them.
+	algorithms []*cstruct
 }
 
 // fakeArchiveID is the fake's archives' form.
@@ -171,8 +276,14 @@ func makeFakeARA() *fakeARAPlugin {
 	types := []int32{int32(ContentNotes)}
 	f.put(afAnalyzesN, 1)
 	f.putPtr(afAnalyzes, uintptr(unsafe.Pointer(&types[0])), types)
-	f.put(afTransforms, uint64(Timestretch))
+	f.put(afTransforms, uint64(Timestretch|FadeAtHead|FadeAtTail))
 	a.factory = f
+	for _, al := range fakeAlgorithms {
+		s := newStruct(algorithmFields...)
+		s.putString(1, al.ID)
+		s.putString(2, al.Name)
+		a.algorithms = append(a.algorithms, s)
+	}
 	return a
 }
 
@@ -223,6 +334,11 @@ type fakeDoc struct {
 	made                     map[uintptr]bool
 	srcRestored, modRestored map[uintptr]bool
 	docRestored              bool
+	// bpm and chords are what Detect has the analysis find besides notes.
+	bpm    float64
+	chords []Chord
+	// contentReaders counts the content readers the host holds.
+	contentReaders int
 }
 
 type fakeContext struct {
@@ -252,12 +368,20 @@ type fakeSource struct {
 	analysed  bool
 	samples   [][]float32
 	peak      float64
+	// algo is the index of its algorithm in fakeAlgorithms; again says
+	// it changed while an analysis ran, which must run again.
+	algo  int
+	again bool
+	notes []Note
 }
 
 type fakeMod struct {
 	host, src uintptr
 	id        string
 	gain      float64
+	// edit is the span of the source's time whose notes the gain makes
+	// louder or softer, or nil for all of it.
+	edit *TimeRange
 }
 
 type fakeRegion struct {
@@ -313,41 +437,27 @@ func (d *fakeDoc) readContent(c *fakeContext) {
 			d.a.violate("the host grades its content %d", g)
 		}
 		rd := ca.call(2, c.host, uintptr(t), 0)
+		var got ObjectContent
 		n := int(int32(uint32(ca.call(6, rd))))
 		for i := range n {
-			p := ca.call(7, rd, uintptr(i))
-			switch t { //nolint:exhaustive // the fake reads these four
-			case ContentTempo:
-				r := readAt(p, fF64, fF64)
-				c.tempo = append(c.tempo, TempoEntry{r.f64(0), r.f64(1)})
-			case ContentBars:
-				r := readAt(p, fI32, fI32, fF64)
-				c.bars = append(c.bars, BarSignature{int(r.i32(0)), int(r.i32(1)), r.f64(2)})
-			case ContentKeys:
-				r := readAt(p, fI32, bytesField(12), fPtr, fF64)
-				k := KeySignature{Root: int(r.i32(0)), Name: r.str(2), Quarter: r.f64(3)}
-				for j, b := range r.bytes(1) {
-					k.Scale[j] = b == 0xFF
-				}
-				c.keys = append(c.keys, k)
-			case ContentSheetChords:
-				r := readAt(p, fI32, fI32, bytesField(12), fPtr, fF64)
-				ch := Chord{Root: int(r.i32(0)), Bass: int(r.i32(1)), Name: r.str(3), Quarter: r.f64(4)}
-				copy(ch.Intervals[:], r.bytes(2))
-				c.chords = append(c.chords, ch)
-			}
+			decodeEvent(t, ca.call(7, rd, uintptr(i)), &got)
 		}
 		ca.call(8, rd)
+		c.tempo, c.bars, c.keys, c.chords = append(c.tempo, got.Tempo...), append(c.bars, got.Bars...),
+			append(c.keys, got.Keys...), append(c.chords, got.Chords...)
 	}
 }
 
 // startAnalysis reads the source whole through a reader of the host's,
 // on a goroutine of the fake's own, as a plugin's thread does.
 func (d *fakeDoc) startAnalysis(s *fakeSource) {
+	d.mu.Lock()
 	if !s.enabled || !s.requested || s.analysing || s.analysed || d.editing {
+		d.mu.Unlock()
 		return
 	}
 	s.analysing = true
+	d.mu.Unlock()
 	use64 := len(s.id) > 2 && s.id[len(s.id)-2:] == "64"
 	rd := d.host.audio.call(0, s.host, araBool(use64))
 	if rd == 0 {
@@ -407,11 +517,128 @@ func (d *fakeDoc) startAnalysis(s *fakeSource) {
 				peak = max(peak, math.Abs(float64(v)))
 			}
 		}
+		notes := findNotes(samples, s.rate)
 		d.mu.Lock()
-		s.samples, s.peak, s.analysing, s.analysed = samples, peak, false, true
+		again := s.again
+		s.samples, s.peak, s.notes, s.analysing, s.analysed, s.again = samples, peak, notes, false, !again, false
 		d.mu.Unlock()
-		d.later(func() { callProgress(d.host.model, s.host, 2, 1) })
+		if again {
+			// Its algorithm changed meanwhile: it reads the source again.
+			d.later(func() { d.startAnalysis(s) })
+			return
+		}
+		d.later(func() {
+			callProgress(d.host.model, s.host, 2, 1)
+			d.host.model.call(1, s.host, 0, uintptr(SignalUnchanged))
+		})
 	}()
+}
+
+// setAlgorithm has s analysed with algorithm k from now on, again where
+// it was analysed with another. d.mu is held.
+func (d *fakeDoc) setAlgorithm(s *fakeSource, k int) {
+	if s.algo == k {
+		return
+	}
+	s.algo, s.requested = k, true
+	if s.analysing {
+		s.again = true
+	} else {
+		s.analysed = false
+	}
+}
+
+// findNotes returns a note, an A4 as loud as its peak, for each stretch
+// of samples between silences of 10 ms or more.
+func findNotes(samples [][]float32, rate float64) []Note {
+	if len(samples) == 0 {
+		return nil
+	}
+	quiet := int(math.Ceil(0.01 * rate))
+	var notes []Note
+	add := func(from, to int, peak float64) {
+		dur := float64(to-from) / rate
+		notes = append(notes, Note{Frequency: 440, Pitch: 69, Volume: peak, Start: float64(from) / rate, Duration: dur,
+			Signal: dur})
+	}
+	start, run, peak := -1, 0, 0.0
+	for i := range samples[0] {
+		v := 0.0
+		for _, ch := range samples {
+			v = max(v, math.Abs(float64(ch[i])))
+		}
+		if v < 1e-4 {
+			run++
+			if start >= 0 && run >= quiet {
+				add(start, i-run+1, peak)
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start, peak = i, 0
+		}
+		run, peak = 0, max(peak, v)
+	}
+	if start >= 0 {
+		add(start, len(samples[0])-run, peak)
+	}
+	return notes
+}
+
+// The fake's content, by its objects. d.mu is held.
+
+// sourceEvents returns the content of kind k the fake has of s, its
+// notes as notes gives them, or nil where it has none.
+func (d *fakeDoc) sourceEvents(s *fakeSource, k ContentType, notes func() []Note) *contentEvents {
+	if s == nil || !s.analysed {
+		return nil
+	}
+	switch k { //nolint:exhaustive // the kinds the fake finds
+	case ContentNotes:
+		return noteEvents(notes())
+	case ContentTempo:
+		if d.bpm > 0 {
+			return contentOf(Content{Tempo: []TempoEntry{{0, 0}, {60 / d.bpm, 1}}})[ContentTempo]
+		}
+	case ContentSheetChords:
+		return contentOf(Content{Chords: d.chords})[ContentSheetChords]
+	}
+	return nil
+}
+
+// modNotes returns the notes of m: its source's, those in its edit as
+// loud as its gain makes them.
+func (d *fakeDoc) modNotes(m *fakeMod) []Note {
+	notes := slices.Clone(d.sources[m.src].notes)
+	for i, n := range notes {
+		if m.edit == nil || n.Start < m.edit.Start+m.edit.Duration && n.Start+n.Duration > m.edit.Start {
+			notes[i].Volume = min(n.Volume*m.gain, 1)
+		}
+	}
+	return notes
+}
+
+// regionNotes returns the notes of r's modification in the stretch it
+// plays, cut to it, in the song's time.
+func (d *fakeDoc) regionNotes(r *fakeRegion) []Note {
+	p := r.props
+	scale := 1.0
+	if p.Duration > 0 {
+		scale = p.Length / p.Duration
+	}
+	end := p.Start + p.Duration
+	var out []Note
+	for _, n := range d.modNotes(d.mods[r.mod]) {
+		from, to, sig := max(n.Start, p.Start), min(n.Start+n.Duration, end), min(n.Start+n.Signal, end)
+		if to <= from {
+			continue
+		}
+		n.Start, n.Duration, n.Signal = p.At+(from-p.Start)*scale, (to-from)*scale, max(sig-from, 0)*scale
+		n.Attack *= scale
+		out = append(out, n)
+	}
+	return out
 }
 
 // fakeDocOf returns the fake document of ref.
@@ -420,7 +647,7 @@ func fakeDocOf(ref uintptr) *fakeDoc { return handle[fakeDoc](ref) }
 // The document controller's functions, made once.
 var fakeDCTable = sync.OnceValue(func() fnTable {
 	none := func(ctl, a, b, c uintptr) uintptr { return 0 }
-	fns := make([]uintptr, dcStoreObjectsToArchive+1)
+	fns := make([]uintptr, dcRequestProcessingAlgorithmForAudioSource+1)
 	for i := range fns {
 		fns[i] = newCallback(none)
 	}
@@ -433,6 +660,9 @@ var fakeDCTable = sync.OnceValue(func() fnTable {
 		d.mu.Unlock()
 		if left > 0 {
 			d.a.violate("the document went with %d objects in it", left)
+		}
+		if d.contentReaders > 0 {
+			d.a.violate("the document went with %d content readers open", d.contentReaders)
 		}
 		d.destroyed = true
 		return 0
@@ -649,11 +879,95 @@ var fakeDCTable = sync.OnceValue(func() fnTable {
 		d.mu.Unlock()
 		return 0
 	})
-	set(dcIsAudioSourceContentAvailable, func(ctl, ref, kind uintptr) uintptr {
+	// Content, through a function of each kind of object's.
+	type events func(d *fakeDoc, ref uintptr, k ContentType) *contentEvents
+	contentFns := func(available, grade, reader int, ev events) {
+		set(available, func(ctl, ref, kind uintptr) uintptr {
+			d := fakeDocOf(ctl)
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return araBool(ev(d, ref, ContentType(int32(uint32(kind)))) != nil)
+		})
+		set(grade, func(ctl, ref, kind uintptr) uintptr {
+			d := fakeDocOf(ctl)
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if ev(d, ref, ContentType(int32(uint32(kind)))) != nil {
+				return uintptr(GradeDetected)
+			}
+			return uintptr(GradeInitial)
+		})
+		set(reader, func(ctl, ref, kind, rng uintptr) uintptr {
+			d := fakeDocOf(ctl)
+			d.mu.Lock()
+			e := ev(d, ref, ContentType(int32(uint32(kind))))
+			d.mu.Unlock()
+			if e == nil {
+				d.a.violate("a content reader of content the fake has none of")
+				return 0
+			}
+			d.contentReaders++
+			return newHandle(&contentReader{ev: e})
+		})
+	}
+	contentFns(dcIsAudioSourceContentAvailable, dcGetAudioSourceContentGrade, dcCreateAudioSourceContentReader,
+		func(d *fakeDoc, ref uintptr, k ContentType) *contentEvents {
+			s := d.sources[ref]
+			return d.sourceEvents(s, k, func() []Note { return slices.Clone(s.notes) })
+		})
+	contentFns(dcIsAudioModificationContentAvailable, dcGetAudioModificationContentGrade,
+		dcCreateAudioModificationContentReader, func(d *fakeDoc, ref uintptr, k ContentType) *contentEvents {
+			m := d.mods[ref]
+			return d.sourceEvents(d.sources[m.src], k, func() []Note { return d.modNotes(m) })
+		})
+	contentFns(dcIsPlaybackRegionContentAvailable, dcGetPlaybackRegionContentGrade, dcCreatePlaybackRegionContentReader,
+		func(d *fakeDoc, ref uintptr, k ContentType) *contentEvents {
+			if k != ContentNotes {
+				return nil
+			}
+			r := d.regions[ref]
+			return d.sourceEvents(d.sources[d.mods[r.mod].src], k, func() []Note { return d.regionNotes(r) })
+		})
+	set(dcGetContentReaderEventCount, getContentReaderEventCount)
+	set(dcGetContentReaderDataForEvent, getContentReaderDataForEvent)
+	set(dcDestroyContentReader, func(ctl, reader uintptr) uintptr {
+		d := fakeDocOf(ctl)
+		if handle[contentReader](reader) == nil {
+			d.a.violate("a content reader destroyed that is none")
+			return 0
+		}
+		d.contentReaders--
+		dropHandle(reader)
+		return 0
+	})
+	set(dcGetProcessingAlgorithmsCount, func(ctl uintptr) uintptr { return uintptr(len(fakeAlgorithms)) })
+	set(dcGetProcessingAlgorithmProperties, func(ctl, i uintptr) uintptr {
+		d := fakeDocOf(ctl)
+		k := int(int32(uint32(i)))
+		if k < 0 || k >= len(d.a.algorithms) {
+			d.a.violate("the properties of algorithm %d asked for", k)
+			return 0
+		}
+		return d.a.algorithms[k].addr()
+	})
+	set(dcGetProcessingAlgorithmForAudioSource, func(ctl, ref uintptr) uintptr {
 		d := fakeDocOf(ctl)
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		return araBool(d.sources[ref].analysed)
+		return uintptr(d.sources[ref].algo)
+	})
+	set(dcRequestProcessingAlgorithmForAudioSource, func(ctl, ref, i uintptr) uintptr {
+		d := fakeDocOf(ctl)
+		d.mustEdit("requestProcessingAlgorithmForAudioSource")
+		k := int(int32(uint32(i)))
+		if k < 0 || k >= len(fakeAlgorithms) {
+			d.a.violate("algorithm %d requested", k)
+			return 0
+		}
+		d.mu.Lock()
+		d.setAlgorithm(d.sources[ref], k)
+		d.mu.Unlock()
+		return 0
 	})
 	set(dcIsAudioSourceContentAnalysisIncomplete, func(ctl, ref, kind uintptr) uintptr {
 		d := fakeDocOf(ctl)
@@ -730,10 +1044,15 @@ type fakeArchive struct {
 	Doc     string
 	Sources map[string]float64
 	Mods    map[string]float64
+	// Algorithms are the sources' algorithms' IDs, and Edits the spans
+	// of the modifications' gains, by their objects' IDs.
+	Algorithms map[string]string    `json:",omitempty"`
+	Edits      map[string]TimeRange `json:",omitempty"`
 }
 
 func (d *fakeDoc) store(writer, filter uintptr) bool {
-	ar := fakeArchive{Doc: d.data, Sources: map[string]float64{}, Mods: map[string]float64{}}
+	ar := fakeArchive{Doc: d.data, Sources: map[string]float64{}, Mods: map[string]float64{},
+		Algorithms: map[string]string{}, Edits: map[string]TimeRange{}}
 	all := filter == 0
 	var srcs, mods []uintptr
 	if !all {
@@ -750,13 +1069,20 @@ func (d *fakeDoc) store(writer, filter uintptr) bool {
 	}
 	d.mu.Lock()
 	for ref, s := range d.sources {
-		if (all || slices.Contains(srcs, ref)) && s.analysed {
+		if !all && !slices.Contains(srcs, ref) {
+			continue
+		}
+		if s.analysed {
 			ar.Sources[s.id] = s.peak
 		}
+		ar.Algorithms[s.id] = fakeAlgorithms[s.algo].ID
 	}
 	for ref, m := range d.mods {
 		if all || slices.Contains(mods, ref) {
 			ar.Mods[m.id] = m.gain
+			if m.edit != nil {
+				ar.Edits[m.id] = *m.edit
+			}
 		}
 	}
 	d.mu.Unlock()
@@ -818,15 +1144,27 @@ func (d *fakeDoc) restore(reader, filter uintptr) bool {
 				s.peak, s.requested = p, true
 				srcs[ref] = true
 			}
+			if id, ok := a.Algorithms[n]; ok {
+				if k := slices.IndexFunc(fakeAlgorithms, func(al Algorithm) bool { return al.ID == id }); k >= 0 {
+					d.setAlgorithm(s, k)
+				}
+				srcs[ref] = true
+			}
 		}
 	}
+	// A modification takes the edits archived whatever source it is of,
+	// as a plugin keeps what it can of a modification of another source.
 	var changed []*fakeMod
 	for ref, m := range d.mods {
 		if n, ok := name(modNames, m.id); ok {
 			if g, ok := a.Mods[n]; ok {
 				mods[ref] = true
-				if g != m.gain {
-					m.gain = g
+				var edit *TimeRange
+				if r, ok := a.Edits[n]; ok {
+					edit = &r
+				}
+				if g != m.gain || (edit == nil) != (m.edit == nil) || edit != nil && *edit != *m.edit {
+					m.gain, m.edit = g, edit
 					changed = append(changed, m)
 				}
 			}
@@ -886,7 +1224,7 @@ func (d *fakeDoc) edit(id string, gain, from, length float64) {
 			m = x
 		}
 	}
-	m.gain = gain
+	m.gain, m.edit = gain, &TimeRange{from, length}
 	d.mu.Unlock()
 	d.later(func() {
 		rng := newPlain(fF64, fF64)
@@ -1056,20 +1394,43 @@ func (a *fakeARAPlugin) render(f *fakeInstance, d *processData) {
 		r := doc.regions[ref]
 		m := doc.mods[r.mod]
 		s := doc.sources[m.src]
-		if r == nil || m == nil || s == nil || !s.analysed {
+		if r == nil || m == nil || s == nil || len(s.samples) == 0 {
 			continue
+		}
+		p := r.props
+		frames := len(s.samples[0])
+		// sample returns the source's frame at of channel c, or silence.
+		sample := func(c int, at int64) float32 {
+			if at < 0 || at >= int64(frames) {
+				return 0
+			}
+			return s.samples[c%len(s.samples)][at]
 		}
 		for i := range n {
 			t := float64(ctx.projectTime+int64(i)) / ctx.rate
-			if t < r.props.At || t >= r.props.At+r.props.Length {
+			if t < p.At || t >= p.At+p.Length {
 				continue
 			}
-			at := int64(math.Round((r.props.Start + t - r.props.At) * s.rate))
-			if at < 0 || at >= s.frames {
+			g := m.gain
+			if p.Transforms&FadeAtHead != 0 && t-p.At < fakeFade {
+				g *= (t - p.At) / fakeFade
+			}
+			if p.Transforms&FadeAtTail != 0 && p.At+p.Length-t < fakeFade {
+				g *= (p.At + p.Length - t) / fakeFade
+			}
+			if p.Duration == p.Length {
+				at := int64(math.Round((p.Start + t - p.At) * s.rate))
+				for c := range out {
+					out[c][i] += float32(g) * sample(c, at)
+				}
 				continue
 			}
+			// Stretched: Duration of the modification over Length.
+			pos := (p.Start + (t-p.At)*p.Duration/p.Length) * s.rate
+			at := math.Floor(pos)
+			fr := float32(pos - at)
 			for c := range out {
-				out[c][i] += float32(m.gain) * s.samples[c%len(s.samples)][at]
+				out[c][i] += float32(g) * (sample(c, int64(at))*(1-fr) + sample(c, int64(at)+1)*fr)
 			}
 		}
 	}
@@ -1085,6 +1446,10 @@ type fakeInstance struct {
 	mu       sync.Mutex
 	isActive bool
 	araExt   *fakeExt
+	// activations and deactivations count its setActive calls; view is
+	// its view's zoom, which its state holds.
+	activations, deactivations int
+	view                       float64
 }
 
 type fakeInstObject struct {
@@ -1161,11 +1526,37 @@ var fakeInstCompKind = &kind{iids: []uid{iidComponent}, other: fakeInstOther, ma
 			f := instOf(this)
 			f.mu.Lock()
 			f.isActive = state&0xff != 0
+			if f.isActive {
+				f.activations++
+			} else {
+				f.deactivations++
+			}
 			f.mu.Unlock()
 			return ok()
 		}),
-		newCallback(func(this, stream uintptr) uintptr { return ok() }),
-		newCallback(func(this, stream uintptr) uintptr { return ok() }),
+		newCallback(func(this, stream uintptr) uintptr {
+			f := instOf(this)
+			var b [8]byte
+			var n int32
+			call(stream, 3, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), uintptr(unsafe.Pointer(&n)))
+			if n != int32(len(b)) {
+				return resultOf(resultFalse)
+			}
+			f.mu.Lock()
+			f.view = math.Float64frombits(binary.LittleEndian.Uint64(b[:]))
+			f.mu.Unlock()
+			return ok()
+		}),
+		newCallback(func(this, stream uintptr) uintptr {
+			f := instOf(this)
+			var b [8]byte
+			f.mu.Lock()
+			binary.LittleEndian.PutUint64(b[:], math.Float64bits(f.view))
+			f.mu.Unlock()
+			var n int32
+			call(stream, 4, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), uintptr(unsafe.Pointer(&n)))
+			return ok()
+		}),
 	}
 }}
 
