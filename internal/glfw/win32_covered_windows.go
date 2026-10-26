@@ -35,6 +35,8 @@ const (
 	_NULLREGION              = 1
 	_LWA_COLORKEY            = 0x1
 	_DEVICE_NOTIFY_WINDOW    = 0
+	_EVENT_OBJECT_DESTROY    = 0x8001
+	_EVENT_OBJECT_HIDE       = 0x8003
 	_NOTIFY_FOR_THIS_SESSION = 0
 	// coveredDelay is how long after windows move the check waits, in
 	// milliseconds, so a burst of moves costs one.
@@ -50,6 +52,7 @@ var (
 	procSetWinEventHook                    = user32.NewProc("SetWinEventHook")
 	procUnhookWinEvent                     = user32.NewProc("UnhookWinEvent")
 	procGetAncestor                        = user32.NewProc("GetAncestor")
+	procIsWindow                           = user32.NewProc("IsWindow")
 	procRegisterPowerSettingNotification   = user32.NewProc("RegisterPowerSettingNotification")
 	procUnregisterPowerSettingNotification = user32.NewProc("UnregisterPowerSettingNotification")
 	procCombineRgn                         = gdi32.NewProc("CombineRgn")
@@ -98,7 +101,7 @@ func (w *Window) watchCovered() {
 	if covering.hooks == nil {
 		if covering.hookProc == 0 {
 			covering.hookProc = syscall.NewCallback(func(hook, event, hwnd, object, child, thread, at uintptr) uintptr {
-				if int32(object) == _OBJID_WINDOW && child == 0 && isTopLevel(windows.HWND(hwnd)) {
+				if int32(object) == _OBJID_WINDOW && child == 0 && (isTopLevel(windows.HWND(hwnd)) || gone(event, windows.HWND(hwnd))) {
 					checkCoveredSoon()
 				}
 				return 0
@@ -132,6 +135,8 @@ func (w *Window) stopCovered() {
 		w.platform.covering.session = false
 	}
 	if len(_glfw.windows) > 1 {
+		// The windows it covered show again once it has gone.
+		checkCoveredSoon()
 		return
 	}
 	for _, hook := range covering.hooks {
@@ -186,6 +191,18 @@ func isTopLevel(h windows.HWND) bool {
 	}
 	root, _, _ := procGetAncestor.Call(uintptr(h), _GA_ROOT)
 	return windows.HWND(root) == h
+}
+
+// gone reports whether event tells of window h hiding or going that is
+// gone already: the hooks hear of a window late, and one destroyed by
+// then is no longer anyone's, top-level or not. It may have covered one
+// of ours.
+func gone(event uintptr, h windows.HWND) bool {
+	if event != _EVENT_OBJECT_DESTROY && event != _EVENT_OBJECT_HIDE {
+		return false
+	}
+	ok, _, _ := procIsWindow.Call(uintptr(h))
+	return ok == 0
 }
 
 // checkCoveredSoon checks which windows are covered in a moment, once
