@@ -25,6 +25,7 @@ import (
 func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreen(size, root)
+	t.Cleanup(w.Close)
 	t.Cleanup(func() { Check(t, w) })
 	return w
 }
@@ -35,6 +36,7 @@ func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 func NewWith(t testing.TB, o gunim.WindowOptions) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreenWith(o)
+	t.Cleanup(w.Close)
 	t.Cleanup(func() { Check(t, w) })
 	return w
 }

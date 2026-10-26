@@ -308,6 +308,22 @@ func TestAClosedPopupsWindowIsKeptForTheNext(t *testing.T) {
 	}
 }
 
+// An offscreen window has no loop, so its Close closes its popups
+// itself: their goroutines stop, and let the window go.
+func TestClosingAnOffscreenWindowClosesItsPopups(t *testing.T) {
+	w, _, _, _ := openMenu(t, nil)
+	s := w.ui.popups[0]
+	w.Close()
+	if len(w.ui.popups) != 0 {
+		t.Fatalf("closed, the window still has %d popups", len(w.ui.popups))
+	}
+	select {
+	case <-s.stop:
+	default:
+		t.Fatal("closed, the popup's goroutine was not told to stop")
+	}
+}
+
 // A popup opened from within another keeps its window for popups from
 // that one, even when its opener has left the other's content by the
 // time it goes: a popup from the main window opens in a window of its own.
