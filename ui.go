@@ -1109,8 +1109,17 @@ func (w *Window) RefreshRate() float64 { return w.dw.RefreshRate() }
 
 // Close shuts the window down at once and drops any queued work. For an
 // animated goodbye, unmount the root's views first and call Close once
-// they have gone.
-func (w *Window) Close() { w.closeOnce.Do(func() { close(w.done) }) }
+// they have gone. An offscreen window, which has no loop of its own,
+// closes its popups in Close, so call it where the window is driven.
+func (w *Window) Close() {
+	w.closeOnce.Do(func() {
+		close(w.done)
+		if w.app == nil {
+			// An offscreen window has no loop to close its popups.
+			w.ui.closeAllPopups()
+		}
+	})
+}
 
 // loop is the window's whole life.
 //
