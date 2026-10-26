@@ -3,6 +3,7 @@ package widget
 import (
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -214,15 +215,31 @@ func (d *Dropdown) AccessAct(r access.Request, u *gunim.UI) bool {
 }
 
 // Access implements [gunim.Accessible]: a menu with an item for each
-// entry, the highlighted one active.
+// entry, the highlighted one active. An item says whether it is ticked
+// or greyed out, and the shortcut beside it as its description, as the
+// command palette's rows do; a caption is a label.
 func (m *Menu) Access() access.Info {
 	info := access.Info{Role: access.RoleMenu, Active: m.hot + 1}
 	for i := range m.len() {
+		it := m.list.items[i]
 		part := access.Info{Role: access.RoleMenuItem, Name: m.label(i), Actions: []string{access.ActionPress}}
+		if it.Caption {
+			// A caption heads the items under it: nothing to press.
+			part = access.Info{Role: access.RoleLabel, Name: m.label(i)}
+		}
+		if it.Sub == nil && isShortcut(it.Hint) {
+			part.Description = it.Hint
+		}
 		if i == m.hot {
 			part.State = access.StateSelected
 		}
-		if len(m.list.items[i].subItems()) > 0 {
+		if it.Checked {
+			part.State |= access.StateChecked
+		}
+		if it.Disabled {
+			part.State |= access.StateDisabled
+		}
+		if len(it.subItems()) > 0 {
 			part.State |= access.StateExpandable | access.StateHasPopup
 			if i == m.subOpen() {
 				part.State |= access.StateExpanded
@@ -270,3 +287,10 @@ func (r *row) Access() access.Info { return access.Info{Role: access.RoleListIte
 
 // Access implements [gunim.Accessible].
 func (s *Scroll) Access() access.Info { return access.Info{Role: access.RoleScrollArea} }
+
+// isShortcut reports whether a menu item's hint names keys, as "Ctrl+V"
+// or "M", rather than marking the item, as the "›" of a menu bar's
+// titles folded into a menu does.
+func isShortcut(hint string) bool {
+	return strings.IndexFunc(hint, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
+}

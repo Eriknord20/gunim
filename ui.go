@@ -553,9 +553,13 @@ func newWindow(dw driver.Window, root Node) *Window {
 		clock: time.Now(),
 		open: func(o driver.Options) (driver.Window, error) {
 			ow := driver.Offscreen(o.Size)
+			p, ok := o.Parent.(*driver.OffscreenWindow)
+			if ok && o.Kind == driver.KindPopup {
+				ow.Attach(p, o.Over, o.Above)
+			}
 			_ = ow.Place(o.Anchor, o.Size)
 			// A screen reader reading a window reads its popups.
-			if p, ok := o.Parent.(*driver.OffscreenWindow); ok && p.AccessWanted() {
+			if ok && p.AccessWanted() {
 				ow.ListenForAccess()
 			}
 			return ow, nil
@@ -1053,7 +1057,10 @@ func (w *Window) Frame(delta time.Duration) {
 // for a window driven with [Window.Frame],
 // such as one from [NewOffscreen], and must be called from the goroutine
 // calling Frame. Positions are in window space, and the pointer is
-// routed through where the last frame drew each node.
+// routed through where the last frame drew each node. The event reaches
+// this window alone, as a platform's does: a click where a popup shows
+// lands in the window under it. [Window.Inject] hands an event to an
+// open popup where it lands, as a person's click does.
 func (w *Window) Input(ev any) { w.platform(ev) }
 
 // platform handles one of the platform's events. A window out of sight
@@ -1282,7 +1289,7 @@ func (w *Window) wait() bool {
 	case out := <-w.fade:
 		w.ui.setFade(out)
 	case ev := <-w.injected:
-		w.inject(ev)
+		w.route(ev)
 		w.ui.focusNow()
 	case got := <-w.accesses:
 		got <- w.ui.clientAccess()

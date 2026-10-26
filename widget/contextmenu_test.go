@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -383,5 +384,42 @@ func TestAContextMenuTallerThanTheScreenScrolls(t *testing.T) {
 	}
 	if size.H > 600 {
 		t.Fatalf("the menu's window is %v, on a screen 600 tall", size)
+	}
+}
+
+// A test finds an item of an open menu in the window's accessibility
+// tree, where the menu shows below where it opened, and clicks it there,
+// as a person would: the click reaches the menu, which picks it.
+func TestAnOpenMenusItemIsFoundAndClickedThroughTheWindowsTree(t *testing.T) {
+	w, _, run := contextStage(t)
+	w.Inject(input.PointerDown{Pos: geom.Pt(50, 50), Button: input.ButtonSecondary, Clicks: 1, Time: time.Now()})
+	w.Inject(input.PointerUp{Pos: geom.Pt(50, 50), Button: input.ButtonSecondary, Time: time.Now()})
+	run(10)
+	var open *access.Node
+	var walk func(n *access.Node)
+	walk = func(n *access.Node) {
+		if n.Role == access.RoleMenuItem && n.Name == "Open" {
+			open = n
+		}
+		for _, k := range n.Children {
+			walk(k)
+		}
+	}
+	walk(w.Access().Root)
+	if open == nil {
+		t.Fatal("the window's tree holds no Open")
+	}
+	// The menu opens at the press, so its first item shows near it,
+	// not in the window's corner.
+	if b := open.Bounds; b.Min.X < 40 || b.Min.Y < 40 || open.Description != "Enter" {
+		t.Fatalf("Open shows at %v, saying %q", b, open.Description)
+	}
+	at := open.Bounds.Center()
+	w.Inject(input.PointerMove{Pos: at, Time: time.Now()})
+	w.Inject(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Inject(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	run(2)
+	if got := sent(w); len(got) != 1 || got[0] != (menuPicked{"Open"}) {
+		t.Fatalf("the click picked %v, want Open", got)
 	}
 }
