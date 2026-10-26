@@ -879,9 +879,11 @@ func (w *Window) forward(s *surface) {
 
 // Inject hands ev to the window as [Client.Input] does: a pointer event
 // that lands on an open popup goes to the popup, in its own space, as a
-// real click does. It is for a window driven by [Window.Frame], as an
-// offscreen one in a test, which has no loop to take [Client.Input]:
-// call it where the window is driven.
+// real click does; [Window.Input] hands it to this window alone. It is
+// for a window driven with [Window.Frame], such as one from
+// [NewOffscreen], which has no loop to take [Client.Input], and must be
+// called from the goroutine calling Frame: never on a window its loop
+// runs, which takes [Client.Input].
 func (w *Window) Inject(ev input.Event) {
 	w.route(ev)
 	w.ui.focusNow()

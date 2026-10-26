@@ -1057,7 +1057,10 @@ func (w *Window) Frame(delta time.Duration) {
 // for a window driven with [Window.Frame],
 // such as one from [NewOffscreen], and must be called from the goroutine
 // calling Frame. Positions are in window space, and the pointer is
-// routed through where the last frame drew each node.
+// routed through where the last frame drew each node. The event reaches
+// this window alone, as a platform's does: a click where a popup shows
+// lands in the window under it. [Window.Inject] hands an event to an
+// open popup where it lands, as a person's click does.
 func (w *Window) Input(ev any) { w.platform(ev) }
 
 // platform handles one of the platform's events. A window out of sight

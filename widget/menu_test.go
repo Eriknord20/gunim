@@ -420,9 +420,10 @@ func TestATooltipHiddenStaysDownUntilThePointerComesBack(t *testing.T) {
 // A menu's item says whether it is ticked or greyed out, and its
 // shortcut, to a screen reader.
 func TestAMenusItemsSayTheirTickTheirShortcutAndWhetherTheyAreOff(t *testing.T) {
-	m := NewMenu([]MenuItem{{Label: "Mute clip", Hint: "M", Checked: true}, {Label: "Split", Disabled: true}, {Label: "Plain"}})
+	m := NewMenu([]MenuItem{{Label: "Mute clip", Hint: "M", Checked: true}, {Label: "Split", Disabled: true}, {Label: "Plain"},
+		{Label: "Edit", Hint: "›"}, {Label: "Kits", Caption: true}})
 	parts := m.Access().Parts
-	if len(parts) != 3 {
+	if len(parts) != 5 {
 		t.Fatalf("the menu says %d items", len(parts))
 	}
 	if p := parts[0]; p.Name != "Mute clip" || p.Description != "M" || !p.State.Has(access.StateChecked) {
@@ -433,5 +434,11 @@ func TestAMenusItemsSayTheirTickTheirShortcutAndWhetherTheyAreOff(t *testing.T) 
 	}
 	if p := parts[2]; p.Description != "" || p.State.Has(access.StateChecked) || p.State.Has(access.StateDisabled) {
 		t.Errorf("a plain item says %+v", p)
+	}
+	if p := parts[3]; p.Description != "" {
+		t.Errorf("an item marked by a chevron says %q as its shortcut", p.Description)
+	}
+	if p := parts[4]; p.Role != access.RoleLabel || len(p.Actions) != 0 {
+		t.Errorf("a caption says %+v", p)
 	}
 }

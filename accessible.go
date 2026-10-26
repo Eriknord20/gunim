@@ -300,9 +300,10 @@ func (c Client) Access(ctx context.Context) (*access.Tree, error) {
 
 // Access returns the window's accessibility tree as the last frame drew
 // it, with each open popup's moved into the window's space, as
-// [Client.Access] does. It is for a window driven by [Window.Frame], as
-// an offscreen one in a test, which has no loop to answer
-// [Client.Access]: call it where the window is driven.
+// [Client.Access] does. It is for a window driven with [Window.Frame],
+// such as one from [NewOffscreen], which has no loop to answer
+// [Client.Access], and must be called from the goroutine calling Frame:
+// never on a window its loop runs, which answers [Client.Access].
 func (w *Window) Access() *access.Tree { return w.ui.clientAccess() }
 
 // clientAccess builds [Client.Access]'s tree, with each open popup's moved into the window's space.
