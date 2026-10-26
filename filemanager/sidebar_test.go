@@ -282,7 +282,7 @@ func TestEveryPlaceHasAMenuWithTheProgramsItems(t *testing.T) {
 	// A place that is not the folder showing has its menu, and one on
 	// another file system too.
 	h.rightClick(h.placeAt(keys[1]))
-	if items, _ := h.sideMenuShown(); !slices.Equal(items, []string{"Open", "Open in new window"}) {
+	if items, _ := h.sideMenuShown(); !slices.Equal(items, []string{"Open", "Open in new window", "Disk usage"}) {
 		t.Fatalf("the menu of Sub is %v", items)
 	}
 	h.closeSideMenu()
@@ -309,10 +309,10 @@ func TestEveryPlaceHasAMenuWithTheProgramsItems(t *testing.T) {
 	})
 	h.rightClick(fav.Center())
 	items, _ = h.sideMenuShown()
-	if !slices.Equal(items, []string{"Open", "Open in new window", "Edit favourite…", "Unpin", "Forget"}) {
+	if !slices.Equal(items, []string{"Open", "Open in new window", "Disk usage", "Edit favourite…", "Unpin", "Forget"}) {
 		t.Fatalf("the favourite's menu is %v", items)
 	}
-	h.ui(func(b *browser, u *gunim.UI) { b.dnd.sideMenu.m.OnPick(4, u) })
+	h.ui(func(b *browser, u *gunim.UI) { b.dnd.sideMenu.m.OnPick(5, u) })
 	h.frames(2)
 	select {
 	case c := <-commands:
@@ -340,6 +340,72 @@ func TestAPlaceElsewhereHasAMenuWithoutTheProgramsItems(t *testing.T) {
 	if items, _ := h.sideMenuShown(); !slices.Equal(items, []string{"Open", "Open in new window"}) {
 		t.Fatalf("the menu of the server is %v", items)
 	}
+}
+
+func TestDiskUsageOpensOnAPlaceAndAFavourite(t *testing.T) {
+	h := newMenuHarness(t, func(o *Options) {
+		dir := o.Dir
+		o.Places = func() ([]Place, error) {
+			return []Place{
+				{Name: "Here", Path: dir, Kind: "home"},
+				{Name: "Sub", Path: filepath.Join(dir, "sub"), Kind: "documents"},
+				{Name: "Gone", Path: filepath.Join(dir, "gone"), Kind: "drive", Err: "not mounted"},
+			}, nil
+		}
+	}, "sub/a.txt", "sub/b.txt", "fav/c.txt")
+	h.do(Navigate{Path: filepath.Join(h.dir, "fav")})
+	h.do(Command{Name: CmdPin})
+	h.do(Command{Name: CmdUp})
+	h.until("the places and the favourite show", func() bool { return len(h.b.side.placeKeys()) == 3 && h.b.side.favs.Len() == 1 })
+	h.frames(30)
+	keys := h.b.side.placeKeys()
+	pick := func(label string) {
+		t.Helper()
+		h.ui(func(b *browser, u *gunim.UI) {
+			b.dnd.sideMenu.m.OnPick(slices.Index(labelsOf(b.dnd.sideMenu.m.Items()), label), u)
+		})
+	}
+	read := func(what, root string, files int) {
+		t.Helper()
+		h.until(what, func() bool {
+			pg := h.usagePage()
+			return pg != nil && !pg.state.Reading && pg.state.Root == root && pg.state.Total.Files == files
+		})
+	}
+
+	// A place that cannot be read has Disk usage dimmed.
+	h.rightClick(h.placeAt(keys[2]))
+	items, _ := h.sideMenuShown()
+	var off []bool
+	h.ui(func(b *browser, _ *gunim.UI) { off = disabledOf(b.dnd.sideMenu.m.Items()) })
+	if i := slices.Index(items, "Disk usage"); i < 0 || !off[i] {
+		t.Fatalf("the menu of a place that cannot be read is %v, want Disk usage dimmed", items)
+	}
+	h.closeSideMenu()
+
+	h.rightClick(h.placeAt(keys[1]))
+	h.sideMenuShown()
+	pick("Disk usage")
+	read("the page reads Sub", filepath.Join(h.dir, "sub"), 2)
+	if h.a.nav.path != h.dir {
+		t.Fatalf("Disk usage on a place went to %s", h.a.nav.path)
+	}
+	pg := h.usagePage()
+	h.press(input.KeyEscape, 0)
+	h.until("the page has gone from over the sidebar", func() bool {
+		var drawn bool
+		h.ui(func(_ *browser, u *gunim.UI) { _, drawn = u.Bounds(pg) })
+		return !h.a.usage.open && !drawn
+	})
+
+	fav := h.bounds(func(b *browser) gunim.Node {
+		n, _ := b.side.favs.Row(b.side.favs.Keys()[0])
+		return n
+	})
+	h.rightClick(fav.Center())
+	h.sideMenuShown()
+	pick("Disk usage")
+	read("the page reads the favourite", filepath.Join(h.dir, "fav"), 1)
 }
 
 func TestALitPlaceIsMarkedGreen(t *testing.T) {
