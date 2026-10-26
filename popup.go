@@ -877,13 +877,23 @@ func (w *Window) forward(s *surface) {
 	}
 }
 
-// inject hands an event given to [Client.Input] to the window, or, for a
+// Inject hands ev to the window as [Client.Input] does: a pointer event
+// that lands on an open popup goes to the popup, in its own space, as a
+// real click does. It is for a window driven by [Window.Frame], as an
+// offscreen one in a test, which has no loop to take [Client.Input]:
+// call it where the window is driven.
+func (w *Window) Inject(ev input.Event) {
+	w.route(ev)
+	w.ui.focusNow()
+}
+
+// route hands an event given to [Client.Input] to the window, or, for a
 // pointer event that lands on an open popup, to the popup, in its own
 // space: a popup has a window of its own, which a real click lands in. A
 // press in a popup keeps the pointer's events going to it until the
 // button comes up, as the system gives a window the pointer it pressed
 // in.
-func (w *Window) inject(ev input.Event) {
+func (w *Window) route(ev input.Event) {
 	u := w.ui
 	s, local, ok := u.injectedPopup(ev)
 	switch ev.(type) {

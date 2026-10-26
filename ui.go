@@ -553,9 +553,13 @@ func newWindow(dw driver.Window, root Node) *Window {
 		clock: time.Now(),
 		open: func(o driver.Options) (driver.Window, error) {
 			ow := driver.Offscreen(o.Size)
+			p, ok := o.Parent.(*driver.OffscreenWindow)
+			if ok && o.Kind == driver.KindPopup {
+				ow.Attach(p, o.Over, o.Above)
+			}
 			_ = ow.Place(o.Anchor, o.Size)
 			// A screen reader reading a window reads its popups.
-			if p, ok := o.Parent.(*driver.OffscreenWindow); ok && p.AccessWanted() {
+			if ok && p.AccessWanted() {
 				ow.ListenForAccess()
 			}
 			return ow, nil
@@ -1282,7 +1286,7 @@ func (w *Window) wait() bool {
 	case out := <-w.fade:
 		w.ui.setFade(out)
 	case ev := <-w.injected:
-		w.inject(ev)
+		w.route(ev)
 		w.ui.focusNow()
 	case got := <-w.accesses:
 		got <- w.ui.clientAccess()

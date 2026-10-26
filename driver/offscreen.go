@@ -73,9 +73,11 @@ type OffscreenWindow struct {
 	// compass answers WatchHeading; see SetCompass.
 	compass func(on bool)
 	// anchor is where a popup was last attached, and origin where the
-	// window sits on its pretend screen.
-	anchor geom.Rect
-	origin geom.Point
+	// window sits on its pretend screen. attached is how a popup
+	// attaches: the window it belongs to, and its options.
+	anchor   geom.Rect
+	origin   geom.Point
+	attached *attachment
 	// out holds the files of each drag handed to other programs.
 	out [][]string
 	// access says whether something listens for the accessibility tree,
@@ -365,11 +367,44 @@ func (w *OffscreenWindow) Reshape(by geom.Insets) error {
 	return nil
 }
 
-// Place implements [Placer] by taking the size, at the window's zoom, and keeping the anchor.
-func (w *OffscreenWindow) Place(anchor geom.Rect, size geom.Size) error {
+// attachment is how a popup attaches to the window it belongs to.
+type attachment struct {
+	parent      *OffscreenWindow
+	over, above bool
+}
+
+// Attach makes the window a popup of parent, as [Options] does with its
+// Parent, Over and Above: each [OffscreenWindow.Place] puts it where a
+// display would, below its anchor from the anchor's left edge, on the
+// anchor's corner for over, or above it for above. The pretend screen
+// has no edges, so it never slides or flips to stay on one.
+func (w *OffscreenWindow) Attach(parent *OffscreenWindow, over, above bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.attached = &attachment{parent: parent, over: over, above: above}
+}
+
+// Place implements [Placer] by taking the size, at the window's zoom, and keeping the anchor; a popup goes where
+// [OffscreenWindow.Attach] says.
+func (w *OffscreenWindow) Place(anchor geom.Rect, size geom.Size) error {
+	w.mu.Lock()
 	w.anchor, w.size = anchor, geom.Sz(size.W*w.zoom, size.H*w.zoom)
+	a := w.attached
+	w.mu.Unlock()
+	if a == nil || a.parent == nil {
+		return nil
+	}
+	at := geom.Pt(anchor.Min.X, anchor.Max.Y)
+	switch {
+	case a.over:
+		at = anchor.Min
+	case a.above:
+		at = geom.Pt(anchor.Min.X, anchor.Min.Y-size.H)
+	}
+	at = a.parent.ToScreen(at)
+	w.mu.Lock()
+	w.origin = at
+	w.mu.Unlock()
 	return nil
 }
 

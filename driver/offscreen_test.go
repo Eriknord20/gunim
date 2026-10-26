@@ -108,3 +108,36 @@ func TestAnOffscreenWindowKeepsAPictureOnItsClipboard(t *testing.T) {
 		t.Fatalf("the text reads %q", s)
 	}
 }
+
+// A popup attached to a window goes where a display puts it: below its
+// anchor from the anchor's left edge, on the anchor's corner laid over
+// it, or above it, all in the screen's space round the parent.
+func TestAnAttachedPopupGoesWhereADisplayPutsIt(t *testing.T) {
+	parent := Offscreen(geom.Sz(800, 600))
+	parent.SetOrigin(geom.Pt(100, 50))
+	anchor := geom.Rect{Min: geom.Pt(20, 30), Max: geom.Pt(80, 40)}
+	for _, c := range []struct {
+		name        string
+		over, above bool
+		want        geom.Point
+	}{
+		{"below", false, false, geom.Pt(120, 90)},
+		{"over", true, false, geom.Pt(120, 80)},
+		{"above", false, true, geom.Pt(120, 0)},
+	} {
+		pop := Offscreen(geom.Sz(200, 80))
+		pop.Attach(parent, c.over, c.above)
+		if err := pop.Place(anchor, geom.Sz(200, 80)); err != nil {
+			t.Fatal(err)
+		}
+		if got := pop.ToScreen(geom.Point{}); got != c.want {
+			t.Errorf("%s: the popup sits at %v, want %v", c.name, got, c.want)
+		}
+	}
+	// One attached to nothing stays where it was.
+	alone := Offscreen(geom.Sz(200, 80))
+	_ = alone.Place(anchor, geom.Sz(200, 80))
+	if got := alone.ToScreen(geom.Point{}); got != (geom.Point{}) {
+		t.Errorf("a window attached to nothing moved to %v", got)
+	}
+}

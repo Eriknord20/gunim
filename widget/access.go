@@ -214,15 +214,24 @@ func (d *Dropdown) AccessAct(r access.Request, u *gunim.UI) bool {
 }
 
 // Access implements [gunim.Accessible]: a menu with an item for each
-// entry, the highlighted one active.
+// entry, the highlighted one active. An item says whether it is ticked
+// or greyed out, and the shortcut beside it as its description, as the
+// command palette's rows do.
 func (m *Menu) Access() access.Info {
 	info := access.Info{Role: access.RoleMenu, Active: m.hot + 1}
 	for i := range m.len() {
-		part := access.Info{Role: access.RoleMenuItem, Name: m.label(i), Actions: []string{access.ActionPress}}
+		it := m.list.items[i]
+		part := access.Info{Role: access.RoleMenuItem, Name: m.label(i), Description: it.Hint, Actions: []string{access.ActionPress}}
 		if i == m.hot {
 			part.State = access.StateSelected
 		}
-		if len(m.list.items[i].subItems()) > 0 {
+		if it.Checked {
+			part.State |= access.StateChecked
+		}
+		if it.Disabled {
+			part.State |= access.StateDisabled
+		}
+		if len(it.subItems()) > 0 {
 			part.State |= access.StateExpandable | access.StateHasPopup
 			if i == m.subOpen() {
 				part.State |= access.StateExpanded

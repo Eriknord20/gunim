@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -413,5 +414,24 @@ func TestATooltipHiddenStaysDownUntilThePointerComesBack(t *testing.T) {
 	run(60)
 	if tip.tip.popup == nil {
 		t.Fatal("the pointer back, the tooltip stayed down")
+	}
+}
+
+// A menu's item says whether it is ticked or greyed out, and its
+// shortcut, to a screen reader.
+func TestAMenusItemsSayTheirTickTheirShortcutAndWhetherTheyAreOff(t *testing.T) {
+	m := NewMenu([]MenuItem{{Label: "Mute clip", Hint: "M", Checked: true}, {Label: "Split", Disabled: true}, {Label: "Plain"}})
+	parts := m.Access().Parts
+	if len(parts) != 3 {
+		t.Fatalf("the menu says %d items", len(parts))
+	}
+	if p := parts[0]; p.Name != "Mute clip" || p.Description != "M" || !p.State.Has(access.StateChecked) {
+		t.Errorf("a ticked item with a shortcut says %+v", p)
+	}
+	if p := parts[1]; !p.State.Has(access.StateDisabled) || p.State.Has(access.StateChecked) {
+		t.Errorf("a greyed out item says %+v", p)
+	}
+	if p := parts[2]; p.Description != "" || p.State.Has(access.StateChecked) || p.State.Has(access.StateDisabled) {
+		t.Errorf("a plain item says %+v", p)
 	}
 }
