@@ -21,6 +21,7 @@ const (
 	localMoveUp     = "local.moveup"
 	localMoveDown   = "local.movedown"
 	localOpenWith   = "local.openwith"
+	localUsage      = "local.usage"
 )
 
 // changes reports whether the command cmd of a context menu changes
@@ -85,24 +86,17 @@ var emptyItems = []menuItem{
 
 // placeItems are the context menu of a place in the sidebar, on any file
 // system, and favItems of a favourite. Open on another file system than
-// the window's asks for a Visit.
+// the window's asks for a Visit, and Disk usage is left off there.
 var (
 	placeItems = []menuItem{
 		{"Open", "", localOpenPlace},
 		{"Open in new window", "", localOpenWindow},
+		{"Disk usage", "", localUsage},
 	}
 	favItems = []menuItem{
 		{"Open", "", localOpenPlace},
 		{"Open in new window", "", localOpenWindow},
-		{"-", "", ""},
-		{"Edit favourite…", "F2", localEditFav},
-		{"Unpin", "", localUnpin},
-	}
-	// awayFavItems are the context menu of a favourite on another file
-	// system than the window's, whose Open asks for a Visit.
-	awayFavItems = []menuItem{
-		{"Open", "", localOpenPlace},
-		{"Open in new window", "", localOpenWindow},
+		{"Disk usage", "", localUsage},
 		{"-", "", ""},
 		{"Edit favourite…", "F2", localEditFav},
 		{"Unpin", "", localUnpin},
@@ -360,6 +354,8 @@ func (v *dndView) menuPicked(m *widget.ContextMenu, st menuState, i int, u *guni
 			return
 		}
 		u.Send(m, Navigate{Path: st.path})
+	case localUsage:
+		u.Send(m, UsageAsked{Path: st.path})
 	case localUnpin:
 		u.Send(m, Unpin{FS: st.fs, Path: st.path})
 	case localEditFav:
@@ -618,11 +614,11 @@ func (s *sideMenu) prepare(at geom.Point, u *gunim.UI) bool {
 	}
 	s.st = menuState{path: pr.item.Path, fs: pr.item.FS, away: pr.item.away, place: pr.item.Place}
 	items := placeItems
-	switch {
-	case fav && pr.item.away:
-		items = awayFavItems
-	case fav:
+	if fav {
 		items = favItems
+	}
+	if pr.item.away {
+		items = without(items, localUsage)
 	}
 	if s.giving && pr.item.key == s.key && len(s.given) > 0 {
 		items = slices.Clone(items)
@@ -631,7 +627,8 @@ func (s *sideMenu) prepare(at geom.Point, u *gunim.UI) bool {
 			items = append(items, menuItem{it.Label, "", placeCmd + it.ID})
 		}
 	}
-	s.st.cmds = fill(s.m, items, func(string) bool { return false }, func(string) bool { return false })
+	unread := pr.item.Err != ""
+	s.st.cmds = fill(s.m, items, func(cmd string) bool { return cmd == localUsage && unread }, func(string) bool { return false })
 	return true
 }
 

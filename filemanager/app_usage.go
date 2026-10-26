@@ -68,6 +68,8 @@ func (a *app) handleUsage(in gunim.Intent) bool {
 			return false
 		}
 		a.openUsage(a.usageTarget())
+	case UsageAsked:
+		a.openUsage(v.Path)
 	case UsageFocus:
 		if v.Seq == s.seq && s.open {
 			s.focus = v.Key
@@ -127,7 +129,7 @@ func (a *app) openUsage(root string) {
 	s.note, s.noteErr = "", false
 	s.free, s.space = 0, 0
 	fsys := a.fs
-	if a.nav.archive == "" {
+	if a.nav.archive == "" || !a.ps.inside(root, a.nav.archive) {
 		// Outside an archive, the file system itself, so a zip on the way
 		// counts as the file it is, and no path is looked up in one.
 		fsys = unwrapFS(fsys)

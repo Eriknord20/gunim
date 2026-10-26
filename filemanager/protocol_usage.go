@@ -9,6 +9,12 @@ import "github.com/marrasen/gunim"
 // provider keeps online apart from those on this device.
 const CmdUsage = "usage"
 
+// UsageAsked asks for Disk usage on the folder at Path, as a place's
+// context menu in the sidebar does.
+type UsageAsked struct {
+	Path string
+}
+
 // Measure is what Disk usage sizes items by.
 type Measure uint8
 
@@ -192,6 +198,7 @@ type UsageClosed struct{ Seq int }
 
 func init() {
 	gunim.RegisterType[Usage]("files.usage")
+	gunim.RegisterType[UsageAsked]("files.usage-asked")
 	gunim.RegisterType[UsageFocus]("files.usage-focus")
 	gunim.RegisterType[UsageOpened]("files.usage-opened")
 	gunim.RegisterType[UsageSet]("files.usage-set")
