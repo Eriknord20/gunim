@@ -129,6 +129,25 @@ func (u *uploadHarness) told(title string) bool {
 	return false
 }
 
+// uploaded waits for the nth upload to say it went, and then finds the
+// remote holding want. It reads the remote only then: on Windows a read
+// holds the file open, and an upload replacing it meanwhile fails.
+func (u *uploadHarness) uploaded(n int, want string) {
+	u.t.Helper()
+	u.until("the upload finishes", func() bool {
+		got := 0
+		for _, x := range u.notices() {
+			if x.Title == "Uploaded report.txt" && x.Kind == "success" {
+				got++
+			}
+		}
+		return got >= n
+	})
+	if got := contents(u.t, u.remote); got != want {
+		u.t.Fatalf("the remote holds %q, want %q", got, want)
+	}
+}
+
 func (u *uploadHarness) answerOffer(button int, checked bool) {
 	u.do(NoticeAnswered{Key: offerKey(u.key), Button: button, Checked: checked})
 }
@@ -212,7 +231,7 @@ func TestDontAskAgainWithUploadUploadsLaterEditsByThemselves(t *testing.T) {
 	u.step()
 	u.until("the change is offered", func() bool { return len(u.offers()) == 1 })
 	u.answerOffer(0, true)
-	u.until("the upload finishes", func() bool { return contents(t, u.remote) == "draft two" })
+	u.uploaded(1, "draft two")
 	u.idle()
 	if p, _ := loadPrefs(u.a.prefsPath); p.UploadEdited != uploadAlways {
 		t.Fatalf("the settings keep %q", p.UploadEdited)
@@ -228,7 +247,7 @@ func TestDontAskAgainWithUploadUploadsLaterEditsByThemselves(t *testing.T) {
 	u.edit("draft three, longer")
 	u.step()
 	u.step()
-	u.until("the next change uploads", func() bool { return contents(t, u.remote) == "draft three, longer" })
+	u.uploaded(2, "draft three, longer")
 	u.idle()
 	if u.a.ops.next != ops+1 {
 		t.Fatalf("the upload ran as %d operations", u.a.ops.next-ops)
@@ -329,7 +348,7 @@ func TestACopyReplacedByARenameIsNoticed(t *testing.T) {
 	u.step()
 	u.until("the change is offered", func() bool { return len(u.offers()) == 1 })
 	u.answerOffer(0, false)
-	u.until("the upload finishes", func() bool { return contents(t, u.remote) == "saved by rename" })
+	u.uploaded(1, "saved by rename")
 }
 
 func TestAFailedUploadSaysWhyAndOffersAgain(t *testing.T) {
@@ -348,7 +367,7 @@ func TestAFailedUploadSaysWhyAndOffersAgain(t *testing.T) {
 	u.answer(DialogClosed{})
 	u.fs.breaks(false)
 	u.answerOffer(0, false)
-	u.until("the second try goes up", func() bool { return contents(t, u.remote) == "draft two" })
+	u.uploaded(1, "draft two")
 }
 
 func TestTheOfferIsAToastThatStaysAndTakesNoKeyboard(t *testing.T) {
