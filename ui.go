@@ -1436,6 +1436,9 @@ func (w *Window) applyPending() {
 	w.barrier = 0
 	w.inMu.Unlock()
 
+	if len(batch) > 0 {
+		w.ui.stirred = true
+	}
 	for _, cmd := range batch {
 		w.ui.apply(cmd)
 	}
@@ -1602,6 +1605,14 @@ type UI struct {
 	painter   paint.Painter
 	animating bool
 	invalid   bool
+	// stirred says input, a command or a change of focus came since the
+	// last frame, and calm that none did before this one, nor did the
+	// theme, a scroll or a drag move: only then are Steady nodes' subtrees
+	// carried (steady.go). keptPainted counts the nodes painted for a
+	// [Drawing].
+	stirred     bool
+	calm        bool
+	keptPainted int
 	// pending holds intents the application has yet to take. See
 	// [UI.post] for why it grows instead of blocking or dropping.
 	pending []Envelope
@@ -1823,6 +1834,7 @@ func (u *UI) themeOf(s *state) *theme.Live {
 
 // on runs fn with s as the node being served, so Theme finds its scope.
 func (u *UI) on(s *state, fn func()) {
+	u.stirred = true
 	prev := u.current
 	u.current = s
 	defer func() { u.current = prev }()
@@ -2419,6 +2431,8 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 	u.now = now
 	// Timers run first, so what they invalidate is drawn in this frame
 	u.runTimers()
+	u.calm = !u.invalid && !u.stirred && !u.dragOver
+	u.stirred = false
 	u.invalid = false
 	if u.shotsOwed.Load() > 0 {
 		// A shot waits on the windows' next frames: keep drawing them.
@@ -2446,6 +2460,7 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 	// 1. Advance every animated value by the real elapsed time, the
 	//    theme's included.
 	animating := u.theme.Step(delta) || scrolled
+	u.calm = u.calm && !animating
 	for _, r := range u.roots() {
 		if u.step(r, delta) {
 			animating = true
@@ -2694,9 +2709,16 @@ func (u *UI) step(s *state, dt time.Duration) bool {
 	animating := false
 	if a, ok := s.node.(Animator); ok && a.Step(dt) {
 		animating = true
+		s.moved = u.seq
 	}
 	if w, ok := s.node.(Waker); ok {
-		if d := w.WakeIn(); d > 0 && (u.wakeIn == 0 || d < u.wakeIn) {
+		d := w.WakeIn()
+		if d > 0 {
+			// Resting, it may still change as it is drawn, as a graph
+			// sliding on: Steady nodes round it are drawn anew.
+			s.moved = u.seq
+		}
+		if d > 0 && (u.wakeIn == 0 || d < u.wakeIn) {
 			u.wakeIn = d
 		}
 	}

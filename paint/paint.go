@@ -531,6 +531,18 @@ type Clip struct {
 	ellipse bool
 }
 
+// Same reports whether c and o clip alike: the same shapes, in the same
+// spaces, inside the same clips, none of them tilted.
+func (c *Clip) Same(o *Clip) bool {
+	for ; c != nil || o != nil; c, o = c.outer, o.outer {
+		if c == nil || o == nil || c.proj != nil || o.proj != nil || c.inv != o.inv || c.ok != o.ok ||
+			c.rect != o.rect || c.radius != o.radius || c.ellipse != o.ellipse {
+			return false
+		}
+	}
+	return true
+}
+
 // Contains reports whether p, a point on the screen, in window space,
 // lies inside c and every clip around it. A nil Clip contains every
 // point.
