@@ -1149,6 +1149,8 @@ func (w *Window) render() {
 	var ft frameTimes
 	// shownEdge is the edge the last frame presented left for the border
 	shownEdge := float32(-1)
+	// shownCorner is the corner radius the last frame drawn was drawn with.
+	shownCorner := float32(-1)
 	// shownLUT is the colour table handed to the renderer last, and
 	// shownColor the colour state GUNIM_DEBUG_FRAMES logged last.
 	var shownLUT *icc.LUT
@@ -1191,6 +1193,28 @@ func (w *Window) render() {
 				shownColor = colorInfo
 				log.Printf("gunim frames %p colour: %v", w, colorInfo)
 			}
+			if readback == nil && !redraw && r.Corner == shownCorner && r.Edge == shownEdge &&
+				r.Unchanged(f.damage, fbW, fbH, scale) {
+				// Nothing on screen would change: the window keeps the
+				// frame it shows, and this one is neither drawn nor
+				// presented. It still waits for the vertical blank, so
+				// the engine draws at the display's pace.
+				if vb.wait() {
+					last = time.Now()
+				} else {
+					last = pace(last, rate)
+				}
+				if framesDebug {
+					ft.skipped++
+				}
+				select {
+				case w.presented <- driver.Frame{Shown: last}:
+				case <-w.quit:
+					return
+				}
+				continue
+			}
+			shownCorner = r.Corner
 			t0 := time.Now()
 			if w.pres != nil {
 				fbo, err := w.pres.begin(fbW, fbH)
@@ -1286,6 +1310,7 @@ var framesFinish = os.Getenv("GUNIM_DEBUG_FRAMES") == "gpu"
 type frameTimes struct {
 	from                time.Time
 	n, late             int
+	skipped             int
 	draw, wait, present time.Duration
 	drawMax, presentMax time.Duration
 	waitMax             time.Duration
@@ -1294,7 +1319,8 @@ type frameTimes struct {
 }
 
 // add counts a frame that took draw, wait and present, and logs the
-// second's sums once one has passed. A frame is late where the three
+// second's sums once one has passed, with how many frames were skipped
+// meanwhile as unchanged. A frame is late where the three
 // together took longer than a refresh at rate.
 func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int, converting bool) {
 	ft.gpu += gpu
@@ -1324,8 +1350,8 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	}
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	n := time.Duration(ft.n)
-	log.Printf("gunim frames %p %dx%d at %.0f Hz: %d frames, %d late; draw %.1f ms (max %.1f), vblank wait %.1f (max %.1f), present %.1f (max %.1f)",
-		w, fbW, fbH, rate, ft.n, ft.late, ms(ft.draw/n), ms(ft.drawMax), ms(ft.wait/n), ms(ft.waitMax), ms(ft.present/n), ms(ft.presentMax))
+	log.Printf("gunim frames %p %dx%d at %.0f Hz: %d frames, %d late, %d more unchanged and not drawn; draw %.1f ms (max %.1f), vblank wait %.1f (max %.1f), present %.1f (max %.1f)",
+		w, fbW, fbH, rate, ft.n, ft.late, ft.skipped, ms(ft.draw/n), ms(ft.drawMax), ms(ft.wait/n), ms(ft.waitMax), ms(ft.present/n), ms(ft.presentMax))
 	colour := "sRGB as it is"
 	if converting {
 		colour = "converted to the display's profile"
