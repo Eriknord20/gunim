@@ -747,7 +747,7 @@ func (r *Renderer) Release() {
 // as they were. The window then shows that frame as it is, and the
 // driver need neither draw nor present this one.
 func (r *Renderer) Unchanged(damage geom.Rect, fbW, fbH int, scale float32) bool {
-	return damage.Empty() && r.Stretched.Empty() && !r.color.changed && r.canvasOK && !r.direct &&
+	return damage.Empty() && r.Stretched.Empty() && !r.color.changed && r.canvasOK &&
 		fbW == r.fbW && fbH == r.fbH && scale == r.canvasScale
 }
 
