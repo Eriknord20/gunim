@@ -941,15 +941,29 @@ func (u *UI) injectedPopup(ev input.Event) (*surface, input.Event, bool) {
 	}
 	for i := len(u.popups) - 1; i >= 0; i-- {
 		s := u.popups[i]
-		if s.closing || s.dw == nil {
+		if s.closing || s.dw == nil || s.opts.Passthrough {
+			// A popup the pointer passes through, as a drag's picture,
+			// takes none of it.
 			continue
 		}
 		q, ok := local(s)
-		if ok && q.X >= 0 && q.Y >= 0 && q.X < s.size.W && q.Y < s.size.H {
+		if ok && q.X >= 0 && q.Y >= 0 && q.X < s.size.W && q.Y < s.size.H && u.takesPointerAt(s, q) {
 			return s, withPos(ev, q), true
 		}
 	}
 	return nil, nil, false
+}
+
+// takesPointerAt reports whether s's window takes the pointer at q, in
+// its own space, as the region its window is told says: the pointer
+// passes through the room round its card, as a shadow's, to the window
+// under it, as it does on a display.
+func (u *UI) takesPointerAt(s *surface, q geom.Point) bool {
+	r := u.pointerRegion(s)
+	if r == nil {
+		return true
+	}
+	return slices.ContainsFunc(r, func(rc geom.Rect) bool { return rc.Contains(q) })
 }
 
 // pointerPos is where a pointer event happened.
