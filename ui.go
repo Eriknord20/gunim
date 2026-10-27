@@ -2712,7 +2712,13 @@ func (u *UI) step(s *state, dt time.Duration) bool {
 		s.moved = u.seq
 	}
 	if w, ok := s.node.(Waker); ok {
-		if d := w.WakeIn(); d > 0 && (u.wakeIn == 0 || d < u.wakeIn) {
+		d := w.WakeIn()
+		if d > 0 {
+			// Resting, it may still change as it is drawn, as a graph
+			// sliding on: Steady nodes round it are drawn anew.
+			s.moved = u.seq
+		}
+		if d > 0 && (u.wakeIn == 0 || d < u.wakeIn) {
 			u.wakeIn = d
 		}
 	}

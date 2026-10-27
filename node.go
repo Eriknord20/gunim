@@ -94,13 +94,18 @@ type Waker interface {
 //
 // The engine draws the subtree anew, whatever the key, in a frame that
 // follows input, a command, a theme change or [UI.Invalidate], and
-// where a node in it animates, enters or leaves; so a hover or a press
-// inside needs no part in the key. A subtree that puts painting off
-// with [paint.Painter.Float], keeps a drawing ([KeepDrawing]) or
-// paints a layer that blurs or tilts is drawn anew every frame.
+// where a node in it animates or waits to ([Waker]), enters or leaves,
+// or a [ThemeScope] above it moves; so a hover or a press inside needs
+// no part in the key. A subtree that puts painting off with
+// [paint.Painter.Float], keeps a drawing ([KeepDrawing]) or paints a
+// layer that blurs or tilts is drawn anew every frame, and so is one
+// whose key cannot be compared, as a slice. A node laid out twice in a
+// frame, as a container that measures it first, is laid out and drawn
+// as usual.
 //
-// GUNIM_DEBUG_STEADY=1 draws every Steady node's subtree anew, and logs
-// each one whose key said it would draw the same, and did not.
+// GUNIM_DEBUG_STEADY=1 paints every Steady node's subtree anew, laid out
+// as carried, and logs each one whose key said it would draw the same,
+// and did not.
 type Steady interface {
 	Node
 	SteadyKey(f Frame) (key any, ok bool)
@@ -586,12 +591,14 @@ type keeping struct {
 	cs    Constraints
 	laid  uint64
 	carry bool
-	// run is what it painted, in frame drawn, under toWindow and clip;
+	// run is what it painted, in frame drawn, under toWindow, clip and
+	// blend;
 	// ok says the run may be carried: nothing in it painted aside.
 	run      paint.Run
 	drawn    uint64
 	toWindow paint.Transform
 	clip     *paint.Clip
+	blend    paint.Blend
 	ok       bool
 }
 

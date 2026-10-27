@@ -71,3 +71,6 @@ func (p *Painter) blendFor(b Blend) Blend {
 
 // blendNow returns the blend in force, for an op that takes it.
 func (p *Painter) blendNow() Blend { return p.blendFor(BlendInherit) }
+
+// BlendInForce returns the blend what is painted now is drawn with.
+func (p *Painter) BlendInForce() Blend { return p.blend }

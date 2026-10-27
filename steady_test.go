@@ -7,6 +7,7 @@ import (
 
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 )
 
 // steadyRow is a SteadyNode that counts its layouts and paints, and draws a
@@ -16,6 +17,7 @@ type steadyRow struct {
 	ok            bool
 	laid, painted int
 	colour        color.NRGBA
+	paintsFirst   bool
 	clipsAChild   bool
 }
 
@@ -34,8 +36,13 @@ func (r *steadyRow) Paint(p *paint.Painter, _ Frame, box geom.Size, kids Childre
 	if r.clipsAChild {
 		defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Clip: true, Opacity: 1})()
 	}
+	i := 0
 	for k := range kids.All {
+		if r.paintsFirst && i > 0 {
+			break
+		}
 		k.Paint(p)
+		i++
 	}
 }
 
@@ -114,7 +121,6 @@ func TestASteadyNodeIsDrawnAnew(t *testing.T) {
 		{"once its key changes", func(_ *Window, row *steadyRow, _ *steadyLeaf) { row.key = 2 }},
 		{"saying ok false", func(_ *Window, row *steadyRow, _ *steadyLeaf) { row.ok = false }},
 		{"after Invalidate", func(w *Window, _ *steadyRow, _ *steadyLeaf) { w.ui.Invalidate() }},
-		{"after input", func(w *Window, _ *steadyRow, _ *steadyLeaf) { w.ui.stirred = true }},
 		{"while a node in it moves", func(_ *Window, _ *steadyRow, leaf *steadyLeaf) { leaf.moving = true }},
 	} {
 		row := &steadyRow{key: 1, ok: true, colour: rowBlue}
@@ -157,5 +163,101 @@ func BenchmarkASteadyRowBesideAPlayhead(b *testing.B) {
 				w.Frame(time.Second / 60)
 			}
 		})
+	}
+}
+
+// steadyWaiter rests, but has a frame to come: as a graph that slides
+// on while it says it does not move.
+type steadyWaiter struct{ steadyLeaf }
+
+func (w *steadyWaiter) WakeIn() time.Duration { return time.Second }
+
+// themeBox is a ThemeScope round the row, moving while moving says.
+type themeBox struct {
+	live   *theme.Live
+	moving bool
+}
+
+func (b *themeBox) ThemeScope() *theme.Live { return b.live }
+func (b *themeBox) Step(time.Duration) bool { return b.moving }
+func (b *themeBox) Layout(_ Constraints, _ Frame, kids Children) geom.Size {
+	for k := range kids.All {
+		k.Layout(Tight(geom.Sz(200, 40)))
+	}
+	return geom.Sz(200, 40)
+}
+func (b *themeBox) Paint(p *paint.Painter, _ Frame, _ geom.Size, kids Children) {
+	for k := range kids.All {
+		k.Paint(p)
+	}
+}
+
+func TestAChildLaidOutButNotDrawnStaysUndrawnWhenCarried(t *testing.T) {
+	row := &steadyRow{key: 1, ok: true, colour: rowBlue, paintsFirst: true}
+	w, _ := steadyStage(t, row)
+	hidden := &steadyLeaf{}
+	w.ui.Insert(row, hidden)
+	run(w, 10)
+	painted := row.painted
+	run(w, 1)
+	if row.painted != painted {
+		t.Fatal("the row was not carried")
+	}
+	if hs := w.ui.index[hidden]; hs.drawn == w.ui.seq {
+		t.Fatal("a child the row lays out but does not draw is marked drawn, for input to find")
+	}
+}
+
+func TestAKeyThatCannotBeComparedIsDrawnAsUsual(t *testing.T) {
+	row := &steadyRow{key: []int{1}, ok: true, colour: rowBlue}
+	w, _ := steadyStage(t, row)
+	painted := row.painted
+	run(w, 3)
+	if row.painted != painted+3 {
+		t.Fatalf("with a key of a slice, the row was painted %d times in three frames", row.painted-painted)
+	}
+}
+
+func TestASteadyNodeIsDrawnAnewWhileAWaiterInItWaits(t *testing.T) {
+	row := &steadyRow{key: 1, ok: true, colour: rowBlue}
+	w, _ := steadyStage(t, row)
+	w.ui.Insert(row, &steadyWaiter{})
+	run(w, 5)
+	painted := row.painted
+	run(w, 1)
+	if row.painted == painted {
+		t.Fatal("a node in the row waiting for a frame to come, the row was carried")
+	}
+}
+
+func TestASteadyNodeIsDrawnAnewWhileTheThemeRoundItMoves(t *testing.T) {
+	w := newTestWindow()
+	box := &themeBox{live: theme.NewLive(theme.Theme{})}
+	row := &steadyRow{key: 1, ok: true, colour: rowBlue}
+	w.ui.Insert(w.ui.Root(), box)
+	w.ui.Insert(box, row)
+	w.ui.Insert(row, &steadyLeaf{})
+	w.ui.Insert(w.ui.Root(), &ticker{})
+	run(w, 60)
+	painted := row.painted
+	run(w, 2)
+	if row.painted != painted {
+		t.Fatal("the row was not carried")
+	}
+	box.moving = true
+	run(w, 1)
+	if row.painted == painted {
+		t.Fatal("the theme round it moving, the row was carried")
+	}
+}
+
+func TestASteadyNodeIsDrawnAnewAfterAHandlerRuns(t *testing.T) {
+	row := &steadyRow{key: 1, ok: true, colour: rowBlue}
+	w, leaf := steadyStage(t, row)
+	painted := row.painted
+	w.ui.on(w.ui.index[leaf], func() {})
+	run(w, 1)
+	if row.painted == painted {
+		t.Fatal("after a handler ran, the row was carried")
 	}
 }
