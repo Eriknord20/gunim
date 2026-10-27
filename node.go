@@ -82,6 +82,30 @@ type Waker interface {
 	WakeIn() time.Duration
 }
 
+// A Steady node is one whose subtree, itself and every node beneath it,
+// draws the same while its key does: a long list of rows, still while
+// a playhead moves across it. SteadyKey returns the key: a comparable value
+// that says everything the subtree shows, as a version of the data and
+// the place it is scrolled to. Where it equals the key of the frame
+// before, and the node is laid out within the same constraints and
+// painted in the same place, inside the same clips, the engine draws
+// the subtree as it drew it then, with neither Layout nor Paint. With
+// ok false, or a key that differs, it draws as usual.
+//
+// The engine draws the subtree anew, whatever the key, in a frame that
+// follows input, a command, a theme change or [UI.Invalidate], and
+// where a node in it animates, enters or leaves; so a hover or a press
+// inside needs no part in the key. A subtree that puts painting off
+// with [paint.Painter.Float], keeps a drawing ([KeepDrawing]) or
+// paints a layer that blurs or tilts is drawn anew every frame.
+//
+// GUNIM_DEBUG_STEADY=1 draws every Steady node's subtree anew, and logs
+// each one whose key said it would draw the same, and did not.
+type Steady interface {
+	Node
+	SteadyKey(f Frame) (key any, ok bool)
+}
+
 // A Transitioner is a node that animates as it enters and leaves the
 // tree.
 //
@@ -496,6 +520,10 @@ func (c Child) Presence() Presence { return c.n.presence }
 // Layout lays the child out within cs and returns the size it chose.
 func (c Child) Layout(cs Constraints) geom.Size {
 	f := scoped(c.f, c.n.node)
+	if k, ok := c.n.node.(Steady); ok && c.f.u.carries(c.n, k, cs, f) {
+		c.n.laid = c.f.seq
+		return c.n.size
+	}
 	c.n.laid = c.f.seq
 	c.n.size = c.n.node.Layout(cs, f, Children{ns: c.n.kids, f: f, s: c.n})
 	return c.n.size
@@ -528,7 +556,17 @@ func (c Child) Paint(p *paint.Painter) {
 	if c.f.u.chrome != nil {
 		c.f.u.noteTitleBar(c.n.node, p.Transform(), c.n.size)
 	}
+	if kp := c.n.keep; kp != nil {
+		c.f.u.paintKept(c, kp, p, f)
+		return
+	}
+	c.paintNode(p, f)
+}
+
+// paintNode paints the child's node and its subtree, f its scoped frame.
+func (c Child) paintNode(p *paint.Painter, f Frame) {
 	if d := c.f.u.kept[c.n.node]; d != nil {
+		c.f.u.keptPainted++
 		mark := p.Mark()
 		c.n.node.Paint(p, f, c.n.size, Children{ns: c.n.kids, f: f, s: c.n})
 		p.Keep(mark, &d.rec)
@@ -536,6 +574,25 @@ func (c Child) Paint(p *paint.Painter) {
 		return
 	}
 	c.n.node.Paint(p, f, c.n.size, Children{ns: c.n.kids, f: f, s: c.n})
+}
+
+// keeping is what the engine keeps of a [Steady] node's subtree, from frame
+// to frame.
+type keeping struct {
+	// key and cs are the key and the constraints of the last layout, in
+	// frame laid; carry says this frame carries the subtree, its layout
+	// and, where it paints in the same place, its paint.
+	key   any
+	cs    Constraints
+	laid  uint64
+	carry bool
+	// run is what it painted, in frame drawn, under toWindow and clip;
+	// ok says the run may be carried: nothing in it painted aside.
+	run      paint.Run
+	drawn    uint64
+	toWindow paint.Transform
+	clip     *paint.Clip
+	ok       bool
 }
 
 // state is the engine's bookkeeping for one node. It stays inside the
@@ -581,6 +638,10 @@ type state struct {
 	parts *keyedParts
 	// aliases are the nodes the node embeds, which the index also maps to it.
 	aliases []Node
+	// moved is the frame the node's Step last said it moves in; keep,
+	// for a [Steady], what the engine keeps of its subtree.
+	moved uint64
+	keep  *keeping
 }
 
 // up returns s's parent, or for the root of a popup, the node that
