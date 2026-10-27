@@ -256,3 +256,36 @@ func TestAnEllipticalGradientReachesEachAxisAtItsLength(t *testing.T) {
 		t.Errorf("60 down, past the ellipse's short axis, it is %v, want blue", got)
 	}
 }
+
+// A square rectangle on whole pixels covers each of its corner pixels
+// whole, wherever the corner falls among the blocks of pixels a GPU
+// shades together; the window's own background too.
+func TestSquareCornersCoverTheirPixelsWhole(t *testing.T) {
+	r, done := hiddenGL(t)
+	defer done()
+	rects := []geom.Rect{geom.Rc(100, 100, 40, 20), geom.Rc(201, 101, 41, 21), geom.Rc(300, 151, 40, 21)}
+	pix := drawn(r, func(p *paint.Painter) {
+		for _, rc := range rects {
+			p.RRect(rc, 0, paint.Solid(red))
+		}
+	})
+	for _, rc := range rects {
+		x0, y0, x1, y1 := int(rc.Min.X), int(rc.Min.Y), int(rc.Max.X)-1, int(rc.Max.Y)-1
+		for _, c := range [][2]int{{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}} {
+			if got := pixelAt(pix, c[0], c[1]); got != px(red) {
+				t.Errorf("the corner pixel %v of %v is %v, want it red", c, rc, got)
+			}
+		}
+		for _, c := range [][2]int{{x0 - 1, y0 - 1}, {x1 + 1, y0 - 1}, {x0 - 1, y1 + 1}, {x1 + 1, y1 + 1}} {
+			if got := pixelAt(pix, c[0], c[1]); got != px(black) {
+				t.Errorf("past the corner of %v at %v the canvas is %v, want it untouched", rc, c, got)
+			}
+		}
+	}
+	w, h := int(benchSize.W)-1, int(benchSize.H)-1
+	for _, c := range [][2]int{{0, 0}, {w, 0}, {0, h}, {w, h}} {
+		if got := pixelAt(pix, c[0], c[1]); got != px(black) {
+			t.Errorf("the window's corner pixel %v is %v, want the background whole", c, got)
+		}
+	}
+}

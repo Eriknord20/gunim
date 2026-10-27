@@ -323,6 +323,24 @@ float sdRRect(vec2 p, vec4 rect, float r) {
 	return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// rrectWidth returns how much sdRRect's distance changes across one
+// device pixel at p: along the way the distance grows, which fwidth
+// gets wrong at a corner, where the distance bends and a GPU that
+// takes one difference for a block of pixels sees it change twice.
+float rrectWidth(vec2 p, vec4 rect, float r) {
+	vec2 halfSize = (rect.zw - rect.xy) * 0.5;
+	r = clamp(r, 0.0, min(halfSize.x, halfSize.y));
+	vec2 q = abs(p - (rect.xy + rect.zw) * 0.5) - halfSize + r;
+	vec2 g = q.x > 0.0 && q.y > 0.0 ? normalize(q) : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+	return max(abs(dot(g, dFdx(p))) + abs(dot(g, dFdy(p))), 1e-4);
+}
+
+// rrectCover returns the antialiased coverage of the rounded rectangle
+// at p.
+float rrectCover(vec2 p, vec4 rect, float r) {
+	return clamp(0.5 - sdRRect(p, rect, r) / rrectWidth(p, rect, r), 0.0, 1.0);
+}
+
 // coverage turns a distance into antialiased coverage, one device pixel
 // wide whatever the transform.
 float coverage(float d) {
@@ -445,7 +463,7 @@ vec4 shade(out vec4 cover) {
 		col = premul(v_color0) * (1.0 - smoothstep(-blur, blur, d));
 		if (v_param.y > 0.5) {
 			// Kept outside the shape, as CSS's box-shadow is.
-			col *= 1.0 - coverage(sdRRect(v_local, v_rect, v_param.x));
+			col *= 1.0 - rrectCover(v_local, v_rect, v_param.x);
 		}
 	} else if (kind == 3) {
 		float cov;
@@ -453,7 +471,7 @@ vec4 shade(out vec4 cover) {
 			vec2 hs = (v_rect.zw - v_rect.xy) * 0.5;
 			cov = ellipseCover((v_local - v_rect.xy - hs) / hs);
 		} else {
-			cov = coverage(sdRRect(v_local, v_rect, v_param.x));
+			cov = rrectCover(v_local, v_rect, v_param.x);
 		}
 		col = texture(u_tex, v_extra.xy) * v_color0.a * cov;
 	} else if (kind == 4) {
@@ -462,7 +480,7 @@ vec4 shade(out vec4 cover) {
 			vec2 hs = (v_rect.zw - v_rect.xy) * 0.5;
 			cov = ellipseCover((v_local - v_rect.xy - hs) / hs);
 		} else if (v_param.w > 0.5) {
-			cov = coverage(sdRRect(v_local, v_rect, v_param.x));
+			cov = rrectCover(v_local, v_rect, v_param.x);
 		}
 		// A faded layer fades out toward its bounds' edges, over the
 		// widths in v_extra: left, top, right and bottom.
@@ -488,7 +506,7 @@ vec4 shade(out vec4 cover) {
 		vec4 r = v_rect + vec4(spread, spread, -spread, -spread);
 		float d = sdRRect(v_local - v_extra.xy, r, max(v_param.x - spread, 0.0));
 		float blur = max(v_extra.z, 0.5);
-		float inside = coverage(sdRRect(v_local, v_rect, v_param.x));
+		float inside = rrectCover(v_local, v_rect, v_param.x);
 		col = premul(v_color0) * smoothstep(-blur, blur, d) * inside;
 	} else {
 		float d = sdRRect(v_local, v_rect, v_param.x);
@@ -496,10 +514,11 @@ vec4 shade(out vec4 cover) {
 		if (v_param.w > 0.5) {
 			fill = gradient(v_param.w, v_extra.zw, v_color0, v_color1);
 		}
-		col = premul(fill) * coverage(d);
+		float w = rrectWidth(v_local, v_rect, v_param.x);
+		col = premul(fill) * clamp(0.5 - d / w, 0.0, 1.0);
 		float sw = v_param.y;
 		if (sw > 0.0) {
-			vec4 s = premul(v_stroke) * coverage(abs(d) - sw * 0.5);
+			vec4 s = premul(v_stroke) * clamp(0.5 - (abs(d) - sw * 0.5) / w, 0.0, 1.0);
 			col = s + col * (1.0 - s.a);
 		}
 	}
