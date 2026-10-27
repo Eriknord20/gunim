@@ -215,11 +215,15 @@ func (d *Dropdown) AccessAct(r access.Request, u *gunim.UI) bool {
 }
 
 // Access implements [gunim.Accessible]: a menu with an item for each
-// entry, the highlighted one active. An item says whether it is ticked
+// entry, the highlighted one active, each where it shows: a row
+// scrolled out of sight has no bounds. An item says whether it is ticked
 // or greyed out, and the shortcut beside it as its description, as the
 // command palette's rows do; a caption is a label.
 func (m *Menu) Access() access.Info {
 	info := access.Info{Role: access.RoleMenu, Active: m.hot + 1}
+	// The rows show inside the card's padding, scrolled where they are
+	// taller than it.
+	rows := geom.Rect{Min: geom.Pt(m.card.Min.X, m.card.Min.Y+m.pad), Max: geom.Pt(m.card.Max.X, m.card.Max.Y-m.pad)}
 	for i := range m.len() {
 		it := m.list.items[i]
 		part := access.Info{Role: access.RoleMenuItem, Name: m.label(i), Actions: []string{access.ActionPress}}
@@ -245,10 +249,20 @@ func (m *Menu) Access() access.Info {
 				part.State |= access.StateExpanded
 			}
 		}
-		part.Bounds = geom.Rc(m.card.Min.X, m.rowY(i), m.card.Size().W, m.row)
+		part.Bounds = clipRows(geom.Rc(m.card.Min.X, m.rowY(i), m.card.Size().W, m.row), rows)
 		info.Parts = append(info.Parts, part)
 	}
 	return info
+}
+
+// clipRows is r cut to rows, where a menu's rows show; empty where a row
+// scrolled out of sight shows none. A screen reader can still press it.
+func clipRows(r, rows geom.Rect) geom.Rect {
+	r.Min.Y, r.Max.Y = max(r.Min.Y, rows.Min.Y), min(r.Max.Y, rows.Max.Y)
+	if r.Empty() {
+		return geom.Rect{}
+	}
+	return r
 }
 
 // AccessAct implements [gunim.AccessActor]: pressing an item picks it, or opens its submenu.
