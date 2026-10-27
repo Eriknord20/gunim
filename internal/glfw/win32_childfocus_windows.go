@@ -25,7 +25,7 @@ func takeFocusFromChild(hWnd windows.HWND) {
 	if r, _, _ := procIsChild.Call(uintptr(hWnd), f); r == 0 {
 		return
 	}
-	if _, err := _SetFocus(hWnd); err != nil {
-		_glfw.errors = append(_glfw.errors, err)
-	}
+	// Taking the keyboard back is best effort. An error here must not
+	// reach WaitEvents, which would stop the program over a press.
+	_, _ = _SetFocus(hWnd)
 }

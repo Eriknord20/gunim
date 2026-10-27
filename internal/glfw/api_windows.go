@@ -1631,7 +1631,11 @@ func _SetCursorPos(x, y int32) error {
 
 func _SetFocus(hWnd windows.HWND) (windows.HWND, error) {
 	r, _, e := procSetFocus.Call(uintptr(hWnd))
-	if windows.HWND(r) == 0 {
+	// gunim change: SetFocus returns the window that had the keyboard
+	// before, and NULL where there was none or it can't name one, as when
+	// that window is another thread's. Only a NULL with an error set is a
+	// failure.
+	if windows.HWND(r) == 0 && !errors.Is(e, windows.ERROR_SUCCESS) {
 		return 0, fmt.Errorf("glfw: SetFocus failed: %w", e)
 	}
 	return windows.HWND(r), nil
