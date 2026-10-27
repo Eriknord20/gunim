@@ -762,6 +762,17 @@ func (r *Renderer) Release() {
 	g.DeleteVertexArray(r.vao)
 }
 
+// Unchanged reports whether a frame of damage, at fbW by fbH device
+// pixels and scale, would draw nothing new: nothing in it changed since
+// the frame drawn last, nothing drawn stretched waits to be drawn
+// sharp, the canvas holds that frame at this size, and the colours stay
+// as they were. The window then shows that frame as it is, and the
+// driver need neither draw nor present this one.
+func (r *Renderer) Unchanged(damage geom.Rect, fbW, fbH int, scale float32) bool {
+	return damage.Empty() && r.Stretched.Empty() && !r.color.changed && r.canvasOK &&
+		fbW == r.fbW && fbH == r.fbH && scale == r.canvasScale
+}
+
 // Draw replays ops into the canvas, within damage, the logical-pixel
 // area that changed since the last frame, and copies the canvas to the
 // window.

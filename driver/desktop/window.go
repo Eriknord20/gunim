@@ -144,6 +144,9 @@ type Window struct {
 	// readback, when set by a test, receives each frame's pixels as
 	// RGBA rows from the bottom up, read before the swap.
 	readback func(pix []byte, w, h int)
+	// lost says the display server asked for the window's contents back,
+	// so the next frame draws, changed or not.
+	lost bool
 	// shot, when set, receives the next frame's pixels once, the right
 	// way up.
 	shot func(*image.RGBA)
@@ -939,7 +942,14 @@ func (w *Window) install() {
 		}
 		w.in.Push(driver.WindowMaximized{Maximized: maximized})
 	})
-	_, _ = gw.SetRefreshCallback(func(*glfw.Window) { w.in.Push(driver.Redraw{}) })
+	_, _ = gw.SetRefreshCallback(func(*glfw.Window) {
+		// The display server wants the window's contents back: the next
+		// frame draws, though nothing in it changed (render).
+		w.mu.Lock()
+		w.lost = true
+		w.mu.Unlock()
+		w.in.Push(driver.Redraw{})
+	})
 	_, _ = gw.SetCoveredCallback(func(_ *glfw.Window, covered bool) {
 		w.hiddenBy = covered
 		w.tellUnseen()
@@ -1149,6 +1159,10 @@ func (w *Window) render() {
 	var ft frameTimes
 	// shownEdge is the edge the last frame presented left for the border
 	shownEdge := float32(-1)
+	// shownCorner and shownUnder are the corner radius and the colour
+	// under the frame the last frame drawn was drawn with.
+	shownCorner := float32(-1)
+	var shownUnder color.NRGBA
 	// shownLUT is the colour table handed to the renderer last, and
 	// shownColor the colour state GUNIM_DEBUG_FRAMES logged last.
 	var shownLUT *icc.LUT
@@ -1177,6 +1191,8 @@ func (w *Window) render() {
 			lut, colorInfo := w.colorLUT, w.colorInfo
 			readback, shot := w.readback, w.shot
 			w.shot = nil
+			lost := w.lost
+			w.lost = false
 			w.mu.Unlock()
 			if shot != nil {
 				readback = shotBack(readback, shot)
@@ -1191,6 +1207,29 @@ func (w *Window) render() {
 				shownColor = colorInfo
 				log.Printf("gunim frames %p colour: %v", w, colorInfo)
 			}
+			if readback == nil && !redraw && !lost && r.Corner == shownCorner && r.Edge == shownEdge &&
+				r.Under == shownUnder && r.Unchanged(f.damage, fbW, fbH, scale) {
+				// Nothing on screen would change: the window keeps the
+				// frame it shows, and this one is neither drawn nor
+				// presented. It still waits for the vertical blank, so
+				// the engine draws at the display's pace; where there is
+				// none to wait for, a refresh after the last.
+				if vb.wait() {
+					last = time.Now()
+				} else {
+					last = paceStill(last, rate)
+				}
+				if framesDebug {
+					ft.skip(w, rate, fbW, fbH)
+				}
+				select {
+				case w.presented <- driver.Frame{Shown: last}:
+				case <-w.quit:
+					return
+				}
+				continue
+			}
+			shownCorner, shownUnder = r.Corner, r.Under
 			t0 := time.Now()
 			if w.pres != nil {
 				fbo, err := w.pres.begin(fbW, fbH)
@@ -1286,6 +1325,7 @@ var framesFinish = os.Getenv("GUNIM_DEBUG_FRAMES") == "gpu"
 type frameTimes struct {
 	from                time.Time
 	n, late             int
+	skipped             int
 	draw, wait, present time.Duration
 	drawMax, presentMax time.Duration
 	waitMax             time.Duration
@@ -1294,7 +1334,8 @@ type frameTimes struct {
 }
 
 // add counts a frame that took draw, wait and present, and logs the
-// second's sums once one has passed. A frame is late where the three
+// second's sums once one has passed, with how many frames were left
+// undrawn meanwhile as unchanged. A frame is late where the three
 // together took longer than a refresh at rate.
 func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int, converting bool) {
 	ft.gpu += gpu
@@ -1324,8 +1365,8 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	}
 	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 	n := time.Duration(ft.n)
-	log.Printf("gunim frames %p %dx%d at %.0f Hz: %d frames, %d late; draw %.1f ms (max %.1f), vblank wait %.1f (max %.1f), present %.1f (max %.1f)",
-		w, fbW, fbH, rate, ft.n, ft.late, ms(ft.draw/n), ms(ft.drawMax), ms(ft.wait/n), ms(ft.waitMax), ms(ft.present/n), ms(ft.presentMax))
+	log.Printf("gunim frames %p %dx%d at %.0f Hz: %d frames, %d late, %d more unchanged and not drawn; draw %.1f ms (max %.1f), vblank wait %.1f (max %.1f), present %.1f (max %.1f)",
+		w, fbW, fbH, rate, ft.n, ft.late, ft.skipped, ms(ft.draw/n), ms(ft.drawMax), ms(ft.wait/n), ms(ft.waitMax), ms(ft.present/n), ms(ft.presentMax))
 	colour := "sRGB as it is"
 	if converting {
 		colour = "converted to the display's profile"
@@ -1333,6 +1374,21 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	log.Printf("gunim frames %p sent each frame: %d quads, %.1f MB in %d draws, %d layers; handing them over took %.1f ms; gpu %.1f ms (max %.1f); colour %s",
 		w, ft.sent.Quads/ft.n, float64(ft.sent.Bytes)/float64(ft.n)/1e6, ft.sent.Flushes/ft.n, ft.sent.Layers/ft.n,
 		ms(ft.sent.FlushTime/n), ms(ft.gpu/n), ms(ft.gpuMax), colour)
+	*ft = frameTimes{from: now}
+}
+
+// skip counts a frame left undrawn as unchanged, and logs once a second
+// has passed with none drawn.
+func (ft *frameTimes) skip(w *Window, rate float64, fbW, fbH int) {
+	now := time.Now()
+	if ft.from.IsZero() {
+		ft.from = now
+	}
+	ft.skipped++
+	if ft.n > 0 || now.Sub(ft.from) < time.Second {
+		return
+	}
+	log.Printf("gunim frames %p %dx%d at %.0f Hz: no frame drawn, %d unchanged and not drawn", w, fbW, fbH, rate, ft.skipped)
 	*ft = frameTimes{from: now}
 }
 
@@ -1357,6 +1413,22 @@ func pace(last time.Time, rate float64) time.Time {
 	interval := time.Duration(float64(time.Second) / rate)
 	if next := last.Add(interval); now.Sub(last) < interval*3/4 {
 		time.Sleep(time.Until(next))
+		return next
+	}
+	return now
+}
+
+// paceStill returns the time a frame not presented would have reached
+// the screen, given when the last one did, a refresh after it: it waits
+// for that time, as nothing else does, where no vertical blank is to be
+// waited for.
+func paceStill(last time.Time, rate float64) time.Time {
+	now := time.Now()
+	if last.IsZero() || rate <= 0 {
+		return now
+	}
+	if next := last.Add(time.Duration(float64(time.Second) / rate)); now.Before(next) {
+		time.Sleep(next.Sub(now))
 		return next
 	}
 	return now
