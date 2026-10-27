@@ -423,3 +423,33 @@ func TestAnOpenMenusItemIsFoundAndClickedThroughTheWindowsTree(t *testing.T) {
 		t.Fatalf("the click picked %v, want Open", got)
 	}
 }
+
+// A menu taller than its room scrolls, and its rows say where they show:
+// a row scrolled out of sight has no bounds, so nothing points at it
+// past the menu, though a screen reader can still press it.
+func TestAScrolledMenusHiddenRowsHaveNoBounds(t *testing.T) {
+	c, _ := openContextMenuIn(t, Labels(slices.Repeat([]string{"Item"}, 40)...), geom.Pt(300, 380))
+	m := c.menu
+	parts := m.Access().Parts
+	if len(parts) != 40 {
+		t.Fatalf("the menu says %d items, want all 40", len(parts))
+	}
+	rows := geom.Rect{Min: geom.Pt(m.card.Min.X, m.card.Min.Y+m.pad), Max: geom.Pt(m.card.Max.X, m.card.Max.Y-m.pad)}
+	shown, hidden := 0, 0
+	for i, p := range parts {
+		switch {
+		case p.Bounds.Empty():
+			hidden++
+		case p.Bounds.Min.Y < rows.Min.Y || p.Bounds.Max.Y > rows.Max.Y:
+			t.Fatalf("item %d says %v, past the rows at %v", i, p.Bounds, rows)
+		default:
+			shown++
+		}
+	}
+	if shown == 0 || hidden == 0 {
+		t.Fatalf("%d items show and %d are hidden, want some of each", shown, hidden)
+	}
+	if len(parts[39].Actions) == 0 {
+		t.Fatal("a hidden item can't be pressed")
+	}
+}
