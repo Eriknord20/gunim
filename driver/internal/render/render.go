@@ -330,8 +330,11 @@ float sdRRect(vec2 p, vec4 rect, float r) {
 float rrectWidth(vec2 p, vec4 rect, float r) {
 	vec2 halfSize = (rect.zw - rect.xy) * 0.5;
 	r = clamp(r, 0.0, min(halfSize.x, halfSize.y));
-	vec2 q = abs(p - (rect.xy + rect.zw) * 0.5) - halfSize + r;
+	vec2 o = p - (rect.xy + rect.zw) * 0.5;
+	vec2 q = abs(o) - halfSize + r;
 	vec2 g = q.x > 0.0 && q.y > 0.0 ? normalize(q) : (q.x > q.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+	// The way it grows, on the side of the centre p lies.
+	g *= vec2(o.x < 0.0 ? -1.0 : 1.0, o.y < 0.0 ? -1.0 : 1.0);
 	return max(abs(dot(g, dFdx(p))) + abs(dot(g, dFdy(p))), 1e-4);
 }
 
