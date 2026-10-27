@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -112,5 +113,25 @@ func TestPopupsPointerRegionFollowsItsCard(t *testing.T) {
 	}
 	if !seen[150] || len(seen) < 3 {
 		t.Errorf("the region went through widths %v, want several on the way to 150", seen)
+	}
+}
+
+// An injected press in the room round a popup's card passes through to
+// the window under it, as a real click does on a display; one on the
+// card reaches the popup. A popup the pointer passes through takes none.
+func TestAnInjectedPressInAPopupsPaddingReachesTheWindowUnderIt(t *testing.T) {
+	w, _, _ := openPadded(t, func(*UI) {})
+	pw := popupWindow(t, w)
+	main := w.dw.(*driver.OffscreenWindow)
+	at := func(p geom.Point) geom.Point { return main.FromScreen(pw.ToScreen(p)) }
+	if s, _, ok := w.ui.injectedPopup(input.PointerDown{Pos: at(geom.Pt(4, 4))}); ok {
+		t.Fatalf("a press in the padding went to popup %p", s)
+	}
+	if _, q, ok := w.ui.injectedPopup(input.PointerDown{Pos: at(geom.Pt(30, 30))}); !ok || !near(q.(input.PointerDown).Pos, geom.Pt(30, 30)) {
+		t.Fatalf("a press on the card went to the popup %v at %v", ok, q)
+	}
+	w.ui.popups[0].opts.Passthrough = true
+	if _, _, ok := w.ui.injectedPopup(input.PointerDown{Pos: at(geom.Pt(30, 30))}); ok {
+		t.Fatal("a popup the pointer passes through took a press")
 	}
 }
