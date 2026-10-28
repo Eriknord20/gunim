@@ -44,6 +44,80 @@ func TestARunCarriedOnIsTheSameAndDamagesNothing(t *testing.T) {
 	}
 }
 
+// A run carried after ops that came or went, as a meter lighting more of
+// its lights draws more, damages nothing: the ops after it match those
+// after it the frame before, and only what changed around it damages.
+func TestARunCarriedPastOpsThatCameDamagesNothing(t *testing.T) {
+	var p Painter
+	red, blue := color.NRGBA{R: 0xff, A: 0xff}, color.NRGBA{B: 0xff, A: 0xff}
+	meter := func(n int) {
+		for i := range n {
+			p.RRect(geom.Rc(float32(i*4), 300, 3, 3), 0, Solid(red))
+		}
+	}
+	p.Reset()
+	meter(2)
+	mark := p.Mark()
+	cells(&p, 50, red)
+	run := p.RunFrom(mark)
+	meter(2)
+	p.RRect(geom.Rc(0, 100, 10, 10), 0, Solid(red))
+
+	p.Reset()
+	meter(5)
+	if !p.Again(run) {
+		t.Fatal("the run from the frame before was refused")
+	}
+	meter(2)
+	p.RRect(geom.Rc(0, 100, 10, 10), 0, Solid(red))
+	if d := p.Damage(); d.Min.Y < 295 || d.Max.X > 25 {
+		t.Fatalf("the damage is %v, want the three lights that came on", d)
+	}
+
+	// Gone again, and the square after the run changed: the lights that
+	// went and the square damage, and the run between them does not.
+	p.Reset()
+	meter(1)
+	mark = p.Mark()
+	cells(&p, 50, red)
+	run = p.RunFrom(mark)
+	meter(2)
+	p.RRect(geom.Rc(0, 100, 10, 10), 0, Solid(red))
+	p.Reset()
+	meter(3)
+	if !p.Again(run) {
+		t.Fatal("the run was refused")
+	}
+	meter(2)
+	p.RRect(geom.Rc(0, 100, 10, 10), 0, Solid(blue))
+	if d := p.Damage(); d.Min.Y < 20 || d.Max.Y < 303 {
+		t.Fatalf("the damage is %v, want the lights that came on and the square, not the run", d)
+	}
+}
+
+// An op that comes early in the frame, with nothing carried after it,
+// damages where it stands, and not the ops after it that stayed.
+func TestAnOpThatCameEarlyDamagesOnlyItself(t *testing.T) {
+	var p Painter
+	red := color.NRGBA{R: 0xff, A: 0xff}
+	p.Reset()
+	p.RRect(geom.Rc(0, 300, 3, 3), 0, Solid(red))
+	cells(&p, 50, red)
+	p.Reset()
+	p.RRect(geom.Rc(0, 300, 3, 3), 0, Solid(red))
+	p.RRect(geom.Rc(4, 300, 3, 3), 0, Solid(red))
+	cells(&p, 50, red)
+	if d := p.Damage(); d.Min.Y < 295 {
+		t.Fatalf("one light that came damaged %v", d)
+	}
+	// And one that went.
+	p.Reset()
+	cells(&p, 50, red)
+	if d := p.Damage(); d.Min.Y < 295 {
+		t.Fatalf("two lights that went damaged %v", d)
+	}
+}
+
 // A run from two frames back, or from another painter, or holding a
 // layer that blurs, is refused, and nothing is recorded.
 func TestARunFromElsewhereIsRefused(t *testing.T) {

@@ -85,8 +85,9 @@ type Painter struct {
 	// done; see Float.
 	floats []func(*Painter)
 	// carried are the stretches of this frame copied from the frame
-	// before with Again.
+	// before with Again, and matched Damage's marks of the ops before.
 	carried []carried
+	matched []bool
 }
 
 // slab hands out ops from blocks it keeps from frame to frame.
@@ -202,6 +203,10 @@ func (p *Painter) Forget() {
 // Ops returns the recorded commands in draw order.
 func (p *Painter) Ops() []Op { return p.ops }
 
+// lookAhead are how many ops [Painter.Damage] looks past a difference
+// for the ops on either side to match again.
+var lookAhead = [...]int{1, 2, 3, 4, 5, 6, 7, 8}
+
 // Damage returns the part of the window where this frame differs from
 // the one recorded before it: the old and new bounds of every op that
 // changed, came or went. A driver redraws just that part, so a button
@@ -209,36 +214,82 @@ func (p *Painter) Ops() []Op { return p.ops }
 //
 // It is [Everything] for the first frame, and for a frame that blurs
 // or tilts or followed one that did, since a blur spreads a change past
-// its bounds, and a tilt moves it. Ops are matched in order, so a node added early in the frame
-// damages everything painted after it, which costs time and never
-// correctness.
+// its bounds, and a tilt moves it. Ops are matched in order, so a node
+// that adds ops early in the frame damages what is painted after it, up
+// to the next stretch carried with [Painter.Again]: a carried stretch
+// is the same by making, wherever it now stands among the ops, and the
+// ops after it are matched to those after it the frame before. That
+// costs time and never correctness. Past a difference, it looks a few
+// ops ahead on either side for the two to match again, so a few ops that
+// came or went, as a meter lighting more of its lights draws, damage
+// where they stand, and not every op after them.
 func (p *Painter) Damage() geom.Rect {
 	if !p.hasPrev || p.blurs || p.prevBlurs || p.tilts || p.prevTilts {
 		return Everything
 	}
 	var d geom.Rect
-	n := min(len(p.ops), len(p.prev))
-	next := 0
-	for i := 0; i < n; i++ {
-		// A stretch carried to the place it held is the same by making.
-		for next < len(p.carried) && p.carried[next].at < i {
-			next++
-		}
-		if next < len(p.carried) {
-			if c := p.carried[next]; c.at == i && c.from == i && i+c.n <= n {
-				i += c.n - 1
+	// matched marks the ops of the frame before that this frame's match;
+	// the rest went, and damage where they stood.
+	p.matched = slices.Grow(p.matched[:0], len(p.prev))[:len(p.prev)]
+	clear(p.matched)
+	same := func(i, j int) bool { return p.bounds[i] == p.prevBounds[j] && sameOp(p.ops[i], p.prev[j]) }
+	// in reports whether ops i and i+1 match ops j and j+1 before, within
+	// i1 and j1: where they do after a difference, the ops between came
+	// or went, and those after are matched from there.
+	in := func(i, i1, j, j1 int) bool { return i+1 < i1 && j+1 < j1 && same(i, j) && same(i+1, j+1) }
+	// compare matches the ops of this frame from i to i1 in order with
+	// those of the frame before from j to j1.
+	// Where looking ahead failed a few times running, as everything
+	// moved in a scroll, it stops until ops match again.
+	compare := func(i, i1, j, j1 int) {
+		misses := 0
+		for i < i1 && j < j1 {
+			if same(i, j) {
+				p.matched[j] = true
+				i, j = i+1, j+1
+				misses = 0
 				continue
 			}
+			if misses < 4 {
+				if k := slices.IndexFunc(lookAhead[:], func(k int) bool { return in(i, i1, j+k, j1) }); k >= 0 {
+					j += lookAhead[k]
+					continue
+				}
+				if k := slices.IndexFunc(lookAhead[:], func(k int) bool { return in(i+k, i1, j, j1) }); k >= 0 {
+					for range lookAhead[k] {
+						d = d.Union(p.bounds[i])
+						i++
+					}
+					continue
+				}
+				misses++
+			}
+			p.matched[j] = true
+			d = d.Union(p.bounds[i]).Union(p.prevBounds[j])
+			i, j = i+1, j+1
 		}
-		if p.bounds[i] != p.prevBounds[i] || !sameOp(p.ops[i], p.prev[i]) {
-			d = d.Union(p.bounds[i]).Union(p.prevBounds[i])
+		for ; i < i1; i++ {
+			d = d.Union(p.bounds[i])
 		}
 	}
-	for _, b := range p.bounds[n:] {
-		d = d.Union(b)
+	i, j := 0, 0
+	for _, c := range p.carried {
+		if c.at < i || c.from < j || c.from+c.n > len(p.prev) {
+			// Out of the order of the frame before: compared as drawn.
+			continue
+		}
+		compare(i, c.at, j, c.from)
+		for k := range c.n {
+			p.matched[c.from+k] = true
+		}
+		i, j = c.at+c.n, c.from+c.n
 	}
-	for _, b := range p.prevBounds[n:] {
-		d = d.Union(b)
+	compare(i, len(p.ops), j, len(p.prev))
+
+	for k, ok := range p.matched {
+		if !ok {
+			d = d.Union(p.prevBounds[k])
+		}
 	}
 	return d
 }
