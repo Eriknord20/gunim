@@ -727,8 +727,24 @@ func (r *runner) moveAcross(src, dst string, replacing bool) error {
 var errTrashless = errors.New("this file system has no trash; delete permanently instead")
 
 // errNotTrashable says the trash cannot take an item, as one on another
-// volume than it, though it takes others.
+// volume than it, though it takes others. trashAll passes such an item
+// by, and the window asks to delete it for good, so it is said only where
+// that is certain: never of a failure that may pass.
 var errNotTrashable = errors.New("it cannot go to the trash")
+
+// cannotTrash is errNotTrashable, saying why in words a question about
+// deleting the item can show.
+type cannotTrash struct {
+	why string
+	err error
+}
+
+func (c cannotTrash) Error() string { return c.why }
+
+func (c cannotTrash) Unwrap() error { return c.err }
+
+// Is makes the error match errNotTrashable.
+func (c cannotTrash) Is(target error) bool { return target == errNotTrashable }
 
 // notTrashed says the trash could not take paths, for the reason err gives
 // of the first, while it took the other items.

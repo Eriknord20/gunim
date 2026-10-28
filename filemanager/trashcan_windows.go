@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var procSHEmptyRecycleBinW = shell32.NewProc("SHEmptyRecycleBinW")
@@ -68,33 +70,34 @@ func binTrashItem(r recycled) TrashItem {
 	return it
 }
 
-// findKept returns the IShellItem2 of the item the Recycle Bin keeps at
-// kept. The caller releases it.
-func findKept(kept string) (unsafe.Pointer, error) {
-	var found unsafe.Pointer
-	err := eachRecycled(true, func(r recycled) bool {
-		if found == nil && strings.EqualFold(r.kept, kept) {
-			found = r.item
-			return false
-		}
-		release(r.item)
-		return true
-	})
+// keptItem returns the IShellItem of the file the Recycle Bin keeps an
+// item as, at kept: a $R file in a folder of $Recycle.Bin, which is all it
+// takes. Its record, the $I file beside it, goes with dropRecord once it
+// has. The caller releases it.
+func keptItem(kept string) (unsafe.Pointer, error) {
+	if !strings.HasPrefix(filepath.Base(kept), "$R") ||
+		!strings.EqualFold(filepath.Base(filepath.Dir(filepath.Dir(kept))), "$Recycle.Bin") {
+		return nil, fmt.Errorf("%s is not an item of the Recycle Bin", kept)
+	}
+	if _, err := os.Lstat(kept); err != nil {
+		return nil, fmt.Errorf("the Recycle Bin no longer holds %s; it may have been restored or emptied: %w", kept, err)
+	}
+	name, err := windows.UTF16PtrFromString(kept)
 	if err != nil {
-		if found != nil {
-			release(found)
-		}
 		return nil, err
 	}
-	if found == nil {
-		return nil, fmt.Errorf("the Recycle Bin no longer holds %s; it may have been restored or emptied", kept)
+	var item unsafe.Pointer
+	hr, _, _ := procSHCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(name)), 0,
+		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&item)))
+	if failed(uint32(hr)) {
+		return nil, fmt.Errorf("finding %s in the Recycle Bin: HRESULT %#x", kept, uint32(hr))
 	}
-	return found, nil
+	return item, nil
 }
 
 // RestoreItem implements [TrashCan].
 func (recycleBin) RestoreItem(it TrashItem) error {
-	return restoreTo(it.Original, func() (unsafe.Pointer, error) { return findKept(it.ID) })
+	return restoreTo(it.Original, func() (unsafe.Pointer, error) { return keptItem(it.ID) })
 }
 
 // PurgeItem implements [TrashCan] with the shell, which deletes an item
@@ -104,7 +107,7 @@ func (recycleBin) PurgeItem(ctx context.Context, it TrashItem) error {
 		return err
 	}
 	err := onCOM(func() error {
-		item, err := findKept(it.ID)
+		item, err := keptItem(it.ID)
 		if err != nil {
 			return err
 		}
@@ -115,6 +118,9 @@ func (recycleBin) PurgeItem(ctx context.Context, it TrashItem) error {
 	})
 	if err != nil {
 		return err
+	}
+	if _, err := os.Lstat(it.ID); err == nil {
+		return fmt.Errorf("the Recycle Bin did not delete %s", it.Name)
 	}
 	dropRecord(it.ID)
 	return nil

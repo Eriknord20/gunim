@@ -353,8 +353,11 @@ func (t *titleBar) setShell(s Shell, u *gunim.UI) {
 	t.head.hidden = s.Pane
 	for m, cmds := range t.cmds {
 		for i, c := range cmds {
-			if c == CmdTrash {
+			switch c {
+			case CmdTrash:
 				t.bar.Menus[m].Items[i].Label = trashLabel(s.NoTrash)
+			case CmdTrashCan:
+				t.bar.Menus[m].Items[i].Disabled = s.NoTrashCan
 			}
 		}
 	}

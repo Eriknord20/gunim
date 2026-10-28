@@ -54,8 +54,12 @@ func (t xdgTrash) Trash(path string) (string, error) {
 		return "", fmt.Errorf("moving %s to the trash: %w", abs, err)
 	}
 	for _, d := range []string{ps.Join(t.dir, "files"), ps.Join(t.dir, "info")} {
-		if err := mkdirAll(fsys, d, 0o700); err != nil {
-			return "", fmt.Errorf("the trash in %s cannot be made: %w: %w", t.dir, errNotTrashable, err)
+		err := mkdirAll(fsys, d, 0o700)
+		if errors.Is(err, fs.ErrPermission) {
+			return "", cannotTrash{why: "the trash in " + t.dir + " cannot be made, as permission is denied", err: err}
+		}
+		if err != nil {
+			return "", fmt.Errorf("making the trash: %w", err)
 		}
 	}
 	base := ps.Base(abs)
@@ -105,12 +109,19 @@ func (t xdgTrash) claim(abs, name string) (dest string, ok bool, err error) {
 		return "", false, errors.Join(fmt.Errorf("writing the trash record for %s: %w", abs, err), fsys.Remove(record))
 	}
 	if err := fsys.Rename(abs, dest); err != nil {
-		if errors.Is(err, ErrCrossDevice) {
-			err = fmt.Errorf("%s is on another volume than the trash: %w", abs, errNotTrashable)
+		// Only the computer's own file system says for sure that a rename
+		// crossed volumes. Another, as a server's over SFTP, may say so of
+		// any failure, as of a mount point that is busy, and its item is
+		// not offered to be deleted for good.
+		if errors.Is(err, ErrCrossDevice) && fsys.ID() == "" {
+			err = cannotTrash{why: abs + " is on another volume than the trash", err: err}
 		} else {
 			err = fmt.Errorf("moving %s to the trash: %w", abs, err)
 		}
-		return "", false, errors.Join(err, fsys.Remove(record))
+		if rerr := fsys.Remove(record); rerr != nil {
+			return "", false, errors.Join(err, rerr)
+		}
+		return "", false, err
 	}
 	return dest, true, nil
 }
@@ -229,6 +240,18 @@ func (t xdgTrash) TrashItems(ctx context.Context) ([]TrashItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the trash: %w", err)
 	}
+	// The items are read in one go, as a server's are a round trip each.
+	kept, err := fsys.ReadDir(ctx, ps.Join(t.dir, "files"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the trash: %w", err)
+	}
+	items := make(map[string]fs.DirEntry, len(kept))
+	for _, k := range kept {
+		items[k.Name()] = k
+	}
 	var out []TrashItem
 	for _, r := range records {
 		if err := ctx.Err(); err != nil {
@@ -238,8 +261,12 @@ func (t xdgTrash) TrashItems(ctx context.Context) ([]TrashItem, error) {
 		if !ok || r.IsDir() || name == "" || name == "." || name == ".." {
 			continue
 		}
+		k, ok := items[name]
+		if !ok {
+			continue
+		}
 		at := ps.Join(t.dir, "files", name)
-		info, err := fsys.Lstat(at)
+		info, err := k.Info()
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}

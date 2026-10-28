@@ -149,8 +149,8 @@ func restoreTo(to string, find func() (unsafe.Pointer, error)) error {
 // at kept, the $I file beside the $R one, once the item is gone from
 // there. The shell's file operations move or delete the $R file alone,
 // and the record left would stay in the bin's folder until it is
-// emptied. A record that will not go stays so, as it did before: the bin
-// lists nothing for it.
+// emptied. A record that will not go is left: the bin lists nothing for
+// it.
 func dropRecord(kept string) {
 	base := filepath.Base(kept)
 	if !strings.HasPrefix(base, "$R") {

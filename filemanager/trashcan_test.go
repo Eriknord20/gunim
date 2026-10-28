@@ -3,11 +3,15 @@ package filemanager
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -212,7 +216,7 @@ func TestATrashThatCannotBeReadSaysSo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tr := xdgTrash{fs: lostFS{FS: LocalFS(), lost: "b.txt"}, dir: filepath.Join(root, "Trash")}
+	tr := xdgTrash{fs: lostFS{FS: LocalFS(), lost: "b.txt.trashinfo"}, dir: filepath.Join(root, "Trash")}
 	if its, err := tr.TrashItems(context.Background()); err == nil {
 		t.Fatalf("a trash read part of the way listed %+v", its)
 	}
@@ -229,15 +233,96 @@ func TestATrashThatCannotBeReadSaysSo(t *testing.T) {
 	}
 }
 
-// lostFS is a file system whose connection drops at the item named lost.
+// lostFS is a file system whose connection drops as the file named lost
+// is opened.
 type lostFS struct {
 	FS
 	lost string
 }
 
-func (l lostFS) Lstat(p string) (fs.FileInfo, error) {
+func (l lostFS) Open(p string) (io.ReadSeekCloser, error) {
 	if filepath.Base(p) == l.lost {
 		return nil, errors.New("the connection ended")
 	}
-	return l.FS.Lstat(p)
+	return l.FS.Open(p)
+}
+
+// failingFS is a file system on another machine whose Mkdir fails with
+// mkdir, and whose Rename of a file named far fails as one across volumes,
+// as a server may say of any failure.
+type failingFS struct {
+	slashFS
+	mkdir error
+	far   string
+}
+
+func (f failingFS) ID() string { return "server" }
+
+func (f failingFS) Mkdir(p string, perm fs.FileMode) error {
+	if f.mkdir != nil {
+		return f.mkdir
+	}
+	return f.slashFS.Mkdir(p, perm)
+}
+
+func (f failingFS) Rename(from, to string) error {
+	if path.Base(from) == f.far {
+		return fmt.Errorf("%w: failure", ErrCrossDevice)
+	}
+	return f.slashFS.Rename(from, to)
+}
+
+func TestOnlyACertainFailureOffersToDeleteForGood(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		fsys    failingFS
+		offered bool
+	}{
+		{"a home the trash cannot be made in", failingFS{mkdir: fs.ErrPermission}, true},
+		{"a failure that may pass", failingFS{mkdir: errors.New("the connection ended")}, false},
+		{"a server's rename that says it crossed volumes", failingFS{far: "a.txt"}, false},
+	} {
+		root := t.TempDir()
+		tree(t, root, "home/a.txt")
+		c.fsys.slashFS = slashFS{root: root}
+		_, err := XDGTrash(c.fsys, "/home/.local/share/Trash").Trash("/home/a.txt")
+		if err == nil {
+			t.Fatalf("%s: the trash took the file", c.name)
+		}
+		if got := errors.Is(err, errNotTrashable); got != c.offered {
+			t.Errorf("%s: %v, offered to delete for good %v, want %v", c.name, err, got, c.offered)
+		}
+		if contents(t, at(root, "home/a.txt")) != "home/a.txt" {
+			t.Fatalf("%s: the file is gone", c.name)
+		}
+	}
+}
+
+// statCount is a file system that counts the Lstats made of it.
+type statCount struct {
+	FS
+	n *atomic.Int32
+}
+
+func (s statCount) Lstat(p string) (fs.FileInfo, error) {
+	s.n.Add(1)
+	return s.FS.Lstat(p)
+}
+
+func TestTheTrashListsItsItemsInOneRead(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt", "b.txt", "c.txt")
+	local := xdgTrash{dir: filepath.Join(root, "Trash")}
+	for _, p := range []string{"a.txt", "b.txt", "c.txt"} {
+		if _, err := local.Trash(at(root, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n atomic.Int32
+	if its := trashItems(t, xdgTrash{fs: statCount{FS: LocalFS(), n: &n}, dir: local.dir}); len(its) != 3 {
+		t.Fatalf("the trash lists %+v", its)
+	}
+	if n.Load() != 0 {
+		t.Fatalf("listing the trash looked at its items one by one, %d times", n.Load())
+	}
 }

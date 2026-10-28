@@ -1,15 +1,21 @@
 package filemanager
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/widget"
 )
 
 // newTrashHarness is a harness whose trash holds the items of spec in
@@ -188,13 +194,18 @@ func TestTheTrashPathOpensThePageOverTheFolder(t *testing.T) {
 	h.until("Disk usage shows in place of the trash", func() bool { return h.a.usage.open && !h.a.bin.open })
 }
 
-// gatedTrash is a trash whose restores wait for the gate to open.
+// gatedTrash is a trash whose restores wait for the gate to open, each
+// saying so on entered, where it is set.
 type gatedTrash struct {
 	xdgTrash
-	gate chan struct{}
+	gate    chan struct{}
+	entered chan struct{}
 }
 
 func (g gatedTrash) RestoreItem(it TrashItem) error {
+	if g.entered != nil {
+		g.entered <- struct{}{}
+	}
 	<-g.gate
 	return g.xdgTrash.RestoreItem(it)
 }
@@ -202,6 +213,10 @@ func (g gatedTrash) RestoreItem(it TrashItem) error {
 func TestOpeningTheTrashAgainLetsARestoreFinish(t *testing.T) {
 	h := newTrashHarness(t, []string{"a.txt", "b.txt"}, "a.txt", "b.txt")
 	g := gatedTrash{xdgTrash: h.a.trash.(xdgTrash), gate: make(chan struct{})}
+	// Opened before the harness stops the app, which waits for the
+	// restore, so a test that fails early fails rather than hangs.
+	var open sync.Once
+	t.Cleanup(func() { open.Do(func() { close(g.gate) }) })
 	h.a.trash = g
 	pg := h.openTrashPage(Command{Name: CmdTrashCan})
 	h.pickTrash(pg, "a.txt")
@@ -213,7 +228,7 @@ func TestOpeningTheTrashAgainLetsARestoreFinish(t *testing.T) {
 	if !h.a.bin.busy || !pg.state.Busy || !pg.restore.Disabled || !pg.remove.Disabled {
 		t.Fatalf("opened again, the page is busy %v, restore disabled %v", pg.state.Busy, pg.restore.Disabled)
 	}
-	close(g.gate)
+	open.Do(func() { close(g.gate) })
 	h.until("the restore ends, and the page says so", func() bool {
 		return !pg.state.Busy && !pg.state.Reading && strings.Contains(pg.state.Note, "restored") &&
 			slices.Equal(trashShown(pg), []string{"b.txt"})
@@ -256,4 +271,197 @@ func (f farFS) Rename(from, to string) error {
 		return crossDevice{errors.New("not the same device")}
 	}
 	return f.FS.Rename(from, to)
+}
+
+func TestClosingTheWindowStopsARestoreAtTheNextItem(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt"}, "a.txt", "b.txt")
+	g := gatedTrash{xdgTrash: h.a.trash.(xdgTrash), gate: make(chan struct{}), entered: make(chan struct{}, 2)}
+	var open sync.Once
+	t.Cleanup(func() { open.Do(func() { close(g.gate) }) })
+	h.a.trash = g
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.pickTrash(pg, "a.txt", "b.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("the first restore is under way", func() bool { return len(g.entered) > 0 })
+	// The first item is let go only once the window is closing.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		open.Do(func() { close(g.gate) })
+	}()
+	h.a.stopAll()
+	if back := btoi(h.exists("a.txt")) + btoi(h.exists("b.txt")); back != 1 {
+		t.Fatalf("%d items came back after the window closed, want the one under way", back)
+	}
+}
+
+// btoi is 1 for true and 0 for false.
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func TestTheSidebarEmptiesTheTrashWithNoPageOpen(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "sub"}, "a.txt", "sub/c.txt")
+	got := notices(h)
+	// As the sidebar's Empty trash… sends it.
+	h.do(Command{Name: CmdEmptyTrash})
+	h.until("the window asks", func() bool { return len(h.a.ops.dialogs) > 0 })
+	c := h.a.ops.dialogs[0].state.(Confirm)
+	if c.Title != "Empty the trash?" || !strings.Contains(c.Body, "Everything in the trash") {
+		t.Fatalf("the window asks %+v", c)
+	}
+	h.answer(Confirmed{Token: c.Token, OK: true})
+	h.until("the trash is empty, and a notice says so", func() bool {
+		return !h.a.bin.busy && len(names(t, filepath.Join(h.root, "Trash", "files"))) == 0 &&
+			slices.ContainsFunc(got(), func(n Notice) bool { return n.Title == "Emptied the trash" })
+	})
+	if h.a.bin.open {
+		t.Fatal("emptying from the sidebar opened the trash page")
+	}
+}
+
+func TestTheTitleBarLetsThePageTakeItsPresses(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	captions := func() (title, menus []geom.Rect) {
+		h.ui(func(b *browser, _ *gunim.UI) {
+			title = b.title.head.name.CaptionRects(geom.Sz(400, 30))
+			menus = b.title.bar.CaptionRects(geom.Sz(400, 30))
+		})
+		return title, menus
+	}
+	if title, menus := captions(); len(title) == 0 || len(menus) == 0 {
+		t.Fatalf("with no page, the title bar moves the window by %v and %v", title, menus)
+	}
+	h.openTrashPage(Command{Name: CmdTrashCan})
+	if title, menus := captions(); len(title) != 0 || len(menus) != 0 {
+		t.Fatalf("under the trash page, the title bar still moves the window by %v and %v", title, menus)
+	}
+	h.press(input.KeyEscape, 0)
+	h.until("the page has closed", func() bool { return !h.a.bin.open })
+	if title, _ := captions(); len(title) == 0 {
+		t.Fatal("once the page closed, the title moves the window no more")
+	}
+}
+
+func TestADropOnTheTrashPlaceIsRefused(t *testing.T) {
+	h := newHarnessWith(t, func(o *Options) {
+		home := filepath.Dir(o.Dir)
+		o.Places = func() ([]Place, error) {
+			return []Place{{Name: "Home", Path: home, Kind: "home"}, {Name: "Trash", Path: TrashPath, Kind: "trash"}}, nil
+		}
+	}, "here.txt")
+	outside := filepath.Join(h.root, "elsewhere")
+	tree(t, outside, "x.txt")
+	h.until("the trash shows in the sidebar", func() bool { _, ok := h.b.side.items[widget.Key(TrashPath)]; return ok })
+	h.frames(10)
+	h.w.Input(input.Drop{Pos: h.placeAt(widget.Key(TrashPath)), Paths: []string{filepath.Join(outside, "x.txt")}})
+	h.frames(30)
+	if len(h.a.ops.running) != 0 || len(h.a.ops.dialogs) != 0 {
+		t.Fatalf("a drop on the trash started %d operations and %d dialogs", len(h.a.ops.running), len(h.a.ops.dialogs))
+	}
+	if _, err := os.Stat(TrashPath); err == nil {
+		t.Fatal("a drop on the trash made a folder named trash:")
+	}
+	if contents(t, filepath.Join(outside, "x.txt")) != "x.txt" {
+		t.Fatal("the dropped file changed")
+	}
+}
+
+// unopenable is a trash the window cannot read.
+type unopenable struct{ xdgTrash }
+
+func (unopenable) TrashItems(context.Context) ([]TrashItem, error) {
+	return nil, fmt.Errorf("this one: %w", errors.ErrUnsupported)
+}
+
+func TestATrashThatWillNotOpenCannotBeEmptied(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	h.a.trash = unopenable{h.a.trash.(xdgTrash)}
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	if pg.state.Err == "" || !pg.empty.Disabled {
+		t.Fatalf("the page says %q, with Empty disabled %v", pg.state.Err, pg.empty.Disabled)
+	}
+}
+
+func TestAClickOnRestoreLeavesTheKeysOnTheItems(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt", "c.txt"}, "a.txt", "b.txt", "c.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.frames(30)
+	var row, restore geom.Rect
+	h.ui(func(_ *browser, u *gunim.UI) {
+		i := slices.IndexFunc(pg.rows, func(r TrashRow) bool { return r.Name == "a.txt" })
+		row, _ = pg.grid.RowRect(i)
+		g, _ := u.Bounds(pg.grid)
+		row = row.Add(g.Min)
+		restore, _ = u.Bounds(pg.restore)
+	})
+	h.click(row.Center())
+	h.click(restore.Center())
+	h.until("a.txt is back", func() bool { return h.exists("a.txt") && len(pg.rows) == 2 && !pg.state.Busy })
+	h.press(input.KeyA, input.ModControl)
+	if got := len(pg.selectedKeys()); got != 2 {
+		t.Fatalf("Ctrl+A after a click on Restore selected %d items, want 2", got)
+	}
+}
+
+func TestGoTrashIsDimmedWhereThereIsNoTrash(t *testing.T) {
+	h := newHarnessWith(t, onBareFS, "a.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	var dimmed, found bool
+	for m, cmds := range h.b.title.cmds {
+		if i := slices.Index(cmds, CmdTrashCan); i >= 0 {
+			found, dimmed = true, h.b.title.bar.Menus[m].Items[i].Disabled
+		}
+	}
+	if !found || !dimmed {
+		t.Fatalf("Go › Trash is there %v, dimmed %v, on a file system with no trash", found, dimmed)
+	}
+}
+
+func TestANarrowTrashPageLeavesItsTitleOut(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.frames(20)
+	if pg.title.Text == "" {
+		t.Fatal("a wide page shows no title")
+	}
+	h.w.Offscreen().Resize(geom.Sz(480, 500))
+	h.frames(20)
+	var title, restore geom.Rect
+	h.ui(func(_ *browser, u *gunim.UI) { title, _ = u.Bounds(pg.title); restore, _ = u.Bounds(pg.restore) })
+	if pg.title.Text != "" && title.Max.X > restore.Min.X {
+		t.Fatalf("the title %v runs under Restore %v", title, restore)
+	}
+}
+
+// slowList is a trash whose listing waits for the gate to open.
+type slowList struct {
+	xdgTrash
+	gate chan struct{}
+}
+
+func (s slowList) TrashItems(ctx context.Context) ([]TrashItem, error) {
+	<-s.gate
+	return s.xdgTrash.TrashItems(ctx)
+}
+
+func TestEmptyWaitsForTheTrashToList(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt"}, "a.txt")
+	slow := slowList{xdgTrash: h.a.trash.(xdgTrash), gate: make(chan struct{})}
+	var open sync.Once
+	t.Cleanup(func() { open.Do(func() { close(slow.gate) }) })
+	h.a.trash = slow
+	h.do(Command{Name: CmdTrashCan})
+	h.until("the page shows, reading", func() bool { pg := h.trashPage(); return pg != nil && pg.state.Reading })
+	pg := h.trashPage()
+	if !pg.empty.Disabled {
+		t.Fatal("Empty can be clicked before the trash has listed anything")
+	}
+	open.Do(func() { close(slow.gate) })
+	h.until("the trash lists a.txt", func() bool { return !pg.state.Reading && len(pg.rows) == 1 })
+	if pg.empty.Disabled {
+		t.Fatal("Empty stays dimmed once the trash lists an item")
+	}
 }

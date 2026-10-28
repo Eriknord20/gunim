@@ -4,7 +4,7 @@ package filemanager
 // have none, and tells the window, whose menus then say Delete.
 func (a *app) trashless() {
 	a.trash = nil
-	a.shell.NoTrash = true
+	a.shell.NoTrash, a.shell.NoTrashCan = true, true
 	a.publishShell()
 }
 
@@ -52,6 +52,7 @@ func (a *app) showFS(fsys FS, dir string) {
 
 	a.hub.shows(a, fsys)
 	a.shell.FS, a.shell.Paths, a.shell.NoTrash = fsys.ID(), a.ps, a.trash == nil
+	a.shell.NoTrashCan = !canOpen(a.trash)
 	a.shell.Where, a.shell.Fetches = a.where(), a.fetches()
 	a.shell.OpenWith = a.openWithOn()
 	a.publishShell()

@@ -48,6 +48,9 @@ type Trash struct {
 	// it.
 	Title, Where string
 	Rows         []TrashRow
+	// RowsGen changes when Rows do, so the page sorts only rows it has
+	// not.
+	RowsGen int
 	// Reading says the trash is being read, and Err why it could not be.
 	Reading bool
 	Err     string

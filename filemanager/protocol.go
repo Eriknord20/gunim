@@ -55,6 +55,9 @@ type Shell struct {
 	// carries, and Paths how it writes paths.
 	FS    string
 	Paths PathStyle
+	// NoTrashCan says the file system has no trash the window can open,
+	// so Go › Trash is dimmed.
+	NoTrashCan bool
 	// NoTrash says the file system has no trash, so the key that trashes
 	// deletes, after asking.
 	NoTrash bool

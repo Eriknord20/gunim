@@ -23,8 +23,11 @@ type trashCanState struct {
 	opened, seq, gen, reads int
 	id                      gunim.ID
 	can                     TrashCan
-	// items are what the trash holds, the latest deleted first.
+	// items are what the trash holds, the latest deleted first, and rows
+	// them as the page shows them, made again as rowsGen counts.
 	items   []TrashItem
+	rows    []TrashRow
+	rowsGen int
 	reading bool
 	err     string
 	// busy says items are being put back or deleted, which goes on while
@@ -34,7 +37,8 @@ type trashCanState struct {
 	// note says what came of the last act, and noteErr that it failed.
 	note    string
 	noteErr bool
-	cancel  context.CancelFunc
+	// cancel stops the reading, and acting the act running.
+	cancel, acting context.CancelFunc
 	// last is the state sent last, which a pane coming to a window shows.
 	last Trash
 }
@@ -44,6 +48,16 @@ func (s *trashCanState) stop() {
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
+	}
+}
+
+// end stops the reading and the act running, as the window closes, which
+// waits for the act.
+func (s *trashCanState) end() {
+	s.stop()
+	if s.acting != nil {
+		s.acting()
+		s.acting = nil
 	}
 }
 
@@ -94,7 +108,8 @@ func (a *app) openTrashCan() {
 	a.closeViewer()
 	a.closeUsage(true)
 	s.seq++
-	s.can, s.items, s.err = can, nil, ""
+	s.can, s.err = can, ""
+	a.setTrashItems(nil)
 	s.note, s.noteErr = "", false
 	a.readTrashCan()
 	s.open = true
@@ -113,6 +128,18 @@ func (a *app) openTrashCan() {
 func (a *app) trashCan() (TrashCan, bool) {
 	c, ok := a.trash.(TrashCan)
 	return c, ok
+}
+
+// canOpen reports whether the window can open the trash t. The
+// computer's own is one on every system, and opens only where the system
+// has a trash the window knows.
+func canOpen(t Trasher) bool {
+	if _, ok := t.(localFS); ok {
+		_, err := systemTrashCan()
+		return err == nil
+	}
+	_, ok := t.(TrashCan)
+	return ok
 }
 
 // mountTrashCan shows the page over the browser, under any dialog asking,
@@ -145,14 +172,16 @@ func (a *app) readTrashCan() {
 			s.cancel, s.reading = nil, false
 			switch {
 			case errors.Is(err, errors.ErrUnsupported):
-				s.err, s.items = "The "+trashNoun(a.trashTitle())+" cannot be opened here. "+upperFirst(err.Error())+".", nil
+				s.err = "The " + trashNoun(a.trashTitle()) + " cannot be opened here. " + upperFirst(err.Error()) + "."
+				a.setTrashItems(nil)
 			case err != nil:
-				s.err, s.items = "Reading the trash: "+err.Error(), nil
+				s.err = "Reading the trash: " + err.Error()
+				a.setTrashItems(nil)
 				a.logLine("Reading the trash", err.Error())
 			default:
 				s.err = ""
 				slices.SortFunc(items, byDeleted)
-				s.items = items
+				a.setTrashItems(items)
 			}
 			a.publishTrashCan()
 		})
@@ -189,10 +218,18 @@ func trashNoun(title string) string {
 func (a *app) trashCanState() Trash {
 	s := &a.bin
 	s.gen++
-	t := Trash{Seq: s.seq, Gen: s.gen, Title: a.trashTitle(), Where: a.shell.Where, Reading: s.reading, Err: s.err,
-		Busy: s.busy, Note: s.note, NoteErr: s.noteErr}
-	t.Rows = make([]TrashRow, len(s.items))
-	for i, it := range s.items {
+	return Trash{Seq: s.seq, Gen: s.gen, Title: a.trashTitle(), Where: a.shell.Where, Rows: s.rows, RowsGen: s.rowsGen,
+		Reading: s.reading, Err: s.err, Busy: s.busy, Note: s.note, NoteErr: s.noteErr}
+}
+
+// setTrashItems takes items as what the trash holds, and makes the rows
+// the page shows of them.
+func (a *app) setTrashItems(items []TrashItem) {
+	s := &a.bin
+	s.items = items
+	s.rowsGen++
+	s.rows = make([]TrashRow, len(items))
+	for i, it := range items {
 		r := TrashRow{Key: it.ID, Name: it.Name, From: a.ps.Show(a.ps.Dir(it.Original)), Path: a.ps.Show(it.Original),
 			Bytes: it.Size, Dir: it.Dir, Tint: tintOf(entry{Name: it.Name, Dir: it.Dir})}
 		if !it.Deleted.IsZero() {
@@ -201,9 +238,8 @@ func (a *app) trashCanState() Trash {
 		if !it.Dir {
 			r.Size = humanBytes(it.Size)
 		}
-		t.Rows[i] = r
+		s.rows[i] = r
 	}
-	return t
 }
 
 // publishTrashCan sends the page its state.
@@ -225,7 +261,8 @@ func (a *app) closeTrashCan(unmount bool) {
 	}
 	s.open = false
 	s.stop()
-	s.can, s.items, s.last = nil, nil, Trash{}
+	s.can, s.last = nil, Trash{}
+	a.setTrashItems(nil)
 	a.shell.TrashCan = ""
 	a.publishShell()
 	if unmount {
@@ -278,7 +315,8 @@ func trashWhat(items []TrashItem) string {
 
 // trashRun does do to each of items in the background, one at a time,
 // and says on the page what came of it, in the words of doing and done.
-// An item that fails is passed by. One thing at a time: a second asked
+// An item that fails is passed by, and the window closing stops it at the
+// next item, as closing waits for it. One thing at a time: a second asked
 // for while the first runs is refused.
 func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx context.Context, it TrashItem) error) {
 	s := &a.bin
@@ -290,11 +328,17 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 	s.note, s.noteErr = doing+" "+trashWhat(items)+"…", false
 	a.publishTrashCan()
 	seq := s.seq
+	ctx, cancel := context.WithCancel(a.ctx)
+	s.acting = cancel
 	a.ops.wg.Go(func() {
+		defer cancel()
 		var failed []string
 		var first error
 		for _, it := range items {
-			if err := do(a.ctx, it); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			if err := do(ctx, it); err != nil {
 				failed = append(failed, it.Name)
 				first = cmp.Or(first, err)
 			}
@@ -303,7 +347,7 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 			if first != nil {
 				a.logLine(doing+" "+trashWhat(items)+" from the trash", first.Error())
 			}
-			s.busy = false
+			s.busy, s.acting = false, nil
 			if !s.open {
 				return
 			}
@@ -373,10 +417,13 @@ func (a *app) emptyTrash() {
 			s.note, s.noteErr = "Emptying the "+trashNoun(title)+"…", false
 			a.publishTrashCan()
 		}
+		ctx, cancel := context.WithCancel(a.ctx)
+		s.acting = cancel
 		a.ops.wg.Go(func() {
-			err := can.EmptyTrash(a.ctx)
+			defer cancel()
+			err := can.EmptyTrash(ctx)
 			a.post(func() {
-				s.busy = false
+				s.busy, s.acting = false, nil
 				if err != nil {
 					a.logLine("Emptying the trash", err.Error())
 				}

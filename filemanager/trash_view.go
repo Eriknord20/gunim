@@ -58,6 +58,8 @@ type trashPage struct {
 	desc bool
 	// menuActs are what the items of the context menu do.
 	menuActs []string
+	// heading is the title, which a narrow page leaves out.
+	heading string
 }
 
 func newTrashPage() *trashPage {
@@ -81,7 +83,11 @@ func newTrashPage() *trashPage {
 	pg.empty.OnClick = func(u *gunim.UI) gunim.Intent {
 		return TrashAct{Seq: pg.state.Seq, Act: TrashEmpty}
 	}
+	// A click leaves the keyboard on the items, where its keys act.
 	pg.again = widget.NewIconButton(icon.RefreshCw, "Read the trash again (F5)")
+	for _, b := range []*widget.Button{pg.restore, pg.remove, pg.empty, &pg.again.Button} {
+		b.KeepFocus = true
+	}
 	pg.again.OnClick = func(u *gunim.UI) gunim.Intent {
 		return TrashAct{Seq: pg.state.Seq, Act: TrashRead}
 	}
@@ -125,28 +131,21 @@ func newTrashPage() *trashPage {
 // set takes the page's state.
 func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	first := pg.state.Seq == 0
+	fresh := first || s.RowsGen != pg.state.RowsGen
 	keep := keySet(pg.selectedKeys())
 	pg.state = s
 	title := s.Title
 	if s.Where != "" {
 		title += " on " + s.Where
 	}
-	pg.title.Text = title
+	pg.heading = title
 	pg.empty.Label = "Empty " + trashNoun(s.Title)
-	pg.arrange()
-	pg.grid.SetRows(len(pg.rows), u)
-	// The items selected stay selected, where they are still there.
-	var sel [][2]int
-	for i, r := range pg.rows {
-		if keep[r.Key] {
-			sel = append(sel, [2]int{i, i + 1})
-		}
+	if fresh {
+		pg.arrange()
+		pg.grid.SetRows(len(pg.rows), u)
+		// The items selected stay selected, where they are still there.
+		pg.reselect(keep, u)
 	}
-	cursor := -1
-	if len(sel) > 0 {
-		cursor = sel[0][0]
-	}
-	pg.grid.SetSelectedRows(sel, cursor, u)
 	switch {
 	case s.Err != "":
 		pg.msg.Color, pg.msg.Text = ErrorInk, s.Err
@@ -189,26 +188,42 @@ func (pg *trashPage) summary() string {
 	return plural(len(pg.state.Rows), "item") + " · " + humanBytes(bytes) + " in files"
 }
 
-// arrange sorts the rows by the column picked, and shows its arrow.
+// arrange sorts the rows by the column picked, and shows its arrow. A
+// column of words sorts by each row's words in lower case, made once.
 func (pg *trashPage) arrange() {
-	pg.rows = slices.Clone(pg.state.Rows)
-	slices.SortStableFunc(pg.rows, func(a, b TrashRow) int {
-		var c int
+	type sorted struct {
+		row   TrashRow
+		lower string
+	}
+	rows := make([]sorted, len(pg.state.Rows))
+	for i, r := range pg.state.Rows {
+		rows[i].row = r
 		switch pg.sort {
 		case trashColName:
-			c = cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+			rows[i].lower = strings.ToLower(r.Name)
 		case trashColFrom:
-			c = cmp.Compare(strings.ToLower(a.From), strings.ToLower(b.From))
+			rows[i].lower = strings.ToLower(r.From)
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b sorted) int {
+		var c int
+		switch pg.sort {
+		case trashColName, trashColFrom:
+			c = cmp.Compare(a.lower, b.lower)
 		case trashColDeleted:
-			c = cmp.Compare(a.DeletedUnix, b.DeletedUnix)
+			c = cmp.Compare(a.row.DeletedUnix, b.row.DeletedUnix)
 		case trashColSize:
-			c = cmp.Compare(a.Bytes, b.Bytes)
+			c = cmp.Compare(a.row.Bytes, b.row.Bytes)
 		}
 		if pg.desc {
 			c = -c
 		}
 		return c
 	})
+	pg.rows = pg.rows[:0]
+	for _, r := range rows {
+		pg.rows = append(pg.rows, r.row)
+	}
 	for i := range pg.grid.Columns {
 		pg.grid.Columns[i].Sort = 0
 	}
@@ -232,6 +247,12 @@ func (pg *trashPage) sortBy(c int, u *gunim.UI) {
 		pg.sort, pg.desc = c, c == trashColDeleted || c == trashColSize
 	}
 	pg.arrange()
+	pg.reselect(keep, u)
+	u.Invalidate()
+}
+
+// reselect selects the rows of the keys in keep.
+func (pg *trashPage) reselect(keep map[string]bool, u *gunim.UI) {
 	var sel [][2]int
 	for i, r := range pg.rows {
 		if keep[r.Key] {
@@ -243,7 +264,6 @@ func (pg *trashPage) sortBy(c int, u *gunim.UI) {
 		cursor = sel[0][0]
 	}
 	pg.grid.SetSelectedRows(sel, cursor, u)
-	u.Invalidate()
 }
 
 // row is row i of the grid.
@@ -290,7 +310,8 @@ func (pg *trashPage) enable() {
 	busy := pg.state.Busy
 	pg.restore.Disabled = none || busy
 	pg.remove.Disabled = none || busy
-	pg.empty.Disabled = busy || len(pg.state.Rows) == 0 && pg.state.Err == "" && !pg.state.Reading
+	// Not before the trash lists something, as it may not open at all.
+	pg.empty.Disabled = busy || len(pg.state.Rows) == 0
 }
 
 // act asks for act on the items selected, where there are any and the
@@ -407,10 +428,12 @@ func (pg *trashPage) Handle(e input.Event, u *gunim.UI) bool {
 	return false
 }
 
-// The page's room: the height of its head and its foot.
+// The page's room: the height of its head and its foot, and the least
+// width its title shows in.
 const (
-	trashHeadH = 52
-	trashFootH = 34
+	trashHeadH      = 52
+	trashFootH      = 34
+	trashTitleLeast = 90
 )
 
 // Layout implements [gunim.Node]: the head along the top, with the
@@ -440,7 +463,13 @@ func (pg *trashPage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(40, 40)})
 			k.Place(geom.Pt(usageMargin-6, (trashHeadH-s.H)/2))
 		case gunim.Node(pg.title):
-			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(0, right-left), 0)})
+			// Narrow, the title gives its room to the buttons.
+			room := right - left
+			pg.title.Text = pg.heading
+			if room < trashTitleLeast {
+				pg.title.Text, room = "", 1
+			}
+			s := k.Layout(gunim.Constraints{Max: geom.Sz(room, 0)})
 			k.Place(geom.Pt(left, (trashHeadH-s.H)/2))
 		case gunim.Node(pg.menu):
 			k.Layout(gunim.Tight(geom.Sz(w, bodyH)))

@@ -84,3 +84,23 @@ func noRecord(t *testing.T, it TrashItem) {
 		t.Fatalf("the bin still keeps the record %s: %v", record, err)
 	}
 }
+
+func TestTheRecycleBinTouchesNothingOutsideIt(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"plain.txt", "$Rlookalike.txt"} {
+		p := filepath.Join(root, name)
+		if err := os.WriteFile(p, []byte("stays"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		it := TrashItem{ID: p, Name: name, Original: filepath.Join(root, "back", name)}
+		if err := (recycleBin{}).PurgeItem(context.Background(), it); err == nil {
+			t.Errorf("deleting %s, outside the Recycle Bin, worked", name)
+		}
+		if err := (recycleBin{}).RestoreItem(it); err == nil {
+			t.Errorf("restoring %s, outside the Recycle Bin, worked", name)
+		}
+		if got := contents(t, p); got != "stays" {
+			t.Fatalf("%s holds %q", name, got)
+		}
+	}
+}
