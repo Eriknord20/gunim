@@ -277,6 +277,9 @@ func (a *app) republish() {
 	if a.usage.open {
 		a.mountUsage(false)
 	}
+	if a.bin.open {
+		a.mountTrashCan(false)
+	}
 	if len(a.ops.dialogs) > 0 {
 		a.mountDialog(a.ops.dialogs[0])
 	}
@@ -389,6 +392,9 @@ func (v viewIDs) reading(n int) gunim.ID { return gunim.ID(v.prefix + "reading-"
 
 // usage is the ID of the nth Disk usage page.
 func (v viewIDs) usage(n int) gunim.ID { return gunim.ID(v.prefix + "usage-" + strconv.Itoa(n)) }
+
+// trashCan is the ID of the nth trash page.
+func (v viewIDs) trashCan(n int) gunim.ID { return gunim.ID(v.prefix + "trash-" + strconv.Itoa(n)) }
 
 // viewer is the ID of the nth picture viewer.
 func (v viewIDs) viewer(n int) gunim.ID { return gunim.ID(v.prefix + "viewer-" + strconv.Itoa(n)) }

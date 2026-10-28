@@ -215,7 +215,7 @@ func TestAHeadingsMenuMovesItsSection(t *testing.T) {
 	}
 }
 
-func TestLocalPlacesAreHomeAndTheDrives(t *testing.T) {
+func TestLocalPlacesAreHomeTheDrivesAndTheTrash(t *testing.T) {
 	ps, err := LocalPlaces()
 	if err != nil {
 		t.Fatal(err)
@@ -223,9 +223,15 @@ func TestLocalPlacesAreHomeAndTheDrives(t *testing.T) {
 	if len(ps) == 0 || ps[0].Kind != "home" {
 		t.Fatalf("the places are %+v, want home first", ps)
 	}
+	if _, err := systemTrashCan(); err == nil {
+		if last := ps[len(ps)-1]; last.Kind != "trash" || last.Path != TrashPath {
+			t.Fatalf("the last place is %+v, want the trash", last)
+		}
+		ps = ps[:len(ps)-1]
+	}
 	for _, p := range ps[1:] {
 		if p.Kind != "drive" {
-			t.Errorf("%s is a place of kind %s, want only drives after home", p.Name, p.Kind)
+			t.Errorf("%s is a place of kind %s, want only drives between home and the trash", p.Name, p.Kind)
 		}
 	}
 	for _, f := range DefaultFavourites() {

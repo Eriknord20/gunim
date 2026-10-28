@@ -119,6 +119,7 @@ func (a *app) openUsage(root string) {
 	}
 	s := &a.usage
 	a.closeViewer()
+	a.closeTrashCan(true)
 	s.stop()
 	s.seq++
 	s.gen = 0

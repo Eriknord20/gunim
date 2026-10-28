@@ -92,6 +92,8 @@ var menus = []struct {
 		{"Edit path", "Ctrl+L", localEditPath},
 		{"Filter", "Ctrl+F", localFilter},
 		{"Filter subfolders too", "", CmdDeepFilter},
+		{"-", "", ""},
+		{"Trash", "", CmdTrashCan},
 	}},
 }
 

@@ -358,6 +358,15 @@ func (a *app) hopped(h *hop, from visited) bool {
 // navigate shows the folder at path. travel is the way the user went,
 // and record keeps the folder left in the history.
 func (a *app) navigate(path string, travel int, record bool) {
+	if path == TrashPath {
+		// The trash is a page over a folder: the home folder, where none
+		// shows yet.
+		if a.nav.path == "" {
+			a.startNav("")
+		}
+		a.openTrashCan()
+		return
+	}
 	n := &a.nav
 	abs, err := a.ps.Abs(path)
 	if err != nil {

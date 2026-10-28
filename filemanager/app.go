@@ -178,6 +178,7 @@ type app struct {
 	thumbs  thumbState
 	viewer  viewerState
 	usage   usageState
+	bin     trashCanState
 	reading readingState
 	search  searchState
 	tree    deepState
@@ -302,7 +303,8 @@ func (a *app) join(h *Hub, w *Window) {
 	w.a = a
 	a.publishClip()
 	a.handlers = []handler{a.handleDnd, a.handleNav, a.handleOps, a.handlePreview, a.handlePlaces, a.handleShell,
-		a.handleIcons, a.handleViewer, a.handleReading, a.handleSearch, a.handleTheme, a.handleUsage}
+		a.handleIcons, a.handleViewer, a.handleReading, a.handleSearch, a.handleTheme, a.handleUsage,
+		a.handleTrashCan}
 	a.startup(a.opts)
 }
 
@@ -589,6 +591,7 @@ func (a *app) stopAll() {
 	a.search.stop()
 	a.tree.stop()
 	a.usage.stop()
+	a.bin.stop()
 	a.hub.leave(a)
 	close(a.stopped)
 	a.ops.wg.Wait()

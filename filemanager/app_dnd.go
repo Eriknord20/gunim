@@ -223,7 +223,7 @@ func (a *app) publishVolumes(s Places) {
 		}
 	}
 	for _, p := range slices.Concat(s.Places, s.Favourites) {
-		if p.FS == a.fs.ID() {
+		if p.FS == a.fs.ID() && p.Path != TrashPath {
 			add(p.Path)
 		}
 	}

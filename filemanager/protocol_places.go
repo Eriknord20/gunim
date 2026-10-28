@@ -6,8 +6,9 @@ import "github.com/marrasen/gunim"
 // favourite.
 type Place struct {
 	Name, Path string
-	// Kind is home, desktop, documents, downloads, pictures, drive or
-	// favourite, and picks the colour of the place's mark.
+	// Kind is home, desktop, documents, downloads, pictures, drive,
+	// favourite or trash, and picks the colour of the place's mark. The
+	// trash's Path is TrashPath.
 	Kind string
 	// Free and Total are a volume's space in bytes, when it has one.
 	Free, Total uint64

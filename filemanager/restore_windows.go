@@ -111,6 +111,12 @@ func onCOM(fn func() error) error {
 // closest to time at in the Recycle Bin, and moves it to the path to with
 // the shell, which clears its record.
 func (recycleBin) Restore(original, _ string, at time.Time, to string) error {
+	return restoreTo(to, func() (unsafe.Pointer, error) { return findRecycled(original, at) })
+}
+
+// restoreTo moves the item find returns out of the Recycle Bin to the
+// path to, where nothing may be.
+func restoreTo(to string, find func() (unsafe.Pointer, error)) error {
 	if _, err := os.Lstat(to); err == nil {
 		return fmt.Errorf("%s exists again; move it away to restore the one in the Recycle Bin", to)
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -120,7 +126,7 @@ func (recycleBin) Restore(original, _ string, at time.Time, to string) error {
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
 	err := onCOM(func() error {
-		item, err := findRecycled(original, at)
+		item, err := find()
 		if err != nil {
 			return err
 		}
@@ -143,6 +149,8 @@ func (recycleBin) Describe(string) string { return "in the Recycle Bin" }
 type recycled struct {
 	item unsafe.Pointer
 	binItem
+	// kept is the file the bin keeps the item as, where the shell says.
+	kept string
 }
 
 // findRecycled returns the IShellItem2 of the item in the Recycle Bin that
@@ -150,19 +158,6 @@ type recycled struct {
 // before it. An item known to have original's extension comes before one
 // that matches only by the name without it.
 func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
-	var bin unsafe.Pointer
-	hr, _, _ := procSHGetKnownFolderItem.Call(uintptr(unsafe.Pointer(&folderRecycleBin)), 0, 0,
-		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&bin)))
-	if failed(uint32(hr)) {
-		return nil, fmt.Errorf("opening the Recycle Bin: HRESULT %#x", uint32(hr))
-	}
-	defer release(bin)
-	var enum unsafe.Pointer
-	if hr := comCall(bin, vtBindToHandler, 0, uintptr(unsafe.Pointer(&bhidEnumItems)),
-		uintptr(unsafe.Pointer(&iidEnumShellItems)), uintptr(unsafe.Pointer(&enum))); failed(hr) {
-		return nil, fmt.Errorf("listing the Recycle Bin: HRESULT %#x", hr)
-	}
-	defer release(enum)
 	// found holds the items that match, to pick the best of.
 	var found []recycled
 	defer func() {
@@ -172,26 +167,16 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 			}
 		}
 	}()
-	for {
-		var child unsafe.Pointer
-		var got uint32
-		hr := comCall(enum, vtEnumNext, 1, uintptr(unsafe.Pointer(&child)), uintptr(unsafe.Pointer(&got)))
-		if failed(hr) {
-			return nil, fmt.Errorf("listing the Recycle Bin: HRESULT %#x", hr)
-		}
-		if got == 0 {
-			break
-		}
-		r, err := readRecycled(child)
-		release(child)
-		if err != nil {
-			return nil, err
-		}
+	err := eachRecycled(func(r recycled) bool {
 		if rankRecycled(r.binItem, original, at) == 0 {
 			release(r.item)
-			continue
+			return true
 		}
 		found = append(found, r)
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	items := make([]binItem, len(found))
 	for i, r := range found {
@@ -206,6 +191,43 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 	item := found[best].item
 	found[best].item = nil
 	return item, nil
+}
+
+// eachRecycled hands fn each item in the Recycle Bin, as readRecycled
+// reads it, until fn returns false. fn releases the item it is handed.
+func eachRecycled(fn func(r recycled) bool) error {
+	var bin unsafe.Pointer
+	hr, _, _ := procSHGetKnownFolderItem.Call(uintptr(unsafe.Pointer(&folderRecycleBin)), 0, 0,
+		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&bin)))
+	if failed(uint32(hr)) {
+		return fmt.Errorf("opening the Recycle Bin: HRESULT %#x", uint32(hr))
+	}
+	defer release(bin)
+	var enum unsafe.Pointer
+	if hr := comCall(bin, vtBindToHandler, 0, uintptr(unsafe.Pointer(&bhidEnumItems)),
+		uintptr(unsafe.Pointer(&iidEnumShellItems)), uintptr(unsafe.Pointer(&enum))); failed(hr) {
+		return fmt.Errorf("listing the Recycle Bin: HRESULT %#x", hr)
+	}
+	defer release(enum)
+	for {
+		var child unsafe.Pointer
+		var got uint32
+		hr := comCall(enum, vtEnumNext, 1, uintptr(unsafe.Pointer(&child)), uintptr(unsafe.Pointer(&got)))
+		if failed(hr) {
+			return fmt.Errorf("listing the Recycle Bin: HRESULT %#x", hr)
+		}
+		if got == 0 {
+			return nil
+		}
+		r, err := readRecycled(child)
+		release(child)
+		if err != nil {
+			return err
+		}
+		if !fn(r) {
+			return nil
+		}
+	}
 }
 
 // readRecycled reads where the Recycle Bin item child came from and when
@@ -242,6 +264,7 @@ func readRecycled(child unsafe.Pointer) (recycled, error) {
 	// the item's own extension. That tells a.txt from a.log where the name
 	// shows without its extension.
 	if kept, err := shellName(item, sigdnFileSysPath); err == nil && strings.HasPrefix(filepath.Base(kept), "$R") {
+		r.kept = kept
 		r.ext, r.extKnown = filepath.Ext(kept), true
 	}
 	return r, nil
@@ -285,8 +308,16 @@ func shellMove(item unsafe.Pointer, to string) error {
 		return fmt.Errorf("finding the folder %s: HRESULT %#x", filepath.Dir(to), uint32(hr))
 	}
 	defer release(dest)
+	return fileOp("restoring "+to, func(op unsafe.Pointer) uint32 {
+		return comCall(op, vtMoveItem, uintptr(item), uintptr(dest), uintptr(unsafe.Pointer(name)), 0)
+	})
+}
+
+// fileOp runs the operation add puts on an IFileOperation, without any
+// window of its own; what names it in an error.
+func fileOp(what string, add func(op unsafe.Pointer) uint32) error {
 	var op unsafe.Pointer
-	hr, _, _ = procCoCreateInstance.Call(uintptr(unsafe.Pointer(&clsidFileOperation)), 0, clsctxInprocServer,
+	hr, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(&clsidFileOperation)), 0, clsctxInprocServer,
 		uintptr(unsafe.Pointer(&iidFileOperation)), uintptr(unsafe.Pointer(&op)))
 	if failed(uint32(hr)) {
 		return fmt.Errorf("starting a file operation: HRESULT %#x", uint32(hr))
@@ -296,18 +327,18 @@ func shellMove(item unsafe.Pointer, to string) error {
 	if hr := comCall(op, vtSetOperationFlags, flags); failed(hr) {
 		return fmt.Errorf("starting a file operation: HRESULT %#x", hr)
 	}
-	if hr := comCall(op, vtMoveItem, uintptr(item), uintptr(dest), uintptr(unsafe.Pointer(name)), 0); failed(hr) {
-		return fmt.Errorf("restoring %s: HRESULT %#x", to, hr)
+	if hr := add(op); failed(hr) {
+		return fmt.Errorf("%s: HRESULT %#x", what, hr)
 	}
 	if hr := comCall(op, vtPerformOperations); failed(hr) {
-		return fmt.Errorf("restoring %s failed with HRESULT %#x", to, hr)
+		return fmt.Errorf("%s failed with HRESULT %#x", what, hr)
 	}
 	var aborted int32
 	if hr := comCall(op, vtAnyOperationAborted, uintptr(unsafe.Pointer(&aborted))); failed(hr) {
-		return fmt.Errorf("restoring %s: HRESULT %#x", to, hr)
+		return fmt.Errorf("%s: HRESULT %#x", what, hr)
 	}
 	if aborted != 0 {
-		return fmt.Errorf("restoring %s was stopped", to)
+		return fmt.Errorf("%s was stopped", what)
 	}
 	return nil
 }

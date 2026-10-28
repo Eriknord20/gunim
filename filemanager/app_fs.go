@@ -20,6 +20,15 @@ func (a *app) showFS(fsys FS, dir string) {
 	if fsys == nil {
 		fsys = LocalFS()
 	}
+	if dir == TrashPath {
+		// The trash of the file system showing opens over the folder
+		// showing; another's over its home folder.
+		if fsys.ID() != a.fs.ID() || a.nav.path == "" {
+			a.showFS(fsys, "")
+		}
+		a.openTrashCan()
+		return
+	}
 	if a.nav.late(fsys.ID(), dir) {
 		// The user went on from that step back or forward.
 		return
@@ -27,6 +36,7 @@ func (a *app) showFS(fsys FS, dir string) {
 	from, h := a.here(), a.nav.hop
 	a.nav.hop = nil
 	a.closeViewer()
+	a.closeTrashCan(true)
 	a.search.stop()
 	a.tree.forget()
 	// The counts go on, so the answers of the old index are dropped.

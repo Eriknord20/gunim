@@ -725,9 +725,12 @@ func (r *placeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		p.RRect(bar, 1.5, paint.Solid(widget.Accent.Get(th)))
 	}
 	line := float32(30)
-	if r.item.Kind == "favourite" {
+	switch r.item.Kind {
+	case "favourite":
 		paintFavMark(p, th, r.item.Color, r.item.Icon, geom.Pt(18, t+line/2))
-	} else {
+	case "trash":
+		widget.PaintIcon(p, th, icon.Trash2, geom.Rc(11, t+(line-14)/2, 14, 14), Faint.Get(th))
+	default:
 		mark := placeMark(r.item.Place).Get(th)
 		p.RRect(geom.Rc(12, t+(line-12)/2, 12, 12), 3.5, paint.Solid(mark))
 	}

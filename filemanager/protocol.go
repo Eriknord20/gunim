@@ -95,6 +95,18 @@ type Shell struct {
 	// Usage is the ID of the Disk usage page showing over the browser,
 	// which the keyboard goes to in place of the listing; "" for none.
 	Usage gunim.ID
+	// TrashCan is the ID of the trash page showing over the browser, as
+	// Usage is.
+	TrashCan gunim.ID
+}
+
+// page is the ID of the page showing over the browser, Disk usage or the
+// trash, and "" for none.
+func (s Shell) page() gunim.ID {
+	if s.Usage != "" {
+		return s.Usage
+	}
+	return s.TrashCan
 }
 
 // Crumb is one folder of the path bar.

@@ -93,6 +93,14 @@ var (
 		{"Open in new window", "", localOpenWindow},
 		{"Disk usage", "", localUsage},
 	}
+	// trashPlaceItems are the context menu of the trash, which leaves out
+	// Empty for the trash of another file system than the window's.
+	trashPlaceItems = []menuItem{
+		{"Open", "", localOpenPlace},
+		{"Open in new window", "", localOpenWindow},
+		{"-", "", ""},
+		{"Empty trash…", "", CmdEmptyTrash},
+	}
 	favItems = []menuItem{
 		{"Open", "", localOpenPlace},
 		{"Open in new window", "", localOpenWindow},
@@ -614,11 +622,14 @@ func (s *sideMenu) prepare(at geom.Point, u *gunim.UI) bool {
 	}
 	s.st = menuState{path: pr.item.Path, fs: pr.item.FS, away: pr.item.away, place: pr.item.Place}
 	items := placeItems
-	if fav {
+	switch {
+	case fav:
 		items = favItems
+	case pr.item.Kind == "trash":
+		items = trashPlaceItems
 	}
 	if pr.item.away {
-		items = without(items, localUsage)
+		items = without(without(items, localUsage), CmdEmptyTrash)
 	}
 	if s.giving && pr.item.key == s.key && len(s.given) > 0 {
 		items = slices.Clone(items)

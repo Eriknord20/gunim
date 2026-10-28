@@ -139,6 +139,66 @@ func (localFS) Describe(trashed string) string {
 	return t.Describe(trashed)
 }
 
+// systemTrashCan is the system's trash, where the window can open it.
+func systemTrashCan() (TrashCan, error) {
+	t, err := systemTrash()
+	if err != nil {
+		return nil, err
+	}
+	c, ok := t.(TrashCan)
+	if !ok {
+		return nil, errNoTrashCan
+	}
+	return c, nil
+}
+
+// errNoTrashCan says the window cannot open the system's trash.
+var errNoTrashCan = noTrashCan{}
+
+// noTrashCan is errNoTrashCan, which matches errors.ErrUnsupported.
+type noTrashCan struct{}
+
+func (noTrashCan) Error() string { return "opening the trash is not supported on this system" }
+
+// Is makes the error match errors.ErrUnsupported.
+func (noTrashCan) Is(target error) bool { return target == errors.ErrUnsupported }
+
+// TrashItems implements [TrashCan] with the system's trash.
+func (localFS) TrashItems(ctx context.Context) ([]TrashItem, error) {
+	t, err := systemTrashCan()
+	if err != nil {
+		return nil, err
+	}
+	return t.TrashItems(ctx)
+}
+
+// RestoreItem implements [TrashCan].
+func (localFS) RestoreItem(it TrashItem) error {
+	t, err := systemTrashCan()
+	if err != nil {
+		return err
+	}
+	return t.RestoreItem(it)
+}
+
+// PurgeItem implements [TrashCan].
+func (localFS) PurgeItem(ctx context.Context, it TrashItem) error {
+	t, err := systemTrashCan()
+	if err != nil {
+		return err
+	}
+	return t.PurgeItem(ctx, it)
+}
+
+// EmptyTrash implements [TrashCan].
+func (localFS) EmptyTrash(ctx context.Context) error {
+	t, err := systemTrashCan()
+	if err != nil {
+		return err
+	}
+	return t.EmptyTrash(ctx)
+}
+
 // Space implements [SpaceReporter].
 func (localFS) Space(path string) (free, total uint64, err error) {
 	s, err := volumeSpace(path)

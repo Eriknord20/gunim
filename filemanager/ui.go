@@ -29,6 +29,7 @@ func RegisterViews(w *gunim.Window) {
 	registerDnd(w)
 	registerProps(w)
 	registerUsage(w)
+	registerTrashCan(w)
 }
 
 // root is the window's root: the background, with the views stacked on
@@ -137,11 +138,11 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 	} else {
 		b.main.SetShare(b.previewShare(), nil)
 	}
-	if (s.Usage != "") != (was.Usage != "") && b.shown {
-		// Over the Disk usage page, so what it does, as move an item to
+	if (s.page() != "") != (was.page() != "") && b.shown {
+		// Over the page, as Disk usage, so what it does, as move an item to
 		// the trash, says so where it can be seen and undone; back under
 		// the dialogs once it goes.
-		if s.Usage != "" {
+		if s.page() != "" {
 			u.InsertAt(b, 3, b.ops)
 			u.InsertAt(b, 3, b.toasts)
 		} else {
@@ -156,8 +157,8 @@ func (b *browser) setShell(s Shell, u *gunim.UI) {
 	b.shown = true
 }
 
-// Children implements [gunim.Composite]. While the Disk usage page shows,
-// in the layer, the operations and the toasts move over it: see setShell.
+// Children implements [gunim.Composite]. While a page shows in the layer,
+// as Disk usage, the operations and the toasts move over it: see setShell.
 func (b *browser) Children() []gunim.Node { return []gunim.Node{b.page, b.ops, b.toasts, b.layer} }
 
 // Slot implements [gunim.Slotted]: the dialogs mounted under the browser
@@ -348,11 +349,16 @@ func (b *browser) focusListing(u *gunim.UI) {
 }
 
 // focusNode is the node that takes the keyboard in the browser: the
-// listing, or the Disk usage page over it while that shows.
+// listing, or the page over it while one shows, Disk usage or the trash.
 func (b *browser) focusNode(u *gunim.UI) gunim.Node {
 	if b.shell.Usage != "" {
 		if pg, ok := u.Mounted(b.shell.Usage).(*usagePage); ok && !pg.closing {
 			return pg.list
+		}
+	}
+	if b.shell.TrashCan != "" {
+		if pg, ok := u.Mounted(b.shell.TrashCan).(*trashPage); ok && !pg.closing {
+			return pg.grid
 		}
 	}
 	if b.listing.cur == nil {
