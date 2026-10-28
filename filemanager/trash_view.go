@@ -125,7 +125,7 @@ func newTrashPage() *trashPage {
 // set takes the page's state.
 func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	first := pg.state.Seq == 0
-	keep := pg.selectedKeys()
+	keep := keySet(pg.selectedKeys())
 	pg.state = s
 	title := s.Title
 	if s.Where != "" {
@@ -138,7 +138,7 @@ func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	// The items selected stay selected, where they are still there.
 	var sel [][2]int
 	for i, r := range pg.rows {
-		if slices.Contains(keep, r.Key) {
+		if keep[r.Key] {
 			sel = append(sel, [2]int{i, i + 1})
 		}
 	}
@@ -224,7 +224,7 @@ func (pg *trashPage) sortBy(c int, u *gunim.UI) {
 	if c < 0 || c >= len(pg.grid.Columns) {
 		return
 	}
-	keep := pg.selectedKeys()
+	keep := keySet(pg.selectedKeys())
 	if c == pg.sort {
 		pg.desc = !pg.desc
 	} else {
@@ -234,7 +234,7 @@ func (pg *trashPage) sortBy(c int, u *gunim.UI) {
 	pg.arrange()
 	var sel [][2]int
 	for i, r := range pg.rows {
-		if slices.Contains(keep, r.Key) {
+		if keep[r.Key] {
 			sel = append(sel, [2]int{i, i + 1})
 		}
 	}
@@ -262,6 +262,15 @@ func (pg *trashPage) row(i int) (widget.GridRow, bool) {
 		{{Text: r.Deleted, Ink: Faint}},
 		{{Text: r.Size, Ink: Faint}},
 	}}, true
+}
+
+// keySet is keys as a set.
+func keySet(keys []string) map[string]bool {
+	set := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		set[k] = true
+	}
+	return set
 }
 
 // selectedKeys are the keys of the items selected.

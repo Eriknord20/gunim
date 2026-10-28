@@ -24,11 +24,12 @@ const (
 )
 
 // TrashItems implements [TrashCan]: what the shell lists in the Recycle
-// Bin, of every drive.
+// Bin, of every drive. An item it cannot read is left out, so one does
+// not keep the rest from showing.
 func (recycleBin) TrashItems(ctx context.Context) ([]TrashItem, error) {
 	var out []TrashItem
 	err := onCOM(func() error {
-		return eachRecycled(func(r recycled) bool {
+		return eachRecycled(true, func(r recycled) bool {
 			release(r.item)
 			if ctx.Err() != nil {
 				return false
@@ -71,7 +72,7 @@ func binTrashItem(r recycled) TrashItem {
 // kept. The caller releases it.
 func findKept(kept string) (unsafe.Pointer, error) {
 	var found unsafe.Pointer
-	err := eachRecycled(func(r recycled) bool {
+	err := eachRecycled(true, func(r recycled) bool {
 		if found == nil && strings.EqualFold(r.kept, kept) {
 			found = r.item
 			return false
@@ -97,12 +98,12 @@ func (recycleBin) RestoreItem(it TrashItem) error {
 }
 
 // PurgeItem implements [TrashCan] with the shell, which deletes an item
-// in the Recycle Bin for good, and its record with it.
+// in the Recycle Bin for good; its record goes after it.
 func (recycleBin) PurgeItem(ctx context.Context, it TrashItem) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return onCOM(func() error {
+	err := onCOM(func() error {
 		item, err := findKept(it.ID)
 		if err != nil {
 			return err
@@ -112,6 +113,11 @@ func (recycleBin) PurgeItem(ctx context.Context, it TrashItem) error {
 			return comCall(op, vtDeleteItem, uintptr(item), 0)
 		})
 	})
+	if err != nil {
+		return err
+	}
+	dropRecord(it.ID)
+	return nil
 }
 
 // EmptyTrash implements [TrashCan]: the Recycle Bin of every drive.

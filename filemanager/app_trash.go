@@ -27,7 +27,9 @@ type trashCanState struct {
 	items   []TrashItem
 	reading bool
 	err     string
-	// busy says items are being put back or deleted.
+	// busy says items are being put back or deleted, which goes on while
+	// the page closes and opens again, and stops a second act until it
+	// ends.
 	busy bool
 	// note says what came of the last act, and noteErr that it failed.
 	note    string
@@ -73,33 +75,37 @@ func (a *app) handleTrashCan(in gunim.Intent) bool {
 }
 
 // openTrashCan shows the trash page, over the folder showing, and reads
-// the trash.
+// the trash. Where the page shows already, it reads the trash again, and
+// what it is doing goes on.
 func (a *app) openTrashCan() {
 	can, ok := a.trashCan()
 	if !ok {
 		a.fail("There is no trash to open here.")
 		return
 	}
-	a.closeViewer()
-	a.closeUsage(true)
 	s := &a.bin
-	s.seq++
-	s.can, s.items, s.err = can, nil, ""
-	s.busy, s.note, s.noteErr = false, "", false
-	a.readTrashCan()
-	if !s.open {
-		s.open = true
-		s.opened++
-		s.id = a.ids.trashCan(s.opened)
-		a.shell.TrashCan = s.id
-		a.publishShell()
-		s.last = a.trashCanState()
-		s.last.Take = len(a.ops.dialogs) == 0
-		a.mountTrashCan(true)
-		s.last.Take = false
+	if s.open {
+		if !s.busy {
+			a.readTrashCan()
+		}
+		a.publishTrashCan()
 		return
 	}
-	a.publishTrashCan()
+	a.closeViewer()
+	a.closeUsage(true)
+	s.seq++
+	s.can, s.items, s.err = can, nil, ""
+	s.note, s.noteErr = "", false
+	a.readTrashCan()
+	s.open = true
+	s.opened++
+	s.id = a.ids.trashCan(s.opened)
+	a.shell.TrashCan = s.id
+	a.publishShell()
+	s.last = a.trashCanState()
+	s.last.Take = len(a.ops.dialogs) == 0
+	a.mountTrashCan(true)
+	s.last.Take = false
 }
 
 // trashCan is the trash of the window's file system, where the window can
@@ -241,8 +247,9 @@ func (a *app) trashAct(keys []string, act string) {
 		return
 	}
 	var items []TrashItem
+	asked := keySet(keys)
 	for _, it := range s.items {
-		if slices.Contains(keys, it.ID) {
+		if asked[it.ID] {
 			items = append(items, it)
 		}
 	}
@@ -276,15 +283,14 @@ func trashWhat(items []TrashItem) string {
 func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx context.Context, it TrashItem) error) {
 	s := &a.bin
 	if s.busy {
-		s.note, s.noteErr = "Wait until the last one is done.", true
-		a.publishTrashCan()
+		a.waitForLast()
 		return
 	}
 	s.busy = true
 	s.note, s.noteErr = doing+" "+trashWhat(items)+"…", false
 	a.publishTrashCan()
 	seq := s.seq
-	go func() {
+	a.ops.wg.Go(func() {
 		var failed []string
 		var first error
 		for _, it := range items {
@@ -297,12 +303,15 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 			if first != nil {
 				a.logLine(doing+" "+trashWhat(items)+" from the trash", first.Error())
 			}
-			if seq != s.seq || !s.open {
+			s.busy = false
+			if !s.open {
 				return
 			}
-			s.busy = false
 			worked := len(items) - len(failed)
 			switch {
+			case seq != s.seq:
+				// The page closed and opened again since: it says only
+				// what the trash holds now.
 			case first == nil:
 				s.note, s.noteErr = upperFirst(trashWhat(items))+" "+done+".", false
 				if len(items) == 1 {
@@ -322,7 +331,7 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 			a.poll()
 			a.publishTrashCan()
 		})
-	}()
+	})
 }
 
 // upperFirst is s with its first letter in upper case.
@@ -344,9 +353,8 @@ func (a *app) emptyTrash() {
 		a.fail("There is no trash to empty here.")
 		return
 	}
-	if s.open && s.busy {
-		s.note, s.noteErr = "Wait until the last one is done.", true
-		a.publishTrashCan()
+	if s.busy {
+		a.waitForLast()
 		return
 	}
 	title := a.trashTitle()
@@ -355,27 +363,37 @@ func (a *app) emptyTrash() {
 		body = "The " + plural(len(s.items), "item") + " in the " + trashNoun(title) + " will be deleted for good."
 	}
 	a.confirm(Confirm{Title: "Empty the " + trashNoun(title) + "?", Body: body, OK: "Empty"}, func() {
-		seq, open := s.seq, s.open
-		if open {
-			s.busy = true
+		if s.busy {
+			a.waitForLast()
+			return
+		}
+		s.busy = true
+		seq := s.seq
+		if s.open {
 			s.note, s.noteErr = "Emptying the "+trashNoun(title)+"…", false
 			a.publishTrashCan()
 		}
-		go func() {
+		a.ops.wg.Go(func() {
 			err := can.EmptyTrash(a.ctx)
 			a.post(func() {
+				s.busy = false
 				if err != nil {
 					a.logLine("Emptying the trash", err.Error())
 				}
-				if !open || seq != s.seq || !s.open {
+				if !s.open || seq != s.seq {
+					// The page that asked is gone: a notice says how it went,
+					// and a page open since reads the trash again.
 					if err != nil {
 						a.fail("Couldn't empty the " + trashNoun(title) + ": " + err.Error())
-						return
+					} else {
+						a.patch(Notice{Title: "Emptied the " + trashNoun(title), Kind: "success"})
 					}
-					a.patch(Notice{Title: "Emptied the " + trashNoun(title), Kind: "success"})
+					if s.open {
+						a.readTrashCan()
+						a.publishTrashCan()
+					}
 					return
 				}
-				s.busy = false
 				s.note, s.noteErr = "Emptied the "+trashNoun(title)+".", false
 				if err != nil {
 					s.note, s.noteErr = "Couldn't empty all of the "+trashNoun(title)+": "+err.Error(), true
@@ -383,6 +401,18 @@ func (a *app) emptyTrash() {
 				a.readTrashCan()
 				a.publishTrashCan()
 			})
-		}()
+		})
 	})
+}
+
+// waitForLast says the trash is busy with the last act, on the page
+// where it shows, and as a notice where it does not.
+func (a *app) waitForLast() {
+	s := &a.bin
+	if !s.open {
+		a.patch(Notice{Title: "Wait until the trash is done with the last one", Kind: "warning"})
+		return
+	}
+	s.note, s.noteErr = "Wait until the last one is done.", true
+	a.publishTrashCan()
 }

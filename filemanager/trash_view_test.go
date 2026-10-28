@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -185,4 +186,74 @@ func TestTheTrashPathOpensThePageOverTheFolder(t *testing.T) {
 	// Disk usage takes the trash page's place.
 	h.do(Command{Name: CmdUsage})
 	h.until("Disk usage shows in place of the trash", func() bool { return h.a.usage.open && !h.a.bin.open })
+}
+
+// gatedTrash is a trash whose restores wait for the gate to open.
+type gatedTrash struct {
+	xdgTrash
+	gate chan struct{}
+}
+
+func (g gatedTrash) RestoreItem(it TrashItem) error {
+	<-g.gate
+	return g.xdgTrash.RestoreItem(it)
+}
+
+func TestOpeningTheTrashAgainLetsARestoreFinish(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt"}, "a.txt", "b.txt")
+	g := gatedTrash{xdgTrash: h.a.trash.(xdgTrash), gate: make(chan struct{})}
+	h.a.trash = g
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.pickTrash(pg, "a.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("the restore runs", func() bool { return pg.state.Busy })
+	// The sidebar's place, clicked while it runs.
+	h.do(Navigate{Path: TrashPath})
+	h.frames(5)
+	if !h.a.bin.busy || !pg.state.Busy || !pg.restore.Disabled || !pg.remove.Disabled {
+		t.Fatalf("opened again, the page is busy %v, restore disabled %v", pg.state.Busy, pg.restore.Disabled)
+	}
+	close(g.gate)
+	h.until("the restore ends, and the page says so", func() bool {
+		return !pg.state.Busy && !pg.state.Reading && strings.Contains(pg.state.Note, "restored") &&
+			slices.Equal(trashShown(pg), []string{"b.txt"})
+	})
+	if !h.exists("a.txt") {
+		t.Fatal("a.txt did not come back")
+	}
+}
+
+func TestATrashOnAnotherVolumeAsksToDeleteForGood(t *testing.T) {
+	h := newTrashHarness(t, nil, "near.txt", "far.txt")
+	h.a.trash = xdgTrash{fs: farFS{FS: LocalFS(), far: "far.txt"}, dir: filepath.Join(h.root, "Trash")}
+	h.pick("near.txt", "far.txt")
+	h.press(input.KeyDelete, 0)
+	h.until("the window asks about the one the trash can't take", func() bool { return len(h.a.ops.dialogs) > 0 })
+	c, ok := h.a.ops.dialogs[0].state.(Confirm)
+	if !ok || c.Title != "Delete far.txt for good?" || !strings.Contains(c.Body, "another volume") {
+		t.Fatalf("the window asked %#v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("near.txt") || !h.exists("far.txt") {
+		t.Fatal("near.txt should be in the trash, and far.txt still here")
+	}
+	h.answer(Confirmed{Token: c.Token, OK: true})
+	h.until("far.txt is deleted", func() bool { return !h.exists("far.txt") })
+	if got := names(t, filepath.Join(h.root, "Trash", "files")); !slices.Equal(got, []string{"near.txt"}) {
+		t.Fatalf("the trash holds %v", got)
+	}
+}
+
+// farFS is a file system on which the item named far is on another
+// volume than everything else, so a rename of it fails as one across
+// volumes.
+type farFS struct {
+	FS
+	far string
+}
+
+func (f farFS) Rename(from, to string) error {
+	if filepath.Base(from) == f.far {
+		return crossDevice{errors.New("not the same device")}
+	}
+	return f.FS.Rename(from, to)
 }

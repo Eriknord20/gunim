@@ -403,6 +403,12 @@ func (v *dndView) sideSpot(d input.Drop, u *gunim.UI) (widget.DropSpot, bool) {
 				continue
 			}
 			if r, drawn := u.Bounds(n); drawn && r.Contains(at) {
+				if pr.item.Kind == "trash" {
+					// The trash is no folder to drop into.
+					v.plan = nil
+					return widget.DropSpot{Key: spotKey{"place", pr.item.Path}, Rect: r.Add(zr.Min.Mul(-1)), Radius: 6,
+						Hint: widget.DropHint{Text: "Press Delete to move items to the trash"}, Refused: true}, true
+				}
 				if pr.item.away {
 					return v.awaySpot(d, fd, pr.item, k, r.Add(zr.Min.Mul(-1))), true
 				}

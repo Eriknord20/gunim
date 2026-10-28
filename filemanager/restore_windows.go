@@ -125,12 +125,14 @@ func restoreTo(to string, find func() (unsafe.Pointer, error)) error {
 	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
+	var kept string
 	err := onCOM(func() error {
 		item, err := find()
 		if err != nil {
 			return err
 		}
 		defer release(item)
+		kept, _ = shellName(item, sigdnFileSysPath)
 		return shellMove(item, to)
 	})
 	if err != nil {
@@ -139,7 +141,25 @@ func restoreTo(to string, find func() (unsafe.Pointer, error)) error {
 	if _, err := os.Lstat(to); err != nil {
 		return fmt.Errorf("the Recycle Bin did not put %s back: %w", to, err)
 	}
+	dropRecord(kept)
 	return nil
+}
+
+// dropRecord removes the record the Recycle Bin keeps of the item it kept
+// at kept, the $I file beside the $R one, once the item is gone from
+// there. The shell's file operations move or delete the $R file alone,
+// and the record left would stay in the bin's folder until it is
+// emptied. A record that will not go stays so, as it did before: the bin
+// lists nothing for it.
+func dropRecord(kept string) {
+	base := filepath.Base(kept)
+	if !strings.HasPrefix(base, "$R") {
+		return
+	}
+	if _, err := os.Lstat(kept); !errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	_ = os.Remove(filepath.Join(filepath.Dir(kept), "$I"+base[2:]))
 }
 
 // Describe implements [Trasher].
@@ -167,7 +187,7 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 			}
 		}
 	}()
-	err := eachRecycled(func(r recycled) bool {
+	err := eachRecycled(false, func(r recycled) bool {
 		if rankRecycled(r.binItem, original, at) == 0 {
 			release(r.item)
 			return true
@@ -194,8 +214,9 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 }
 
 // eachRecycled hands fn each item in the Recycle Bin, as readRecycled
-// reads it, until fn returns false. fn releases the item it is handed.
-func eachRecycled(fn func(r recycled) bool) error {
+// reads it, until fn returns false. fn releases the item it is handed. An
+// item that cannot be read fails it, or with skip is passed by.
+func eachRecycled(skip bool, fn func(r recycled) bool) error {
 	var bin unsafe.Pointer
 	hr, _, _ := procSHGetKnownFolderItem.Call(uintptr(unsafe.Pointer(&folderRecycleBin)), 0, 0,
 		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&bin)))
@@ -221,6 +242,9 @@ func eachRecycled(fn func(r recycled) bool) error {
 		}
 		r, err := readRecycled(child)
 		release(child)
+		if err != nil && skip {
+			continue
+		}
 		if err != nil {
 			return err
 		}

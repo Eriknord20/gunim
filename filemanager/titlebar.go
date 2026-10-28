@@ -126,7 +126,8 @@ func newTitleBar(b *browser) *titleBar {
 		t.pick(m, i, u)
 		return nil
 	}
-	t.head = &titleHead{name: &titleText{Menubar: widget.NewMenubar()}, controls: widget.NewWindowControls()}
+	t.head = &titleHead{name: &titleText{Menubar: widget.NewMenubar(), b: b},
+		controls: &titleControls{WindowControls: widget.NewWindowControls(), b: b}}
 	t.head.name.Title = "Files"
 	return t
 }
@@ -155,19 +156,57 @@ func (m *menuButton) CatchKey(e input.Event, u *gunim.UI) bool {
 	return m.Menubar.CatchKey(e, u)
 }
 
+// CaptionRects implements [gunim.Caption]: none while a page covers the
+// browser, as Disk usage does, so a press on the page's head reaches it
+// in place of moving the window.
+func (m *menuButton) CaptionRects(size geom.Size) []geom.Rect {
+	if m.b.shell.page() != "" {
+		return nil
+	}
+	return m.Menubar.CaptionRects(size)
+}
+
 // titleText is the window's title, drawn by a menubar with no menus,
 // which moves the window as a title bar does. It leaves the keys to the
 // menus.
-type titleText struct{ *widget.Menubar }
+type titleText struct {
+	*widget.Menubar
+	b *browser
+}
 
 // CatchKey implements [gunim.KeyCatcher].
 func (*titleText) CatchKey(input.Event, *gunim.UI) bool { return false }
+
+// CaptionRects implements [gunim.Caption]: none while a page covers the
+// title, so a press on the page's head reaches it.
+func (t *titleText) CaptionRects(size geom.Size) []geom.Rect {
+	if t.b.shell.page() != "" {
+		return nil
+	}
+	return t.Menubar.CaptionRects(size)
+}
+
+// titleControls are the window's buttons. While a page covers them, the
+// system is not told where Maximize is, so a press there reaches the
+// page.
+type titleControls struct {
+	*widget.WindowControls
+	b *browser
+}
+
+// MaximizeRect implements [gunim.MaximizeButton].
+func (c *titleControls) MaximizeRect(size geom.Size) geom.Rect {
+	if c.b.shell.page() != "" {
+		return geom.Rect{}
+	}
+	return c.WindowControls.MaximizeRect(size)
+}
 
 // titleHead is the window's own title bar, where the window has none of
 // the system's: its title, and its buttons.
 type titleHead struct {
 	name     *titleText
-	controls *widget.WindowControls
+	controls *titleControls
 	// hidden says there is no title bar to show: in a pane, or a window
 	// with the system's frame.
 	hidden bool

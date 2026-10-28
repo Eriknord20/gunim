@@ -564,6 +564,7 @@ func (a *app) finish(id int, j job, rec record, err error) {
 	if keep {
 		undo = id
 	}
+	var left *notTrashed
 	switch {
 	case j.kind == OpTrash && len(rec.steps) == 0 && errors.Is(err, errors.ErrUnsupported):
 		// The file system turned out to have no trash: from now on the
@@ -573,6 +574,18 @@ func (a *app) finish(id int, j job, rec record, err error) {
 		a.confirm(Confirm{Title: "Delete " + a.what(paths) + " for good?",
 			Body: "There is no trash here, so they cannot come back.", OK: "Delete"},
 			func() { a.startOp(job{kind: OpDelete, srcs: paths}, "Deleting "+a.what(paths)) })
+	case j.kind == OpTrash && errors.As(err, &left):
+		// The others went, and can be undone; these are asked about.
+		if len(rec.steps) > 0 {
+			a.patch(Notice{Title: a.doneTitle(j, rec), Undo: undo, Kind: "success"})
+		}
+		paths := left.paths
+		body := "The trash can't take it: " + left.err.Error() + "."
+		if len(paths) > 1 {
+			body = "The trash can't take them. The first: " + left.err.Error() + "."
+		}
+		a.confirm(Confirm{Title: "Delete " + a.what(paths) + " for good?", Body: body, OK: "Delete"},
+			func() { a.startOp(job{kind: OpDelete, srcs: paths, worked: j.worked}, "Deleting "+a.what(paths)) })
 	case err == nil && j.kind == OpUndo:
 		if n := (Notice{Title: "Undone", Body: r.title, Kind: "success"}); !a.endCard(r, true, n) {
 			a.patch(n)

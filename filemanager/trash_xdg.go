@@ -55,7 +55,7 @@ func (t xdgTrash) Trash(path string) (string, error) {
 	}
 	for _, d := range []string{ps.Join(t.dir, "files"), ps.Join(t.dir, "info")} {
 		if err := mkdirAll(fsys, d, 0o700); err != nil {
-			return "", fmt.Errorf("making the trash: %w", err)
+			return "", fmt.Errorf("the trash in %s cannot be made: %w: %w", t.dir, errNotTrashable, err)
 		}
 	}
 	base := ps.Base(abs)
@@ -106,7 +106,7 @@ func (t xdgTrash) claim(abs, name string) (dest string, ok bool, err error) {
 	}
 	if err := fsys.Rename(abs, dest); err != nil {
 		if errors.Is(err, ErrCrossDevice) {
-			err = fmt.Errorf("%s is on another volume than the trash, and trashing across volumes is not supported yet", abs)
+			err = fmt.Errorf("%s is on another volume than the trash: %w", abs, errNotTrashable)
 		} else {
 			err = fmt.Errorf("moving %s to the trash: %w", abs, err)
 		}
@@ -173,7 +173,7 @@ func (t xdgTrash) read(path string) (from string, deleted time.Time, err error) 
 		}
 		p, err := url.PathUnescape(v)
 		if err != nil {
-			return "", time.Time{}, fmt.Errorf("reading the trash record %s: %w", path, err)
+			return "", time.Time{}, fmt.Errorf("reading the trash record %s: %w: %w", path, errBadRecord, err)
 		}
 		if ps == SystemPaths {
 			p = filepath.FromSlash(p)
@@ -185,10 +185,13 @@ func (t xdgTrash) read(path string) (from string, deleted time.Time, err error) 
 		from = p
 	}
 	if from == "" {
-		return "", time.Time{}, fmt.Errorf("the trash record %s says nothing of where the item came from", path)
+		return "", time.Time{}, fmt.Errorf("the trash record %s says nothing of where the item came from: %w", path, errBadRecord)
 	}
 	return from, deleted, nil
 }
+
+// errBadRecord says a .trashinfo record cannot be read as one.
+var errBadRecord = errors.New("the record is not one the trash specification describes")
 
 // slashed is p written with '/', as a record keeps it.
 func (t xdgTrash) slashed(p string) string {
@@ -213,8 +216,10 @@ func (t xdgTrash) Describe(trashed string) string {
 }
 
 // TrashItems implements [TrashCan]: an item for each record whose item
-// is in files. An item with no record, or a record with no item, is
-// passed by, as the specification has it.
+// is in files. An item with no record, a record with no item, and a
+// record that is not one are passed by, as the specification has it; any
+// other failure to read one fails the whole, as a list with items left
+// out would be taken for all the trash holds.
 func (t xdgTrash) TrashItems(ctx context.Context) ([]TrashItem, error) {
 	fsys, ps := t.on()
 	records, err := fsys.ReadDir(ctx, ps.Join(t.dir, "info"))
@@ -230,17 +235,23 @@ func (t xdgTrash) TrashItems(ctx context.Context) ([]TrashItem, error) {
 			return nil, err
 		}
 		name, ok := strings.CutSuffix(r.Name(), infoExt)
-		if !ok || r.IsDir() {
+		if !ok || r.IsDir() || name == "" || name == "." || name == ".." {
 			continue
 		}
 		at := ps.Join(t.dir, "files", name)
 		info, err := fsys.Lstat(at)
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		from, deleted, err := t.read(ps.Join(t.dir, "info", r.Name()))
 		if err != nil {
+			return nil, fmt.Errorf("reading the trash: %w", err)
+		}
+		from, deleted, err := t.read(ps.Join(t.dir, "info", r.Name()))
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, errBadRecord) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		it := TrashItem{ID: at, Name: ps.Base(from), Original: from, Deleted: deleted, Size: info.Size(), Dir: info.IsDir()}
 		if it.Dir {

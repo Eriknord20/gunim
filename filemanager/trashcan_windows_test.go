@@ -55,6 +55,7 @@ func TestTheRecycleBinListsRestoresAndPurges(t *testing.T) {
 	if got := contents(t, back); got != "gunim-bin-back.txt" {
 		t.Fatalf("the restored file holds %q", got)
 	}
+	noRecord(t, it)
 	it, ok = binItemFrom(t, gone)
 	if !ok {
 		t.Fatalf("the Recycle Bin does not list %s", gone)
@@ -70,5 +71,16 @@ func TestTheRecycleBinListsRestoresAndPurges(t *testing.T) {
 	}
 	if _, err := os.Lstat(gone); !os.IsNotExist(err) {
 		t.Fatalf("the purged file came back: %v", err)
+	}
+	noRecord(t, it)
+}
+
+// noRecord fails t where the Recycle Bin's folder still keeps the record
+// of it, the $I file beside its $R one.
+func noRecord(t *testing.T, it TrashItem) {
+	t.Helper()
+	record := filepath.Join(filepath.Dir(it.ID), "$I"+filepath.Base(it.ID)[2:])
+	if _, err := os.Lstat(record); !os.IsNotExist(err) {
+		t.Fatalf("the bin still keeps the record %s: %v", record, err)
 	}
 }

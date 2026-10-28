@@ -2,6 +2,8 @@ package filemanager
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -199,4 +201,43 @@ func TestATrashOnAFileSystemOfSlashPathsWorksAsTheComputersDoes(t *testing.T) {
 	if its := trashItems(t, tr); len(its) != 0 {
 		t.Fatalf("the trash still lists %+v", its)
 	}
+}
+
+func TestATrashThatCannotBeReadSaysSo(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt", "b.txt")
+	local := xdgTrash{dir: filepath.Join(root, "Trash")}
+	for _, p := range []string{"a.txt", "b.txt"} {
+		if _, err := local.Trash(at(root, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr := xdgTrash{fs: lostFS{FS: LocalFS(), lost: "b.txt"}, dir: filepath.Join(root, "Trash")}
+	if its, err := tr.TrashItems(context.Background()); err == nil {
+		t.Fatalf("a trash read part of the way listed %+v", its)
+	}
+	// A record whose item went, and one that is no record, pass by.
+	if err := os.Remove(filepath.Join(root, "Trash", "files", "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Trash", "info", "c.txt.trashinfo"), []byte("[Trash Info]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tree(t, filepath.Join(root, "Trash", "files"), "c.txt")
+	if got := trashItems(t, local); len(got) != 1 || got[0].Name != "b.txt" {
+		t.Fatalf("the trash lists %+v", got)
+	}
+}
+
+// lostFS is a file system whose connection drops at the item named lost.
+type lostFS struct {
+	FS
+	lost string
+}
+
+func (l lostFS) Lstat(p string) (fs.FileInfo, error) {
+	if filepath.Base(p) == l.lost {
+		return nil, errors.New("the connection ended")
+	}
+	return l.FS.Lstat(p)
 }
