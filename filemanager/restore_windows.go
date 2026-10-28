@@ -80,7 +80,12 @@ const (
 	vtAnyOperationAborted = 22
 )
 
-// comCall calls method index of the COM object obj.
+// comCall calls method index of the COM object obj. The directive keeps
+// what each pointer in args points at alive and in place until the call
+// returns: without it, a stack the goroutine outgrew is copied away
+// under an out-pointer the method writes through.
+//
+//go:uintptrescapes
 func comCall(obj unsafe.Pointer, index int, args ...uintptr) uint32 {
 	table := *(*unsafe.Pointer)(obj)
 	fn := *(*uintptr)(unsafe.Add(table, uintptr(index)*unsafe.Sizeof(uintptr(0))))

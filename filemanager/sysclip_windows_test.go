@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"unsafe"
 )
 
 // TestTheSystemClipboardHandsOverItsFiles reads the files on the system
@@ -74,5 +76,34 @@ func TestTheSystemClipboardHandsOverItsFiles(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// fakeCOM is a COM object whose methods are Go functions.
+type fakeCOM struct{ table *[5]uintptr }
+
+// newFakeCOM makes an object whose method 3 is method3, and whose other
+// methods do nothing.
+func newFakeCOM(method3 any) unsafe.Pointer {
+	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	return unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, nop, syscall.NewCallback(method3), nop}})
+}
+
+// TestAStreamCountsWhatItReadsWhereTheStackMoves fails where comCall lets
+// a COM method write through a pointer into a stack the goroutine has
+// since been moved off, and Read sees no bytes read. Go moves a stack
+// only now and then, so the test shows it run as
+//
+//	go test -gcflags=github.com/marrasen/gunim/filemanager=-d=maymorestack=runtime.mayMoreStackMove -run StackMoves ./filemanager/
+//
+// which moves the stack at every call.
+func TestAStreamCountsWhatItReadsWhereTheStackMoves(t *testing.T) {
+	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
+		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)
+		return 0
+	})}
+	buf := make([]byte, 4096)
+	if n, err := s.Read(buf); n != len(buf) || err != nil {
+		t.Fatalf("the stream filled %d bytes, and Read says %d, %v", len(buf), n, err)
 	}
 }

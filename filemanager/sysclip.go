@@ -151,6 +151,20 @@ func (a *app) systemClipNewer() bool {
 	return systemClip.seq() != seq
 }
 
+// takeCut takes the cut the system clipboard holds at seq for a paste,
+// and reports false where a window took it already. Where the system
+// gives no seq, a cut cannot be told from the next, and every paste
+// takes it.
+func (h *Hub) takeCut(seq uint32) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if seq != 0 && h.cutTaken == seq {
+		return false
+	}
+	h.cutTaken = seq
+	return true
+}
+
 // pasteSystem pastes into here what another program put on the system
 // clipboard. It reads the clipboard off the serve loop, as the program
 // may take a while to hand it over: Remote Desktop asks the computer it
@@ -192,8 +206,14 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 	}
 	var moved func()
 	if sf.cut {
-		// What was cut is pasted once, as in Explorer: once it has moved,
-		// so a move that fails can be pasted again.
+		// What was cut is pasted once, as in Explorer. The clipboard keeps
+		// it until it has moved, for the program that cut it, so it is
+		// taken here at once: a second Ctrl+V, from a held key or another
+		// window, would start a second move of the same items.
+		if !a.hub.takeCut(sf.seq) {
+			a.patch(Notice{Title: "What was cut is pasted already", Body: "Cut it again to move it from there.", Kind: "info"})
+			return
+		}
 		moved = func() { systemClip.empty(sf.seq) }
 	}
 	if fsID != "" {
@@ -272,7 +292,7 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 		}
 		var picked []int
 		for i, it := range items {
-			top, _, _ := strings.Cut(it.name, "/")
+			top := topOf(it.name)
 			if _, ok := found[caseKey(ps, top)]; !ok {
 				continue
 			}
@@ -293,10 +313,21 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 		}
 		r.tell(true)
 		p := outsidePaste{r: r, of: of, items: items, dest: dest,
-			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}}
+			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}, landed: map[string][]string{}}
+		left := map[string]int{}
+		for _, i := range picked {
+			left[topOf(items[i].name)]++
+		}
 		for _, i := range picked {
 			if err := p.item(i); err != nil {
 				return err
+			}
+			// An item has landed once all it holds has, so a retry after
+			// a failure inside it pastes it again, as after copyAll.
+			top := topOf(items[i].name)
+			left[top]--
+			if left[top] == 0 {
+				r.rec.landed = append(r.rec.landed, p.landed[top]...)
 			}
 		}
 		return p.stamp()
@@ -305,10 +336,11 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 
 // outsidePaste is a paste of items held as contents under way. to holds
 // where each folder it has reached went, by its name on the clipboard;
-// merging the folders that went into one already there, whose items may
-// clash; skipped the folders the user skipped; done the items pasted, by
-// their index; and made the folders it made, to set their times once
-// their files are in.
+// merging the folders that went into one already there, whose items are
+// undone on their own; skipped the folders the user skipped; done the
+// items pasted, by their index; made the folders it made, to set their
+// times once their files are in; and landed the names each item at the
+// top went to.
 type outsidePaste struct {
 	r       *runner
 	of      outsideFiles
@@ -319,6 +351,7 @@ type outsidePaste struct {
 	skipped []string
 	done    map[int]bool
 	made    []int
+	landed  map[string][]string
 }
 
 // item pastes items[i], into the folder its parent went to.
@@ -337,7 +370,11 @@ func (p *outsidePaste) item(i int) error {
 	if at := strings.LastIndex(it.name, "/"); at >= 0 {
 		parent, base = it.name[:at], it.name[at+1:]
 	}
-	if p.skippedIn(parent) {
+	if p.skippedIn(it.name) {
+		return p.skip(it)
+	}
+	if _, ok := p.to[it.name]; ok && it.dir {
+		// The clipboard lists the folder twice, or spells it two ways.
 		return p.skip(it)
 	}
 	into := p.dest
@@ -355,14 +392,22 @@ func (p *outsidePaste) item(i int) error {
 	r.p.current = it.name
 	dst := ps.Join(into, base)
 	top := parent == ""
-	// An item whose folder went into one already there may clash, and is
-	// undone on its own, as copyDir does in a merge.
+	// An item whose folder went into one already there is undone on its
+	// own, as copyDir does in a merge. One in a folder the paste made is
+	// undone with that folder.
 	own := top || p.merging[parent]
 	merge, replace := false, false
-	if own {
-		if _, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
+	if info, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
+		switch {
+		case !own && err == nil && it.dir && realDir(info):
+			// A folder this paste made, which the clipboard lists again
+			// under a name the file system takes for the same one.
+			merge = true
+		default:
+			// What is there was there before, or, in a folder the paste
+			// made, came a moment ago under a name the file system takes
+			// for this one's: either way the user says what goes.
 			var skip bool
-			var err error
 			dst, skip, merge, replace, err = r.resolveAs(it.name, dst, it.dir, outsideFacts(it))
 			if err != nil {
 				return err
@@ -377,7 +422,7 @@ func (p *outsidePaste) item(i int) error {
 	}
 	switch {
 	case it.dir && merge:
-		p.merging[it.name] = true
+		p.merging[it.name] = own
 	case it.dir:
 		if err := r.env.fs.Mkdir(dst, 0o755); err != nil {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
@@ -408,9 +453,15 @@ func (p *outsidePaste) item(i int) error {
 		r.did(it.name, dst)
 	}
 	if top {
-		r.rec.landed = append(r.rec.landed, ps.Base(dst))
+		p.landed[it.name] = append(p.landed[it.name], ps.Base(dst))
 	}
 	return nil
+}
+
+// topOf returns the name of the item at the top that name is in, or name.
+func topOf(name string) string {
+	top, _, _ := strings.Cut(name, "/")
+	return top
 }
 
 // folder returns where the folder called name on the clipboard went, or

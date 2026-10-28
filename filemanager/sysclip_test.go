@@ -2,9 +2,11 @@ package filemanager
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -21,7 +23,8 @@ func TestMain(m *testing.M) {
 }
 
 // fakeClip is a system clipboard a test fills: with paths, or with
-// items held as contents, each file's contents in data by its name.
+// items held as contents, each file's contents in data by its name, and
+// broken the files whose contents cannot be read.
 type fakeClip struct {
 	mu      sync.Mutex
 	n       uint32
@@ -29,7 +32,19 @@ type fakeClip struct {
 	cut     bool
 	list    []outsideItem
 	data    map[string]string
+	broken  map[string]bool
 	emptied bool
+}
+
+// breakFiles makes the contents of the files called names unreadable, or
+// all readable again where there are none.
+func (c *fakeClip) breakFiles(names ...string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.broken = map[string]bool{}
+	for _, n := range names {
+		c.broken[n] = true
+	}
 }
 
 // holdPaths puts paths on c, cut where cut is set, as Explorer does.
@@ -72,7 +87,7 @@ func (c *fakeClip) files() (systemFiles, error) {
 
 func (c *fakeClip) outside(fn func(outsideFiles) error) error {
 	c.mu.Lock()
-	of := fakeFiles{list: slices.Clone(c.list), data: c.data}
+	of := fakeFiles{list: slices.Clone(c.list), data: c.data, broken: c.broken}
 	c.mu.Unlock()
 	return fn(of)
 }
@@ -87,13 +102,17 @@ func (c *fakeClip) empty(seq uint32) {
 }
 
 type fakeFiles struct {
-	list []outsideItem
-	data map[string]string
+	list   []outsideItem
+	data   map[string]string
+	broken map[string]bool
 }
 
 func (f fakeFiles) items() []outsideItem { return f.list }
 
 func (f fakeFiles) open(i int) (io.ReadCloser, error) {
+	if f.broken[f.list[i].name] {
+		return nil, errors.New("the stream broke")
+	}
 	return io.NopCloser(strings.NewReader(f.data[f.list[i].name])), nil
 }
 
@@ -364,5 +383,127 @@ func TestACutThatDoesNotMoveStaysOnTheClipboard(t *testing.T) {
 	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
 	if c.emptied || !c.hasFiles() {
 		t.Fatal("a cut that did not move was taken off the clipboard")
+	}
+}
+
+func TestACutFromAnotherProgramIsPastedOnce(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "cut.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	h.do(Command{Name: CmdPaste})
+	// The clash holds the move open, and the clipboard keeps the cut.
+	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+	h.do(Command{Name: CmdPaste})
+	h.until("the second paste is turned away", func() bool {
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "pasted already") })
+	})
+	if len(h.a.ops.running) != 1 {
+		t.Fatalf("one cut started %d moves", len(h.a.ops.running))
+	}
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace})
+	h.until("the move ends", func() bool { return len(h.a.ops.running) == 0 })
+	if contents(t, filepath.Join(other, "cut.txt")) != "missing" || !c.emptied {
+		t.Fatal("the cut did not move, or stayed on the clipboard")
+	}
+}
+
+func TestAFolderWhoseFileFailedIsPastedAgainOnRetry(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "Photos", dir: true, size: -1},
+		{name: "Photos/a.jpg", size: 1},
+		{name: "Photos/b.jpg", size: 1},
+		{name: "z.txt", size: 1},
+	}, map[string]string{"Photos/a.jpg": "a", "Photos/b.jpg": "b", "z.txt": "z"})
+	c.breakFiles("Photos/b.jpg")
+	h.do(Command{Name: CmdPaste})
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !e.Retry {
+		t.Fatalf("the failure shows %+v, with nothing to try again", h.a.ops.dialogs[0].state)
+	}
+	c.breakFiles()
+	h.answer(DialogClosed{Retry: true})
+	// The retry finds the folder there, merges with it, and keeps a.jpg.
+	answers := map[string]Choice{"Photos": ChoiceReplace, "a.jpg": ChoiceSkip}
+	h.until("the retry ends", func() bool {
+		if len(h.a.ops.dialogs) == 1 {
+			ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+			if !ok {
+				t.Fatalf("the retry shows %+v", h.a.ops.dialogs[0].state)
+			}
+			h.answer(ClashAnswered{Op: ask.Op, Choice: answers[ask.Name]})
+		}
+		return len(h.a.ops.running) == 0 && h.exists("Photos/b.jpg")
+	})
+	if contents(t, at(h.dir, "Photos/b.jpg")) != "b" || contents(t, at(h.dir, "z.txt")) != "z" {
+		t.Fatal("the retry did not paste what the failure left out")
+	}
+}
+
+func TestNamesTheFolderTakesForOneAreAskedAbout(t *testing.T) {
+	seconds := []string{"Linux/README"}
+	if runtime.GOOS == "windows" {
+		// A program on a system that tells these apart may hold both.
+		seconds = append(seconds, "Linux/readme", "Linux/README.")
+	}
+	for _, second := range seconds {
+		t.Run(second, func(t *testing.T) {
+			c := useClip(t)
+			h := newHarness(t, "keep.txt")
+			h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+			c.holdContents([]outsideItem{
+				{name: "Linux", dir: true, size: -1},
+				{name: "Linux/README", size: 5},
+				{name: second, size: 5},
+			}, map[string]string{"Linux/README": "upper", second: "lower"})
+			h.do(Command{Name: CmdPaste})
+			h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+			ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+			if !ok || !strings.EqualFold(strings.TrimSuffix(ask.Name, "."), "README") {
+				t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+			}
+			h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceKeepBoth})
+			h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+			if got := names(t, filepath.Join(h.dir, "Linux")); len(got) != 2 {
+				t.Fatalf("Linux holds %q, not both files", got)
+			}
+		})
+	}
+}
+
+func TestAFolderListedTwiceGoesToOnePlace(t *testing.T) {
+	seconds := []string{"X/Sub"}
+	if runtime.GOOS == "windows" {
+		seconds = append(seconds, "X/sub", "X/Sub.")
+	}
+	for _, second := range seconds {
+		t.Run(second, func(t *testing.T) {
+			c := useClip(t)
+			h := newHarness(t, "keep.txt")
+			h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+			c.holdContents([]outsideItem{
+				{name: "X", dir: true, size: -1},
+				{name: "X/Sub", dir: true, size: -1},
+				{name: "X/Sub/a.txt", size: 1},
+				{name: second, dir: true, size: -1},
+				{name: second + "/b.txt", size: 1},
+			}, map[string]string{"X/Sub/a.txt": "a", second + "/b.txt": "b"})
+			h.do(Command{Name: CmdPaste})
+			h.until("the folder arrives", func() bool { return slices.Equal(h.shown(), []string{"X", "keep.txt"}) })
+			h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+			if len(h.a.ops.dialogs) > 0 {
+				t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+			}
+			if got := names(t, filepath.Join(h.dir, "X", "Sub")); !slices.Equal(got, []string{"a.txt", "b.txt"}) {
+				t.Fatalf("X/Sub holds %q", got)
+			}
+		})
 	}
 }
