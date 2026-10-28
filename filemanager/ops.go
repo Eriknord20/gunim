@@ -48,6 +48,9 @@ type job struct {
 	// is made with it.
 	password string
 	worked   func()
+	// outside says srcs name items another program put on the system
+	// clipboard as contents, which a copy reads from there.
+	outside bool
 }
 
 // step is one item an operation moved or made: what was at from is now at
@@ -135,6 +138,9 @@ type env struct {
 	limit float64
 	// pause, when set, holds the operation while it is paused.
 	pause *pauseGate
+	// outside runs fn with the files the system clipboard holds as
+	// contents, for a copy of them.
+	outside func(fn func(outsideFiles) error) error
 }
 
 // pauseGate holds an operation while it is paused.
@@ -195,6 +201,10 @@ func runJob(ctx context.Context, j job, e env) (record, error) {
 	var err error
 	switch j.kind {
 	case OpCopy:
+		if j.outside {
+			err = r.pasteOutside(j.srcs, j.dest)
+			break
+		}
 		err = r.copyAll(j.srcs, j.dest)
 	case OpMove:
 		err = r.moveAll(j.srcs, j.dest)
@@ -312,6 +322,20 @@ func freeName(fsys FS, path string) (string, error) {
 // beside it, or nowhere. merge says dst is a folder src's contents go
 // into, and replace that dst is a file src takes the place of.
 func (r *runner) resolve(src, dst string) (to string, skip, merge, replace bool, err error) {
+	if _, err := r.env.fs.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+		return dst, false, false, false, nil
+	}
+	sInfo, err := r.env.fs.Lstat(src)
+	if err != nil {
+		return "", false, false, false, err
+	}
+	return r.resolveAs(src, dst, realDir(sInfo), "")
+}
+
+// resolveAs is resolve for src, a folder where sDir is set, that may be
+// on no file system: from then says what it is, for the user to compare,
+// where it cannot be read.
+func (r *runner) resolveAs(src, dst string, sDir bool, from string) (to string, skip, merge, replace bool, err error) {
 	dInfo, err := r.env.fs.Lstat(dst)
 	if errors.Is(err, fs.ErrNotExist) {
 		return dst, false, false, false, nil
@@ -319,11 +343,7 @@ func (r *runner) resolve(src, dst string) (to string, skip, merge, replace bool,
 	if err != nil {
 		return "", false, false, false, err
 	}
-	sInfo, err := r.env.fs.Lstat(src)
-	if err != nil {
-		return "", false, false, false, err
-	}
-	sDir, dDir := realDir(sInfo), realDir(dInfo)
+	dDir := realDir(dInfo)
 	ans := answer{}
 	if r.all != nil {
 		ans = *r.all
@@ -331,7 +351,7 @@ func (r *runner) resolve(src, dst string) (to string, skip, merge, replace bool,
 		if r.env.ask == nil {
 			return "", false, false, false, fmt.Errorf("%s already exists", r.env.fs.Paths().Show(dst))
 		}
-		ans, err = r.env.ask(r.ctx, clash{src: src, dst: dst, sameKind: sDir == dDir})
+		ans, err = r.env.ask(r.ctx, clash{src: src, dst: dst, sameKind: sDir == dDir, from: from})
 		if err != nil {
 			return "", false, false, false, err
 		}

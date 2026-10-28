@@ -186,7 +186,7 @@ func (pg *listingPage) contextMenu(g gunim.Node, rowAt func(geom.Point) int, sel
 		// no longer fill one.
 		b.dnd.withAsked = ""
 		row := rowAt(at)
-		clipEmpty := b.dnd.clip.Count == 0
+		clipEmpty := b.dnd.clip.Count == 0 && !systemClip.hasFiles()
 		if row < 0 {
 			b.listing.selectNone(u)
 			st = menuState{path: b.listing.path}

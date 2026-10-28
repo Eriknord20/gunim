@@ -167,6 +167,10 @@ func (a *app) opsCommand(name string) bool {
 		if here == "" {
 			return true
 		}
+		if a.systemClipNewer() {
+			a.pasteSystem(here)
+			return true
+		}
 		if c := a.ops.away; len(c.paths) > 0 {
 			if c.cut {
 				// A cut is pasted once: not again, by a window that had
@@ -368,19 +372,23 @@ func (a *app) startOp(j job, title string) {
 	id, ctx, _ := a.newOp(title, j.kind)
 	r := a.ops.running[id]
 	r.pause = &pauseGate{}
-	if len(j.srcs) > 0 && (j.kind == OpCopy || j.kind == OpMove || j.kind == OpZip) {
+	switch {
+	case j.outside:
+		r.from = "Clipboard"
+	case len(j.srcs) > 0 && (j.kind == OpCopy || j.kind == OpMove || j.kind == OpZip):
 		r.from = a.placeLabel(a.fs.ID(), a.ps.Dir(j.srcs[0]))
 	}
 	if j.kind == OpCopy || j.kind == OpMove {
 		r.to = a.ps.placeName(j.dest)
 	}
 	e := env{
-		pause:  r.pause,
-		fs:     a.fs,
-		trash:  a.trash,
-		ask:    func(ctx context.Context, c clash) (answer, error) { return a.askClash(ctx, id, c) },
-		report: func(p progress) { a.post(func() { a.progressed(id, p) }) },
-		limit:  a.ops.limit,
+		pause:   r.pause,
+		fs:      a.fs,
+		trash:   a.trash,
+		ask:     func(ctx context.Context, c clash) (answer, error) { return a.askClash(ctx, id, c) },
+		report:  func(p progress) { a.post(func() { a.progressed(id, p) }) },
+		limit:   a.ops.limit,
+		outside: systemClip.outside,
 	}
 	if j.kind == OpExtract {
 		ask := PasswordAsk{FS: a.fs.ID(), Path: j.srcs[0], Where: a.ps.Show(j.srcs[0])}
