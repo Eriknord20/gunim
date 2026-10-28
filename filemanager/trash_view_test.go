@@ -465,3 +465,17 @@ func TestEmptyWaitsForTheTrashToList(t *testing.T) {
 		t.Fatal("Empty stays dimmed once the trash lists an item")
 	}
 }
+
+func TestTheTrashStillOpensOnAFileSystemGoneBackTo(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	// Back to a file system hands the window it as the window had it, with
+	// its archives opened.
+	h.a.showFS(h.a.fs, h.dir)
+	h.frames(5)
+	if _, wrapped := h.a.trash.(*archives); !wrapped {
+		t.Fatalf("the window's trash is a %T, not one that opens archives", h.a.trash)
+	}
+	if _, ok := h.a.trashCan(); !ok || h.a.shell.NoTrashCan != !canOpen(LocalFS().(Trasher)) {
+		t.Fatalf("gone back to, the trash opens %v, and Go › Trash is dimmed %v", ok, h.a.shell.NoTrashCan)
+	}
+}

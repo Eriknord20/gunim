@@ -126,14 +126,25 @@ func (a *app) openTrashCan() {
 // trashCan is the trash of the window's file system, where the window can
 // open it.
 func (a *app) trashCan() (TrashCan, bool) {
-	c, ok := a.trash.(TrashCan)
+	c, ok := bareTrash(a.trash).(TrashCan)
 	return c, ok
+}
+
+// bareTrash is t, or the trash of the file system under it where t opens
+// archives, as a window's file system does once it has been gone back to.
+// The trash holds no archive's items, so its page needs none of that.
+func bareTrash(t Trasher) Trasher {
+	if a, ok := t.(*archives); ok {
+		return under[Trasher](a)
+	}
+	return t
 }
 
 // canOpen reports whether the window can open the trash t. The
 // computer's own is one on every system, and opens only where the system
 // has a trash the window knows.
 func canOpen(t Trasher) bool {
+	t = bareTrash(t)
 	if _, ok := t.(localFS); ok {
 		_, err := systemTrashCan()
 		return err == nil
@@ -199,7 +210,7 @@ func byDeleted(a, b TrashItem) int {
 // trashTitle is what the system calls the trash of the window's file
 // system: the computer's own on Windows is the Recycle Bin.
 func (a *app) trashTitle() string {
-	if _, ok := a.trash.(localFS); ok && runtime.GOOS == "windows" {
+	if _, ok := bareTrash(a.trash).(localFS); ok && runtime.GOOS == "windows" {
 		return "Recycle Bin"
 	}
 	return "Trash"
