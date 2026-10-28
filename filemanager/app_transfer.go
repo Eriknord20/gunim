@@ -76,8 +76,9 @@ func lastName(path string) string {
 // transfer has the program copy the items at paths on the file system of
 // ID from, which writes them as ps, into the folder into on the file
 // system of ID to, or move them there with move: one transfer for each
-// folder they are in, each an operation of the window.
-func (a *app) transfer(from string, ps PathStyle, paths []string, to, into string, move bool) {
+// folder they are in, each an operation of the window. worked, when set,
+// is told once every one went well.
+func (a *app) transfer(from string, ps PathStyle, paths []string, to, into string, move bool, worked func()) {
 	if to == a.fs.ID() {
 		if at := a.archiveOf(into, true); at != "" {
 			a.refuseArchive(at)
@@ -93,8 +94,18 @@ func (a *app) transfer(from string, ps PathStyle, paths []string, to, into strin
 		}
 		ts[i].Paths = append(ts[i].Paths, p)
 	}
+	var each func()
+	if worked != nil {
+		left := len(ts)
+		each = func() {
+			left--
+			if left == 0 {
+				worked()
+			}
+		}
+	}
 	for _, t := range ts {
-		a.startTransfer(t, ps, nil)
+		a.startTransfer(t, ps, each)
 	}
 }
 

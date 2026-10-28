@@ -143,10 +143,16 @@ func (s PathStyle) VolumeName(p string) string {
 // Same reports whether a and b name the same place.
 func (s PathStyle) Same(a, b string) bool {
 	a, b = s.Clean(a), s.Clean(b)
-	if s == DrivePaths || s == SystemPaths && runtime.GOOS == "windows" {
+	if s.ignoresCase() {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+// ignoresCase reports whether paths of style s that differ only in the
+// case of their letters name the same place.
+func (s PathStyle) ignoresCase() bool {
+	return s == DrivePaths || s == SystemPaths && runtime.GOOS == "windows"
 }
 
 // Rel returns the path to target from base, as filepath.Rel does. Paths

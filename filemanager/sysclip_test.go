@@ -263,3 +263,106 @@ func TestPasteTakesWhicheverWasCopiedLast(t *testing.T) {
 		return slices.Equal(h.shown(), []string{"mine.txt", "theirs.txt"})
 	})
 }
+
+func TestAFolderSkippedAfterItsItemsTakesThemWithIt(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "sub/")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	// The clipboard lists the folder's file before the folder.
+	c.holdContents([]outsideItem{{name: "sub/b.txt", size: 3}, {name: "sub", dir: true, size: -1}},
+		map[string]string{"sub/b.txt": "bee"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+	if !ok || ask.Name != "sub" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("sub/b.txt") || h.exists("b.txt") || contents(t, "b.txt") != "missing" {
+		t.Fatal("the file of the folder skipped was written")
+	}
+}
+
+func TestAFileHeldWithItemsInsideIsRefused(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{{name: "x", size: 1}, {name: "x/y", size: 1}}, map[string]string{"x": "x", "x/y": "y"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !strings.Contains(e.Detail+e.Body, "as a file") {
+		t.Fatalf("the failure shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("y") || contents(t, "y") != "missing" {
+		t.Fatal("the item inside the file was written outside it")
+	}
+}
+
+func TestAPasteIntoAFolderAlreadyThereCanBeUndone(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "Reports/old.txt", "Reports/same.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	c.holdContents([]outsideItem{
+		{name: "Reports", dir: true, size: -1},
+		{name: "Reports/new.txt", size: 3},
+		{name: "Reports/same.txt", size: 3},
+	}, map[string]string{"Reports/new.txt": "new", "Reports/same.txt": "now"})
+	h.do(Command{Name: CmdPaste})
+	for _, name := range []string{"Reports", "same.txt"} {
+		h.until("the clash about "+name+" is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+		if !ok || ask.Name != name {
+			t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+		}
+		h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace})
+	}
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+	if contents(t, at(h.dir, "Reports/new.txt")) != "new" || contents(t, at(h.dir, "Reports/same.txt")) != "now" {
+		t.Fatal("the paste did not merge the folders")
+	}
+	if !slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Body, "1 file replaced") }) {
+		t.Fatalf("no notice says a file was replaced: %+v", got())
+	}
+	h.do(Command{Name: CmdUndo})
+	h.until("undo takes the new file away", func() bool { return !h.exists("Reports/new.txt") })
+	if contents(t, at(h.dir, "Reports/old.txt")) != "Reports/old.txt" {
+		t.Fatal("undo took away what was there before")
+	}
+}
+
+func TestAFolderSpelledTwoWaysGoesToOnePlace(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	if !h.a.ps.ignoresCase() {
+		t.Skip("the folder's paths tell names apart by case")
+	}
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{{name: "Reports", dir: true, size: -1}, {name: "reports/q3.txt", size: 2}},
+		map[string]string{"reports/q3.txt": "q3"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the folder arrives", func() bool { return slices.Equal(h.shown(), []string{"Reports", "keep.txt"}) })
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if got := names(t, filepath.Join(h.dir, "Reports")); !slices.Equal(got, []string{"q3.txt"}) {
+		t.Fatalf("Reports holds %q", got)
+	}
+}
+
+func TestACutThatDoesNotMoveStaysOnTheClipboard(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "here.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdPaths(true, filepath.Join(h.root, "gone.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if c.emptied || !c.hasFiles() {
+		t.Fatal("a cut that did not move was taken off the clipboard")
+	}
+}

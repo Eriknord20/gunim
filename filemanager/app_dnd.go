@@ -98,7 +98,7 @@ func (a *app) dropFiles(v DropFiles) {
 		}
 		// Files from another program are the computer's own, written as
 		// it writes paths, which Style is by default.
-		a.transfer(v.FS, v.Style, v.Paths, v.To, v.Into, !v.Copy)
+		a.transfer(v.FS, v.Style, v.Paths, v.To, v.Into, !v.Copy, nil)
 		return
 	}
 	for _, p := range v.Paths {

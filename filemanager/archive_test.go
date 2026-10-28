@@ -379,7 +379,7 @@ func TestATransferOutOfAZipCarriesTheZip(t *testing.T) {
 	zp := filepath.Join(h.dir, "a.zip")
 	writeZip(t, zp, map[string]string{"in.txt": "inside"})
 	in := filepath.Join(zp, "in.txt")
-	h.a.transfer("", SystemPaths, []string{in}, "server", "/srv", true)
+	h.a.transfer("", SystemPaths, []string{in}, "server", "/srv", true, nil)
 	c := ho.next(h)
 	if c.t.From == nil || c.t.Move {
 		t.Fatalf("the transfer is %+v, want one from the zip that copies", c.t)
@@ -389,7 +389,7 @@ func TestATransferOutOfAZipCarriesTheZip(t *testing.T) {
 	}
 	c.reply <- nil
 
-	h.a.transfer("", SystemPaths, []string{filepath.Join(h.dir, "a.zip")}, "server", "/srv", true)
+	h.a.transfer("", SystemPaths, []string{filepath.Join(h.dir, "a.zip")}, "server", "/srv", true, nil)
 	if c := ho.next(h); c.t.From != nil || !c.t.Move {
 		t.Fatalf("the zip itself went as %+v", c.t)
 	} else {

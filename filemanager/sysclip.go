@@ -190,18 +190,21 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 		a.fail("Items cannot go between file systems yet.")
 		return
 	}
+	var moved func()
 	if sf.cut {
-		// What was cut is pasted once, as in Explorer.
-		systemClip.empty(sf.seq)
+		// What was cut is pasted once, as in Explorer: once it has moved,
+		// so a move that fails can be pasted again.
+		moved = func() { systemClip.empty(sf.seq) }
 	}
 	if fsID != "" {
 		// Paths from another program are the computer's own.
-		a.transfer("", SystemPaths, sf.paths, fsID, here, sf.cut)
+		a.transfer("", SystemPaths, sf.paths, fsID, here, sf.cut, moved)
 		return
 	}
 	srcs := sf.paths
 	if sf.cut {
-		a.startOp(job{kind: OpMove, srcs: srcs, dest: here}, "Moving "+a.what(srcs)+" to "+a.ps.placeName(here))
+		a.startOp(job{kind: OpMove, srcs: srcs, dest: here, worked: moved},
+			"Moving "+a.what(srcs)+" to "+a.ps.placeName(here))
 		return
 	}
 	a.startOp(job{kind: OpCopy, srcs: srcs, dest: here}, "Copying "+a.what(srcs)+" to "+a.ps.placeName(here))
@@ -262,14 +265,19 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 	}
 	return r.env.outside(func(of outsideFiles) error {
 		ps := r.env.fs.Paths()
-		items := of.items()
+		items := spelledAlike(ps, of.items())
+		found := map[string]bool{}
+		for _, n := range names {
+			found[caseKey(ps, n)] = false
+		}
 		var picked []int
 		for i, it := range items {
-			parts := strings.Split(it.name, "/")
-			if !slices.Contains(names, parts[0]) {
+			top, _, _ := strings.Cut(it.name, "/")
+			if _, ok := found[caseKey(ps, top)]; !ok {
 				continue
 			}
-			for _, part := range parts {
+			found[caseKey(ps, top)] = true
+			for part := range strings.SplitSeq(it.name, "/") {
 				if err := checkName(ps, part); err != nil {
 					return fmt.Errorf("the clipboard holds %s, which cannot be written here: %w", it.name, err)
 				}
@@ -279,12 +287,13 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 			r.p.bytesTotal += max(it.size, 0)
 		}
 		for _, n := range names {
-			if !slices.ContainsFunc(picked, func(i int) bool { return strings.Split(items[i].name, "/")[0] == n }) {
+			if !found[caseKey(ps, n)] {
 				return fmt.Errorf("%s is no longer on the clipboard", n)
 			}
 		}
 		r.tell(true)
-		p := outsidePaste{r: r, of: of, items: items, dest: dest, to: map[string]string{}}
+		p := outsidePaste{r: r, of: of, items: items, dest: dest,
+			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}}
 		for _, i := range picked {
 			if err := p.item(i); err != nil {
 				return err
@@ -319,9 +328,6 @@ func (p *outsidePaste) item(i int) error {
 		// A folder its first item reached before it.
 		return nil
 	}
-	if p.done == nil {
-		p.done = map[int]bool{}
-	}
 	p.done[i] = true
 	if err := r.ctx.Err(); err != nil {
 		return err
@@ -331,7 +337,7 @@ func (p *outsidePaste) item(i int) error {
 	if at := strings.LastIndex(it.name, "/"); at >= 0 {
 		parent, base = it.name[:at], it.name[at+1:]
 	}
-	if slices.ContainsFunc(p.skipped, func(s string) bool { return parent == s || strings.HasPrefix(parent, s+"/") }) {
+	if p.skippedIn(parent) {
 		return p.skip(it)
 	}
 	into := p.dest
@@ -340,12 +346,20 @@ func (p *outsidePaste) item(i int) error {
 		if into, err = p.folder(parent); err != nil {
 			return err
 		}
+		if into == "" {
+			// The user skipped the folder, which the clipboard lists
+			// after this item.
+			return p.skip(it)
+		}
 	}
 	r.p.current = it.name
 	dst := ps.Join(into, base)
 	top := parent == ""
+	// An item whose folder went into one already there may clash, and is
+	// undone on its own, as copyDir does in a merge.
+	own := top || p.merging[parent]
 	merge, replace := false, false
-	if top || p.merging[parent] {
+	if own {
 		if _, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			var skip bool
 			var err error
@@ -363,9 +377,6 @@ func (p *outsidePaste) item(i int) error {
 	}
 	switch {
 	case it.dir && merge:
-		if p.merging == nil {
-			p.merging = map[string]bool{}
-		}
 		p.merging[it.name] = true
 	case it.dir:
 		if err := r.env.fs.Mkdir(dst, 0o755); err != nil {
@@ -387,7 +398,7 @@ func (p *outsidePaste) item(i int) error {
 	}
 	r.p.items++
 	r.tell(false)
-	if !top {
+	if !own {
 		return nil
 	}
 	switch {
@@ -396,36 +407,78 @@ func (p *outsidePaste) item(i int) error {
 	case !merge:
 		r.did(it.name, dst)
 	}
-	r.rec.landed = append(r.rec.landed, ps.Base(dst))
+	if top {
+		r.rec.landed = append(r.rec.landed, ps.Base(dst))
+	}
 	return nil
 }
 
-// folder returns where the folder called name on the clipboard went. A
-// program may leave a folder out and list only the files in it; such a
-// folder is made, in the folder its own parent went to, when its first
-// item comes.
+// folder returns where the folder called name on the clipboard went, or
+// "" where the user skipped it. A program may leave a folder out and list
+// only the files in it; such a folder is made, in the folder its own
+// parent went to, when its first item comes.
 func (p *outsidePaste) folder(name string) (string, error) {
 	if to, ok := p.to[name]; ok {
 		return to, nil
 	}
-	for i, it := range p.items {
-		if it.name == name {
-			if err := p.item(i); err != nil {
-				return "", err
-			}
-			return p.to[name], nil
-		}
+	i := slices.IndexFunc(p.items, func(it outsideItem) bool { return it.name == name })
+	if i < 0 {
+		p.items = append(p.items, outsideItem{name: name, dir: true, size: -1})
+		p.r.p.itemsTotal++
+		i = len(p.items) - 1
 	}
-	err := p.itemOf(outsideItem{name: name, dir: true, size: -1})
-	return p.to[name], err
+	if err := p.item(i); err != nil {
+		return "", err
+	}
+	if to, ok := p.to[name]; ok {
+		return to, nil
+	}
+	if p.skippedIn(name) {
+		return "", nil
+	}
+	return "", fmt.Errorf("the clipboard holds %s as a file, and items inside it", name)
 }
 
-// itemOf pastes it, a folder the clipboard leaves out, as the item after
-// the ones it holds.
-func (p *outsidePaste) itemOf(it outsideItem) error {
-	p.items = append(p.items, it)
-	p.r.p.itemsTotal++
-	return p.item(len(p.items) - 1)
+// skippedIn reports whether name is a folder the user skipped, or is in
+// one.
+func (p *outsidePaste) skippedIn(name string) bool {
+	return slices.ContainsFunc(p.skipped, func(s string) bool { return name == s || strings.HasPrefix(name, s+"/") })
+}
+
+// spelledAlike returns items with each folder on the way to an item
+// spelled as the first item to reach it spells it, where paths of style
+// ps ignore case: a folder a program spells two ways goes to one place.
+func spelledAlike(ps PathStyle, items []outsideItem) []outsideItem {
+	out := slices.Clone(items)
+	if !ps.ignoresCase() {
+		return out
+	}
+	first := map[string]string{}
+	for i := range out {
+		var name string
+		for part := range strings.SplitSeq(out[i].name, "/") {
+			if name != "" {
+				name += "/"
+			}
+			name += part
+			if s, ok := first[caseKey(ps, name)]; ok {
+				name = s
+			} else {
+				first[caseKey(ps, name)] = name
+			}
+		}
+		out[i].name = name
+	}
+	return out
+}
+
+// caseKey returns name as paths of style ps compare it: in lower case
+// where they ignore case.
+func caseKey(ps PathStyle, name string) string {
+	if ps.ignoresCase() {
+		return strings.ToLower(name)
+	}
+	return name
 }
 
 // skip counts it as done, the user having skipped it or the folder it
