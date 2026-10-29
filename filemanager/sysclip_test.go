@@ -13,7 +13,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // TestMain keeps the tests off the system's own clipboard, which holds
@@ -1043,8 +1047,9 @@ func TestALooseKeyTakesWhatAnyFileSystemMayTakeForOneNameForOne(t *testing.T) {
 		{"C:\\d\\Caf\u00e9.txt", "C:\\d\\Cafe\u0301.txt", "c:\\D\\CAF\u00c9.TXT"},
 		// Letters composed in one case only.
 		{"/d/J\u030c.txt", "/d/\u01f0.txt", "/d/j\u030c.txt"},
-		// What lower-casing joins, which the key must not keep apart.
-		{"/d/\u0130.txt", "/d/I.txt", "/d/i.txt"},
+		// What lower-casing joins, which the key must not keep apart, and
+		// the decomposed form of that same letter.
+		{"/d/\u0130.txt", "/d/I.txt", "/d/i.txt", "/d/I\u0307.txt", "/d/i\u0307.txt"},
 		// Full case folding.
 		{"/d/Stra\u00dfe.txt", "/d/STRASSE.txt"},
 		// What Windows drops from the end of a name.
@@ -1062,9 +1067,25 @@ func TestALooseKeyTakesWhatAnyFileSystemMayTakeForOneNameForOne(t *testing.T) {
 	}
 }
 
+func TestALooseKeyTakesEveryLetterInEitherUnicodeFormForOne(t *testing.T) {
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !utf8.ValidRune(r) {
+			continue
+		}
+		// Alone, and before a mark a Mac may order differently.
+		for _, s := range []string{string(r), string(r) + "̣"} {
+			if d := norm.NFD.String(s); looseKey(d) != looseKey(s) {
+				t.Errorf("%+q is %+q, and its decomposed form is %+q", s, looseKey(s), looseKey(d))
+			}
+		}
+	}
+}
+
 func TestAFileThereBeforeInTheOtherUnicodeFormIsKept(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows keeps the two Unicode forms of a name apart")
+	probe := t.TempDir()
+	tree(t, probe, "Café.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "Café.txt")); err == nil {
+		t.Skip("this file system takes the two Unicode forms of a name for one")
 	}
 	c := useClip(t)
 	decomposed := "Cafe\u0301.txt"

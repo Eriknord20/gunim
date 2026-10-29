@@ -545,14 +545,16 @@ func (p *outsidePaste) allFor(own bool, dst string) **answer {
 // then case-folded in full, as a file system that takes ß for ss does,
 // and in one Unicode form, as a Mac takes the composed and decomposed
 // spellings of a name for one. The fold is of the decomposed name, as
-// Unicode's canonical caseless match has it. It is made from what
-// looseName gives, so it never keeps apart two names looseName joins: a
-// name taken too loosely costs a question, in allFor, where one taken
-// too strictly could cost a file.
+// Unicode's canonical caseless match has it, and drops the dot above,
+// which strings.ToLower drops from İ but not from its decomposed form. It
+// is made from what looseName gives, so it never keeps apart two names
+// looseName joins: a name taken too loosely costs a question, in allFor,
+// where one taken too strictly could cost a file.
 func looseKey(path string) string {
 	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	for i, n := range names {
-		names[i] = norm.NFC.String(cases.Fold().String(norm.NFD.String(looseName(n))))
+		folded := cases.Fold().String(norm.NFD.String(looseName(n)))
+		names[i] = norm.NFC.String(strings.ReplaceAll(folded, "̇", ""))
 	}
 	return strings.Join(names, "/")
 }
