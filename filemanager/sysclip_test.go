@@ -944,7 +944,10 @@ func TestAClashThatMayBeWithAFileThereBeforeIsAskedAbout(t *testing.T) {
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
 	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
 	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
-	ask = h.a.ops.dialogs[0].state.(ClashAsk)
+	ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+	if !ok || ask.Name != "a.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
 	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
 	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
 	if contents(t, filepath.Join(h.dir, "a.txt")) != "a.txt" {
@@ -1000,5 +1003,40 @@ func TestAnAnswerForAllOfClashesThatMayBeEitherHoldsForThem(t *testing.T) {
 	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 && h.exists("B.txt") })
 	if len(h.a.ops.dialogs) > 0 {
 		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
+	}
+	if contents(t, filepath.Join(h.dir, "A.txt")) != "A" || contents(t, filepath.Join(h.dir, "B.txt")) != "B" {
+		t.Fatal("a skipped item replaced the one it clashed with")
+	}
+}
+
+func TestAnAnswerForAllWithinTheClipboardIsNotOneForAClashThatMayBeEither(t *testing.T) {
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err == nil {
+		t.Skip("this file system takes names that differ in case for one")
+	}
+	c := useClip(t)
+	h := newHarness(t, "a.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "img.png", size: 1},
+		{name: "img.png", size: 1},
+		{name: "A.txt", size: 1},
+		{name: "a.txt", size: 1},
+	}, map[string]string{"img.png": "i", "A.txt": "A", "a.txt": "n"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash between the two img.png is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "a.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+func TestALooseKeyTakesASpellingInEitherUnicodeFormForOne(t *testing.T) {
+	composed, decomposed := "/d/Caf\u00e9.txt", "/d/Cafe\u0301.txt"
+	if looseKey(composed) != looseKey(decomposed) || looseKey(composed) != looseKey("/D/CAF\u00c9.TXT") {
+		t.Fatalf("the keys are %q, %q", looseKey(composed), looseKey(decomposed))
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // What another program cuts or copies reaches a window through the
@@ -537,9 +539,12 @@ func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	return &p.unsureAll
 }
 
-// looseKey returns path with each name in it as looseName gives it.
+// looseKey returns path with each name in it as looseName gives it, in
+// one Unicode form: a Mac takes the composed and decomposed spellings of
+// a name for one, though Windows keeps them apart and spelledAlike may
+// not join them.
 func looseKey(path string) string {
-	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
+	names := strings.FieldsFunc(norm.NFC.String(path), func(r rune) bool { return r == '/' || r == '\\' })
 	for i, n := range names {
 		names[i] = looseName(n)
 	}
