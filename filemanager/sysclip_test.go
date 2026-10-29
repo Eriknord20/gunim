@@ -857,6 +857,9 @@ func TestACutPastedAgainMovesWhatAStoppedMoveLeft(t *testing.T) {
 	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
 	other := filepath.Join(h.root, "other")
 	tree(t, other, "a.txt", "b.txt", "c.txt")
+	if err := os.WriteFile(filepath.Join(other, "b.txt"), []byte("cut b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	c.holdPaths(true, filepath.Join(other, "a.txt"), filepath.Join(other, "b.txt"), filepath.Join(other, "c.txt"))
 	for i, choice := range []ClashAnswered{{Stop: true}, {Choice: ChoiceReplace}} {
 		h.do(Command{Name: CmdPaste})
@@ -875,7 +878,31 @@ func TestACutPastedAgainMovesWhatAStoppedMoveLeft(t *testing.T) {
 	if len(h.a.ops.dialogs) > 0 {
 		t.Fatalf("the second paste shows %+v", h.a.ops.dialogs[0].state)
 	}
-	if contents(t, filepath.Join(h.dir, "b.txt")) != "b.txt" || !h.exists("c.txt") {
+	if contents(t, filepath.Join(h.dir, "b.txt")) != "cut b" || !h.exists("c.txt") {
 		t.Fatal("the second paste did not move what the first left")
+	}
+}
+
+func TestAClashBetweenItemsTheFileSystemTakesForOneIsAskedAbout(t *testing.T) {
+	c := useClip(t)
+	h := newHarnessWith(t, onSlashFS, "x.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
+		t.Skip("this file system tells names apart by case")
+	}
+	c.holdContents([]outsideItem{
+		{name: "x.txt", size: 1},
+		{name: "A.txt", size: 5},
+		{name: "a.txt", size: 5},
+	}, map[string]string{"x.txt": "X", "A.txt": "upper", "a.txt": "lower"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "a.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
 	}
 }

@@ -124,15 +124,17 @@ func globalBytes(h uintptr) []byte {
 	return bytes.Clone(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), n))
 }
 
-func (c osClip) files() (systemFiles, error) {
+func (c osClip) files() (sf systemFiles, err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	var sf systemFiles
 	if err := openClipboard(); err != nil {
 		return sf, err
 	}
 	defer closeClipboard()
-	sf.seq = c.seq()
+	// The seq once all read is rendered, before the clipboard closes: a
+	// program that renders what it holds only when asked changes the seq
+	// as it does, so a seq read before would not be the one the cut keeps.
+	defer func() { sf.seq = c.seq() }()
 	if h, _, _ := procGetClipboardData.Call(cfHDrop); h != 0 {
 		count, _, _ := procDragQueryFileW.Call(h, 0xffffffff, 0, 0)
 		for i := range count {

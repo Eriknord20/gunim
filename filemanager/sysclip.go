@@ -360,7 +360,7 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 		r.tell(true)
 		p := outsidePaste{r: r, of: of, items: items, dest: dest,
 			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}, landed: map[string][]string{},
-			written: map[string]bool{}}
+			written: map[string][]string{}}
 		left := map[string]int{}
 		for _, i := range picked {
 			left[topOf(items[i].name)]++
@@ -387,10 +387,9 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // undone on their own; skipped the folders the user skipped; done the
 // items pasted, by their index; made the folders it made, to set their
 // times once their files are in; landed the names each item at the top
-// went to; written the paths the paste wrote, as nameKey gives them; and
+// went to; written the paths the paste wrote, by their looseName; and
 // selfAll the answer for every clash between two items of the clipboard,
-// once given. A short name Windows gives one of them is not known for
-// it, as only the file system can say what a short name stands for.
+// once given.
 type outsidePaste struct {
 	r       *runner
 	of      outsideFiles
@@ -402,7 +401,7 @@ type outsidePaste struct {
 	done    map[int]bool
 	made    []int
 	landed  map[string][]string
-	written map[string]bool
+	written map[string][]string
 	selfAll *answer
 }
 
@@ -461,10 +460,7 @@ func (p *outsidePaste) item(i int) error {
 			// one's, as it always did in a folder the paste made: either
 			// way the user says what goes, but an answer for all of one
 			// kind is not one for the other.
-			all := &r.all
-			if !own || p.written[nameKey(ps, dst)] {
-				all = &p.selfAll
-			}
+			all := p.allFor(own, dst, info)
 			var skip bool
 			dst, skip, merge, replace, err = r.resolveAs(it.name, dst, it.dir, outsideFacts(it), all)
 			if err != nil {
@@ -486,7 +482,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
-		p.written[nameKey(ps, dst)] = true
+		p.written[looseName(dst)] = append(p.written[looseName(dst)], dst)
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -496,7 +492,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
-		p.written[nameKey(ps, dst)] = true
+		p.written[looseName(dst)] = append(p.written[looseName(dst)], dst)
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -516,6 +512,33 @@ func (p *outsidePaste) item(i int) error {
 		p.landed[it.name] = append(p.landed[it.name], ps.Base(dst))
 	}
 	return nil
+}
+
+// allFor returns the answer for all that a clash at dst, with what is
+// there described by info, takes: the clipboard's own where this paste
+// wrote what is there, the one for what was there before where it did
+// not, and none, so the user is asked, where the file system cannot say
+// whether a file the paste wrote under a name it may take for this one
+// is the one there. A short name Windows gives a file is not known for
+// it, as only Windows can say what a short name stands for.
+func (p *outsidePaste) allFor(own bool, dst string, info fs.FileInfo) **answer {
+	if !own {
+		return &p.selfAll
+	}
+	fsys := p.r.env.fs
+	for _, w := range p.written[looseName(dst)] {
+		if w == dst {
+			return &p.selfAll
+		}
+		if _, ok := optional[SameFiler](fsys); !ok || info == nil {
+			var none *answer
+			return &none
+		}
+		if wi, err := fsys.Lstat(w); err == nil && sameFile(fsys, wi, info) {
+			return &p.selfAll
+		}
+	}
+	return &p.r.all
 }
 
 // looseName returns name as the loosest file system takes it: in lower
