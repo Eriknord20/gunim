@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -883,26 +884,68 @@ func TestACutPastedAgainMovesWhatAStoppedMoveLeft(t *testing.T) {
 	}
 }
 
+// noSameFS is a slash file system that cannot tell two files for one,
+// as one reached by SFTP may not.
+type noSameFS struct{ slashFS }
+
+func (noSameFS) SameFile(_, _ iofs.FileInfo) bool { return false }
+
 func TestAClashBetweenItemsTheFileSystemTakesForOneIsAskedAbout(t *testing.T) {
-	c := useClip(t)
-	h := newHarnessWith(t, onSlashFS, "x.txt")
-	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
 	probe := t.TempDir()
 	tree(t, probe, "A.txt")
 	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
 		t.Skip("this file system tells names apart by case")
 	}
+	for name, on := range map[string]func(o *Options){
+		"slash paths":                     onSlashFS,
+		"slash paths, files not compared": func(o *Options) { o.FS, o.Dir = noSameFS{slashFS{root: o.Dir}}, "/" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := useClip(t)
+			h := newHarnessWith(t, on, "x.txt")
+			h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+			c.holdContents([]outsideItem{
+				{name: "x.txt", size: 1},
+				{name: "A.txt", size: 5},
+				{name: "a.txt", size: 5},
+			}, map[string]string{"x.txt": "X", "A.txt": "upper", "a.txt": "lower"})
+			h.do(Command{Name: CmdPaste})
+			h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+			ask := h.a.ops.dialogs[0].state.(ClashAsk)
+			h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+			h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+			if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "a.txt" {
+				t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+			}
+		})
+	}
+}
+
+func TestAClashWithAFileThereBeforeTakesItsAnswerForAll(t *testing.T) {
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err == nil {
+		t.Skip("this file system takes names that differ in case for one")
+	}
+	c := useClip(t)
+	h := newHarness(t, "x.txt", "a.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	// The paste writes A.txt beside the a.txt there before; the a.txt it
+	// holds clashes with that one, not with what it wrote.
 	c.holdContents([]outsideItem{
-		{name: "x.txt", size: 1},
 		{name: "A.txt", size: 5},
+		{name: "x.txt", size: 1},
 		{name: "a.txt", size: 5},
-	}, map[string]string{"x.txt": "X", "A.txt": "upper", "a.txt": "lower"})
+	}, map[string]string{"A.txt": "upper", "x.txt": "X", "a.txt": "lower"})
 	h.do(Command{Name: CmdPaste})
 	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
-	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
-	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
-	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "a.txt" {
-		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
+	h.until("the paste ends", func() bool { return h.exists("A.txt") && len(h.a.ops.running) == 0 })
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
+	}
+	if contents(t, filepath.Join(h.dir, "a.txt")) != "a.txt" {
+		t.Fatal("the a.txt there before was replaced")
 	}
 }

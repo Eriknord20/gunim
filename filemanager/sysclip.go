@@ -460,7 +460,7 @@ func (p *outsidePaste) item(i int) error {
 			// one's, as it always did in a folder the paste made: either
 			// way the user says what goes, but an answer for all of one
 			// kind is not one for the other.
-			all := p.allFor(own, dst, info)
+			all := p.allFor(own, dst)
 			var skip bool
 			dst, skip, merge, replace, err = r.resolveAs(it.name, dst, it.dir, outsideFacts(it), all)
 			if err != nil {
@@ -514,27 +514,41 @@ func (p *outsidePaste) item(i int) error {
 	return nil
 }
 
-// allFor returns the answer for all that a clash at dst, with what is
-// there described by info, takes: the clipboard's own where this paste
-// wrote what is there, the one for what was there before where it did
-// not, and none, so the user is asked, where the file system cannot say
-// whether a file the paste wrote under a name it may take for this one
-// is the one there. A short name Windows gives a file is not known for
-// it, as only Windows can say what a short name stands for.
-func (p *outsidePaste) allFor(own bool, dst string, info fs.FileInfo) **answer {
+// allFor returns the answer for all that a clash at dst takes: the
+// clipboard's own where this paste wrote what is there, and the one for
+// what was there before where it did not. Where the paste wrote a path
+// the file system may take for dst under another spelling, the folder's
+// listing says which: an item spelled as dst is what the clash is with,
+// and otherwise the name the file system keeps for the one it took dst
+// for is the paste's or not. Where the folder cannot be read, the user
+// is asked, with an answer for all that applies to no other clash. A
+// short name Windows gives a file is not known for it, as only Windows
+// can say what a short name stands for.
+func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	if !own {
 		return &p.selfAll
 	}
+	written := p.written[looseName(dst)]
+	if len(written) == 0 {
+		return &p.r.all
+	}
+	if slices.Contains(written, dst) {
+		return &p.selfAll
+	}
 	fsys := p.r.env.fs
-	for _, w := range p.written[looseName(dst)] {
-		if w == dst {
-			return &p.selfAll
-		}
-		if _, ok := optional[SameFiler](fsys); !ok || info == nil {
-			var none *answer
-			return &none
-		}
-		if wi, err := fsys.Lstat(w); err == nil && sameFile(fsys, wi, info) {
+	ps := fsys.Paths()
+	es, err := fsys.ReadDir(p.r.ctx, ps.Dir(dst))
+	if err != nil {
+		var none *answer
+		return &none
+	}
+	base := ps.Base(dst)
+	if slices.ContainsFunc(es, func(e fs.DirEntry) bool { return e.Name() == base }) {
+		return &p.r.all
+	}
+	for _, e := range es {
+		if looseName(e.Name()) == looseName(base) &&
+			slices.ContainsFunc(written, func(w string) bool { return ps.Base(w) == e.Name() }) {
 			return &p.selfAll
 		}
 	}
