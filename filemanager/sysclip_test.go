@@ -921,7 +921,7 @@ func TestAClashBetweenItemsTheFileSystemTakesForOneIsAskedAbout(t *testing.T) {
 	}
 }
 
-func TestAClashWithAFileThereBeforeTakesItsAnswerForAll(t *testing.T) {
+func TestAClashThatMayBeWithAFileThereBeforeIsAskedAbout(t *testing.T) {
 	probe := t.TempDir()
 	tree(t, probe, "A.txt")
 	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err == nil {
@@ -930,8 +930,10 @@ func TestAClashWithAFileThereBeforeTakesItsAnswerForAll(t *testing.T) {
 	c := useClip(t)
 	h := newHarness(t, "x.txt", "a.txt")
 	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
-	// The paste writes A.txt beside the a.txt there before; the a.txt it
-	// holds clashes with that one, not with what it wrote.
+	// The paste writes A.txt beside the a.txt there before. The a.txt it
+	// holds clashes with that one, which the paste cannot tell from one
+	// it wrote under another spelling: it asks, whatever the answer for
+	// all, and keeps the file there.
 	c.holdContents([]outsideItem{
 		{name: "A.txt", size: 5},
 		{name: "x.txt", size: 1},
@@ -940,12 +942,63 @@ func TestAClashWithAFileThereBeforeTakesItsAnswerForAll(t *testing.T) {
 	h.do(Command{Name: CmdPaste})
 	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
-	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
-	h.until("the paste ends", func() bool { return h.exists("A.txt") && len(h.a.ops.running) == 0 })
-	if len(h.a.ops.dialogs) > 0 {
-		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
-	}
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask = h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
 	if contents(t, filepath.Join(h.dir, "a.txt")) != "a.txt" {
 		t.Fatal("the a.txt there before was replaced")
+	}
+}
+
+func TestAClashUnderASecondSpellingOfAMergedFolderIsAskedAbout(t *testing.T) {
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
+		t.Skip("this file system tells names apart by case")
+	}
+	c := useClip(t)
+	h := newHarnessWith(t, onSlashFS, "y.txt", "Docs/")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	c.holdContents([]outsideItem{
+		{name: "y.txt", size: 1},
+		{name: "docs", dir: true, size: -1},
+		{name: "docs/x.txt", size: 5},
+		{name: "DOCS", dir: true, size: -1},
+		{name: "DOCS/x.txt", size: 5},
+	}, map[string]string{"y.txt": "Y", "docs/x.txt": "first", "DOCS/x.txt": "secnd"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about y.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "x.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+func TestAnAnswerForAllOfClashesThatMayBeEitherHoldsForThem(t *testing.T) {
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
+		t.Skip("this file system tells names apart by case")
+	}
+	c := useClip(t)
+	h := newHarnessWith(t, onSlashFS, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "A.txt", size: 1},
+		{name: "a.txt", size: 1},
+		{name: "B.txt", size: 1},
+		{name: "b.txt", size: 1},
+	}, map[string]string{"A.txt": "A", "a.txt": "a", "B.txt": "B", "b.txt": "b"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 && h.exists("B.txt") })
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
 	}
 }

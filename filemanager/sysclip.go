@@ -387,22 +387,23 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // undone on their own; skipped the folders the user skipped; done the
 // items pasted, by their index; made the folders it made, to set their
 // times once their files are in; landed the names each item at the top
-// went to; written the paths the paste wrote, by their looseName; and
-// selfAll the answer for every clash between two items of the clipboard,
-// once given.
+// went to; written the paths the paste wrote, by their looseKey; selfAll
+// the answer for every clash between two items of the clipboard, once
+// given; and unsureAll the one for every clash that may be either.
 type outsidePaste struct {
-	r       *runner
-	of      outsideFiles
-	items   []outsideItem
-	dest    string
-	to      map[string]string
-	merging map[string]bool
-	skipped []string
-	done    map[int]bool
-	made    []int
-	landed  map[string][]string
-	written map[string][]string
-	selfAll *answer
+	r         *runner
+	of        outsideFiles
+	items     []outsideItem
+	dest      string
+	to        map[string]string
+	merging   map[string]bool
+	skipped   []string
+	done      map[int]bool
+	made      []int
+	landed    map[string][]string
+	written   map[string][]string
+	selfAll   *answer
+	unsureAll *answer
 }
 
 // item pastes items[i], into the folder its parent went to.
@@ -482,7 +483,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
-		p.written[looseName(dst)] = append(p.written[looseName(dst)], dst)
+		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -492,7 +493,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
-		p.written[looseName(dst)] = append(p.written[looseName(dst)], dst)
+		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -515,44 +516,34 @@ func (p *outsidePaste) item(i int) error {
 }
 
 // allFor returns the answer for all that a clash at dst takes: the
-// clipboard's own where this paste wrote what is there, and the one for
-// what was there before where it did not. Where the paste wrote a path
-// the file system may take for dst under another spelling, the folder's
-// listing says which: an item spelled as dst is what the clash is with,
-// and otherwise the name the file system keeps for the one it took dst
-// for is the paste's or not. Where the folder cannot be read, the user
-// is asked, with an answer for all that applies to no other clash. A
-// short name Windows gives a file is not known for it, as only Windows
-// can say what a short name stands for.
+// clipboard's own where this paste wrote dst, and the one for what was
+// there before where it wrote nothing the loosest file system takes for
+// dst. Where it wrote such a path under another spelling, only the user
+// can say which the clash is with, as file systems keep and compare
+// names in more ways than a name shows; an answer for all given there
+// holds for every such clash. A short name Windows gives a file is not
+// known for it, as only Windows can say what a short name stands for.
 func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	if !own {
 		return &p.selfAll
 	}
-	written := p.written[looseName(dst)]
-	if len(written) == 0 {
+	written := p.written[looseKey(dst)]
+	switch {
+	case len(written) == 0:
 		return &p.r.all
-	}
-	if slices.Contains(written, dst) {
+	case slices.Contains(written, dst):
 		return &p.selfAll
 	}
-	fsys := p.r.env.fs
-	ps := fsys.Paths()
-	es, err := fsys.ReadDir(p.r.ctx, ps.Dir(dst))
-	if err != nil {
-		var none *answer
-		return &none
+	return &p.unsureAll
+}
+
+// looseKey returns path with each name in it as looseName gives it.
+func looseKey(path string) string {
+	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
+	for i, n := range names {
+		names[i] = looseName(n)
 	}
-	base := ps.Base(dst)
-	if slices.ContainsFunc(es, func(e fs.DirEntry) bool { return e.Name() == base }) {
-		return &p.r.all
-	}
-	for _, e := range es {
-		if looseName(e.Name()) == looseName(base) &&
-			slices.ContainsFunc(written, func(w string) bool { return ps.Base(w) == e.Name() }) {
-			return &p.selfAll
-		}
-	}
-	return &p.r.all
+	return strings.Join(names, "/")
 }
 
 // looseName returns name as the loosest file system takes it: in lower
