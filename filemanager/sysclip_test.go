@@ -1073,7 +1073,7 @@ func TestALooseKeyTakesEveryLetterInEitherUnicodeFormForOne(t *testing.T) {
 			continue
 		}
 		// Alone, and before a mark a Mac may order differently.
-		for _, s := range []string{string(r), string(r) + "̣"} {
+		for _, s := range []string{string(r), string(r) + "\u0323"} {
 			if d := norm.NFD.String(s); looseKey(d) != looseKey(s) {
 				t.Errorf("%+q is %+q, and its decomposed form is %+q", s, looseKey(s), looseKey(d))
 			}
@@ -1082,13 +1082,13 @@ func TestALooseKeyTakesEveryLetterInEitherUnicodeFormForOne(t *testing.T) {
 }
 
 func TestAFileThereBeforeInTheOtherUnicodeFormIsKept(t *testing.T) {
+	composed, decomposed := "Caf\u00e9.txt", "Cafe\u0301.txt"
 	probe := t.TempDir()
-	tree(t, probe, "Café.txt")
-	if _, err := os.Lstat(filepath.Join(probe, "Café.txt")); err == nil {
+	tree(t, probe, composed)
+	if _, err := os.Lstat(filepath.Join(probe, decomposed)); err == nil {
 		t.Skip("this file system takes the two Unicode forms of a name for one")
 	}
 	c := useClip(t)
-	decomposed := "Cafe\u0301.txt"
 	h := newHarness(t, "x.txt", decomposed)
 	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
 	c.holdContents([]outsideItem{
@@ -1100,8 +1100,9 @@ func TestAFileThereBeforeInTheOtherUnicodeFormIsKept(t *testing.T) {
 	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
 	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
-	// The key joins the two forms Windows keeps apart, so the clash with
-	// the file there is asked about alone, and Replace all reaches it not.
+	// The key joins the two forms this file system keeps apart, so the
+	// clash with the file there is asked about alone, and Replace all
+	// reaches it not.
 	h.until("the clash about the file there is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
 	if !ok || ask.CanForAll {

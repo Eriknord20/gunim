@@ -554,7 +554,7 @@ func looseKey(path string) string {
 	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	for i, n := range names {
 		folded := cases.Fold().String(norm.NFD.String(looseName(n)))
-		names[i] = norm.NFC.String(strings.ReplaceAll(folded, "̇", ""))
+		names[i] = norm.NFC.String(strings.ReplaceAll(folded, "\u0307", ""))
 	}
 	return strings.Join(names, "/")
 }
