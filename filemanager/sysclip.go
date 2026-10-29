@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -484,7 +485,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
-		p.written[looseKey(ps, dst)] = append(p.written[looseKey(ps, dst)], dst)
+		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -494,7 +495,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
-		p.written[looseKey(ps, dst)] = append(p.written[looseKey(ps, dst)], dst)
+		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -529,7 +530,7 @@ func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	if !own {
 		return &p.selfAll
 	}
-	written := p.written[looseKey(p.r.env.fs.Paths(), dst)]
+	written := p.written[looseKey(dst)]
 	switch {
 	case len(written) == 0:
 		return &p.r.all
@@ -539,20 +540,19 @@ func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	return nil
 }
 
-// looseKey returns path with each name in it as looseName gives it, and,
-// where paths of style ps are not Windows's, in one Unicode form: a Mac
-// takes the composed and decomposed spellings of a name for one, where
-// Windows keeps them apart. A name is lower-cased decomposed and then
-// composed, as the two orders differ where a letter is composed in one
-// case only, and this one never keeps apart two names looseName joins.
-func looseKey(ps PathStyle, path string) string {
+// looseKey returns path with each name in it taken as loosely as a file
+// system may take it, as far as a name shows: as looseName gives it,
+// then case-folded in full, as a file system that takes ß for ss does,
+// and in one Unicode form, as a Mac takes the composed and decomposed
+// spellings of a name for one. The fold is of the decomposed name, as
+// Unicode's canonical caseless match has it. It is made from what
+// looseName gives, so it never keeps apart two names looseName joins: a
+// name taken too loosely costs a question, in allFor, where one taken
+// too strictly could cost a file.
+func looseKey(path string) string {
 	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	for i, n := range names {
-		if ps.windowsNames() {
-			names[i] = looseName(n)
-			continue
-		}
-		names[i] = norm.NFC.String(looseName(norm.NFD.String(n)))
+		names[i] = norm.NFC.String(cases.Fold().String(norm.NFD.String(looseName(n))))
 	}
 	return strings.Join(names, "/")
 }

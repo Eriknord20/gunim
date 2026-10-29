@@ -1036,26 +1036,33 @@ func TestAnAnswerForAllWithinTheClipboardIsNotOneForAClashThatMayBeEither(t *tes
 	}
 }
 
-func TestALooseKeyTakesASpellingInEitherUnicodeFormForOne(t *testing.T) {
-	// The last two are letters composed in one case only.
+func TestALooseKeyTakesWhatAnyFileSystemMayTakeForOneNameForOne(t *testing.T) {
 	for _, spellings := range [][]string{
+		// The two Unicode forms of a name, in either case.
 		{"/d/Caf\u00e9.txt", "/d/Cafe\u0301.txt", "/D/CAF\u00c9.TXT", "/d/CAFE\u0301.txt"},
+		{"C:\\d\\Caf\u00e9.txt", "C:\\d\\Cafe\u0301.txt", "c:\\D\\CAF\u00c9.TXT"},
+		// Letters composed in one case only.
 		{"/d/J\u030c.txt", "/d/\u01f0.txt", "/d/j\u030c.txt"},
-		{"/d/\u0130.txt", "/d/I\u0307.txt", "/d/i\u0307.txt"},
+		// What lower-casing joins, which the key must not keep apart.
+		{"/d/\u0130.txt", "/d/I.txt", "/d/i.txt"},
+		// Full case folding.
+		{"/d/Stra\u00dfe.txt", "/d/STRASSE.txt"},
+		// What Windows drops from the end of a name.
+		{"/d/a.txt", "/d/A.txt. "},
+		{"C:\\d\\a.txt", "C:\\D\\A.txt. "},
 	} {
 		for _, s := range spellings[1:] {
-			if looseKey(SlashPaths, s) != looseKey(SlashPaths, spellings[0]) {
-				t.Errorf("%q is %q, and %q is %q", s, looseKey(SlashPaths, s), spellings[0], looseKey(SlashPaths, spellings[0]))
+			if looseKey(s) != looseKey(spellings[0]) {
+				t.Errorf("%q is %q, and %q is %q", s, looseKey(s), spellings[0], looseKey(spellings[0]))
 			}
 		}
 	}
-	// Windows keeps the two forms apart.
-	if looseKey(DrivePaths, `C:\d\Caf\u00e9.txt`) == looseKey(DrivePaths, `C:\d\Cafe\u0301.txt`) {
-		t.Error("Windows paths in the two forms have one key")
+	if looseKey("/d/a.txt") == looseKey("/e/a.txt") || looseKey("/d/a.txt") == looseKey("/d/b.txt") {
+		t.Error("two names no file system takes for one have one key")
 	}
 }
 
-func TestAFileThereBeforeInTheOtherUnicodeFormTakesItsAnswerForAll(t *testing.T) {
+func TestAFileThereBeforeInTheOtherUnicodeFormIsKept(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows keeps the two Unicode forms of a name apart")
 	}
@@ -1071,12 +1078,43 @@ func TestAFileThereBeforeInTheOtherUnicodeFormTakesItsAnswerForAll(t *testing.T)
 	h.do(Command{Name: CmdPaste})
 	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
-	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
-	h.until("the paste ends", func() bool { return h.exists("Caf\u00e9.txt") && len(h.a.ops.running) == 0 })
-	if len(h.a.ops.dialogs) > 0 {
-		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	// The key joins the two forms Windows keeps apart, so the clash with
+	// the file there is asked about alone, and Replace all reaches it not.
+	h.until("the clash about the file there is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+	if !ok || ask.CanForAll {
+		t.Fatalf("the dialog asks %+v, not about the file there alone", h.a.ops.dialogs[0].state)
 	}
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
+	h.until("the paste ends", func() bool { return h.exists("Caf\u00e9.txt") && len(h.a.ops.running) == 0 })
 	if contents(t, filepath.Join(h.dir, decomposed)) != decomposed {
 		t.Fatal("the file there before was replaced")
+	}
+}
+
+func TestAnAnswerToAClashAskedAboutAloneHoldsForNoOther(t *testing.T) {
+	probe := t.TempDir()
+	tree(t, probe, "A.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
+		t.Skip("this file system tells names apart by case")
+	}
+	c := useClip(t)
+	h := newHarnessWith(t, onSlashFS, "y.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "A.txt", size: 1},
+		{name: "a.txt", size: 1},
+		{name: "y.txt", size: 1},
+	}, map[string]string{"A.txt": "A", "a.txt": "a", "y.txt": "new"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	// A reply that says all, as a client might send though none is on
+	// offer.
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash about y.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "y.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
 	}
 }
