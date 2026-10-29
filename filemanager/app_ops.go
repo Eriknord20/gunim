@@ -314,7 +314,7 @@ func (a *app) askZip(fs string, ps PathStyle, paths []string, dest string) {
 				a.startTransfer(Transfer{FromFS: fs, Paths: paths, ToFS: a.fs.ID(), Into: dest, Zip: name, Password: pw.Text}, ps,
 					func(ok bool) {
 						if ok && pw.Worked != nil {
-							pw.Worked()
+							a.post(pw.Worked)
 						}
 					})
 				return
@@ -374,7 +374,7 @@ func (a *app) newOp(title string, kind OpKind) (id int, ctx context.Context, can
 // startOp runs j in the background, with its progress in the panel once
 // it has run a moment.
 func (a *app) startOp(j job, title string) {
-	if !a.hub.takeCut(j.cut) {
+	if j.cut != nil && !a.hub.takeCut(j.cut.seq) {
 		a.cutBusy()
 		return
 	}
@@ -408,14 +408,8 @@ func (a *app) startOp(j job, title string) {
 	}
 	a.ops.wg.Go(func() {
 		rec, err := runJob(ctx, j, e)
-		if j.cut != 0 {
-			// Here rather than once the window takes the end, which it
-			// does not where it closed meanwhile: the cut leaves the
-			// clipboard before another paste may take it.
-			if err == nil {
-				systemClip.empty(j.cut)
-			}
-			a.hub.releaseCut(j.cut)
+		if j.cut != nil {
+			a.hub.endCut(j.cut.seq, err == nil)
 		}
 		a.post(func() { a.finish(id, j, rec, err) })
 	})

@@ -34,10 +34,10 @@ type Hub struct {
 	// sysSeq is the system clipboard's seq at the last cut or copy, so
 	// Paste can tell whether another program copied since.
 	sysSeq uint32
-	// cutTaken is the system clipboard's seq at the cut a move runs from,
-	// so a second paste of the cut does not move the same items at once.
-	cutTaken uint32
-	favs     map[string]*memFavourites
+	// cuts holds the seqs of the system clipboard's cuts that a move is
+	// moving or has moved, so each moves once.
+	cuts map[uint32]bool
+	favs map[string]*memFavourites
 	// open opens a window with o and serves it, and is nil where no
 	// window can open, as in a test.
 	open func(o Options) error

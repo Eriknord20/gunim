@@ -51,10 +51,9 @@ type job struct {
 	// outside says srcs name items another program put on the system
 	// clipboard as contents, which a copy reads from there.
 	outside bool
-	// cut, where not 0, is the system clipboard's seq when it held the
-	// cut a move moves: the move holds the cut while it runs, so a second
-	// paste of it does not move the same items at once.
-	cut uint32
+	// cut, where set, is the cut another program left on the system
+	// clipboard that a move moves.
+	cut *systemCut
 }
 
 // step is one item an operation moved or made: what was at from is now at

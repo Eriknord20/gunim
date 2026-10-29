@@ -151,36 +151,48 @@ func (a *app) systemClipNewer() bool {
 	return systemClip.seq() != seq
 }
 
+// systemCut is a cut another program left on the system clipboard, as
+// it was at seq.
+type systemCut struct{ seq uint32 }
+
 // takeCut takes the cut the system clipboard held at seq for a move, and
-// reports false where a move of it runs already. A seq of 0 is no cut,
-// or a system that gives no seq, where a cut cannot be told from the
-// next: every move takes it.
+// reports false where a move is moving it or has moved it. A seq of 0 is
+// a system that gives none, where a cut cannot be told from the next:
+// every move takes it.
 func (h *Hub) takeCut(seq uint32) bool {
 	if seq == 0 {
 		return true
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.cutTaken == seq {
+	if h.cuts[seq] {
 		return false
 	}
-	h.cutTaken = seq
+	if h.cuts == nil {
+		h.cuts = map[uint32]bool{}
+	}
+	h.cuts[seq] = true
 	return true
 }
 
-// releaseCut lets the cut at seq be moved again, once the move that took
-// it has ended.
-func (h *Hub) releaseCut(seq uint32) {
+// endCut ends the move of the cut at seq. One that moved it keeps it, as
+// what it held is gone from where it was, and takes it off the
+// clipboard; one that did not lets it be moved again. It is safe from any
+// goroutine, and the move calls it as it ends rather than once a window
+// takes the end, which a window that closed meanwhile never does.
+func (h *Hub) endCut(seq uint32, moved bool) {
+	if moved {
+		systemClip.empty(seq)
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if seq != 0 && h.cutTaken == seq {
-		h.cutTaken = 0
-	}
+	delete(h.cuts, seq)
 }
 
-// cutBusy says a paste of a cut waits for the move of it that runs.
+// cutBusy says a paste of a cut finds it moving, or moved.
 func (a *app) cutBusy() {
-	a.patch(Notice{Title: "What was cut is being moved already", Body: "It can be pasted again if that move stops.", Kind: "info"})
+	a.patch(Notice{Title: "What was cut is moving, or has moved", Body: "If a move of it fails, it can be pasted again.", Kind: "info"})
 }
 
 // pasteSystem pastes into here what another program put on the system
@@ -222,10 +234,11 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 		a.fail("Items cannot go between file systems yet.")
 		return
 	}
-	// What was cut is pasted once, as in Explorer: the clipboard keeps it
-	// until it has moved, so a move that fails can be pasted again, and
-	// the move holds it while it runs, so a second Ctrl+V, from a held key
-	// or another window, does not move the same items at once.
+	// What was cut is moved once, as in Explorer. The clipboard keeps it
+	// until it has moved, so a move that fails can be pasted again; the
+	// hub holds it from the moment a move starts, so a second Ctrl+V, from
+	// a held key, another window or a read of the clipboard from before
+	// the move ended, does not move the same items again.
 	if fsID != "" {
 		// Paths from another program are the computer's own.
 		var ended func(ok bool)
@@ -234,19 +247,14 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 				a.cutBusy()
 				return
 			}
-			ended = func(ok bool) {
-				if ok {
-					systemClip.empty(sf.seq)
-				}
-				a.hub.releaseCut(sf.seq)
-			}
+			ended = func(ok bool) { a.hub.endCut(sf.seq, ok) }
 		}
 		a.transfer("", SystemPaths, sf.paths, fsID, here, sf.cut, ended)
 		return
 	}
 	srcs := sf.paths
 	if sf.cut {
-		a.startOp(job{kind: OpMove, srcs: srcs, dest: here, cut: sf.seq},
+		a.startOp(job{kind: OpMove, srcs: srcs, dest: here, cut: &systemCut{seq: sf.seq}},
 			"Moving "+a.what(srcs)+" to "+a.ps.placeName(here))
 		return
 	}
@@ -364,9 +372,9 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // undone on their own; skipped the folders the user skipped; done the
 // items pasted, by their index; made the folders it made, to set their
 // times once their files are in; landed the names each item at the top
-// went to; written the names that went into folders the paste made, by
-// folder and loose name; and selfAll the answer for every clash between
-// two items of the clipboard, once given.
+// went to; written the names the paste wrote, by folder and loose name;
+// and selfAll the answer for every clash between two items of the
+// clipboard, once given.
 type outsidePaste struct {
 	r       *runner
 	of      outsideFiles
@@ -425,19 +433,21 @@ func (p *outsidePaste) item(i int) error {
 	// undone with that folder.
 	own := top || p.merging[parent]
 	merge, replace := false, false
-	if info, err := p.lstat(own, into, base, dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
+	mark := into + "\x00" + looseName(base)
+	if info, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
 		switch {
 		case !own && err == nil && it.dir && realDir(info):
 			// A folder this paste made, which the clipboard lists again
 			// under a name the file system takes for the same one.
 			merge = true
 		default:
-			// What is there was there before, or, in a folder the paste
-			// made, came a moment ago under a name the file system takes
-			// for this one's: either way the user says what goes, but an
-			// answer for all of one kind is not one for the other.
+			// What is there was there before, or this paste wrote it a
+			// moment ago under a name the file system takes for this
+			// one's, as it always did in a folder the paste made: either
+			// way the user says what goes, but an answer for all of one
+			// kind is not one for the other.
 			all := &r.all
-			if !own {
+			if !own || p.written[mark] {
 				all = &p.selfAll
 			}
 			var skip bool
@@ -461,6 +471,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
+		p.wrote(mark, into, dst)
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -470,6 +481,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
+		p.wrote(mark, into, dst)
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -491,21 +503,11 @@ func (p *outsidePaste) item(i int) error {
 	return nil
 }
 
-// lstat looks at what is at dst, the item called base going into the
-// folder into. An item own may find something there from before the
-// paste; one in a folder the paste made can find only what it wrote, so
-// the file system is asked only where a name it may take for this one
-// went there already, which spares a remote one a call for each item.
-func (p *outsidePaste) lstat(own bool, into, base, dst string) (fs.FileInfo, error) {
-	if !own {
-		k := into + "\x00" + looseName(base)
-		again := p.written[k]
-		p.written[k] = true
-		if !again {
-			return nil, fs.ErrNotExist
-		}
-	}
-	return p.r.env.fs.Lstat(dst)
+// wrote records that the item keyed as key went into the folder into as
+// dst: a later item that clashes with either name clashes with this one.
+func (p *outsidePaste) wrote(key, into, dst string) {
+	p.written[key] = true
+	p.written[into+"\x00"+looseName(p.r.env.fs.Paths().Base(dst))] = true
 }
 
 // looseName returns name as the loosest file system takes it: in lower

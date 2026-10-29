@@ -1,12 +1,9 @@
 package filemanager
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -402,7 +399,7 @@ func TestACutFromAnotherProgramIsPastedOnce(t *testing.T) {
 	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
 	h.do(Command{Name: CmdPaste})
 	h.until("the second paste is turned away", func() bool {
-		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moved already") })
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moving, or has moved") })
 	})
 	if len(h.a.ops.running) != 1 {
 		t.Fatalf("one cut started %d moves", len(h.a.ops.running))
@@ -558,7 +555,7 @@ func TestARetryAndAPasteDoNotMoveACutAtOnce(t *testing.T) {
 	}
 	h.do(DialogClosed{Retry: true})
 	h.until("the retry is turned away", func() bool {
-		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moved already") })
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moving, or has moved") })
 	})
 	if len(h.a.ops.running) != 1 {
 		t.Fatalf("one cut has %d moves running", len(h.a.ops.running))
@@ -582,38 +579,6 @@ func TestAnAnswerForAllIsNotOneForClashesWithinTheClipboard(t *testing.T) {
 	h.until("the clash within the clipboard is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "README" {
 		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
-	}
-}
-
-// lstatCounter counts the Lstat calls made of the file system it holds.
-type lstatCounter struct {
-	FS
-	lstats int
-}
-
-func (c *lstatCounter) Lstat(p string) (fs.FileInfo, error) {
-	c.lstats++
-	return c.FS.Lstat(p)
-}
-
-func TestAPasteLooksOnlyWhereANameRepeats(t *testing.T) {
-	items := make([]outsideItem, 1, 51)
-	items[0] = outsideItem{name: "X", dir: true, size: -1}
-	data := map[string]string{}
-	for i := range 50 {
-		n := fmt.Sprintf("X/%d.txt", i)
-		items = append(items, outsideItem{name: n, size: 1})
-		data[n] = "x"
-	}
-	c := &fakeClip{}
-	c.holdContents(items, data)
-	fsys := &lstatCounter{FS: LocalFS()}
-	if _, err := runJob(context.Background(), job{kind: OpCopy, srcs: []string{"X"}, dest: t.TempDir(), outside: true},
-		env{fs: fsys, outside: c.outside}); err != nil {
-		t.Fatal(err)
-	}
-	if fsys.lstats > 5 {
-		t.Fatalf("a paste of 50 files into a folder it made looked %d times", fsys.lstats)
 	}
 }
 
@@ -642,5 +607,174 @@ func TestAFolderAtTheTopSpelledTwoWaysGoesToOnePlace(t *testing.T) {
 				t.Fatalf("X holds %q", got)
 			}
 		})
+	}
+}
+
+func TestACopyKeptBesideAnotherIsAskedAboutByALaterItem(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	// A program may list a name twice, and then the name Keep both gives.
+	c.holdContents([]outsideItem{
+		{name: "D", dir: true, size: -1},
+		{name: "D/x.txt", size: 1},
+		{name: "D/x.txt", size: 1},
+		{name: "D/x (2).txt", size: 1},
+	}, map[string]string{"D/x.txt": "1", "D/x (2).txt": "3"})
+	h.do(Command{Name: CmdPaste})
+	for _, name := range []string{"x.txt", "x (2).txt"} {
+		h.until("the clash about "+name+" is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+		if !ok || ask.Name != name {
+			t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+		}
+		h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceKeepBoth})
+	}
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+	if got := names(t, filepath.Join(h.dir, "D")); len(got) != 3 {
+		t.Fatalf("D holds %q, not all three files", got)
+	}
+}
+
+func TestAShortNameOfAFileThePasteWroteIsAskedAbout(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows gives files short names")
+	}
+	probe := t.TempDir()
+	tree(t, probe, "longfilename.txt")
+	if _, err := os.Lstat(filepath.Join(probe, "LONGFI~1.TXT")); err != nil {
+		t.Skip("this volume gives files no short names")
+	}
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "D", dir: true, size: -1},
+		{name: "D/longfilename.txt", size: 4},
+		{name: "D/LONGFI~1.TXT", size: 5},
+	}, map[string]string{"D/longfilename.txt": "long", "D/LONGFI~1.TXT": "short"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if _, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+func TestAPasteReadBeforeACutMovedDoesNotMoveItAgain(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "here.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	// A held Ctrl+V reads the clipboard, and is taken only once the move
+	// has ended and emptied it.
+	stale, err := c.files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.do(Command{Name: CmdPaste})
+	h.until("the cut moves", func() bool { return h.exists("cut.txt") && len(h.a.ops.running) == 0 })
+	h.a.pastedSystem(h.a.fs.ID(), h.dir, stale, nil)
+	h.until("the late paste is turned away", func() bool {
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moving, or has moved") })
+	})
+	if len(h.a.ops.running) > 0 || len(h.a.ops.dialogs) > 0 {
+		t.Fatal("the late paste moved the cut again")
+	}
+}
+
+func TestARetryOfAnOldCutLeavesTheCutThatMovesHeld(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "t.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "u.txt", "t.txt")
+	c.holdPaths(true, filepath.Join(other, "u.txt"), filepath.Join(other, "gone.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the old cut fails", func() bool { return len(h.a.ops.dialogs) == 1 })
+	c.holdPaths(true, filepath.Join(other, "t.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the new cut's clash is asked", func() bool { return len(h.a.ops.dialogs) == 2 })
+	box := h.a.ops.dialogs[0]
+	if e, ok := box.state.(ErrorBox); !ok || !e.Retry {
+		t.Fatalf("the first dialog is %+v", box.state)
+	}
+	if err := h.w.Client().Unmount(box.id); err != nil {
+		t.Fatal(err)
+	}
+	h.do(DialogClosed{Retry: true})
+	h.until("the retry fails too", func() bool {
+		_, ok := h.a.ops.dialogs[len(h.a.ops.dialogs)-1].state.(ErrorBox)
+		return len(h.a.ops.running) == 1 && ok
+	})
+	h.do(Command{Name: CmdPaste})
+	h.until("the new cut's second paste is turned away", func() bool {
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moving, or has moved") })
+	})
+	if len(h.a.ops.running) != 1 {
+		t.Fatalf("the new cut has %d moves running", len(h.a.ops.running))
+	}
+}
+
+func TestACutMovedWhereTheSystemGivesNoSeqLeavesTheClipboard(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "here.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	c.mu.Lock()
+	c.n = 0
+	c.mu.Unlock()
+	h.do(Command{Name: CmdPaste})
+	h.until("the cut moves", func() bool { return h.exists("cut.txt") && len(h.a.ops.running) == 0 })
+	if c.hasFiles() {
+		t.Fatal("what was cut and moved stays on the clipboard, to paste again")
+	}
+}
+
+func TestAClashBetweenTwoItemsAtTheTopHasItsOwnAnswer(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "a.txt", "b.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	c.holdContents([]outsideItem{
+		{name: "b.txt", size: 3},
+		{name: "a.txt", size: 3},
+		{name: "a.txt", size: 3},
+	}, map[string]string{"a.txt": "new", "b.txt": "new"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about b.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash between the two a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "a.txt" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+func TestACutPastedElsewhereLeavesTheClipboardWithoutTheWindow(t *testing.T) {
+	c := useClip(t)
+	ho := newHolder()
+	h := newHarnessWith(t, func(o *Options) { onSlashFS(o); o.Transfer = ho.transfer }, "here.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	h.do(Command{Name: CmdPaste})
+	call := ho.next(h)
+	h.do(Command{Name: CmdPaste})
+	h.until("the second paste is turned away", func() bool {
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moving, or has moved") })
+	})
+	call.reply <- nil
+	// The window does not take the end here, as one that closed would not.
+	for deadline := time.Now().Add(5 * time.Second); c.hasFiles(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the clipboard keeps the cut until the window takes the end of its move")
+		}
 	}
 }
