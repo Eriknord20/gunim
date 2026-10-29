@@ -127,11 +127,12 @@ func globalBytes(h uintptr) []byte {
 func (c osClip) files() (systemFiles, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	sf := systemFiles{seq: c.seq()}
+	var sf systemFiles
 	if err := openClipboard(); err != nil {
 		return sf, err
 	}
 	defer closeClipboard()
+	sf.seq = c.seq()
 	if h, _, _ := procGetClipboardData.Call(cfHDrop); h != 0 {
 		count, _, _ := procDragQueryFileW.Call(h, 0xffffffff, 0, 0)
 		for i := range count {
@@ -163,11 +164,13 @@ func (c osClip) files() (systemFiles, error) {
 func (c osClip) empty(seq uint32) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if c.seq() != seq || openClipboard() != nil {
+	if openClipboard() != nil {
 		return
 	}
 	defer closeClipboard()
-	_, _, _ = procEmptyClipboard.Call()
+	if c.seq() == seq {
+		_, _, _ = procEmptyClipboard.Call()
+	}
 }
 
 // outside reads the clipboard through OLE, which alone hands over each

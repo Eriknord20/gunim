@@ -177,7 +177,8 @@ func (h *Hub) takeCut(seq uint32) bool {
 
 // endCut ends the move of the cut at seq. One that moved it keeps it, as
 // what it held is gone from where it was, and takes it off the
-// clipboard; one that did not lets it be moved again. It is safe from any
+// clipboard; one that did not lets it be moved again: a move that failed
+// partway, too, as what it left can still go. It is safe from any
 // goroutine, and the move calls it as it ends rather than once a window
 // takes the end, which a window that closed meanwhile never does.
 func (h *Hub) endCut(seq uint32, moved bool) {
@@ -198,11 +199,25 @@ func (a *app) cutBusy() {
 // pasteSystem pastes into here what another program put on the system
 // clipboard. It reads the clipboard off the serve loop, as the program
 // may take a while to hand it over: Remote Desktop asks the computer it
-// shows.
+// shows; and looks for what was cut there too, as it may be on a share.
 func (a *app) pasteSystem(here string) {
 	fsID := a.fs.ID()
 	go func() {
 		sf, err := systemClip.files()
+		if sf.cut {
+			// What a move that failed partway moved is gone from where
+			// it was cut; the rest still goes.
+			sf.paths = slices.DeleteFunc(sf.paths, func(p string) bool {
+				_, err := LocalFS().Lstat(p)
+				return errors.Is(err, fs.ErrNotExist)
+			})
+			if len(sf.paths) == 0 {
+				a.post(func() {
+					a.patch(Notice{Title: "What was cut is no longer where it was cut", Body: "It moved, or was deleted.", Kind: "info"})
+				})
+				return
+			}
+		}
 		a.post(func() { a.pastedSystem(fsID, here, sf, err) })
 	}()
 }
@@ -372,9 +387,10 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // undone on their own; skipped the folders the user skipped; done the
 // items pasted, by their index; made the folders it made, to set their
 // times once their files are in; landed the names each item at the top
-// went to; written the names the paste wrote, by folder and loose name;
-// and selfAll the answer for every clash between two items of the
-// clipboard, once given.
+// went to; written the paths the paste wrote, as nameKey gives them; and
+// selfAll the answer for every clash between two items of the clipboard,
+// once given. A short name Windows gives one of them is not known for
+// it, as only the file system can say what a short name stands for.
 type outsidePaste struct {
 	r       *runner
 	of      outsideFiles
@@ -433,7 +449,6 @@ func (p *outsidePaste) item(i int) error {
 	// undone with that folder.
 	own := top || p.merging[parent]
 	merge, replace := false, false
-	mark := into + "\x00" + looseName(base)
 	if info, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
 		switch {
 		case !own && err == nil && it.dir && realDir(info):
@@ -447,7 +462,7 @@ func (p *outsidePaste) item(i int) error {
 			// way the user says what goes, but an answer for all of one
 			// kind is not one for the other.
 			all := &r.all
-			if !own || p.written[mark] {
+			if !own || p.written[nameKey(ps, dst)] {
 				all = &p.selfAll
 			}
 			var skip bool
@@ -471,7 +486,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
-		p.wrote(mark, into, dst)
+		p.written[nameKey(ps, dst)] = true
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -481,7 +496,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
-		p.wrote(mark, into, dst)
+		p.written[nameKey(ps, dst)] = true
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -501,13 +516,6 @@ func (p *outsidePaste) item(i int) error {
 		p.landed[it.name] = append(p.landed[it.name], ps.Base(dst))
 	}
 	return nil
-}
-
-// wrote records that the item keyed as key went into the folder into as
-// dst: a later item that clashes with either name clashes with this one.
-func (p *outsidePaste) wrote(key, into, dst string) {
-	p.written[key] = true
-	p.written[into+"\x00"+looseName(p.r.env.fs.Paths().Base(dst))] = true
 }
 
 // looseName returns name as the loosest file system takes it: in lower

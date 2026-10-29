@@ -378,7 +378,8 @@ func TestACutThatDoesNotMoveStaysOnTheClipboard(t *testing.T) {
 	c := useClip(t)
 	h := newHarness(t, "here.txt")
 	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
-	c.holdPaths(true, filepath.Join(h.root, "gone.txt"))
+	// The folder above this one cannot go into it.
+	c.holdPaths(true, h.root)
 	h.do(Command{Name: CmdPaste})
 	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
 	if c.emptied || !c.hasFiles() {
@@ -534,12 +535,13 @@ func TestARetryAndAPasteDoNotMoveACutAtOnce(t *testing.T) {
 	got := notices(h)
 	other := filepath.Join(h.root, "other")
 	tree(t, other, "cut.txt")
-	c.holdPaths(true, filepath.Join(other, "cut.txt"), filepath.Join(other, "gone.txt"))
+	// The folder above this one cannot go into it.
+	c.holdPaths(true, filepath.Join(other, "cut.txt"), h.root)
 	h.do(Command{Name: CmdPaste})
 	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
 	ask := h.a.ops.dialogs[0].state.(ClashAsk)
 	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
-	h.until("the move fails on what is gone", func() bool {
+	h.until("the move fails on the folder above", func() bool {
 		e, ok := h.a.ops.dialogs, len(h.a.ops.dialogs) == 1
 		return ok && e[0].state.(ErrorBox).Retry
 	})
@@ -692,7 +694,8 @@ func TestARetryOfAnOldCutLeavesTheCutThatMovesHeld(t *testing.T) {
 	got := notices(h)
 	other := filepath.Join(h.root, "other")
 	tree(t, other, "u.txt", "t.txt")
-	c.holdPaths(true, filepath.Join(other, "u.txt"), filepath.Join(other, "gone.txt"))
+	// The folder above this one cannot go into it.
+	c.holdPaths(true, filepath.Join(other, "u.txt"), h.root)
 	h.do(Command{Name: CmdPaste})
 	h.until("the old cut fails", func() bool { return len(h.a.ops.dialogs) == 1 })
 	c.holdPaths(true, filepath.Join(other, "t.txt"))
@@ -776,5 +779,103 @@ func TestACutPastedElsewhereLeavesTheClipboardWithoutTheWindow(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the clipboard keeps the cut until the window takes the end of its move")
 		}
+	}
+}
+
+func TestAKeptCopyLeavesTheNameOfWhatWasThereToBeAskedAbout(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "a.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "b.txt", size: 1},
+		{name: "b.txt", size: 1},
+		{name: "a.txt", size: 1},
+		{name: "a.txt", size: 1},
+	}, map[string]string{"a.txt": "2", "b.txt": "b"})
+	h.do(Command{Name: CmdPaste})
+	// Replace all for the clash between the two b.txt, and keep both for
+	// a.txt and the one that was there: the second a.txt clashes with
+	// that one again, and is asked about.
+	h.until("the clash between the two b.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	for range 2 {
+		h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask := h.a.ops.dialogs[0].state.(ClashAsk)
+		if ask.Name != "a.txt" {
+			t.Fatalf("the dialog asks about %s", ask.Name)
+		}
+		h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceKeepBoth})
+	}
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+	if contents(t, filepath.Join(h.dir, "a.txt")) != "a.txt" {
+		t.Fatal("the a.txt that was there was replaced")
+	}
+}
+
+func TestACutWhoseItemsAreAllSkippedStaysOnTheClipboard(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "cut.txt", "sub/")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
+	h.until("the move ends", func() bool { return len(h.a.ops.running) == 0 })
+	if !c.hasFiles() {
+		t.Fatal("a cut that moved nothing left the clipboard")
+	}
+	h.do(Navigate{Path: filepath.Join(h.dir, "sub")})
+	h.until("the folder opens", func() bool { return len(h.shown()) == 0 })
+	h.do(Command{Name: CmdPaste})
+	h.until("the cut moves after all", func() bool { return h.exists("sub/cut.txt") })
+}
+
+func TestACutPastedWhereItIsStaysOnTheClipboard(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "cut.txt", "sub/")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	got := notices(h)
+	c.holdPaths(true, filepath.Join(h.dir, "cut.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the move ends", func() bool { return len(got()) > 0 && len(h.a.ops.running) == 0 })
+	if !c.hasFiles() {
+		t.Fatal("a cut pasted where it is left the clipboard")
+	}
+	h.do(Navigate{Path: filepath.Join(h.dir, "sub")})
+	h.until("the folder opens", func() bool { return len(h.shown()) == 0 })
+	h.do(Command{Name: CmdPaste})
+	h.until("the cut moves after all", func() bool { return h.exists("sub/cut.txt") })
+}
+
+func TestACutPastedAgainMovesWhatAStoppedMoveLeft(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "b.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "a.txt", "b.txt", "c.txt")
+	c.holdPaths(true, filepath.Join(other, "a.txt"), filepath.Join(other, "b.txt"), filepath.Join(other, "c.txt"))
+	for i, choice := range []ClashAnswered{{Stop: true}, {Choice: ChoiceReplace}} {
+		h.do(Command{Name: CmdPaste})
+		h.until("the clash about b.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+		if !ok {
+			t.Fatalf("paste %d shows %+v", i+1, h.a.ops.dialogs[0].state)
+		}
+		choice.Op = ask.Op
+		h.answer(choice)
+		h.until("the move ends", func() bool { return len(h.a.ops.running) == 0 })
+		if i == 0 && (!h.exists("a.txt") || h.exists("c.txt")) {
+			t.Fatal("the stopped move did not stop where it was stopped")
+		}
+	}
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the second paste shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if contents(t, filepath.Join(h.dir, "b.txt")) != "b.txt" || !h.exists("c.txt") {
+		t.Fatal("the second paste did not move what the first left")
 	}
 }

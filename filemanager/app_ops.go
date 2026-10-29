@@ -409,7 +409,9 @@ func (a *app) startOp(j job, title string) {
 	a.ops.wg.Go(func() {
 		rec, err := runJob(ctx, j, e)
 		if j.cut != nil {
-			a.hub.endCut(j.cut.seq, err == nil)
+			// A move that skipped all it was given, or found it in the
+			// folder already, leaves the cut to be pasted elsewhere.
+			a.hub.endCut(j.cut.seq, err == nil && (len(rec.steps) > 0 || rec.replaced > 0))
 		}
 		a.post(func() { a.finish(id, j, rec, err) })
 	})
