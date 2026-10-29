@@ -981,7 +981,7 @@ func TestAClashUnderASecondSpellingOfAMergedFolderIsAskedAbout(t *testing.T) {
 	}
 }
 
-func TestAnAnswerForAllOfClashesThatMayBeEitherHoldsForThem(t *testing.T) {
+func TestAClashThatMayBeEitherIsAskedAboutAlone(t *testing.T) {
 	probe := t.TempDir()
 	tree(t, probe, "A.txt")
 	if _, err := os.Lstat(filepath.Join(probe, "a.txt")); err != nil {
@@ -997,13 +997,15 @@ func TestAnAnswerForAllOfClashesThatMayBeEitherHoldsForThem(t *testing.T) {
 		{name: "b.txt", size: 1},
 	}, map[string]string{"A.txt": "A", "a.txt": "a", "B.txt": "B", "b.txt": "b"})
 	h.do(Command{Name: CmdPaste})
-	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
-	ask := h.a.ops.dialogs[0].state.(ClashAsk)
-	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
-	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 && h.exists("B.txt") })
-	if len(h.a.ops.dialogs) > 0 {
-		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		h.until("the clash about "+name+" is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask, ok := h.a.ops.dialogs[0].state.(ClashAsk)
+		if !ok || ask.Name != name || ask.CanForAll {
+			t.Fatalf("the dialog asks %+v, not about %s alone", h.a.ops.dialogs[0].state, name)
+		}
+		h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
 	}
+	h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
 	if contents(t, filepath.Join(h.dir, "A.txt")) != "A" || contents(t, filepath.Join(h.dir, "B.txt")) != "B" {
 		t.Fatal("a skipped item replaced the one it clashed with")
 	}
@@ -1035,8 +1037,46 @@ func TestAnAnswerForAllWithinTheClipboardIsNotOneForAClashThatMayBeEither(t *tes
 }
 
 func TestALooseKeyTakesASpellingInEitherUnicodeFormForOne(t *testing.T) {
-	composed, decomposed := "/d/Caf\u00e9.txt", "/d/Cafe\u0301.txt"
-	if looseKey(composed) != looseKey(decomposed) || looseKey(composed) != looseKey("/D/CAF\u00c9.TXT") {
-		t.Fatalf("the keys are %q, %q", looseKey(composed), looseKey(decomposed))
+	// The last two are letters composed in one case only.
+	for _, spellings := range [][]string{
+		{"/d/Caf\u00e9.txt", "/d/Cafe\u0301.txt", "/D/CAF\u00c9.TXT", "/d/CAFE\u0301.txt"},
+		{"/d/J\u030c.txt", "/d/\u01f0.txt", "/d/j\u030c.txt"},
+		{"/d/\u0130.txt", "/d/I\u0307.txt", "/d/i\u0307.txt"},
+	} {
+		for _, s := range spellings[1:] {
+			if looseKey(SlashPaths, s) != looseKey(SlashPaths, spellings[0]) {
+				t.Errorf("%q is %q, and %q is %q", s, looseKey(SlashPaths, s), spellings[0], looseKey(SlashPaths, spellings[0]))
+			}
+		}
+	}
+	// Windows keeps the two forms apart.
+	if looseKey(DrivePaths, `C:\d\Caf\u00e9.txt`) == looseKey(DrivePaths, `C:\d\Cafe\u0301.txt`) {
+		t.Error("Windows paths in the two forms have one key")
+	}
+}
+
+func TestAFileThereBeforeInTheOtherUnicodeFormTakesItsAnswerForAll(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows keeps the two Unicode forms of a name apart")
+	}
+	c := useClip(t)
+	decomposed := "Cafe\u0301.txt"
+	h := newHarness(t, "x.txt", decomposed)
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 2 })
+	c.holdContents([]outsideItem{
+		{name: "x.txt", size: 1},
+		{name: "Caf\u00e9.txt", size: 3},
+		{name: decomposed, size: 3},
+	}, map[string]string{"x.txt": "X", "Caf\u00e9.txt": "new", decomposed: "new"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about x.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip, All: true})
+	h.until("the paste ends", func() bool { return h.exists("Caf\u00e9.txt") && len(h.a.ops.running) == 0 })
+	if len(h.a.ops.dialogs) > 0 {
+		t.Fatalf("the paste asks %+v, though the user said to skip all", h.a.ops.dialogs[0].state)
+	}
+	if contents(t, filepath.Join(h.dir, decomposed)) != decomposed {
+		t.Fatal("the file there before was replaced")
 	}
 }

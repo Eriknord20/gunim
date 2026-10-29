@@ -391,21 +391,20 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // times once their files are in; landed the names each item at the top
 // went to; written the paths the paste wrote, by their looseKey; selfAll
 // the answer for every clash between two items of the clipboard, once
-// given; and unsureAll the one for every clash that may be either.
+// given.
 type outsidePaste struct {
-	r         *runner
-	of        outsideFiles
-	items     []outsideItem
-	dest      string
-	to        map[string]string
-	merging   map[string]bool
-	skipped   []string
-	done      map[int]bool
-	made      []int
-	landed    map[string][]string
-	written   map[string][]string
-	selfAll   *answer
-	unsureAll *answer
+	r       *runner
+	of      outsideFiles
+	items   []outsideItem
+	dest    string
+	to      map[string]string
+	merging map[string]bool
+	skipped []string
+	done    map[int]bool
+	made    []int
+	landed  map[string][]string
+	written map[string][]string
+	selfAll *answer
 }
 
 // item pastes items[i], into the folder its parent went to.
@@ -485,7 +484,7 @@ func (p *outsidePaste) item(i int) error {
 			return fmt.Errorf("making %s: %w", ps.Show(dst), err)
 		}
 		p.made = append(p.made, i)
-		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
+		p.written[looseKey(ps, dst)] = append(p.written[looseKey(ps, dst)], dst)
 	default:
 		in, err := p.of.open(i)
 		if err != nil {
@@ -495,7 +494,7 @@ func (p *outsidePaste) item(i int) error {
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}
-		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
+		p.written[looseKey(ps, dst)] = append(p.written[looseKey(ps, dst)], dst)
 	}
 	if it.dir {
 		p.to[it.name] = dst
@@ -522,31 +521,38 @@ func (p *outsidePaste) item(i int) error {
 // there before where it wrote nothing the loosest file system takes for
 // dst. Where it wrote such a path under another spelling, only the user
 // can say which the clash is with, as file systems keep and compare
-// names in more ways than a name shows; an answer for all given there
-// holds for every such clash. A short name Windows gives a file is not
+// names in more ways than a name shows: it returns nil, and the user is
+// asked about that clash alone, so a name taken too loosely costs a
+// question and never a file. A short name Windows gives a file is not
 // known for it, as only Windows can say what a short name stands for.
 func (p *outsidePaste) allFor(own bool, dst string) **answer {
 	if !own {
 		return &p.selfAll
 	}
-	written := p.written[looseKey(dst)]
+	written := p.written[looseKey(p.r.env.fs.Paths(), dst)]
 	switch {
 	case len(written) == 0:
 		return &p.r.all
 	case slices.Contains(written, dst):
 		return &p.selfAll
 	}
-	return &p.unsureAll
+	return nil
 }
 
-// looseKey returns path with each name in it as looseName gives it, in
-// one Unicode form: a Mac takes the composed and decomposed spellings of
-// a name for one, though Windows keeps them apart and spelledAlike may
-// not join them.
-func looseKey(path string) string {
-	names := strings.FieldsFunc(norm.NFC.String(path), func(r rune) bool { return r == '/' || r == '\\' })
+// looseKey returns path with each name in it as looseName gives it, and,
+// where paths of style ps are not Windows's, in one Unicode form: a Mac
+// takes the composed and decomposed spellings of a name for one, where
+// Windows keeps them apart. A name is lower-cased decomposed and then
+// composed, as the two orders differ where a letter is composed in one
+// case only, and this one never keeps apart two names looseName joins.
+func looseKey(ps PathStyle, path string) string {
+	names := strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 	for i, n := range names {
-		names[i] = looseName(n)
+		if ps.windowsNames() {
+			names[i] = looseName(n)
+			continue
+		}
+		names[i] = norm.NFC.String(looseName(norm.NFD.String(n)))
 	}
 	return strings.Join(names, "/")
 }

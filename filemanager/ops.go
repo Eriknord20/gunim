@@ -115,6 +115,9 @@ type clash struct {
 	// from says what src is where it is no path to read, as for an item
 	// in the Recycle Bin.
 	from string
+	// once says the answer is for this clash alone, as no other is of
+	// its kind for sure.
+	once bool
 }
 
 // errStopped is returned when the user stops an operation at a clash.
@@ -338,7 +341,8 @@ func (r *runner) resolve(src, dst string) (to string, skip, merge, replace bool,
 // resolveAs is resolve for src, a folder where sDir is set, that may be
 // on no file system: from then says what it is, for the user to compare,
 // where it cannot be read. all holds the answer the user gave for every
-// clash of its kind, once given.
+// clash of its kind, once given; where it is nil, the clash is of no kind
+// for sure, and the user is asked about it alone.
 func (r *runner) resolveAs(src, dst string, sDir bool, from string, all **answer) (to string, skip, merge, replace bool, err error) {
 	dInfo, err := r.env.fs.Lstat(dst)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -349,17 +353,17 @@ func (r *runner) resolveAs(src, dst string, sDir bool, from string, all **answer
 	}
 	dDir := realDir(dInfo)
 	ans := answer{}
-	if *all != nil {
+	if all != nil && *all != nil {
 		ans = **all
 	} else {
 		if r.env.ask == nil {
 			return "", false, false, false, fmt.Errorf("%s already exists", r.env.fs.Paths().Show(dst))
 		}
-		ans, err = r.env.ask(r.ctx, clash{src: src, dst: dst, sameKind: sDir == dDir, from: from})
+		ans, err = r.env.ask(r.ctx, clash{src: src, dst: dst, sameKind: sDir == dDir, from: from, once: all == nil})
 		if err != nil {
 			return "", false, false, false, err
 		}
-		if ans.all {
+		if ans.all && all != nil {
 			*all = &ans
 		}
 	}

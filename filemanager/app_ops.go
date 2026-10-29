@@ -738,7 +738,7 @@ func (a *app) askClash(ctx context.Context, op int, c clash) (answer, error) {
 	reply := make(chan ClashAnswered, 1)
 	a.post(func() {
 		ask := ClashAsk{Op: op, Name: a.ps.Base(c.dst), Where: a.ps.placeName(a.ps.Dir(c.dst)),
-			New: c.from, Old: describe(a.fs, c.dst), SameKind: c.sameKind, CanForAll: true}
+			New: c.from, Old: describe(a.fs, c.dst), SameKind: c.sameKind, CanForAll: !c.once}
 		if e, err := statEntry(a.fs, c.dst); err == nil {
 			ask.OldFolder = e.Dir
 		}
