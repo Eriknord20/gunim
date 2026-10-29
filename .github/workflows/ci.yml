@@ -34,6 +34,13 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Go moves a goroutine's stack only now and then, so a COM call that
+      # writes through a pointer into a stack moved off passes the tests
+      # above. This moves the stack at every call.
+      - name: Test COM calls on moving stacks
+        if: runner.os == 'Windows'
+        run: go test "-gcflags=github.com/marrasen/gunim/filemanager=-d=maymorestack=runtime.mayMoreStackMove" -run StackMoves ./filemanager/
+
       - name: Build
         run: go build ./...
 

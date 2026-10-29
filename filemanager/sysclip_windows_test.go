@@ -96,7 +96,7 @@ func newFakeCOM(method3 any) unsafe.Pointer {
 //
 //	go test -gcflags=github.com/marrasen/gunim/filemanager=-d=maymorestack=runtime.mayMoreStackMove -run StackMoves ./filemanager/
 //
-// which moves the stack at every call.
+// which moves the stack at every call, as CI runs it.
 func TestAStreamCountsWhatItReadsWhereTheStackMoves(t *testing.T) {
 	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
 		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)

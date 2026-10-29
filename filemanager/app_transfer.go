@@ -76,12 +76,15 @@ func lastName(path string) string {
 // transfer has the program copy the items at paths on the file system of
 // ID from, which writes them as ps, into the folder into on the file
 // system of ID to, or move them there with move: one transfer for each
-// folder they are in, each an operation of the window. worked, when set,
-// is told once every one went well.
-func (a *app) transfer(from string, ps PathStyle, paths []string, to, into string, move bool, worked func()) {
+// folder they are in, each an operation of the window. ended, when set,
+// is told once every one has ended, and whether every one went well.
+func (a *app) transfer(from string, ps PathStyle, paths []string, to, into string, move bool, ended func(ok bool)) {
 	if to == a.fs.ID() {
 		if at := a.archiveOf(into, true); at != "" {
 			a.refuseArchive(at)
+			if ended != nil {
+				ended(false)
+			}
 			return
 		}
 	}
@@ -94,13 +97,14 @@ func (a *app) transfer(from string, ps PathStyle, paths []string, to, into strin
 		}
 		ts[i].Paths = append(ts[i].Paths, p)
 	}
-	var each func()
-	if worked != nil {
-		left := len(ts)
-		each = func() {
+	var each func(ok bool)
+	if ended != nil {
+		left, all := len(ts), true
+		each = func(ok bool) {
 			left--
+			all = all && ok
 			if left == 0 {
-				worked()
+				ended(all)
 			}
 		}
 	}
@@ -126,8 +130,9 @@ func (a *app) placeLabel(fs, path string) string {
 
 // startTransfer runs t through the program in the background, as an
 // operation of the window, with paths of the file system it comes from
-// written as ps. worked, when set, is told once it went well.
-func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
+// written as ps. ended, when set, is told once it has ended, and whether
+// it went well.
+func (a *app) startTransfer(t Transfer, ps PathStyle, ended func(ok bool)) {
 	if t.From == nil {
 		t.From = a.archiveSource(t.FromFS, t.Paths)
 	}
@@ -154,8 +159,8 @@ func (a *app) startTransfer(t Transfer, ps PathStyle, worked func()) {
 		err := do(ctx, w, t, p)
 		stopped := ctx.Err() != nil
 		a.post(func() {
-			if err == nil && worked != nil {
-				worked()
+			if ended != nil {
+				ended(err == nil)
 			}
 			a.transferred(id, t, ps, done, err, stopped)
 		})

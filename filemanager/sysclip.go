@@ -151,18 +151,36 @@ func (a *app) systemClipNewer() bool {
 	return systemClip.seq() != seq
 }
 
-// takeCut takes the cut the system clipboard holds at seq for a paste,
-// and reports false where a window took it already. Where the system
-// gives no seq, a cut cannot be told from the next, and every paste
-// takes it.
+// takeCut takes the cut the system clipboard held at seq for a move, and
+// reports false where a move of it runs already. A seq of 0 is no cut,
+// or a system that gives no seq, where a cut cannot be told from the
+// next: every move takes it.
 func (h *Hub) takeCut(seq uint32) bool {
+	if seq == 0 {
+		return true
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if seq != 0 && h.cutTaken == seq {
+	if h.cutTaken == seq {
 		return false
 	}
 	h.cutTaken = seq
 	return true
+}
+
+// releaseCut lets the cut at seq be moved again, once the move that took
+// it has ended.
+func (h *Hub) releaseCut(seq uint32) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if seq != 0 && h.cutTaken == seq {
+		h.cutTaken = 0
+	}
+}
+
+// cutBusy says a paste of a cut waits for the move of it that runs.
+func (a *app) cutBusy() {
+	a.patch(Notice{Title: "What was cut is being moved already", Body: "It can be pasted again if that move stops.", Kind: "info"})
 }
 
 // pasteSystem pastes into here what another program put on the system
@@ -204,26 +222,31 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 		a.fail("Items cannot go between file systems yet.")
 		return
 	}
-	var moved func()
-	if sf.cut {
-		// What was cut is pasted once, as in Explorer. The clipboard keeps
-		// it until it has moved, for the program that cut it, so it is
-		// taken here at once: a second Ctrl+V, from a held key or another
-		// window, would start a second move of the same items.
-		if !a.hub.takeCut(sf.seq) {
-			a.patch(Notice{Title: "What was cut is pasted already", Body: "Cut it again to move it from there.", Kind: "info"})
-			return
-		}
-		moved = func() { systemClip.empty(sf.seq) }
-	}
+	// What was cut is pasted once, as in Explorer: the clipboard keeps it
+	// until it has moved, so a move that fails can be pasted again, and
+	// the move holds it while it runs, so a second Ctrl+V, from a held key
+	// or another window, does not move the same items at once.
 	if fsID != "" {
 		// Paths from another program are the computer's own.
-		a.transfer("", SystemPaths, sf.paths, fsID, here, sf.cut, moved)
+		var ended func(ok bool)
+		if sf.cut {
+			if !a.hub.takeCut(sf.seq) {
+				a.cutBusy()
+				return
+			}
+			ended = func(ok bool) {
+				if ok {
+					systemClip.empty(sf.seq)
+				}
+				a.hub.releaseCut(sf.seq)
+			}
+		}
+		a.transfer("", SystemPaths, sf.paths, fsID, here, sf.cut, ended)
 		return
 	}
 	srcs := sf.paths
 	if sf.cut {
-		a.startOp(job{kind: OpMove, srcs: srcs, dest: here, worked: moved},
+		a.startOp(job{kind: OpMove, srcs: srcs, dest: here, cut: sf.seq},
 			"Moving "+a.what(srcs)+" to "+a.ps.placeName(here))
 		return
 	}
@@ -288,15 +311,15 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 		items := spelledAlike(ps, of.items())
 		found := map[string]bool{}
 		for _, n := range names {
-			found[caseKey(ps, n)] = false
+			found[nameKey(ps, n)] = false
 		}
 		var picked []int
 		for i, it := range items {
 			top := topOf(it.name)
-			if _, ok := found[caseKey(ps, top)]; !ok {
+			if _, ok := found[nameKey(ps, top)]; !ok {
 				continue
 			}
-			found[caseKey(ps, top)] = true
+			found[nameKey(ps, top)] = true
 			for part := range strings.SplitSeq(it.name, "/") {
 				if err := checkName(ps, part); err != nil {
 					return fmt.Errorf("the clipboard holds %s, which cannot be written here: %w", it.name, err)
@@ -307,13 +330,14 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 			r.p.bytesTotal += max(it.size, 0)
 		}
 		for _, n := range names {
-			if !found[caseKey(ps, n)] {
+			if !found[nameKey(ps, n)] {
 				return fmt.Errorf("%s is no longer on the clipboard", n)
 			}
 		}
 		r.tell(true)
 		p := outsidePaste{r: r, of: of, items: items, dest: dest,
-			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}, landed: map[string][]string{}}
+			to: map[string]string{}, merging: map[string]bool{}, done: map[int]bool{}, landed: map[string][]string{},
+			written: map[string]bool{}}
 		left := map[string]int{}
 		for _, i := range picked {
 			left[topOf(items[i].name)]++
@@ -339,8 +363,10 @@ func (r *runner) pasteOutside(names []string, dest string) error {
 // merging the folders that went into one already there, whose items are
 // undone on their own; skipped the folders the user skipped; done the
 // items pasted, by their index; made the folders it made, to set their
-// times once their files are in; and landed the names each item at the
-// top went to.
+// times once their files are in; landed the names each item at the top
+// went to; written the names that went into folders the paste made, by
+// folder and loose name; and selfAll the answer for every clash between
+// two items of the clipboard, once given.
 type outsidePaste struct {
 	r       *runner
 	of      outsideFiles
@@ -352,6 +378,8 @@ type outsidePaste struct {
 	done    map[int]bool
 	made    []int
 	landed  map[string][]string
+	written map[string]bool
+	selfAll *answer
 }
 
 // item pastes items[i], into the folder its parent went to.
@@ -397,7 +425,7 @@ func (p *outsidePaste) item(i int) error {
 	// undone with that folder.
 	own := top || p.merging[parent]
 	merge, replace := false, false
-	if info, err := r.env.fs.Lstat(dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
+	if info, err := p.lstat(own, into, base, dst); err == nil || !errors.Is(err, fs.ErrNotExist) {
 		switch {
 		case !own && err == nil && it.dir && realDir(info):
 			// A folder this paste made, which the clipboard lists again
@@ -406,9 +434,14 @@ func (p *outsidePaste) item(i int) error {
 		default:
 			// What is there was there before, or, in a folder the paste
 			// made, came a moment ago under a name the file system takes
-			// for this one's: either way the user says what goes.
+			// for this one's: either way the user says what goes, but an
+			// answer for all of one kind is not one for the other.
+			all := &r.all
+			if !own {
+				all = &p.selfAll
+			}
 			var skip bool
-			dst, skip, merge, replace, err = r.resolveAs(it.name, dst, it.dir, outsideFacts(it))
+			dst, skip, merge, replace, err = r.resolveAs(it.name, dst, it.dir, outsideFacts(it), all)
 			if err != nil {
 				return err
 			}
@@ -458,6 +491,27 @@ func (p *outsidePaste) item(i int) error {
 	return nil
 }
 
+// lstat looks at what is at dst, the item called base going into the
+// folder into. An item own may find something there from before the
+// paste; one in a folder the paste made can find only what it wrote, so
+// the file system is asked only where a name it may take for this one
+// went there already, which spares a remote one a call for each item.
+func (p *outsidePaste) lstat(own bool, into, base, dst string) (fs.FileInfo, error) {
+	if !own {
+		k := into + "\x00" + looseName(base)
+		again := p.written[k]
+		p.written[k] = true
+		if !again {
+			return nil, fs.ErrNotExist
+		}
+	}
+	return p.r.env.fs.Lstat(dst)
+}
+
+// looseName returns name as the loosest file system takes it: in lower
+// case, without the dots and spaces Windows drops from the end of one.
+func looseName(name string) string { return strings.ToLower(strings.TrimRight(name, ". ")) }
+
 // topOf returns the name of the item at the top that name is in, or name.
 func topOf(name string) string {
 	top, _, _ := strings.Cut(name, "/")
@@ -498,7 +552,8 @@ func (p *outsidePaste) skippedIn(name string) bool {
 
 // spelledAlike returns items with each folder on the way to an item
 // spelled as the first item to reach it spells it, where paths of style
-// ps ignore case: a folder a program spells two ways goes to one place.
+// ps ignore case and drop dots and spaces from the end of a name: a
+// folder a program spells two ways goes to one place.
 func spelledAlike(ps PathStyle, items []outsideItem) []outsideItem {
 	out := slices.Clone(items)
 	if !ps.ignoresCase() {
@@ -506,16 +561,16 @@ func spelledAlike(ps PathStyle, items []outsideItem) []outsideItem {
 	}
 	first := map[string]string{}
 	for i := range out {
-		var name string
+		var name, key string
 		for part := range strings.SplitSeq(out[i].name, "/") {
 			if name != "" {
-				name += "/"
+				name, key = name+"/", key+"/"
 			}
-			name += part
-			if s, ok := first[caseKey(ps, name)]; ok {
+			name, key = name+part, key+looseName(part)
+			if s, ok := first[key]; ok {
 				name = s
 			} else {
-				first[caseKey(ps, name)] = name
+				first[key] = name
 			}
 		}
 		out[i].name = name
@@ -523,11 +578,11 @@ func spelledAlike(ps PathStyle, items []outsideItem) []outsideItem {
 	return out
 }
 
-// caseKey returns name as paths of style ps compare it: in lower case
-// where they ignore case.
-func caseKey(ps PathStyle, name string) string {
+// nameKey returns name as paths of style ps compare it: where they ignore
+// case, as looseName gives it, as spelledAlike spells items alike.
+func nameKey(ps PathStyle, name string) string {
 	if ps.ignoresCase() {
-		return strings.ToLower(name)
+		return looseName(name)
 	}
 	return name
 }

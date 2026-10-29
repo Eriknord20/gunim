@@ -1,9 +1,12 @@
 package filemanager
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -399,7 +402,7 @@ func TestACutFromAnotherProgramIsPastedOnce(t *testing.T) {
 	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
 	h.do(Command{Name: CmdPaste})
 	h.until("the second paste is turned away", func() bool {
-		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "pasted already") })
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moved already") })
 	})
 	if len(h.a.ops.running) != 1 {
 		t.Fatalf("one cut started %d moves", len(h.a.ops.running))
@@ -503,6 +506,140 @@ func TestAFolderListedTwiceGoesToOnePlace(t *testing.T) {
 			}
 			if got := names(t, filepath.Join(h.dir, "X", "Sub")); !slices.Equal(got, []string{"a.txt", "b.txt"}) {
 				t.Fatalf("X/Sub holds %q", got)
+			}
+		})
+	}
+}
+
+func TestACutWhoseMoveStoppedCanBePastedAgain(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "cut.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"))
+	for range 2 {
+		h.do(Command{Name: CmdPaste})
+		h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+		ask := h.a.ops.dialogs[0].state.(ClashAsk)
+		h.answer(ClashAnswered{Op: ask.Op, Stop: true})
+		h.until("the move stops", func() bool { return len(h.a.ops.running) == 0 })
+		if contents(t, filepath.Join(other, "cut.txt")) != "cut.txt" || c.emptied {
+			t.Fatal("a move that was stopped moved the cut, or took it off the clipboard")
+		}
+	}
+}
+
+func TestARetryAndAPasteDoNotMoveACutAtOnce(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "cut.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	got := notices(h)
+	other := filepath.Join(h.root, "other")
+	tree(t, other, "cut.txt")
+	c.holdPaths(true, filepath.Join(other, "cut.txt"), filepath.Join(other, "gone.txt"))
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceSkip})
+	h.until("the move fails on what is gone", func() bool {
+		e, ok := h.a.ops.dialogs, len(h.a.ops.dialogs) == 1
+		return ok && e[0].state.(ErrorBox).Retry
+	})
+	// A second paste while the error waits runs, and holds the cut.
+	h.do(Command{Name: CmdPaste})
+	h.until("the second paste asks", func() bool { return len(h.a.ops.dialogs) == 2 })
+	box := h.a.ops.dialogs[0]
+	if _, ok := box.state.(ErrorBox); !ok {
+		t.Fatalf("the first dialog is %+v", box.state)
+	}
+	if err := h.w.Client().Unmount(box.id); err != nil {
+		t.Fatal(err)
+	}
+	h.do(DialogClosed{Retry: true})
+	h.until("the retry is turned away", func() bool {
+		return slices.ContainsFunc(got(), func(n Notice) bool { return strings.Contains(n.Title, "moved already") })
+	})
+	if len(h.a.ops.running) != 1 {
+		t.Fatalf("one cut has %d moves running", len(h.a.ops.running))
+	}
+}
+
+func TestAnAnswerForAllIsNotOneForClashesWithinTheClipboard(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "a.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{
+		{name: "a.txt", size: 3},
+		{name: "Linux", dir: true, size: -1},
+		{name: "Linux/README", size: 5},
+		{name: "Linux/README", size: 5},
+	}, map[string]string{"a.txt": "new", "Linux/README": "upper"})
+	h.do(Command{Name: CmdPaste})
+	h.until("the clash about a.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	ask := h.a.ops.dialogs[0].state.(ClashAsk)
+	h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace, All: true})
+	h.until("the clash within the clipboard is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "README" {
+		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+// lstatCounter counts the Lstat calls made of the file system it holds.
+type lstatCounter struct {
+	FS
+	lstats int
+}
+
+func (c *lstatCounter) Lstat(p string) (fs.FileInfo, error) {
+	c.lstats++
+	return c.FS.Lstat(p)
+}
+
+func TestAPasteLooksOnlyWhereANameRepeats(t *testing.T) {
+	items := make([]outsideItem, 1, 51)
+	items[0] = outsideItem{name: "X", dir: true, size: -1}
+	data := map[string]string{}
+	for i := range 50 {
+		n := fmt.Sprintf("X/%d.txt", i)
+		items = append(items, outsideItem{name: n, size: 1})
+		data[n] = "x"
+	}
+	c := &fakeClip{}
+	c.holdContents(items, data)
+	fsys := &lstatCounter{FS: LocalFS()}
+	if _, err := runJob(context.Background(), job{kind: OpCopy, srcs: []string{"X"}, dest: t.TempDir(), outside: true},
+		env{fs: fsys, outside: c.outside}); err != nil {
+		t.Fatal(err)
+	}
+	if fsys.lstats > 5 {
+		t.Fatalf("a paste of 50 files into a folder it made looked %d times", fsys.lstats)
+	}
+}
+
+func TestAFolderAtTheTopSpelledTwoWaysGoesToOnePlace(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the folder's paths tell these names apart")
+	}
+	for _, second := range []string{"X.", "X "} {
+		t.Run(second, func(t *testing.T) {
+			c := useClip(t)
+			h := newHarness(t, "keep.txt")
+			h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+			c.holdContents([]outsideItem{
+				{name: "X", dir: true, size: -1},
+				{name: "X/a.txt", size: 1},
+				{name: second, dir: true, size: -1},
+				{name: second + "/b.txt", size: 1},
+			}, map[string]string{"X/a.txt": "a", second + "/b.txt": "b"})
+			h.do(Command{Name: CmdPaste})
+			h.until("the folder arrives", func() bool { return slices.Equal(h.shown(), []string{"X", "keep.txt"}) })
+			h.until("the paste ends", func() bool { return len(h.a.ops.running) == 0 })
+			if len(h.a.ops.dialogs) > 0 {
+				t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+			}
+			if got := names(t, filepath.Join(h.dir, "X")); !slices.Equal(got, []string{"a.txt", "b.txt"}) {
+				t.Fatalf("X holds %q", got)
 			}
 		})
 	}

@@ -51,6 +51,10 @@ type job struct {
 	// outside says srcs name items another program put on the system
 	// clipboard as contents, which a copy reads from there.
 	outside bool
+	// cut, where not 0, is the system clipboard's seq when it held the
+	// cut a move moves: the move holds the cut while it runs, so a second
+	// paste of it does not move the same items at once.
+	cut uint32
 }
 
 // step is one item an operation moved or made: what was at from is now at
@@ -329,13 +333,14 @@ func (r *runner) resolve(src, dst string) (to string, skip, merge, replace bool,
 	if err != nil {
 		return "", false, false, false, err
 	}
-	return r.resolveAs(src, dst, realDir(sInfo), "")
+	return r.resolveAs(src, dst, realDir(sInfo), "", &r.all)
 }
 
 // resolveAs is resolve for src, a folder where sDir is set, that may be
 // on no file system: from then says what it is, for the user to compare,
-// where it cannot be read.
-func (r *runner) resolveAs(src, dst string, sDir bool, from string) (to string, skip, merge, replace bool, err error) {
+// where it cannot be read. all holds the answer the user gave for every
+// clash of its kind, once given.
+func (r *runner) resolveAs(src, dst string, sDir bool, from string, all **answer) (to string, skip, merge, replace bool, err error) {
 	dInfo, err := r.env.fs.Lstat(dst)
 	if errors.Is(err, fs.ErrNotExist) {
 		return dst, false, false, false, nil
@@ -345,8 +350,8 @@ func (r *runner) resolveAs(src, dst string, sDir bool, from string) (to string, 
 	}
 	dDir := realDir(dInfo)
 	ans := answer{}
-	if r.all != nil {
-		ans = *r.all
+	if *all != nil {
+		ans = **all
 	} else {
 		if r.env.ask == nil {
 			return "", false, false, false, fmt.Errorf("%s already exists", r.env.fs.Paths().Show(dst))
@@ -356,7 +361,7 @@ func (r *runner) resolveAs(src, dst string, sDir bool, from string) (to string, 
 			return "", false, false, false, err
 		}
 		if ans.all {
-			r.all = &ans
+			*all = &ans
 		}
 	}
 	switch ans.choice {
