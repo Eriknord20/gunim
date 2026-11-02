@@ -311,6 +311,17 @@ func (a *aaOutput) enter() bool {
 
 func (a *aaOutput) leave() { a.readers.Add(-1) }
 
+// check says the stream p holds failed, as failed tells, reading it as
+// a reader of the streams.
+func (a *aaOutput) check(p *atomic.Pointer[aaRun], now int64) bool {
+	if !a.enter() {
+		return false
+	}
+	defer a.leave()
+	run := p.Load()
+	return run != nil && a.failed(run, now)
+}
+
 // start fills the ring and starts the streams, and the goroutine that
 // keeps them going.
 func (a *aaOutput) start(ahead time.Duration) {
@@ -392,6 +403,11 @@ func (a *aaOutput) loop(buf []float32) {
 		}
 		now := a.clock()
 		a.keepOpen(now, buf)
+		// Suspend and Resume may close a stream meanwhile, once no
+		// reader reads it.
+		if !a.enter() {
+			return
+		}
 		if now-polled >= int64(aaPoll) {
 			polled = now
 			a.poll()
@@ -399,6 +415,7 @@ func (a *aaOutput) loop(buf []float32) {
 		a.topUp(buf)
 		a.count(now)
 		a.drain(ibuf, now)
+		a.leave()
 	}
 }
 
@@ -421,9 +438,9 @@ func retryDelay(fails int) time.Duration {
 // stopped taking buffers, and one that failed to open, when it may try
 // next.
 func (a *aaOutput) keepOpen(now int64, buf []float32) {
-	if run := a.run.Load(); run != nil && a.failed(run, now) {
+	if a.check(&a.run, now) {
 		a.mu.Lock()
-		if a.run.Load() == run && !a.paused.Load() {
+		if !a.paused.Load() {
 			a.dropOut()
 			a.next = now
 		}
@@ -447,9 +464,9 @@ func (a *aaOutput) keepOpen(now int64, buf []float32) {
 	if a.in == nil {
 		return
 	}
-	if run := a.irun.Load(); run != nil && a.failed(run, now) {
+	if a.check(&a.irun, now) {
 		a.mu.Lock()
-		if a.irun.Load() == run && !a.paused.Load() {
+		if !a.paused.Load() {
 			a.dropIn()
 			a.inext = now
 		}

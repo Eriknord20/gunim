@@ -25,8 +25,10 @@ type fakeAA struct {
 	rate, burst  int
 	delay, ahead int64
 	// failIn fails as many input streams' opens; failOut as many
-	// outputs'.
+	// outputs'; failPause fails each pause, as of a stream whose device
+	// went away.
 	failIn, failOut atomic.Int64
+	failPause       atomic.Bool
 	mu              sync.Mutex
 	outs, ins       []*fakeAAStream
 	// played holds each frame played, the first sample of its pair, as
@@ -145,6 +147,9 @@ func (s *fakeAAStream) run() {
 
 func (s *fakeAAStream) Pause() error {
 	s.pauses.Add(1)
+	if s.f.failPause.Load() {
+		return errors.New("fake: disconnected")
+	}
 	s.pausedAt = aaClock()
 	s.paused.Store(true)
 	return nil
@@ -460,6 +465,47 @@ func TestAAudioLetsTheMicrophoneGoWhileSuspended(t *testing.T) {
 		}
 		if got := m.Heard(); got <= h {
 			t.Error("after resuming the speaker hears nothing more")
+		}
+	})
+}
+
+// TestAAudioOpensAgainAStreamThatWouldNotPause suspends while the
+// output's device has gone, so it will not pause, as the speaker
+// records and plays on: it closes, and the resume opens another, which
+// plays.
+func TestAAudioOpensAgainAStreamThatWouldNotPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 240, delay: 960}
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		s := openAA(t, m, Options{Record: true})
+		time.Sleep(200 * time.Millisecond)
+		f.failPause.Store(true)
+		if err := s.Suspend(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		outs, _ := f.streams()
+		select {
+		case <-outs[0].closed:
+		default:
+			t.Fatal("the output that would not pause stays open")
+		}
+		if err := s.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		synctest.Wait()
+		outs, _ = f.streams()
+		if len(outs) != 2 {
+			t.Fatalf("after resuming %d outputs opened, want 2", len(outs))
+		}
+		h := m.Heard()
+		time.Sleep(500 * time.Millisecond)
+		synctest.Wait()
+		if got := m.Heard() - h; abs64(got-24000) > 2*int64(f.burst) {
+			t.Errorf("in 500 ms after resuming the speaker heard %d frames, want 24000", got)
 		}
 	})
 }
