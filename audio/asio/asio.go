@@ -15,6 +15,11 @@
 // [Config.Outputs] names: with [Config.FillN], on as many as it names,
 // all in step. [Channels] lists a driver's inputs and outputs by name.
 //
+// On Linux, [Drivers] lists JACK too, under the name [JACK], where a
+// JACK server answers, or PipeWire's. Package audio/speaker plays and
+// records through it as through a driver, and [Channels] lists the
+// system's ports JACK connects to. [Open] opens ASIO drivers alone.
+//
 // A process plays through one driver at a time:
 //
 //	d, err := asio.Open(asio.Config{Name: drivers[0].Name, Rate: 44100,
@@ -36,6 +41,14 @@ type Driver struct {
 	// CLSID is the class ID the driver is made from.
 	CLSID string
 }
+
+// JACK is the name [Drivers] lists JACK under, on Linux, where libjack
+// loads and a JACK server answers: jackd, or PipeWire through its own
+// libjack. Package audio/speaker plays through JACK where its
+// Options.Driver names it. The server owns the rate and the buffer
+// size, and has no control panel: a patchbay, as qpwgraph or QjackCtl,
+// connects its ports and sets them.
+const JACK = "JACK"
 
 // Config says how to open a driver.
 type Config struct {
