@@ -149,8 +149,10 @@ func TestEveryFrameIsAimedAtWhenItShows(t *testing.T) {
 			if f.Present.Before(drawn) {
 				t.Fatalf("frame %d: Present %v before the frame was built", i, drawn.Sub(f.Present))
 			}
-			if f.Present.After(f.Now.Add(maxLate)) {
-				t.Fatalf("frame %d: Present %v after Now", i, f.Present.Sub(f.Now))
+			// Once the average is well below zero, the frame is taken to
+			// show as it is built.
+			if i >= 30 && !f.Present.Equal(drawn) {
+				t.Fatalf("frame %d: Present %v after the frame was built, want at it", i, f.Present.Sub(drawn))
 			}
 		}
 		r.w.Close()
@@ -172,4 +174,59 @@ func TestASteppedFrameIsPresentAtItsTime(t *testing.T) {
 			t.Fatalf("stepped frame %d: UI.Present %v after Now", i, got.Sub(f.Now))
 		}
 	}
+}
+
+// With two frames in flight, as a driver that releases a frame before
+// it shows it allows, each report is of the older frame, and is taken
+// against that frame's due time, a refresh before the newer one's.
+// Paired with the newer frame, each frame would seem a refresh early,
+// and Present would be a refresh short.
+func TestAReportIsTakenAgainstItsOwnFrame(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		off := driver.Offscreen(geom.Sz(200, 100))
+		dw := &releasing{OffscreenWindow: off, released: make(chan struct{}, 2)}
+		seer := &presentSeer{}
+		w := newWindow(dw, seer)
+		tick := refreshInterval(off.RefreshRate())
+		lag := 3 * tick
+		var dues []time.Time
+		draw := func() Frame {
+			w.ui.invalid = true
+			w.draw()
+			dues = append(dues, w.due)
+			return seer.frames[len(seer.frames)-1]
+		}
+		// show releases the oldest frame, then reports it shown at its
+		// due time, lighting the screen lag after.
+		show := func() {
+			due := dues[0]
+			dues = dues[1:]
+			unreleased, unshown := w.unreleased, w.unshown
+			dw.released <- struct{}{}
+			for w.unreleased == unreleased {
+				w.wait()
+			}
+			go off.TickWith(driver.Frame{Shown: due, Lag: lag})
+			for w.unshown == unshown {
+				w.wait()
+			}
+		}
+		draw()
+		draw()
+		for i := range 30 {
+			if len(w.dues) != 2 {
+				t.Fatalf("frame %d: %d frames in flight, want 2", i, len(w.dues))
+			}
+			if d := dues[1].Sub(dues[0]); d != tick {
+				t.Fatalf("frame %d: the two frames in flight are due %v apart, want a refresh, %v", i, d, tick)
+			}
+			show()
+			f := draw()
+			if lead := f.Present.Sub(f.Now); lead != lag {
+				t.Fatalf("frame %d: Present %v after Now, want %v", i, lead, lag)
+			}
+			time.Sleep(tick)
+		}
+		w.Close()
+	})
 }

@@ -429,6 +429,7 @@ int gunim_egl_init(void) {
 // nanoseconds, or -1 before one has been read.
 static PFNEGLGETNEXTFRAMEIDANDROIDPROC nextFrameId;
 static PFNEGLGETFRAMETIMESTAMPSANDROIDPROC frameTimestamps;
+static PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC timestampSupported;
 static int stamps;
 #define SENT 8
 static struct { EGLuint64KHR id; int64_t swapped; } sent[SENT];
@@ -441,7 +442,9 @@ static int64_t monotonic(void) {
 	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
-// stampsOn has the surface keep frame timestamps, where EGL can.
+// stampsOn has the surface keep frame timestamps, where EGL can and
+// they tell when a frame lit the screen: an emulator keeps them, but
+// without that.
 static void stampsOn(void) {
 	stamps = 0;
 	nsent = 0;
@@ -451,7 +454,11 @@ static void stampsOn(void) {
 	}
 	nextFrameId = (PFNEGLGETNEXTFRAMEIDANDROIDPROC)eglGetProcAddress("eglGetNextFrameIdANDROID");
 	frameTimestamps = (PFNEGLGETFRAMETIMESTAMPSANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampsANDROID");
-	if (nextFrameId == NULL || frameTimestamps == NULL) {
+	timestampSupported = (PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampSupportedANDROID");
+	if (nextFrameId == NULL || frameTimestamps == NULL || timestampSupported == NULL) {
+		return;
+	}
+	if (!timestampSupported(dpy, surf, EGL_DISPLAY_PRESENT_TIME_ANDROID)) {
 		return;
 	}
 	stamps = eglSurfaceAttrib(dpy, surf, EGL_TIMESTAMPS_ANDROID, EGL_TRUE) == EGL_TRUE;
@@ -501,21 +508,34 @@ int gunim_egl_swap(void) {
 	// Read the frames before. The newest that lit the screen gives the
 	// lag. Each frame up to the newest Android has told of is done
 	// with: one left pending behind it, as a frame dropped may be,
-	// never will be.
+	// never will be. A frame EGL can't read, as one too old for the
+	// record, is let go alone.
 	const EGLint name = EGL_DISPLAY_PRESENT_TIME_ANDROID;
-	int done = 0;
+	int8_t state[SENT]; // 0 pending, 1 told, -1 unread
+	int told = -1;
 	for (int i = 0; i < nsent; i++) {
 		EGLnsecsANDROID at = EGL_TIMESTAMP_INVALID_ANDROID;
-		if (frameTimestamps(dpy, surf, sent[i].id, 1, &name, &at) && at == EGL_TIMESTAMP_PENDING_ANDROID) {
+		if (!frameTimestamps(dpy, surf, sent[i].id, 1, &name, &at)) {
+			state[i] = -1;
 			continue;
 		}
-		done = i + 1;
+		if (at == EGL_TIMESTAMP_PENDING_ANDROID) {
+			state[i] = 0;
+			continue;
+		}
+		state[i] = 1;
+		told = i;
 		if (at > sent[i].swapped) {
 			lag = at - sent[i].swapped;
 		}
 	}
-	memmove(&sent[0], &sent[done], (nsent - done) * sizeof sent[0]);
-	nsent -= done;
+	int kept = 0;
+	for (int i = told + 1; i < nsent; i++) {
+		if (state[i] == 0) {
+			sent[kept++] = sent[i];
+		}
+	}
+	nsent = kept;
 	return 0;
 }
 

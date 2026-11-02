@@ -87,6 +87,7 @@ const (
 	dxgiSwapChainGetFrameStats   = 16
 	dxgiSwapChainGetLastPresent  = 17
 	dxgiSwapChain1Present1       = 22
+	dxgiStatusOccluded           = 0x087A0001
 	d3d11DeviceCreateTexture2D   = 5
 	d3d11ContextCopyResource     = 47
 	d3d11ContextFlush            = 111
@@ -207,12 +208,8 @@ type presenter struct {
 	whole bool
 	// rects are the dirty rectangles of the frame presented last, kept for their room.
 	rects [][4]int32
-	// sent holds the frames presented that DXGI has yet to report shown,
-	// oldest first; measured is how long the last one it reported took
-	// from Present to the screen, and hasLag says one has been.
-	sent     []sentFrame
-	measured time.Duration
-	hasLag   bool
+	// shown matches the frames presented with DXGI's reports of them.
+	shown shownLog
 
 	wglDXOpenDevice, wglDXCloseDevice       uintptr
 	wglDXRegisterObject, wglDXUnregisterObj uintptr
@@ -379,12 +376,13 @@ func (p *presenter) present(dirty []geom.Rect) error {
 		}
 	}
 	p.rects = rects
-	defer p.stamp()
 	if p.whole || len(rects) == 0 {
-		if hr := call(p.swap, dxgiSwapChainPresent, 0, 0); failed(hr) {
+		hr := call(p.swap, dxgiSwapChainPresent, 0, 0)
+		if failed(hr) {
 			return fmt.Errorf("desktop: Present: HRESULT %#x", uint32(hr))
 		}
 		p.whole = false
+		p.stamp(hr)
 		return nil
 	}
 	// Tells the compositor which parts of the window changed.
@@ -395,74 +393,34 @@ func (p *presenter) present(dirty []geom.Rect) error {
 	if failed(hr) {
 		return fmt.Errorf("desktop: Present1: HRESULT %#x", uint32(hr))
 	}
+	p.stamp(hr)
 	return nil
 }
 
-// sentFrame is a frame presented: its present count, and the
-// performance counter as Present returned.
-type sentFrame struct {
-	count uint32
-	qpc   int64
-}
-
-// frameStatistics is DXGI_FRAME_STATISTICS.
-type frameStatistics struct {
-	PresentCount        uint32
-	PresentRefreshCount uint32
-	SyncRefreshCount    uint32
-	SyncQPCTime         int64
-	SyncGPUTime         int64
-}
-
-// stamp notes the frame just presented, and reads from DXGI's frame
-// statistics when the last frame it reports shown lit the screen: at
-// the vertical blank DXGI names. The compositor shows a window's frame
-// a refresh or more after Present, and this is how long it took.
-func (p *presenter) stamp() {
+// stamp notes the frame just presented, whose Present returned hr, and
+// reads DXGI's frame statistics for when the last frame shown lit the
+// screen; see shownLog.
+func (p *presenter) stamp(hr uintptr) {
 	var count uint32
 	if hr := call(p.swap, dxgiSwapChainGetLastPresent, uintptr(unsafe.Pointer(&count))); failed(hr) {
 		return
 	}
 	var now int64
 	_, _, _ = procQueryPerfCounter.Call(uintptr(unsafe.Pointer(&now)))
-	if len(p.sent) == cap(p.sent) && len(p.sent) > 0 {
-		p.sent = p.sent[:copy(p.sent, p.sent[1:])]
-	}
-	if p.sent == nil {
-		p.sent = make([]sentFrame, 0, 8)
-	}
-	p.sent = append(p.sent, sentFrame{count: count, qpc: now})
+	p.shown.presented(count, now, uint32(hr) == dxgiStatusOccluded)
 	var st frameStatistics
 	if hr := call(p.swap, dxgiSwapChainGetFrameStats, uintptr(unsafe.Pointer(&st))); failed(hr) {
 		return
 	}
-	// Each frame up to the one DXGI reports shown is past; that one lit
-	// the screen at SyncQPCTime.
-	i := 0
-	for ; i < len(p.sent) && int32(p.sent[i].count-st.PresentCount) <= 0; i++ {
-		if f := p.sent[i]; f.count == st.PresentCount && st.SyncQPCTime >= f.qpc {
-			if d := qpcDuration(st.SyncQPCTime - f.qpc); d < time.Second {
-				p.measured, p.hasLag = d, true
-			}
-		}
-	}
-	p.sent = p.sent[:copy(p.sent, p.sent[i:])]
+	qpcFreqOnce.Do(func() {
+		_, _, _ = procQueryPerfFrequency.Call(uintptr(unsafe.Pointer(&qpcFreq)))
+	})
+	p.shown.learn(st, qpcFreq)
 }
 
 // lag returns how long the last frame DXGI reported shown took from
 // Present to the screen, and false before it has reported one.
-func (p *presenter) lag() (time.Duration, bool) { return p.measured, p.hasLag }
-
-// qpcDuration turns a count of the performance counter into a duration.
-func qpcDuration(n int64) time.Duration {
-	qpcFreqOnce.Do(func() {
-		_, _, _ = procQueryPerfFrequency.Call(uintptr(unsafe.Pointer(&qpcFreq)))
-	})
-	if qpcFreq <= 0 {
-		return 0
-	}
-	return time.Duration(float64(n) * 1e9 / float64(qpcFreq))
-}
+func (p *presenter) lag() (time.Duration, bool) { return p.shown.lag, p.shown.has }
 
 var (
 	qpcFreqOnce sync.Once
