@@ -256,9 +256,10 @@ func (p *Painter) Damage() geom.Rect {
 // for a frame that changed nothing, and [Everything] alone where
 // [Painter.Damage] is Everything.
 //
-// The slice is the painter's, as the ops are. It holds until the
-// frame after next calls DamageRects, so a driver may draw a frame's
-// damage while the engine paints the next one.
+// The slice is the painter's, as the ops are. It holds through the
+// next frame, so a driver may draw a frame's damage while the engine
+// paints the next one, and the frame after that reuses it. A second
+// call in the same frame rewrites it.
 func (p *Painter) DamageRects() []geom.Rect {
 	d := &p.dmg
 	d.reset()

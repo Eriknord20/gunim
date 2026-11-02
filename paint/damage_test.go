@@ -2,6 +2,7 @@ package paint
 
 import (
 	"image/color"
+	"slices"
 	"testing"
 
 	"github.com/marrasen/gunim/geom"
@@ -181,12 +182,7 @@ func TestDamageHoldsWhileTheNextFramePaints(t *testing.T) {
 	handed := frame(500)
 	want := append([]geom.Rect(nil), handed...)
 	frame(1500)
-	if len(handed) != len(want) {
-		t.Fatalf("damage handed on changed from %v to %v", want, handed)
-	}
-	for i := range want {
-		if handed[i] != want[i] {
-			t.Fatalf("damage handed on changed from %v to %v once the next frame painted", want, handed)
-		}
+	if !slices.Equal(handed, want) {
+		t.Fatalf("damage handed on changed from %v to %v once the next frame painted", want, handed)
 	}
 }

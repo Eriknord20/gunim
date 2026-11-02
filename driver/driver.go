@@ -236,7 +236,7 @@ type Window interface {
 	// a few rectangles apart ([paint.Painter.DamageRects]), none where
 	// nothing did, which a driver may use to redraw and present just
 	// those parts of the surface. Like ops, it is the driver's until the
-	// frame is shown.
+	// frame is shown, or for a [Releaser] until the frame is released.
 	//
 	// ops belong to the driver until the matching Frame arrives on
 	// Presented; the engine records the next frame into the same
