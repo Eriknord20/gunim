@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 )
 
@@ -17,8 +17,8 @@ import (
 // as the driver's thread would.
 type fakeDriver struct {
 	mu     sync.Mutex
-	info   asio.Info
-	cfg    asio.Config
+	info   driver.Info
+	cfg    driver.Config
 	opens  int
 	closed bool
 	// stuck has the device not stop as it closes, as a driver that
@@ -26,7 +26,7 @@ type fakeDriver struct {
 	stuck bool
 }
 
-func (f *fakeDriver) open(c asio.Config) (pullDevice, error) {
+func (f *fakeDriver) open(c driver.Config) (pullDevice, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cfg, f.closed = c, false
@@ -59,23 +59,23 @@ func (f *fakeDriver) take() []float32 {
 
 type fakeDevice struct {
 	f    *fakeDriver
-	info asio.Info
+	info driver.Info
 }
 
-func (d *fakeDevice) Info() asio.Info     { return d.info }
+func (d *fakeDevice) Info() driver.Info   { return d.info }
 func (d *fakeDevice) ControlPanel() error { return nil }
 func (d *fakeDevice) Close() error {
 	d.f.mu.Lock()
 	defer d.f.mu.Unlock()
 	if d.f.stuck {
-		return asio.ErrNotAnswering
+		return driver.ErrNotAnswering
 	}
 	d.f.closed = true
 	return nil
 }
 
 // useFake puts a fake driver in place of ASIO for the test.
-func useFake(t *testing.T, info asio.Info) *fakeDriver {
+func useFake(t *testing.T, info driver.Info) *fakeDriver {
 	t.Helper()
 	f := &fakeDriver{info: info}
 	was := openPull
@@ -120,7 +120,7 @@ func (s steady) Read(dst []float32) (int, error) {
 // 16-bit samples, and reads the mixer's sound from its buffers, at the
 // driver's rate and rounded to 16 bits.
 func TestADriverPlaysTheMixerRounded(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
 	m := audio.NewMixer()
 	m.Play(steady(0.3), audio.Options{})
 	s, err := Open(m, Options{Driver: "Fake", Rate: 44100, Bits: 16, Latency: 50 * time.Millisecond, Fixed: true})
@@ -132,7 +132,7 @@ func TestADriverPlaysTheMixerRounded(t *testing.T) {
 		t.Errorf("the mixer plays at %d Hz, want 44100", m.Rate())
 	}
 	st := s.State()
-	if st.Driver != "Fake" || st.Rate != 44100 || st.ASIO == nil {
+	if st.Driver != "Fake" || st.Rate != 44100 || st.Info == nil {
 		t.Errorf("state %+v", st)
 	}
 	if want := 50 * time.Millisecond; st.Latency < want-time.Millisecond || st.Latency > want+time.Millisecond {
@@ -156,7 +156,7 @@ func TestADriverPlaysTheMixerRounded(t *testing.T) {
 // further ahead; with Fixed set it stays where it is.
 func TestRunningDryWorksFurtherAhead(t *testing.T) {
 	for _, fixed := range []bool{false, true} {
-		f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 4800, Latency: 0, Bits: 32})
+		f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 4800, Latency: 0, Bits: 32})
 		m := audio.NewMixer()
 		s, err := Open(m, Options{Driver: "Fake", Latency: 20 * time.Millisecond, Fixed: fixed})
 		if err != nil {
@@ -184,7 +184,7 @@ func TestRunningDryWorksFurtherAhead(t *testing.T) {
 // TestADriverAskingForAResetOpensAgain has the driver ask to be opened
 // again, and hears of it on Changed.
 func TestADriverAskingForAResetOpensAgain(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
 	m := audio.NewMixer()
 	s, err := Open(m, Options{Driver: "Fake"})
 	if err != nil {
@@ -210,7 +210,7 @@ func TestADriverAskingForAResetOpensAgain(t *testing.T) {
 // TestSetChangesTheRate sets another rate, and finds the driver opened
 // again at it, and the mixer playing at it.
 func TestSetChangesTheRate(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
 	m := audio.NewMixer()
 	o := Options{Driver: "Fake", Rate: 48000}
 	s, err := Open(m, o)
@@ -235,7 +235,7 @@ func TestSetChangesTheRate(t *testing.T) {
 // TestBufferReachesTheDriver opens a driver with a buffer asked for,
 // and finds a change of it opening the driver again with the new one.
 func TestBufferReachesTheDriver(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
 	m := audio.NewMixer()
 	o := Options{Driver: "Fake", Buffer: 64}
 	s, err := Open(m, o)
@@ -263,10 +263,10 @@ func TestBufferReachesTheDriver(t *testing.T) {
 // TestADriverThatFailedOpensItsSettings has a driver fail to open, opens
 // its settings, and finds the speaker trying it again after.
 func TestADriverThatFailedOpensItsSettings(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32})
 	fail := true
 	was := openPull
-	openPull = func(c asio.Config) (pullDevice, error) {
+	openPull = func(c driver.Config) (pullDevice, error) {
 		if fail {
 			return nil, errors.New("the driver refused to start")
 		}
@@ -310,7 +310,7 @@ func TestADriverThatFailedOpensItsSettings(t *testing.T) {
 // answering ask to be opened again: the speaker lets it go and opens
 // the driver anew, where it would keep the one that does not close.
 func TestADriverThatStopsAnsweringIsLetGo(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
 	m := audio.NewMixer()
 	s, err := Open(m, Options{Driver: "Fake", Latency: 50 * time.Millisecond})
 	if err != nil {
@@ -353,7 +353,7 @@ func (r *ramp) Read(dst []float32) (int, error) {
 // buffer's first frame less the driver's output and input latencies.
 // The tap goes as the speaker closes.
 func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32,
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32,
 		Inputs: 4, Recorded: 2, InputNames: []string{"Mic", "Guitar"}, InputLatency: 200})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
@@ -405,7 +405,7 @@ func TestADriverHandsItsInputsOnAsHeard(t *testing.T) {
 // without Record: the speaker asks for none of them, and offers no tap.
 // Set with Record, it opens the driver again with them.
 func TestADriverPlaysAloneUnlessToldToRecord(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32, Inputs: 4, InputNames: []string{"Mic"}})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32, Inputs: 4, InputNames: []string{"Mic"}})
 	m := audio.NewMixer()
 	o := Options{Driver: "Fake"}
 	s, err := Open(m, o)

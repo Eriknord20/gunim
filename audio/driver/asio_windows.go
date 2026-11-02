@@ -1,6 +1,6 @@
 //go:build windows && amd64
 
-package asio
+package driver
 
 import (
 	"errors"
