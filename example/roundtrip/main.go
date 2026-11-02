@@ -366,7 +366,7 @@ func (v *view) WakeIn() time.Duration {
 	if !ok {
 		return time.Second
 	}
-	rate := int64(v.t.mix.Rate())
+	rate := int64(v.t.ticks.rate)
 	return max(time.Millisecond, min(time.Second, audio.DurationAt(rate-since, int(rate))))
 }
 
@@ -381,14 +381,14 @@ func (v *view) sinceClick() (int64, bool) {
 	if h < 0 {
 		return 0, false
 	}
-	return h % int64(v.t.mix.Rate()), true
+	return h % int64(v.t.ticks.rate), true
 }
 
 // flash returns how bright the dot is now, 0 to 1: full as a click is
 // heard, and fading over 150 ms.
 func (v *view) flash() float32 {
 	since, ok := v.sinceClick()
-	fade := int64(v.t.mix.Rate()) * 15 / 100
+	fade := int64(v.t.ticks.rate) * 15 / 100
 	if !ok || since >= fade {
 		return 0
 	}
