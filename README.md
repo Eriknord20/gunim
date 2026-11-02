@@ -187,13 +187,13 @@ album as one.
 Through an ASIO driver, the speakers play on any of its outputs, not
 just the first two: `Options.Outputs` picks them, the mixer plays on
 the first two picked, and `Options.Aux` fills the rest, such as a
-monitor mix on outputs 3 and 4, in step with the mixer. `asio.Channels`
+monitor mix on outputs 3 and 4, in step with the mixer. `driver.Channels`
 lists a driver's inputs and outputs by name.
 
 Package `audio/capture` records the computer's inputs: a microphone, a
 guitar through an audio interface, a synth's output. It records through
 PulseAudio or PipeWire on Linux and WASAPI on Windows, and through the
-ASIO driver the speakers play through, in step with its buffers. Each
+driver the speakers play through, ASIO or JACK, in step with its buffers. Each
 block it records is stamped with the mixer frame heard as it came in,
 so a recording lines up with what was playing. `Measure` plays a click
 and finds it in the recording, to tell how far the stamps are off.

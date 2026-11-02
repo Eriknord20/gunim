@@ -9,24 +9,11 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/internal/wasapi"
 	"github.com/marrasen/gunim/audio/rt"
 )
-
-// WASAPI is the name [Options].Driver takes to play through WASAPI,
-// Windows' own sound API, through gunim's own code in place of oto: the
-// default output, in shared mode, at the smallest period the engine
-// offers where Windows 10 or newer lets it. It plays at the rate the
-// device is set to in Windows' Sound settings, whatever Options.Rate
-// asks, so Windows converts nothing, and the mixer follows it. With
-// [Options].Record set it records the default input too, converted to
-// that rate, for package audio/capture, stamped with the mixer frame
-// heard as each packet came in. As the default device changes, or the
-// device goes, it plays on the new default. On another system it plays
-// through the system's sound, as a driver that fails to open does.
-const WASAPI = "WASAPI"
 
 // wasapiFirst plays through WASAPI where Options names no driver, in
 // place of oto, on Windows.
@@ -514,7 +501,7 @@ func (a *wasOutput) start(ahead time.Duration) {
 	a.topUp(buf)
 	info := a.first
 	if a.record && info.Inputs > 0 {
-		a.tap = duplex.NewTap(WASAPI, a.hz, info.Period, info.InputLatency, channelNames(info.InputName, info.Inputs))
+		a.tap = duplex.NewTap(driver.WASAPI, a.hz, info.Period, info.InputLatency, channelNames(info.InputName, info.Inputs))
 		duplex.Publish(a.tap)
 	}
 	go a.feed(buf)
@@ -598,20 +585,20 @@ func (a *wasOutput) rate() int { return a.hz }
 
 func (a *wasOutput) fill(st *State) {
 	if a.byName {
-		st.Driver = WASAPI
+		st.Driver = driver.WASAPI
 	}
 	info := a.info.Load()
 	played := []int{0, 1}
 	if info.Channels == 1 {
 		played = []int{0}
 	}
-	ai := asio.Info{Driver: WASAPI, Rate: a.hz, Buffer: info.Period, MinBuffer: info.Period, MaxBuffer: info.Buffer,
+	ai := driver.Info{Driver: driver.WASAPI, Rate: a.hz, Buffer: info.Period, MinBuffer: info.Period, MaxBuffer: info.Buffer,
 		PreferredBuffer: info.Period, Latency: int(a.delay.Load()), Bits: 32, Float: true, Outputs: info.Channels,
 		OutputNames: channelNames(info.Name, info.Channels), Played: played}
 	if a.tap != nil {
 		ai.Inputs, ai.Recorded, ai.InputNames, ai.InputLatency = len(a.tap.Names), len(a.tap.Names), a.tap.Names, a.tap.Latency
 	}
-	st.ASIO = &ai
+	st.Info = &ai
 	if st.Problem == nil {
 		st.Problem = a.err()
 	}

@@ -1,12 +1,17 @@
-// Package asio plays sound through an ASIO driver, on Windows: the
-// driver an audio interface's maker ships with it. The interface plays
-// what the driver is given at the rate and in the buffers it is set to,
-// sample for sample, past the mixing and resampling of Windows' own
-// sound.
+// Package driver lists the audio drivers the speakers can play
+// through, past the system's own sound, and plays through ASIO drivers.
+// [Drivers] lists ASIO drivers on Windows and [JACK] on Linux; [AAudio]
+// names AAudio on Android, and [WASAPI] gunim's own WASAPI output on
+// Windows.
 //
-// The package speaks to drivers through its own definitions of the
-// driver's interface, in Go. It is for 64-bit Windows; elsewhere
-// [Drivers] lists none and [Open] returns [ErrUnsupported].
+// An ASIO driver, on Windows, is the driver an audio interface's maker
+// ships with it. The interface plays what the driver is given at the
+// rate and in the buffers it is set to, sample for sample, past the
+// mixing and resampling of Windows' own sound.
+//
+// The package speaks to ASIO drivers through its own definitions of the
+// driver's interface, in Go. ASIO is for 64-bit Windows; elsewhere
+// [Drivers] lists no ASIO driver and [Open] returns [ErrUnsupported].
 //
 // ASIO plays and records together: [Config.Record] takes the driver's
 // inputs in step with the buffers it plays, sample for sample.
@@ -22,23 +27,25 @@
 //
 // A process plays through one driver at a time:
 //
-//	d, err := asio.Open(asio.Config{Name: drivers[0].Name, Rate: 44100,
+//	d, err := driver.Open(driver.Config{Name: drivers[0].Name, Rate: 44100,
 //		Fill: func(frames []float32) { mix.Mix(frames) }})
 //	...
 //	defer d.Close()
-package asio
+package driver
 
 import (
 	"errors"
 	"fmt"
 )
 
-// A Driver is an ASIO driver installed on the computer.
+// A Driver is a driver the speakers can play through: an ASIO driver
+// installed on the computer, or [JACK].
 type Driver struct {
-	// Name is the driver's name, as it is listed under
-	// HKEY_LOCAL_MACHINE\SOFTWARE\ASIO, and as Config.Name takes it.
+	// Name is the driver's name, as Config.Name and package
+	// audio/speaker's Options.Driver take it: for ASIO, as it is listed
+	// under HKEY_LOCAL_MACHINE\SOFTWARE\ASIO.
 	Name string
-	// CLSID is the class ID the driver is made from.
+	// CLSID is the class ID an ASIO driver is made from.
 	CLSID string
 }
 
@@ -49,6 +56,32 @@ type Driver struct {
 // size, and has no control panel: a patchbay, as qpwgraph or QjackCtl,
 // connects its ports and sets them.
 const JACK = "JACK"
+
+// AAudio is the name package audio/speaker takes as Options.Driver to
+// play through AAudio, Android's own sound API, from Android 11, in
+// place of oto: in low-latency mode, with the device to itself where it
+// allows. With Options.Record set it records the phone's microphone
+// too, or the headset's, for package audio/capture, stamped with the
+// mixer frame heard as each block came in, as a driver's inputs are;
+// the application needs the microphone permission first, which gunim's
+// App.Ask asks for. On another system, or an older Android, the
+// speakers play through the system's sound, as through a driver that
+// fails to open.
+const AAudio = "AAudio"
+
+// WASAPI is the name package audio/speaker takes as Options.Driver to
+// play through WASAPI, Windows' own sound API, through gunim's own code
+// in place of oto: the default output, in shared mode, at the smallest
+// period the engine offers where Windows 10 or newer lets it. It plays
+// at the rate the device is set to in Windows' Sound settings, whatever
+// Options.Rate asks, so Windows converts nothing, and the mixer follows
+// it. With Options.Record set it records the default input too,
+// converted to that rate, for package audio/capture, stamped with the
+// mixer frame heard as each packet came in, as a driver's inputs are.
+// As the default device changes, or the device goes, it plays on the
+// new default. On another system the speakers play through the
+// system's sound, as through a driver that fails to open.
+const WASAPI = "WASAPI"
 
 // Config says how to open a driver.
 type Config struct {

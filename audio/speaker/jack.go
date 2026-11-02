@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/internal/jack"
 	"github.com/marrasen/gunim/audio/rt"
@@ -110,7 +110,7 @@ func (j *jackOutput) start(ahead time.Duration) {
 	j.cycledAt = time.Now()
 	if j.info.Recorded > 0 {
 		_, in := j.dev.Latency()
-		tap := duplex.NewTap(asio.JACK, j.hz, j.info.Buffer, in, j.info.Inputs[:j.info.Recorded])
+		tap := duplex.NewTap(driver.JACK, j.hz, j.info.Buffer, in, j.info.Inputs[:j.info.Recorded])
 		j.tap.Store(tap)
 		duplex.Publish(tap)
 	}
@@ -298,9 +298,9 @@ func (j *jackOutput) fill(st *State) {
 	j.mu.Lock()
 	i := j.info
 	j.mu.Unlock()
-	st.Driver = asio.JACK
+	st.Driver = driver.JACK
 	st.Aux = max(j.chans-2, 0)
-	st.ASIO = &asio.Info{Driver: asio.JACK, Rate: i.Rate, Buffer: i.Buffer, MinBuffer: i.Buffer, MaxBuffer: i.Buffer,
+	st.Info = &driver.Info{Driver: driver.JACK, Rate: i.Rate, Buffer: i.Buffer, MinBuffer: i.Buffer, MaxBuffer: i.Buffer,
 		PreferredBuffer: i.Buffer, Latency: i.Buffer + i.Latency, Bits: 32, Float: true,
 		Outputs: len(i.Outputs), OutputNames: i.Outputs, Played: i.Played,
 		Inputs: len(i.Inputs), Recorded: i.Recorded, InputNames: i.Inputs[:i.Recorded], InputLatency: i.InputLatency}

@@ -8,22 +8,11 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/aaudio"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/rt"
 )
-
-// AAudio is the name [Options].Driver takes to play through AAudio,
-// Android's own sound API, from Android 11, in place of oto: in
-// low-latency mode, with the device to itself where it allows. With
-// [Options].Record set it records the phone's microphone too, or the
-// headset's, for package audio/capture, stamped with the mixer frame
-// heard as each block came in, as an ASIO driver's inputs are; the
-// application needs the microphone permission first, which gunim's
-// App.Ask asks for. On another system, or an older Android, it plays
-// through the system's sound as a driver that fails to open does.
-const AAudio = "AAudio"
 
 // aaudioFirst plays through AAudio where Options names no driver, in
 // place of oto, on the Androids it plays on.
@@ -337,7 +326,7 @@ func (a *aaOutput) start(ahead time.Duration) {
 	buf := make([]float32, 2*a.chunk())
 	a.topUp(buf)
 	if a.in != nil {
-		a.tap = duplex.NewTap(AAudio, a.hz, a.burst(), int(a.inDelay.Load()), []string{micName})
+		a.tap = duplex.NewTap(driver.AAudio, a.hz, a.burst(), int(a.inDelay.Load()), []string{micName})
 		duplex.Publish(a.tap)
 	}
 	a.mu.Lock()
@@ -745,9 +734,9 @@ func (a *aaOutput) rate() int { return a.hz }
 
 func (a *aaOutput) fill(st *State) {
 	if a.byName {
-		st.Driver = AAudio
+		st.Driver = driver.AAudio
 	}
-	info := asio.Info{Driver: AAudio, Rate: a.hz, Bits: 32, Float: true, Outputs: 2, Played: []int{0, 1},
+	info := driver.Info{Driver: driver.AAudio, Rate: a.hz, Bits: 32, Float: true, Outputs: 2, Played: []int{0, 1},
 		Latency: int(a.delay.Load())}
 	if run := a.run.Load(); run != nil {
 		info.Buffer, info.MinBuffer, info.PreferredBuffer = run.info.Burst, run.info.Burst, run.info.Burst
@@ -757,7 +746,7 @@ func (a *aaOutput) fill(st *State) {
 		info.Inputs, info.Recorded, info.InputNames = 1, 1, []string{micName}
 		info.InputLatency = int(a.inDelay.Load())
 	}
-	st.ASIO = &info
+	st.Info = &info
 	if st.Problem == nil {
 		st.Problem = a.err()
 	}

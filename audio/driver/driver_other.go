@@ -1,6 +1,6 @@
 //go:build !(windows && amd64)
 
-package asio
+package driver
 
 import "github.com/marrasen/gunim/audio/internal/jack"
 

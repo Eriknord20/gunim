@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/internal/wasapi"
 )
@@ -300,7 +301,7 @@ func (d *fakeWasDev) Close() { d.closes.Add(1) }
 // as the test ends, its voices stopped.
 func openWas(t *testing.T, m *audio.Mixer, o Options, voices ...*audio.Voice) *Speaker {
 	t.Helper()
-	o.Driver = WASAPI
+	o.Driver = driver.WASAPI
 	s, err := Open(m, o)
 	if err != nil {
 		t.Fatal(err)
@@ -358,9 +359,9 @@ func TestWASAPIPlaysTheMixerAsHeard(t *testing.T) {
 		v := m.Play(&ramp{}, audio.Options{})
 		s := openWas(t, m, Options{Rate: 48000, Latency: 30 * time.Millisecond, Fixed: true}, v)
 		st := s.State()
-		if st.Driver != WASAPI || st.Rate != 44100 || m.Rate() != 44100 || st.ASIO == nil || st.ASIO.Buffer != 441 ||
-			len(st.ASIO.Played) != 2 || st.Problem != nil {
-			t.Fatalf("the state says %+v, %+v", st, st.ASIO)
+		if st.Driver != driver.WASAPI || st.Rate != 44100 || m.Rate() != 44100 || st.Info == nil || st.Info.Buffer != 441 ||
+			len(st.Info.Played) != 2 || st.Problem != nil {
+			t.Fatalf("the state says %+v, %+v", st, st.Info)
 		}
 		dev, _ := f.dev(0)
 		hearsAsPlayed(t, m, dev, 3*time.Second)
@@ -387,13 +388,13 @@ func TestWASAPIPlaysTheMixerAsHeard(t *testing.T) {
 		f.mu.Unlock()
 		// The device holds its buffer, and plays it its latency later.
 		st = s.State()
-		if d := st.ASIO.Latency; d < 441 || d > 882+441 {
+		if d := st.Info.Latency; d < 441 || d > 882+441 {
 			t.Errorf("the device's delay is %d frames", d)
 		}
 		// As asked, or the device's own delay and the ring's least.
 		least := int64(441) + audio.FramesAt(2*wasTick, 44100)
-		if l, most := s.Latency(), audio.DurationAt(int64(st.ASIO.Latency)+least, 44100); l < 30*time.Millisecond || l > most+time.Millisecond {
-			t.Errorf("the latency is %v, asked 30 ms; the device delays %d frames", l, st.ASIO.Latency)
+		if l, most := s.Latency(), audio.DurationAt(int64(st.Info.Latency)+least, 44100); l < 30*time.Millisecond || l > most+time.Millisecond {
+			t.Errorf("the latency is %v, asked 30 ms; the device delays %d frames", l, st.Info.Latency)
 		}
 		if !errors.Is(s.ControlPanel(), errWasPanel) {
 			t.Errorf("ControlPanel = %v", s.ControlPanel())
@@ -492,11 +493,11 @@ func TestWASAPIStampsWhatItRecords(t *testing.T) {
 		v := m.Play(&ramp{}, audio.Options{})
 		s := openWas(t, m, Options{Record: true}, v)
 		tap := duplex.Current()
-		if tap == nil || tap.Driver != WASAPI || len(tap.Names) != 2 || tap.Rate != 48000 || tap.Latency != 480 {
+		if tap == nil || tap.Driver != driver.WASAPI || len(tap.Names) != 2 || tap.Rate != 48000 || tap.Latency != 480 {
 			t.Fatalf("the tap is %+v", tap)
 		}
-		if st := s.State(); st.ASIO.Recorded != 2 || st.ASIO.InputNames[0] != "Microphone 1" {
-			t.Errorf("the state says %+v", st.ASIO)
+		if st := s.State(); st.Info.Recorded != 2 || st.Info.InputNames[0] != "Microphone 1" {
+			t.Errorf("the state says %+v", st.Info)
 		}
 		type packet struct{ truth, heard int64 }
 		var (
@@ -604,7 +605,7 @@ func TestWASAPIHeldWhileReopening(t *testing.T) {
 	f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 480, chans: 2, inputs: 1}
 	useFakeWas(t, f)
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: WASAPI})
+	s, err := Open(m, Options{Driver: driver.WASAPI})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,7 +629,7 @@ func TestWASAPIHeldWhileReopening(t *testing.T) {
 			}
 		}()
 	}
-	o := Options{Driver: WASAPI}
+	o := Options{Driver: driver.WASAPI}
 	for i := range 20 {
 		o.Latency = time.Duration(20+i) * time.Millisecond
 		o.Record = i%2 == 0
@@ -681,7 +682,7 @@ func TestWASAPIFailsWhereItWillNotOpen(t *testing.T) {
 	}
 	openWasDevice = nil
 	if _, err := openWasapi(s, Options{}, true); !errors.Is(err, wasapi.ErrUnsupported) {
-		t.Errorf("without WASAPI openWasapi returned %v", err)
+		t.Errorf("without driver.WASAPI openWasapi returned %v", err)
 	}
 }
 
