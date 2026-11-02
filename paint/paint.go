@@ -41,8 +41,10 @@ type Painter struct {
 	hasPrev          bool
 	blurs            bool
 	prevBlurs        bool
-	// dmg gathers the damage [Painter.DamageRects] returns.
-	dmg damage
+	// dmg gathers the damage [Painter.DamageRects] returns, and
+	// prevDmg holds the frame before's. A driver draws a frame while
+	// the next one paints, so the two take turns, as the ops do.
+	dmg, prevDmg damage
 	// showTable and showNext index the frame before's ops by where they
 	// show, for resync, and indexed says they hold this frame's index.
 	showTable, showNext []int32
@@ -150,6 +152,7 @@ func (p *Painter) Reset() {
 	p.prev, p.ops = p.ops, p.prev[:0]
 	p.prevBounds, p.bounds = p.bounds, p.prevBounds[:0]
 	p.prevShows, p.shows = p.shows, p.prevShows[:0]
+	p.prevDmg, p.dmg = p.dmg, p.prevDmg
 	p.prevBlurs, p.blurs = p.blurs, false
 	p.prevTilts, p.tilts = p.tilts, false
 	p.prevRRects, p.rrects = p.rrects, p.prevRRects
@@ -253,8 +256,10 @@ func (p *Painter) Damage() geom.Rect {
 // for a frame that changed nothing, and [Everything] alone where
 // [Painter.Damage] is Everything.
 //
-// The slice is the painter's, and holds until the next call: a driver
-// keeps it with the ops until the frame is shown.
+// The slice is the painter's, as the ops are. It holds through the
+// next frame, so a driver may draw a frame's damage while the engine
+// paints the next one, and the frame after that reuses it. A second
+// call in the same frame rewrites it.
 func (p *Painter) DamageRects() []geom.Rect {
 	d := &p.dmg
 	d.reset()

@@ -15,6 +15,8 @@ static jclass nativeClass;
 static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder;
 static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
+static jclass audioClass;
+static jmethodID midAudioRoute, midAudioProbe;
 
 // JNI_OnLoad runs on the thread that loads the library, which has the
 // application's class loader, so it looks up the class Go calls back.
@@ -50,6 +52,14 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 	midAsk = (*env)->GetStaticMethodID(env, c, "ask", "(II)V");
 	midUserFolder = (*env)->GetStaticMethodID(env, c, "userFolder", "(I)Ljava/lang/String;");
 	midChooseFolder = (*env)->GetStaticMethodID(env, c, "chooseFolder", "(I)V");
+	jclass ac = (*env)->FindClass(env, "gunim/android/GunimAudio");
+	if (ac != NULL) {
+		audioClass = (*env)->NewGlobalRef(env, ac);
+		midAudioRoute = (*env)->GetStaticMethodID(env, ac, "route", "(I)[I");
+		midAudioProbe = (*env)->GetStaticMethodID(env, ac, "probe", "(I)[I");
+	} else {
+		(*env)->ExceptionClear(env);
+	}
 	return JNI_VERSION_1_6;
 }
 
@@ -455,3 +465,32 @@ void gunim_window_release(ANativeWindow *w) {
 void gunim_log(const char *line) {
 	__android_log_write(ANDROID_LOG_INFO, "gunim", line);
 }
+
+// ints calls GunimAudio's method mid with arg, and copies the ints it
+// returns into r, n at most. It returns how many it copied, or 0 where
+// the call failed.
+static int ints(jmethodID mid, int arg, int *r, int n) {
+	if (audioClass == NULL || mid == NULL) {
+		return 0;
+	}
+	int a;
+	JNIEnv *env = envGet(&a);
+	jintArray got = (*env)->CallStaticObjectMethod(env, audioClass, mid, (jint)arg);
+	int k = 0;
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+	} else if (got != NULL) {
+		k = (*env)->GetArrayLength(env, got);
+		if (k > n) {
+			k = n;
+		}
+		(*env)->GetIntArrayRegion(env, got, 0, k, (jint *)r);
+		(*env)->DeleteLocalRef(env, got);
+	}
+	envPut(a);
+	return k;
+}
+
+int gunim_audio_route(int device, int *r, int n) { return ints(midAudioRoute, device, r, n); }
+
+int gunim_audio_probe(int usage, int *r, int n) { return ints(midAudioProbe, usage, r, n); }
