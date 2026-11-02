@@ -401,6 +401,11 @@ func (s *Speaker) ranDry() {
 	s.dropouts.Add(1)
 }
 
+// ranDryOnce counts a read that found the buffer empty for a reason
+// that passes, as a stream opening: a dropout, but no sign the buffer
+// is too small.
+func (s *Speaker) ranDryOnce() { s.dropouts.Add(1) }
+
 // askReset asks the watch to open the output again.
 func (s *Speaker) askReset() {
 	select {
