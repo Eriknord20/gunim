@@ -407,18 +407,17 @@ func (a *aaOutput) setUnstamped(run *aaRun, jump bool) {
 // they place the device, buffer and burst the stream's, and mixer the
 // latency Android's mixer reports for the output, 0 for none.
 //
-// A shared stream's timestamp on Bluetooth may come from the mixer
-// rather than the device, where the device tells no position: it then
-// places the device at most a burst past the stream's own buffer, and
-// leaves out all the mixer reports, the headset's delay with it. On a
-// Pixel 8 Pro with WF-1000XM4 earbuds, AAudio's timestamp places the
-// device about 50 ms behind, Java's AudioTrack.getTimestamp about 40 ms,
-// and the earbuds play about 270 ms behind; AudioManager's hidden
-// getOutputLatency reports 200 ms, the headset's delay with the
-// Bluetooth HAL's buffer. A timestamp from the device counts the mixer's
-// latency itself: whatever it places past the buffer and a burst counts
-// as part of it, and only the rest of the mixer's latency is added.
-// Where the two agree, that rest is a burst at most.
+// On a Pixel 8 Pro with WF-1000XM4 earbuds, a shared stream's timestamp
+// places the device about 50 ms behind, its own 40 ms buffer and little
+// more, and Java's AudioTrack.getTimestamp about 40 ms; the earbuds play
+// about 270 ms behind. Whether Android takes the position at its mixer
+// or the Bluetooth HAL reports one without the headset, the headset's
+// delay is left out. AudioManager's hidden getOutputLatency reports 200
+// ms there: the headset's delay with the HAL's buffer. A timestamp that
+// stops within a burst of the buffer counts none of that, and all of it
+// is added. One that places the device further back counts what it
+// places past the buffer and a burst as part of it, and only the rest
+// is added. Where the two agree, that rest is a burst at most.
 //
 // Sources: ExtendedTimestamp's getBestTimestamp in AOSP's frameworks/av
 // (media/libaudioclient), AudioStreamTrack::getTimestamp in
