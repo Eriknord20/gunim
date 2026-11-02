@@ -98,8 +98,10 @@ static void failed(AAudioStream *s, void *user, aaudio_result_t err) {
 int gunim_aa_api(void) { return android_get_device_api_level(); }
 
 typedef void (*set_preset)(AAudioStreamBuilder *, aaudio_input_preset_t);
+typedef void (*set_usage)(AAudioStreamBuilder *, aaudio_usage_t);
+typedef void (*set_content)(AAudioStreamBuilder *, aaudio_content_type_t);
 
-const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate, int chans, int exclusive) {
+const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate, int chans, int exclusive, int quick) {
 	AAudioStreamBuilder *b;
 	aaudio_result_t r = AAudio_createStreamBuilder(&b);
 	if (r != AAUDIO_OK) {
@@ -111,6 +113,18 @@ const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate
 	AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
 	AAudioStreamBuilder_setChannelCount(b, chans);
 	AAudioStreamBuilder_setSampleRate(b, rate);
+	if (!in) {
+		// What the sound is for: on Bluetooth, Android asks the headset
+		// for its quicker link for a game, where it has one. Both are
+		// Android 9's, older than the API level gunim builds for, as
+		// setInputPreset is.
+		set_usage u = (set_usage)dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setUsage");
+		set_content c = (set_content)dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setContentType");
+		if (u && c) {
+			u(b, quick ? AAUDIO_USAGE_GAME : AAUDIO_USAGE_MEDIA);
+			c(b, AAUDIO_CONTENT_TYPE_MUSIC);
+		}
+	}
 	if (in) {
 		// Singing over a song: the preset for a live performance, low
 		// latency and none of a call's processing, from Android 10.
@@ -144,4 +158,17 @@ int gunim_aa_timestamp(AAudioStream *s, int64_t *pos, int64_t *at, int64_t *now)
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	*now = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 	return r;
+}
+
+// The Android driver's calls into Java, where it is linked in: weak, so
+// a program without it links all the same, and finds them NULL.
+extern int gunim_audio_route(int device, int *r, int n) __attribute__((weak));
+extern int gunim_audio_probe(int usage, int *r, int n) __attribute__((weak));
+
+int gunim_aa_route(int device, int *r, int n) {
+	return gunim_audio_route ? gunim_audio_route(device, r, n) : 0;
+}
+
+int gunim_aa_probe(int quick, int *r, int n) {
+	return gunim_audio_probe ? gunim_audio_probe(quick ? AAUDIO_USAGE_GAME : AAUDIO_USAGE_MEDIA, r, n) : 0;
 }

@@ -11,6 +11,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"time"
 	"unsafe"
 )
 
@@ -42,8 +43,11 @@ type Config struct {
 	// Exclusive asks for the device to itself, for the lowest latency.
 	// A device that refuses shares it.
 	Exclusive bool
-	Data      *Ring[float32]
-	Blocks    *Ring[int64]
+	// Quick marks an output's sound as a game's, for the shortest delay
+	// Android offers on Bluetooth; else it is media's.
+	Quick  bool
+	Data   *Ring[float32]
+	Blocks *Ring[int64]
 }
 
 // A Stream is an AAudio stream, playing or recording.
@@ -52,6 +56,7 @@ type Stream struct {
 	sh    *Shared
 	info  Info
 	input bool
+	quick bool
 }
 
 // Open opens a stream, stopped; Start starts it.
@@ -63,9 +68,9 @@ func Open(c Config) (*Stream, error) {
 		return nil, errors.New("aaudio: a stream's rings do not fit it")
 	}
 	sh := NewShared(c.Data, c.Blocks)
-	st := &Stream{sh: sh, input: c.Input}
+	st := &Stream{sh: sh, input: c.Input, quick: c.Quick}
 	if msg := C.gunim_aa_open(&st.s, (*C.gunim_shared)(unsafe.Pointer(sh)), cbool(c.Input), C.int(c.Rate),
-		C.int(c.Channels), cbool(c.Exclusive)); msg != nil {
+		C.int(c.Channels), cbool(c.Exclusive), cbool(c.Quick)); msg != nil {
 		FreeShared(sh)
 		return nil, fmt.Errorf("aaudio: opening a stream: %s", C.GoString(msg))
 	}
@@ -140,3 +145,36 @@ func (s *Stream) Info() Info {
 // XRuns counts the times the device ran dry or overflowed, as AAudio
 // counts them, which a callback too late makes.
 func (s *Stream) XRuns() int64 { return int64(C.AAudioStream_getXRunCount(s.s)) }
+
+// Route asks Android's Java side of the device the stream plays on. It
+// calls into Java, and may take a few milliseconds: call it from
+// neither AAudio's thread nor one that must keep time.
+func (s *Stream) Route() Route {
+	var r [3]C.int
+	if C.gunim_aa_route(C.AAudioStream_getDeviceId(s.s), &r[0], 3) < 3 {
+		return Route{}
+	}
+	lat := time.Duration(-1)
+	if r[2] >= 0 {
+		lat = time.Duration(r[2]) * time.Millisecond
+	}
+	return Route{Known: true, Type: int(r[0]), Bluetooth: r[1] != 0, Latency: lat}
+}
+
+// Probe plays a second of silence through a Java AudioTrack, for as
+// long, and tells what it reports; ok is false where the Android driver
+// is missing.
+func (s *Stream) Probe() (p Probe, ok bool) {
+	var r [3]C.int
+	if C.gunim_aa_probe(cbool(s.quick), &r[0], 3) < 3 {
+		return Probe{}, false
+	}
+	p = Probe{Behind: -1, Latency: -1, Buffer: int(r[2])}
+	if r[0] >= 0 {
+		p.Behind = time.Duration(r[0]) * time.Microsecond
+	}
+	if r[1] >= 0 {
+		p.Latency = time.Duration(r[1]) * time.Millisecond
+	}
+	return p, true
+}

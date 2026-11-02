@@ -10,7 +10,7 @@ func init() {
 	}
 	openAAStream = func(c aaConfig) (aaStream, error) {
 		st, err := aaudio.Open(aaudio.Config{Input: c.input, Rate: c.rate, Channels: c.chans, Exclusive: c.exclusive,
-			Data: c.data, Blocks: c.blocks})
+			Quick: c.quick, Data: c.data, Blocks: c.blocks})
 		if err != nil {
 			return nil, err
 		}

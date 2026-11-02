@@ -28,6 +28,12 @@ void gunim_ask(int p, int code);
 void gunim_choose_folder(int code);
 uint16_t *gunim_user_folder(int f, int *n);
 
+// For package audio/internal/aaudio, which calls them where the driver
+// is linked in: what GunimAudio.route and GunimAudio.probe return, into
+// r, n ints at most. Each returns how many it wrote, or 0.
+int gunim_audio_route(int device, int *r, int n);
+int gunim_audio_probe(int usage, int *r, int n);
+
 // EGL, from the render thread. Each returns 0, or the EGL error.
 int gunim_egl_init(void);
 int gunim_egl_attach(ANativeWindow *w);
