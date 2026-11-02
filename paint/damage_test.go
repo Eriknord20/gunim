@@ -2,6 +2,7 @@ package paint
 
 import (
 	"image/color"
+	"slices"
 	"testing"
 
 	"github.com/marrasen/gunim/geom"
@@ -163,5 +164,25 @@ func TestDamageOutsideAClipIsNone(t *testing.T) {
 	}
 	if rs := damageOf(paint(dark), paint(light)); len(rs) != 0 {
 		t.Fatalf("a change cut away by the clip damaged %v", rs)
+	}
+}
+
+// A driver draws a frame's damage while the engine paints the next one,
+// so the slice DamageRects returns holds through the next frame's call.
+func TestDamageHoldsWhileTheNextFramePaints(t *testing.T) {
+	var p Painter
+	frame := func(at float32) []geom.Rect {
+		p.Reset()
+		p.RRect(geom.Rc(0, 0, 2000, 1000), 0, dark)
+		p.RRect(geom.Rc(at, 0, 10, 10), 0, light)
+		return p.DamageRects()
+	}
+	frame(0)
+	frame(100)
+	handed := frame(500)
+	want := append([]geom.Rect(nil), handed...)
+	frame(1500)
+	if !slices.Equal(handed, want) {
+		t.Fatalf("damage handed on changed from %v to %v once the next frame painted", want, handed)
 	}
 }
