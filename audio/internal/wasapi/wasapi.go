@@ -12,12 +12,14 @@
 // locks it. Nothing else touches its COM objects, so nothing can call
 // into a stream another goroutine has closed.
 //
-// On another system [Open] returns [ErrUnsupported].
+// The package builds on every system for its types and errors; the
+// rest is Windows' alone. Package audio/speaker reports
+// [ErrUnsupported] where WASAPI is not.
 package wasapi
 
 import "errors"
 
-// ErrUnsupported is returned by [Open] on a system other than Windows.
+// ErrUnsupported tells of a system other than Windows.
 var ErrUnsupported = errors.New("wasapi: WASAPI plays on Windows")
 
 // ErrLost is returned by a device whose endpoint went away: unplugged,

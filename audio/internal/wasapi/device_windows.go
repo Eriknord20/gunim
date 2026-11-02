@@ -311,7 +311,7 @@ func (d *Device) Wait(t time.Duration) {
 
 // Room returns how many frames the output's buffer has room for.
 func (d *Device) Room() (int, error) {
-	if hr, _, _ := syscall.SyscallN(d.getPadding, d.client, uintptr(unsafe.Pointer(&d.p.padding))); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.getPadding, d.client, uintptr(unsafe.Pointer(&d.p.padding))); !succeeded(uint32(hr)) {
 		return 0, failed("playing", uint32(hr))
 	}
 	return d.info.Buffer - int(d.p.padding), nil
@@ -325,7 +325,7 @@ func (d *Device) Write(frames []float32) error {
 	if n == 0 {
 		return nil
 	}
-	if hr, _, _ := syscall.SyscallN(d.getBuffer, d.render, uintptr(n), uintptr(unsafe.Pointer(&d.p.data))); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.getBuffer, d.render, uintptr(n), uintptr(unsafe.Pointer(&d.p.data))); !succeeded(uint32(hr)) {
 		return failed("playing", uint32(hr))
 	}
 	ch := d.info.Channels
@@ -343,7 +343,7 @@ func (d *Device) Write(frames []float32) error {
 			dst[i*ch], dst[i*ch+1] = frames[2*i], frames[2*i+1]
 		}
 	}
-	if hr, _, _ := syscall.SyscallN(d.releaseBuffer, d.render, uintptr(n), 0); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.releaseBuffer, d.render, uintptr(n), 0); !succeeded(uint32(hr)) {
 		return failed("playing", uint32(hr))
 	}
 	return nil
@@ -354,10 +354,10 @@ func (d *Device) Silence(n int) error {
 	if n <= 0 {
 		return nil
 	}
-	if hr, _, _ := syscall.SyscallN(d.getBuffer, d.render, uintptr(n), uintptr(unsafe.Pointer(&d.p.data))); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.getBuffer, d.render, uintptr(n), uintptr(unsafe.Pointer(&d.p.data))); !succeeded(uint32(hr)) {
 		return failed("playing", uint32(hr))
 	}
-	if hr, _, _ := syscall.SyscallN(d.releaseBuffer, d.render, uintptr(n), BufferFlagsSilent); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.releaseBuffer, d.render, uintptr(n), BufferFlagsSilent); !succeeded(uint32(hr)) {
 		return failed("playing", uint32(hr))
 	}
 	return nil
@@ -367,7 +367,7 @@ func (d *Device) Silence(n int) error {
 // first written, as IAudioClock tells it, and the moment it was there,
 // in nanoseconds of the performance counter.
 func (d *Device) Clock() (pos, at int64, err error) {
-	if hr, _, _ := syscall.SyscallN(d.getPosition, d.clock, uintptr(unsafe.Pointer(&d.p.pos)), uintptr(unsafe.Pointer(&d.p.qpc))); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.getPosition, d.clock, uintptr(unsafe.Pointer(&d.p.pos)), uintptr(unsafe.Pointer(&d.p.qpc))); !succeeded(uint32(hr)) {
 		return 0, 0, failed("reading the clock", uint32(hr))
 	}
 	return int64(d.p.pos * uint64(d.info.Rate) / d.freq), int64(d.p.qpc) * 100, nil
@@ -383,14 +383,14 @@ func (d *Device) Read(dst []float32) (n int, at int64, ok bool, err error) {
 	if d.capture == 0 {
 		return 0, 0, false, nil
 	}
-	if hr, _, _ := syscall.SyscallN(d.nextPacket, d.capture, uintptr(unsafe.Pointer(&d.p.n))); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.nextPacket, d.capture, uintptr(unsafe.Pointer(&d.p.n))); !succeeded(uint32(hr)) {
 		return 0, 0, false, failed("recording", uint32(hr))
 	}
 	if d.p.n == 0 {
 		return 0, 0, false, nil
 	}
 	if hr, _, _ := syscall.SyscallN(d.capGet, d.capture, uintptr(unsafe.Pointer(&d.p.data)), uintptr(unsafe.Pointer(&d.p.frames)),
-		uintptr(unsafe.Pointer(&d.p.flags)), uintptr(unsafe.Pointer(&d.p.devPos)), uintptr(unsafe.Pointer(&d.p.qpc))); uint32(hr) != 0 {
+		uintptr(unsafe.Pointer(&d.p.flags)), uintptr(unsafe.Pointer(&d.p.devPos)), uintptr(unsafe.Pointer(&d.p.qpc))); !succeeded(uint32(hr)) {
 		return 0, 0, false, failed("recording", uint32(hr))
 	}
 	ch := d.info.Inputs
@@ -404,7 +404,7 @@ func (d *Device) Read(dst []float32) (n int, at int64, ok bool, err error) {
 	if d.p.flags&BufferFlagsTimestampError == 0 {
 		at = int64(d.p.qpc) * 100
 	}
-	if hr, _, _ := syscall.SyscallN(d.capRelease, d.capture, uintptr(frames)); uint32(hr) != 0 {
+	if hr, _, _ := syscall.SyscallN(d.capRelease, d.capture, uintptr(frames)); !succeeded(uint32(hr)) {
 		return 0, 0, false, failed("recording", uint32(hr))
 	}
 	return n, at, true, nil
