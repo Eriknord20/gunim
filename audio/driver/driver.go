@@ -1,7 +1,8 @@
 // Package driver lists the audio drivers the speakers can play
 // through, past the system's own sound, and plays through ASIO drivers.
 // [Drivers] lists ASIO drivers on Windows and [JACK] on Linux; [AAudio]
-// names AAudio on Android.
+// names AAudio on Android, and [WASAPI] gunim's own WASAPI output on
+// Windows.
 //
 // An ASIO driver, on Windows, is the driver an audio interface's maker
 // ships with it. The interface plays what the driver is given at the
@@ -82,6 +83,20 @@ const AAudio = "AAudio"
 // its Info.plist, as macOS ends one without it as it asks for the
 // microphone. Without leave to record, it plays and records nothing.
 const CoreAudio = "Core Audio"
+
+// WASAPI is the name package audio/speaker takes as Options.Driver to
+// play through WASAPI, Windows' own sound API, through gunim's own code
+// in place of oto: the default output, in shared mode, at the smallest
+// period the engine offers where Windows 10 or newer lets it. It plays
+// at the rate the device is set to in Windows' Sound settings, whatever
+// Options.Rate asks, so Windows converts nothing, and the mixer follows
+// it. With Options.Record set it records the default input too,
+// converted to that rate, for package audio/capture, stamped with the
+// mixer frame heard as each packet came in, as a driver's inputs are.
+// As the default device changes, or the device goes, it plays on the
+// new default. On another system the speakers play through the
+// system's sound, as through a driver that fails to open.
+const WASAPI = "WASAPI"
 
 // Config says how to open a driver.
 type Config struct {

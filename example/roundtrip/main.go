@@ -1,9 +1,9 @@
-// Command roundtrip plays and records through AAudio on Android, or the
-// driver -driver names elsewhere, and shows how: a click each second
-// through the speakers, the microphone's level, the delays the speaker
-// reports, and the times the sound ran dry. A tap on the screen, or a
-// click, measures the round trip: a click played, heard by the
-// microphone, and found in the recording by its stamp, as package
+// Command roundtrip plays and records through AAudio on Android,
+// WASAPI on Windows, or the driver -driver names, and shows how: a click
+// each second through the speakers, the microphone's level, the delays
+// the speaker reports, and the times the sound ran dry. A tap on the
+// screen, or a click, measures the round trip: a click played, heard by
+// the microphone, and found in the recording by its stamp, as package
 // audio/capture's Measure finds it. An offset near zero says the stamps
 // line a take up with what the singer heard.
 //
@@ -11,9 +11,14 @@
 //	go run ./example/roundtrip -driver "Core Audio"   # on macOS
 //	go run ./example/roundtrip -driver JACK           # on Linux
 //
-// It asks for the microphone as it starts. Where the driver fails to
-// open, it plays through the system's sound, and says why it records
-// nothing.
+// On Windows:
+//
+//	go run ./example/roundtrip
+//
+// -driver names another driver to play through, such as an ASIO
+// driver's name. It asks for the microphone as it starts. Where the
+// driver fails to open, it plays through the system's sound, and says
+// why it records nothing.
 package main
 
 import (
@@ -25,6 +30,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,8 +55,12 @@ func main() {
 }
 
 func run() error {
-	name := flag.String("driver", audiodriver.AAudio, "the driver to play and record through, as "+
-		"package audio/driver names it: \"Core Audio\" on macOS, JACK on Linux")
+	def := audiodriver.AAudio
+	if runtime.GOOS == "windows" {
+		def = audiodriver.WASAPI
+	}
+	through := flag.String("driver", def, "the driver to play and record through, as package "+
+		"audio/driver names it: \"Core Audio\" on macOS, JACK on Linux")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -61,7 +71,7 @@ func run() error {
 			return err
 		}
 		mix := audio.NewMixer()
-		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: *name, Record: true})
+		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: *through, Record: true})
 		if err != nil {
 			return err
 		}
