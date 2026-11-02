@@ -3,6 +3,7 @@
 package audiounit
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -39,7 +40,9 @@ type Client struct {
 	// recording at a rate other than the output's, 0 where none was: the
 	// client listens to its rate, to open again once the two agree.
 	inDefault, refused uint32
-	rate               int
+	// asked is Config.Rate.
+	asked int
+	rate  int
 	// mu guards info, closed and the units: each call into a unit is
 	// made with it held, after closed is read.
 	mu     sync.Mutex
@@ -93,18 +96,25 @@ func Open(cfg Config) (*Client, error) {
 		return nil, err
 	}
 	playing.Store(cl.dev)
+	recording.Store(cl.inDev)
 	return cl, nil
 }
 
-// playing is the output device of the client opened last, until it
-// closes.
-var playing atomic.Uint32
+// playing and recording are the output and input devices of the client
+// opened last, until it closes; recording is 0 where it records
+// nothing.
+var playing, recording atomic.Uint32
 
 // Playing returns the output device, by its AudioObjectID, that a
 // client plays through now, or 0 where none plays. A program that sets
 // a device's rate or buffer leaves this one's be: either change would
 // have the client open again.
 func Playing() uint32 { return playing.Load() }
+
+// Recording returns the input device, by its AudioObjectID, that a
+// client records now, or 0 where none records. A program leaves its
+// rate and buffer be, as it does Playing's.
+func Recording() uint32 { return recording.Load() }
 
 func (cl *Client) logf(format string, args ...any) {
 	if cl.log != nil {
@@ -122,6 +132,8 @@ func (cl *Client) open(cfg Config) error {
 	}
 	cl.dev = dev
 	info := Info{Device: deviceName(a, dev)}
+	cl.asked = cfg.Rate
+	cl.setRate(dev, info.Device, cfg.Rate)
 	rate, ok := rateOf(a, dev)
 	if !ok || rate <= 0 {
 		return fmt.Errorf("audiounit: %s reports no rate", info.Device)
@@ -313,6 +325,59 @@ func (cl *Client) openInputOf(dev uint32, cfg Config, info *Info) error {
 	info.InputLatency = int(lat) + streamLatency(a, dev, scopeInput)
 	cl.inLatency.Store(int64(info.InputLatency))
 	return nil
+}
+
+// The rates the clients set the devices to, by device: where another
+// application moves a device off the rate a client set, the device is
+// played at its own rate after, while asked the same rate, so the two
+// do not set it back and forth.
+var (
+	ratesMu sync.Mutex
+	moved   = map[uint32]int{}
+)
+
+// setRate sets device dev, called name, to rate, where rate is set, the
+// device offers it and no other application moved the device off it,
+// and waits a moment for the device to change. Where the device stays
+// at another rate, the client plays at that.
+func (cl *Client) setRate(dev uint32, name string, rate int) {
+	a := cl.a
+	if rate <= 0 {
+		return
+	}
+	ratesMu.Lock()
+	if moved[dev] == rate {
+		ratesMu.Unlock()
+		return
+	}
+	delete(moved, dev)
+	ratesMu.Unlock()
+	if now, ok := rateOf(a, dev); !ok || int(math.Round(now)) == rate {
+		return
+	}
+	if b := getBytes(a, dev, address{propAvailableRates, scopeGlobal, elementMain}); len(b) >= 16 {
+		offered := false
+		for i := 0; i+16 <= len(b); i += 16 {
+			lo := math.Float64frombits(binary.LittleEndian.Uint64(b[i:]))
+			hi := math.Float64frombits(binary.LittleEndian.Uint64(b[i+8:]))
+			offered = offered || (float64(rate) >= lo-0.5 && float64(rate) <= hi+0.5)
+		}
+		if !offered {
+			cl.logf("audiounit: %s offers no %d Hz: it plays at its own rate", name, rate)
+			return
+		}
+	}
+	v := float64(rate)
+	if st := a.set(dev, address{propNominalSampleRate, scopeGlobal, elementMain}, 8, unsafe.Pointer(&v)); st != noErr {
+		cl.logf("audiounit: %s refuses %d Hz: %d", name, rate, st)
+		return
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if now, ok := rateOf(a, dev); ok && int(math.Round(now)) == rate {
+			return
+		}
+	}
+	cl.logf("audiounit: %s stays at its own rate in place of %d Hz", name, rate)
 }
 
 // setBuffer sets device dev's buffer to want frames, brought into the
@@ -753,6 +818,12 @@ func (cl *Client) check() string {
 		return name + " went away"
 	}
 	if rate, ok := rateOf(a, cl.dev); ok && int(math.Round(rate)) != cl.rate {
+		if cl.asked > 0 && cl.rate == cl.asked {
+			// Moved off the rate the client set: follow it.
+			ratesMu.Lock()
+			moved[cl.dev] = cl.asked
+			ratesMu.Unlock()
+		}
 		return fmt.Sprintf("%s's rate changed from %d to %v Hz", name, cl.rate, rate)
 	}
 	if n := channels(a, cl.dev, scopeOutput); n != len(cl.info.Outputs) {
@@ -852,7 +923,9 @@ func (cl *Client) Close() error {
 		return nil
 	}
 	cl.closed = true
-	playing.CompareAndSwap(cl.dev, 0)
+	if playing.CompareAndSwap(cl.dev, 0) {
+		recording.Store(0)
+	}
 	var err error
 	cl.a.masked(func() { err = cl.teardown() })
 	return err

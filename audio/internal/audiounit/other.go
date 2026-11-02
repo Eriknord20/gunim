@@ -18,6 +18,9 @@ func ControlPanel() error { return ErrUnsupported }
 // Playing returns the output device a client plays through: none, here.
 func Playing() uint32 { return 0 }
 
+// Recording returns the input device a client records: none, here.
+func Recording() uint32 { return 0 }
+
 // Open opens a client; here it returns [ErrUnsupported].
 func Open(Config) (*Client, error) { return nil, ErrUnsupported }
 

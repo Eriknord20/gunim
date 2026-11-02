@@ -136,7 +136,15 @@ func driverFirst() bool { return aaudioFirst || wasapiFirst || coreAudioFirst }
 // Options.Record says. byName says Options.Driver named it.
 func openAUOutput(s *Speaker, o Options, byName bool) (*auOutput, error) {
 	buffer := auBuffer(o, time.Duration(s.ahead.Load()), o.rate())
-	dev, err := openAU(audiounit.Config{Outputs: o.Outputs, Record: o.Record, Buffer: buffer, Hold: MaxLatency, Log: s.logf})
+	// As the system's own sound, it sets the device to the rate asked,
+	// as the older output did; named as a driver, it follows the
+	// device's.
+	rate := o.Rate
+	if byName {
+		rate = 0
+	}
+	dev, err := openAU(audiounit.Config{Outputs: o.Outputs, Record: o.Record, Rate: rate, Buffer: buffer,
+		Hold: MaxLatency, Log: s.logf})
 	if err != nil {
 		return nil, err
 	}

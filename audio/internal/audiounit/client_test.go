@@ -5,6 +5,7 @@ package audiounit
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -651,5 +652,115 @@ func TestSuspendAndClose(t *testing.T) {
 	}
 	if f.unmasked != 0 {
 		t.Fatalf("%d units made or started with signals unmasked", f.unmasked)
+	}
+}
+
+// rates returns the bytes of AvailableNominalSampleRates: a range for
+// each pair.
+func rates(pairs ...float64) []byte {
+	var b []byte
+	for _, v := range pairs {
+		b = binary.LittleEndian.AppendUint64(b, math.Float64bits(v))
+	}
+	return b
+}
+
+// Config.Rate sets the device to it, where the device offers it, and
+// the client plays at it; a rate not offered, or zero, plays at the
+// device's own. Where another application moves the device off the rate
+// set, the client opens again at the device's rate, and plays at it
+// after, while asked the same rate.
+func TestClientSetsTheRateAsked(t *testing.T) {
+	t.Cleanup(func() {
+		ratesMu.Lock()
+		clear(moved)
+		ratesMu.Unlock()
+	})
+	f := newSystem(speakers)
+	f.put(speakers.id, propAvailableRates, scopeGlobal, 0, rates(44100, 44100, 48000, 48000, 96000, 96000))
+	f.use(t)
+	open := func(rate int) *Client {
+		t.Helper()
+		cl, err := Open(Config{Rate: rate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cl
+	}
+	cl := open(96000)
+	if r, _ := rateOf(cl.a, speakers.id); cl.Info().Rate != 96000 || r != 96000 {
+		t.Fatalf("asked 96000 Hz: plays at %d, the device at %v", cl.Info().Rate, r)
+	}
+	_ = cl.Close()
+	cl = open(192000)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked a rate not offered: plays at %d, want the device's 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+	cl = open(0)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked no rate: plays at %d, want the device's 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+
+	cl = open(48000)
+	f.put(speakers.id, propNominalSampleRate, scopeGlobal, 0, 44100.0) // another application
+	f.tell(speakers.id, propNominalSampleRate)
+	if e := cl.Poll(); e.Reopen == "" {
+		t.Fatal("no reopen asked as the rate moved")
+	}
+	_ = cl.Close()
+	cl = open(48000)
+	if cl.Info().Rate != 44100 {
+		t.Fatalf("moved off 48000 Hz and asked it again: plays at %d, want the 44100 it moved to", cl.Info().Rate)
+	}
+	_ = cl.Close()
+	cl = open(96000)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked another rate after: plays at %d, want 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+}
+
+// Playing and Recording tell the devices the client opened last plays
+// and records, until it closes: a client that closes after another
+// opened leaves the other's.
+func TestPlayingAndRecording(t *testing.T) {
+	f := newSystem(speakers, mic)
+	f.use(t)
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("before any client: %d, %d", Playing(), Recording())
+	}
+	a, err := Open(Config{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Playing() != speakers.id || Recording() != mic.id {
+		t.Fatalf("recording: %d, %d", Playing(), Recording())
+	}
+	_ = a.Close()
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("closed: %d, %d", Playing(), Recording())
+	}
+	a, err = Open(Config{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.add(fakeDevice{id: 30, name: "Headphones", rate: testRate, outs: 2, buffer: bufFrames})
+	f.defaults(30, mic.id)
+	b, err := Open(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Playing() != 30 || Recording() != 0 {
+		t.Fatalf("a second client, recording nothing: %d, %d", Playing(), Recording())
+	}
+	_ = a.Close()
+	if Playing() != 30 || Recording() != 0 {
+		t.Fatalf("the first closed after the second opened: %d, %d", Playing(), Recording())
+	}
+	_ = b.Close()
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("both closed: %d, %d", Playing(), Recording())
 	}
 }

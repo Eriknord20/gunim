@@ -33,6 +33,7 @@ const (
 	propNominalSampleRate   = 0x6e737274 // 'nsrt'
 	propLatency             = 0x6c746e63 // 'ltnc', of a device and of a stream
 	propSafetyOffset        = 0x73616674 // 'saft'
+	propAvailableRates      = 0x6e737223 // 'nsr#'
 	propStreams             = 0x73746d23 // 'stm#'
 	propStreamConfiguration = 0x736c6179 // 'slay'
 

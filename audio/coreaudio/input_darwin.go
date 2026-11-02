@@ -266,9 +266,9 @@ func OpenInput(c InputConfig) (*Input, error) {
 		return nil, fmt.Errorf("coreaudio: %s has no inputs", in.info.Device)
 	}
 
-	// The device the speaker plays through keeps its rate and its
-	// buffer: either set here would open the speaker again.
-	playing := audiounit.Playing() == dev
+	// The devices the speaker plays through and records keep their rate
+	// and their buffer: either set here would open the speaker again.
+	playing := audiounit.Playing() == dev || audiounit.Recording() == dev
 	followed := c.Rate > 0 && inputFollowed[dev] == c.Rate
 	var refused error
 	if c.Rate > 0 && !playing && !followed {
@@ -284,7 +284,7 @@ func OpenInput(c InputConfig) (*Input, error) {
 	if c.Rate > 0 && in.info.Rate != c.Rate {
 		switch {
 		case playing:
-			refused = fmt.Errorf("coreaudio: %s keeps the %d Hz the output plays at", in.info.Device, in.info.Rate)
+			refused = fmt.Errorf("coreaudio: %s keeps the %d Hz the speaker plays at", in.info.Device, in.info.Rate)
 		case followed:
 			refused = fmt.Errorf("coreaudio: %s keeps the %d Hz another application set", in.info.Device, in.info.Rate)
 		case refused == nil:

@@ -365,7 +365,7 @@ func (s *Speaker) open() (output, error) {
 		s.problem = err
 		s.logf("%v; playing through the system's sound", err)
 	}
-	oto, err := openOto(s, s.o)
+	oto, err := openSystemSound(s, s.o)
 	if err != nil {
 		return nil, err
 	}
@@ -373,6 +373,10 @@ func (s *Speaker) open() (output, error) {
 	oto.start(ahead)
 	return oto, nil
 }
+
+// openSystemSound opens the system's own sound by oto, where no driver
+// plays; a test puts a function of its own here.
+var openSystemSound = func(s *Speaker, o Options) (startedOutput, error) { return openOto(s, o) }
 
 // A startedOutput is an output that starts once the speaker holds it.
 type startedOutput interface {
@@ -513,9 +517,10 @@ func (s *Speaker) SetLatency(d time.Duration) {
 	s.logf("working %v ahead", s.Latency())
 }
 
-// Set changes how the speakers play. A change of driver or rate, or of
-// Buffer, Record, Quick, Direct or Outputs while a driver plays, opens the output
-// again, with a moment's silence; the mixer's rate follows, and
+// Set changes how the speakers play. A change of driver, of a rate the
+// output plays otherwise, or of Buffer, Record, Quick, Direct or Outputs
+// where the driver playing uses it, opens the output again, with a
+// moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
 // far ahead the mixer works from where it is.
 func (s *Speaker) Set(o Options) error {
@@ -530,10 +535,20 @@ func (s *Speaker) Set(o Options) error {
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
 		s.setAhead(o.latency())
 	}
-	drives := o.Driver != "" || driverFirst()
-	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
-		(drives && (o.Buffer != prev.Buffer || o.Direct != prev.Direct || o.Record != prev.Record ||
-			o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
+	// A rate asked reopens where the output plays at another. Buffer and
+	// Direct reopen a driver named, and Core Audio's buffer as the
+	// system's own sound; Record, Quick and Outputs reopen any driver,
+	// named or playing as the system's own sound.
+	rate := o.Rate != prev.Rate
+	if out := s.out.Load(); rate && out != nil && out.rate() == o.rate() {
+		rate = false
+	}
+	named := o.Driver != ""
+	drives := named || driverFirst()
+	if o.Driver != prev.Driver || rate ||
+		(named && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
+		(!named && coreAudioFirst && o.Buffer != prev.Buffer) ||
+		(drives && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil

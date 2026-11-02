@@ -61,6 +61,14 @@ type Config struct {
 	// Record records the default input device too, each of its
 	// channels, up to [MaxPorts].
 	Record bool
+	// Rate, where set, is the rate to play at, in frames a second: the
+	// output device is set to it, as a DAW sets it, where the device
+	// offers it, and the other applications playing through the device
+	// are converted to it. Info.Rate tells the rate played. Where
+	// another application then moves the device to another rate, the
+	// client plays at that rate, while asked the same Rate again. Zero
+	// plays at the device's own rate.
+	Rate int
 	// Buffer is how many frames the device hands the client at a time,
 	// brought into the range the device allows. Zero keeps the device's
 	// size. The size is the process's own: other applications playing
