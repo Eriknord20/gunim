@@ -587,8 +587,145 @@ func TestCoreAudioSuspendAndClose(t *testing.T) {
 func TestCoreAudioFailsOver(t *testing.T) {
 	f := useAU(t, macInfo())
 	f.failed = audiounit.ErrNoOutput
-	_, err := openAUOutput(&Speaker{}, Options{Driver: driver.CoreAudio})
+	_, err := openAUOutput(&Speaker{}, Options{Driver: driver.CoreAudio}, true)
 	if !errors.Is(err, audiounit.ErrNoOutput) {
 		t.Fatalf("openAUOutput = %v", err)
+	}
+}
+
+// On macOS, with no driver named, the speaker plays through Core Audio
+// as the system's own sound: State names no driver but tells Core
+// Audio's Info, and a change of Record, Outputs or Buffer opens it
+// again, as it does a driver.
+func TestCoreAudioIsTheDefault(t *testing.T) {
+	was := coreAudioFirst
+	coreAudioFirst = true
+	t.Cleanup(func() { coreAudioFirst = was })
+	f := useAU(t, macInfo())
+	s, err := Open(audio.NewMixer(), Options{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f.mu.Lock()
+	opens, rec := f.opens, f.cfg.Record
+	f.mu.Unlock()
+	if opens != 1 || !rec {
+		t.Fatalf("opened Core Audio %d times, recording %v", opens, rec)
+	}
+	st := s.State()
+	if st.Driver != "" || st.Info == nil || st.Info.Driver != driver.CoreAudio || st.Info.Inputs != 2 ||
+		st.Problem != nil {
+		t.Fatalf("state %+v, info %+v", st, st.Info)
+	}
+	for i, o := range []Options{{}, {Outputs: []int{1, 0}}, {Outputs: []int{1, 0}, Buffer: 512}} {
+		if err := s.Set(o); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		opens, cfg := f.opens, f.cfg
+		f.mu.Unlock()
+		if opens != 2+i || cfg.Record != o.Record || !slices.Equal(cfg.Outputs, o.Outputs) ||
+			(o.Buffer != 0 && cfg.Buffer != o.Buffer) {
+			t.Fatalf("after Set(%+v): opened %d times, with %+v", o, opens, cfg)
+		}
+	}
+}
+
+// As the system's own sound, Core Audio is asked for the rate Options
+// sets, as the older output set the device to it; named as a driver, it
+// follows the device. Set reopens for a rate only where the output
+// plays another.
+func TestCoreAudioDefaultAsksTheRate(t *testing.T) {
+	was := coreAudioFirst
+	coreAudioFirst = true
+	t.Cleanup(func() { coreAudioFirst = was })
+	f := useAU(t, macInfo()) // plays at 44100 Hz, whatever it is asked
+	s, err := Open(audio.NewMixer(), Options{Rate: 96000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	opened := func() (int, int) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.opens, f.cfg.Rate
+	}
+	if n, rate := opened(); n != 1 || rate != 96000 {
+		t.Fatalf("opened %d times, asked %d Hz, want once at 96000", n, rate)
+	}
+	// The device plays at 44100 Hz: asking that changes nothing.
+	if err := s.Set(Options{Rate: 44100}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := opened(); n != 1 {
+		t.Fatalf("asking the rate playing opened it again: %d opens", n)
+	}
+	if err := s.Set(Options{Rate: 48000}); err != nil {
+		t.Fatal(err)
+	}
+	if n, rate := opened(); n != 2 || rate != 48000 {
+		t.Fatalf("asking another rate: %d opens, asked %d Hz", n, rate)
+	}
+	// Named, Core Audio follows the device.
+	if err := s.Set(Options{Driver: driver.CoreAudio, Rate: 48000}); err != nil {
+		t.Fatal(err)
+	}
+	if n, rate := opened(); n != 3 || rate != 0 {
+		t.Fatalf("named as a driver: %d opens, asked %d Hz", n, rate)
+	}
+}
+
+// Where Core Audio fails to open as the system's own sound, the speaker
+// falls back to oto and says why.
+func TestCoreAudioDefaultFallsBackToOto(t *testing.T) {
+	was := coreAudioFirst
+	coreAudioFirst = true
+	t.Cleanup(func() { coreAudioFirst = was })
+	f := useAU(t, macInfo())
+	f.failed = audiounit.ErrNoOutput
+	errOto := errors.New("oto: here as a stand-in")
+	called := 0
+	wasOto := openSystemSound
+	openSystemSound = func(s *Speaker, o Options) (startedOutput, error) {
+		called++
+		if !errors.Is(s.problem, audiounit.ErrNoOutput) {
+			t.Errorf("falling back, the problem is %v", s.problem)
+		}
+		return nil, errOto
+	}
+	t.Cleanup(func() { openSystemSound = wasOto })
+	if _, err := Open(audio.NewMixer(), Options{}); !errors.Is(err, errOto) || called != 1 {
+		t.Fatalf("Open = %v, oto opened %d times", err, called)
+	}
+}
+
+// As the system's own sound on Windows and Android, which take neither
+// Buffer nor Direct, a change of either opens nothing again.
+func TestSetReopensForWhatTheDriverUses(t *testing.T) {
+	was := coreAudioFirst
+	coreAudioFirst = false
+	t.Cleanup(func() { coreAudioFirst = was })
+	called := 0
+	wasOto := openSystemSound
+	t.Cleanup(func() { openSystemSound = wasOto })
+	f := useAU(t, macInfo())
+	openSystemSound = func(s *Speaker, o Options) (startedOutput, error) {
+		called++
+		return openAUOutput(s, Options{Driver: driver.CoreAudio}, true)
+	}
+	s, err := Open(audio.NewMixer(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.Set(Options{Buffer: 256, Direct: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	opens := f.opens
+	f.mu.Unlock()
+	if called != 1 || opens != 1 {
+		t.Fatalf("Buffer and Direct opened the system's sound again: %d, %d", called, opens)
 	}
 }

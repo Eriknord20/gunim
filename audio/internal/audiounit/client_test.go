@@ -5,7 +5,9 @@ package audiounit
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"slices"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -187,6 +189,51 @@ func TestHeardFollowsTheClock(t *testing.T) {
 			}
 			last = got
 		}
+	}
+}
+
+// A buffer that comes late lets the frame heard run on to the end of
+// the frames taken; where its time stamp places the frame heard behind
+// that, Heard keeps to the frame it returned, then moves on once the
+// stamps pass it. A buffer Core Audio stamped with no time leaves the
+// one before it to place the frames.
+func TestHeardNeverGoesBack(t *testing.T) {
+	f := newSystem(speakers)
+	cl := openFake(t, f, Config{})
+	cl.Write(ramp(0, 4000))
+	f.render(t, bufFrames, 2, start)
+	f.render(t, bufFrames, 2, start+period)
+	took := int64(2 * bufFrames)
+	// The second buffer's stamp places 144 at the ear by now, past the
+	// frames taken: the frame heard runs to the end of them.
+	late := int64(start + period + 200*frameNs)
+	f.setClock(late)
+	if got, _ := cl.Heard(); got != took {
+		t.Fatalf("past the buffers taken: heard %d, want %d", got, took)
+	}
+	// The next buffer, 40 frames later than its turn: its stamp places
+	// the frame heard at 104, 24 behind.
+	f.render(t, bufFrames, 2, uint64(start+2*period+40*frameNs))
+	if at, _ := cl.heardAt(late); at != 104 {
+		t.Fatalf("the late stamp places the frame heard at %d, want 104", at)
+	}
+	last := took
+	for ns := late; ns < late+period; ns += 3 * frameNs {
+		f.setClock(ns)
+		got, ok := cl.Heard()
+		if !ok || got < last {
+			t.Fatalf("%d ns on: heard %d, %v, after %d", ns-late, got, ok, last)
+		}
+		last = got
+	}
+	if last != 104+63 {
+		t.Fatalf("63 frames on, heard %d, want %d", last, 104+63)
+	}
+	// A buffer with no time: the one before places the frames.
+	f.render(t, bufFrames, 2, 0)
+	f.setClock(late + period)
+	if got, ok := cl.Heard(); !ok || got < last {
+		t.Fatalf("after a buffer with no time: heard %d, %v, after %d", got, ok, last)
 	}
 }
 
@@ -488,6 +535,70 @@ func TestFailedInputWaitsForAnotherDevice(t *testing.T) {
 	}
 }
 
+// An input refused for its rate has the client listen to that rate:
+// once it agrees with the output's, Poll asks to open again, and
+// before, a change of it asks nothing.
+func TestRefusedInputWaitsForItsRate(t *testing.T) {
+	f := newSystem(speakers, mic)
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, 44100.0)
+	cl := openFake(t, f, Config{Record: true})
+	if cl.Info().InputProblem == nil {
+		t.Fatal("recorded at another rate")
+	}
+	f.mu.Lock()
+	n := f.listeners[propKey{mic.id, propNominalSampleRate, scopeGlobal, 0}]
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d listeners on the refused input's rate, want 1", n)
+	}
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, 48000.0)
+	f.tell(mic.id, propNominalSampleRate)
+	if e := cl.Poll(); !e.Changed || e.Reopen != "" {
+		t.Fatalf("events %+v with the rates still apart", e)
+	}
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, float64(testRate))
+	f.tell(mic.id, propNominalSampleRate)
+	if e := cl.Poll(); e.Reopen == "" {
+		t.Fatal("no reopen asked as the rates came to agree")
+	}
+	// Opened again, it records.
+	if err := cl.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cl = openFake(t, f, Config{Record: true})
+	if i := cl.Info(); i.InputProblem != nil || i.Recorded != 2 {
+		t.Fatalf("opened again: %+v", i)
+	}
+}
+
+// Close removes the listeners of a device gone with no error, as Core
+// Audio says '!obj' of it; any other failure makes one error, however
+// many listeners fail.
+func TestCloseAfterADeviceWentAway(t *testing.T) {
+	f := newSystem(speakers, mic)
+	cl := openFake(t, f, Config{Record: true})
+	f.mu.Lock()
+	f.unlistenFails[speakers.id] = badObject
+	f.unlistenFails[mic.id] = badObject
+	f.mu.Unlock()
+	if err := cl.Close(); err != nil {
+		t.Fatalf("closing with the devices gone: %v", err)
+	}
+
+	f = newSystem(speakers, mic)
+	cl = openFake(t, f, Config{Record: true})
+	f.mu.Lock()
+	f.unlistenFails[speakers.id] = -50
+	f.mu.Unlock()
+	err := cl.Close()
+	if err == nil {
+		t.Fatal("no error as the listeners failed to go")
+	}
+	if lines := strings.Count(err.Error(), "\n") + 1; lines != 1 || !strings.Contains(err.Error(), "-50, for 6 of 12 listeners") {
+		t.Fatalf("the error tells %d lines: %v", lines, err)
+	}
+}
+
 // Suspend stops both units and Resume starts them; Close stops and lets
 // go of each, and removes the listeners, once; and each call that starts
 // a unit runs with signals masked.
@@ -541,5 +652,115 @@ func TestSuspendAndClose(t *testing.T) {
 	}
 	if f.unmasked != 0 {
 		t.Fatalf("%d units made or started with signals unmasked", f.unmasked)
+	}
+}
+
+// rates returns the bytes of AvailableNominalSampleRates: a range for
+// each pair.
+func rates(pairs ...float64) []byte {
+	var b []byte
+	for _, v := range pairs {
+		b = binary.LittleEndian.AppendUint64(b, math.Float64bits(v))
+	}
+	return b
+}
+
+// Config.Rate sets the device to it, where the device offers it, and
+// the client plays at it; a rate not offered, or zero, plays at the
+// device's own. Where another application moves the device off the rate
+// set, the client opens again at the device's rate, and plays at it
+// after, while asked the same rate.
+func TestClientSetsTheRateAsked(t *testing.T) {
+	t.Cleanup(func() {
+		ratesMu.Lock()
+		clear(moved)
+		ratesMu.Unlock()
+	})
+	f := newSystem(speakers)
+	f.put(speakers.id, propAvailableRates, scopeGlobal, 0, rates(44100, 44100, 48000, 48000, 96000, 96000))
+	f.use(t)
+	open := func(rate int) *Client {
+		t.Helper()
+		cl, err := Open(Config{Rate: rate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cl
+	}
+	cl := open(96000)
+	if r, _ := rateOf(cl.a, speakers.id); cl.Info().Rate != 96000 || r != 96000 {
+		t.Fatalf("asked 96000 Hz: plays at %d, the device at %v", cl.Info().Rate, r)
+	}
+	_ = cl.Close()
+	cl = open(192000)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked a rate not offered: plays at %d, want the device's 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+	cl = open(0)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked no rate: plays at %d, want the device's 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+
+	cl = open(48000)
+	f.put(speakers.id, propNominalSampleRate, scopeGlobal, 0, 44100.0) // another application
+	f.tell(speakers.id, propNominalSampleRate)
+	if e := cl.Poll(); e.Reopen == "" {
+		t.Fatal("no reopen asked as the rate moved")
+	}
+	_ = cl.Close()
+	cl = open(48000)
+	if cl.Info().Rate != 44100 {
+		t.Fatalf("moved off 48000 Hz and asked it again: plays at %d, want the 44100 it moved to", cl.Info().Rate)
+	}
+	_ = cl.Close()
+	cl = open(96000)
+	if cl.Info().Rate != 96000 {
+		t.Fatalf("asked another rate after: plays at %d, want 96000", cl.Info().Rate)
+	}
+	_ = cl.Close()
+}
+
+// Playing and Recording tell the devices the client opened last plays
+// and records, until it closes: a client that closes after another
+// opened leaves the other's.
+func TestPlayingAndRecording(t *testing.T) {
+	f := newSystem(speakers, mic)
+	f.use(t)
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("before any client: %d, %d", Playing(), Recording())
+	}
+	a, err := Open(Config{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Playing() != speakers.id || Recording() != mic.id {
+		t.Fatalf("recording: %d, %d", Playing(), Recording())
+	}
+	_ = a.Close()
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("closed: %d, %d", Playing(), Recording())
+	}
+	a, err = Open(Config{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.add(fakeDevice{id: 30, name: "Headphones", rate: testRate, outs: 2, buffer: bufFrames})
+	f.defaults(30, mic.id)
+	b, err := Open(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Playing() != 30 || Recording() != 0 {
+		t.Fatalf("a second client, recording nothing: %d, %d", Playing(), Recording())
+	}
+	_ = a.Close()
+	if Playing() != 30 || Recording() != 0 {
+		t.Fatalf("the first closed after the second opened: %d, %d", Playing(), Recording())
+	}
+	_ = b.Close()
+	if Playing() != 0 || Recording() != 0 {
+		t.Fatalf("both closed: %d, %d", Playing(), Recording())
 	}
 }

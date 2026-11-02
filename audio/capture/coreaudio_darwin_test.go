@@ -12,6 +12,7 @@ import (
 
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/coreaudio"
+	"github.com/marrasen/gunim/audio/internal/audiounit"
 	"github.com/marrasen/gunim/audio/speaker"
 )
 
@@ -196,7 +197,7 @@ func TestMacInputsListAndRecord(t *testing.T) {
 // An input of the device the output plays through keeps the output's
 // rate, and the stream converts it to the rate asked for.
 func TestMacInputConvertsTheOutputsRate(t *testing.T) {
-	out, err := coreaudio.Open(coreaudio.Config{Rate: 48000, Fill: func(f []float32) { clear(f) }})
+	out, err := audiounit.Open(audiounit.Config{Hold: time.Second})
 	if err != nil {
 		t.Skipf("no output to play through: %v", err)
 	}

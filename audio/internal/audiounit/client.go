@@ -3,6 +3,7 @@
 package audiounit
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -35,9 +36,13 @@ type Client struct {
 	dev, inDev uint32
 	record     bool
 	// inDefault is the default input device as the client opened, 0
-	// where there was none.
-	inDefault uint32
-	rate      int
+	// where there was none. refused is the input device refused for
+	// recording at a rate other than the output's, 0 where none was: the
+	// client listens to its rate, to open again once the two agree.
+	inDefault, refused uint32
+	// asked is Config.Rate.
+	asked int
+	rate  int
 	// mu guards info, closed and the units: each call into a unit is
 	// made with it held, after closed is read.
 	mu     sync.Mutex
@@ -50,6 +55,8 @@ type Client struct {
 	// from a frame written as a buffer starts to its being heard, and
 	// inLatency Info.InputLatency, for any goroutine.
 	latency, buffer, static, inLatency atomic.Int64
+	// heard is the frame Heard last returned, the most it has.
+	heard atomic.Int64
 	// What Poll last read, and Read: the counts read, the changes seen,
 	// and the input's buffers read.
 	polled  struct{ short, lost, failed uint64 }
@@ -88,8 +95,26 @@ func Open(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	playing.Store(cl.dev)
+	recording.Store(cl.inDev)
 	return cl, nil
 }
+
+// playing and recording are the output and input devices of the client
+// opened last, until it closes; recording is 0 where it records
+// nothing.
+var playing, recording atomic.Uint32
+
+// Playing returns the output device, by its AudioObjectID, that a
+// client plays through now, or 0 where none plays. A program that sets
+// a device's rate or buffer leaves this one's be: either change would
+// have the client open again.
+func Playing() uint32 { return playing.Load() }
+
+// Recording returns the input device, by its AudioObjectID, that a
+// client records now, or 0 where none records. A program leaves its
+// rate and buffer be, as it does Playing's.
+func Recording() uint32 { return recording.Load() }
 
 func (cl *Client) logf(format string, args ...any) {
 	if cl.log != nil {
@@ -107,6 +132,8 @@ func (cl *Client) open(cfg Config) error {
 	}
 	cl.dev = dev
 	info := Info{Device: deviceName(a, dev)}
+	cl.asked = cfg.Rate
+	cl.setRate(dev, info.Device, cfg.Rate)
 	rate, ok := rateOf(a, dev)
 	if !ok || rate <= 0 {
 		return fmt.Errorf("audiounit: %s reports no rate", info.Device)
@@ -239,6 +266,7 @@ func (cl *Client) openInputOf(dev uint32, cfg Config, info *Info) error {
 		return fmt.Errorf("audiounit: %s reports no rate", name)
 	}
 	if int(math.Round(rate)) != info.Rate {
+		cl.refused = dev
 		return fmt.Errorf("audiounit: %s records at %v Hz and %s plays at %d Hz: set them to one rate in "+
 			"Audio MIDI Setup", name, rate, info.Device, info.Rate)
 	}
@@ -297,6 +325,59 @@ func (cl *Client) openInputOf(dev uint32, cfg Config, info *Info) error {
 	info.InputLatency = int(lat) + streamLatency(a, dev, scopeInput)
 	cl.inLatency.Store(int64(info.InputLatency))
 	return nil
+}
+
+// The rates the clients set the devices to, by device: where another
+// application moves a device off the rate a client set, the device is
+// played at its own rate after, while asked the same rate, so the two
+// do not set it back and forth.
+var (
+	ratesMu sync.Mutex
+	moved   = map[uint32]int{}
+)
+
+// setRate sets device dev, called name, to rate, where rate is set, the
+// device offers it and no other application moved the device off it,
+// and waits a moment for the device to change. Where the device stays
+// at another rate, the client plays at that.
+func (cl *Client) setRate(dev uint32, name string, rate int) {
+	a := cl.a
+	if rate <= 0 {
+		return
+	}
+	ratesMu.Lock()
+	if moved[dev] == rate {
+		ratesMu.Unlock()
+		return
+	}
+	delete(moved, dev)
+	ratesMu.Unlock()
+	if now, ok := rateOf(a, dev); !ok || int(math.Round(now)) == rate {
+		return
+	}
+	if b := getBytes(a, dev, address{propAvailableRates, scopeGlobal, elementMain}); len(b) >= 16 {
+		offered := false
+		for i := 0; i+16 <= len(b); i += 16 {
+			lo := math.Float64frombits(binary.LittleEndian.Uint64(b[i:]))
+			hi := math.Float64frombits(binary.LittleEndian.Uint64(b[i+8:]))
+			offered = offered || (float64(rate) >= lo-0.5 && float64(rate) <= hi+0.5)
+		}
+		if !offered {
+			cl.logf("audiounit: %s offers no %d Hz: it plays at its own rate", name, rate)
+			return
+		}
+	}
+	v := float64(rate)
+	if st := a.set(dev, address{propNominalSampleRate, scopeGlobal, elementMain}, 8, unsafe.Pointer(&v)); st != noErr {
+		cl.logf("audiounit: %s refuses %d Hz: %d", name, rate, st)
+		return
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if now, ok := rateOf(a, dev); ok && int(math.Round(now)) == rate {
+			return
+		}
+	}
+	cl.logf("audiounit: %s stays at its own rate in place of %d Hz", name, rate)
 }
 
 // setBuffer sets device dev's buffer to want frames, brought into the
@@ -424,6 +505,9 @@ func (cl *Client) listen() error {
 	if cl.record {
 		ls = append(ls, listening{systemObject, address{propDefaultInputDevice, scopeGlobal, 0}})
 	}
+	if cl.refused != 0 {
+		ls = append(ls, listening{cl.refused, address{propNominalSampleRate, scopeGlobal, 0}})
+	}
 	if cl.inDev != 0 && cl.inDev != cl.dev {
 		ls = append(ls,
 			listening{cl.inDev, address{propDeviceIsAlive, scopeGlobal, 0}},
@@ -466,10 +550,21 @@ func (cl *Client) teardown() error {
 		}
 	}
 	cl.units = nil
+	// A device gone took its listeners with it: Core Audio tells it is
+	// gone, and the listener is removed all the same. Other failures
+	// make one error, however many listeners fail.
+	failed, first := 0, int32(noErr)
 	for _, l := range cl.listened {
-		if st := a.unlisten(l.obj, l.a, procs.changed, uintptr(unsafe.Pointer(&changes))); st != noErr {
-			errs = append(errs, fmt.Errorf("audiounit: AudioObjectRemovePropertyListener: %d", st))
+		if st := a.unlisten(l.obj, l.a, procs.changed, uintptr(unsafe.Pointer(&changes))); st != noErr && st != badObject {
+			if failed == 0 {
+				first = st
+			}
+			failed++
 		}
+	}
+	if failed > 0 {
+		errs = append(errs, fmt.Errorf("audiounit: AudioObjectRemovePropertyListener: %d, for %d of %d listeners",
+			first, failed, len(cl.listened)))
 	}
 	cl.listened = nil
 	// Core Audio's threads read these until the units were let go.
@@ -540,7 +635,29 @@ func (cl *Client) Room() int64 { return int64(cl.size) - cl.Queued() }
 
 // Heard returns the frame heard now, as Written counts them, and false
 // before the output has taken a buffer Core Audio stamped with a time.
-func (cl *Client) Heard() (int64, bool) { return cl.heardAt(cl.a.now()) }
+// It never goes back: where a buffer comes late, the frame heard runs on
+// to the end of the frames taken, and the late buffer's time stamp may
+// place it a little behind that; Heard keeps to the frame it returned
+// until the stamps pass it.
+func (cl *Client) Heard() (int64, bool) {
+	at, ok := cl.heardAt(cl.a.now())
+	if !ok {
+		return 0, false
+	}
+	for {
+		most := cl.heard.Load()
+		if at <= most {
+			return most, true
+		}
+		if cl.heard.CompareAndSwap(most, at) {
+			return at, true
+		}
+	}
+}
+
+// stampedBack is how many buffers back from the newest heardAt looks for
+// one Core Audio stamped with a time.
+const stampedBack = 8
 
 // heardAt returns the frame heard at host time t, in nanoseconds, as
 // Heard does. The output's log places each buffer's first frame at the
@@ -556,13 +673,18 @@ func (cl *Client) heardAt(t int64) (int64, bool) {
 		if c == 0 {
 			return 0, false
 		}
-		i := (c - 1) & (logSize - 1)
-		host := atomic.LoadUint64(&st.logHost[i])
+		// The newest buffer stamped with a time places the frames.
+		k := c - 1
+		host := atomic.LoadUint64(&st.logHost[k&(logSize-1)])
+		for host == 0 && k > 0 && c-k < stampedBack {
+			k--
+			host = atomic.LoadUint64(&st.logHost[k&(logSize-1)])
+		}
 		if host == 0 {
 			return 0, false
 		}
 		// p is the frame at the ear, counted as played counts them.
-		p := float64(atomic.LoadUint64(&st.logPlayed[i])) + float64(t-a.hostNs(host))*float64(cl.rate)/1e9 - lat
+		p := float64(atomic.LoadUint64(&st.logPlayed[k&(logSize-1)])) + float64(t-a.hostNs(host))*float64(cl.rate)/1e9 - lat
 		// The buffer that played it, the last if it is past them all:
 		// walking back as far as the log holds.
 		j := c - 1
@@ -573,7 +695,7 @@ func (cl *Client) heardAt(t int64) (int64, bool) {
 		}
 		r := atomic.LoadUint64(&st.logR[j&(logSize-1)])
 		took := atomic.LoadUint64(&st.logTook[j&(logSize-1)])
-		if atomic.LoadUint64(&st.cycles)-j >= logSize {
+		if atomic.LoadUint64(&st.cycles)-min(j, k) >= logSize {
 			// Written over as it was read.
 			continue
 		}
@@ -696,6 +818,12 @@ func (cl *Client) check() string {
 		return name + " went away"
 	}
 	if rate, ok := rateOf(a, cl.dev); ok && int(math.Round(rate)) != cl.rate {
+		if cl.asked > 0 && cl.rate == cl.asked {
+			// Moved off the rate the client set: follow it.
+			ratesMu.Lock()
+			moved[cl.dev] = cl.asked
+			ratesMu.Unlock()
+		}
 		return fmt.Sprintf("%s's rate changed from %d to %v Hz", name, cl.rate, rate)
 	}
 	if n := channels(a, cl.dev, scopeOutput); n != len(cl.info.Outputs) {
@@ -704,6 +832,11 @@ func (cl *Client) check() string {
 	if cl.record {
 		if dev, ok := get32(a, systemObject, propDefaultInputDevice, scopeGlobal); ok && dev != cl.inDefault {
 			return "the default input device changed"
+		}
+	}
+	if cl.refused != 0 {
+		if rate, ok := rateOf(a, cl.refused); ok && int(math.Round(rate)) == cl.rate {
+			return fmt.Sprintf("%s records at %d Hz now, as %s plays", deviceName(a, cl.refused), cl.rate, name)
 		}
 	}
 	if cl.inDev != 0 {
@@ -790,6 +923,9 @@ func (cl *Client) Close() error {
 		return nil
 	}
 	cl.closed = true
+	if playing.CompareAndSwap(cl.dev, 0) {
+		recording.Store(0)
+	}
 	var err error
 	cl.a.masked(func() { err = cl.teardown() })
 	return err

@@ -3,13 +3,10 @@
 package coreaudio
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
-	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -82,19 +79,11 @@ var (
 	getPropertyData     func(id uint32, addr *propertyAddress, qualSize uint32, qual unsafe.Pointer, size *uint32, out unsafe.Pointer) int32
 	getPropertyDataSize func(id uint32, addr *propertyAddress, qualSize uint32, qual unsafe.Pointer, size *uint32) int32
 	setPropertyData     func(id uint32, addr *propertyAddress, qualSize uint32, qual unsafe.Pointer, size uint32, data unsafe.Pointer) int32
-	addListener         func(id uint32, addr *propertyAddress, proc uintptr, client unsafe.Pointer) int32
-	removeListener      func(id uint32, addr *propertyAddress, proc uintptr, client unsafe.Pointer) int32
-	createIOProcID      func(dev uint32, proc uintptr, client unsafe.Pointer, id *uintptr) int32
 	destroyIOProcID     func(dev uint32, id uintptr) int32
 	deviceStart         func(dev uint32, id uintptr) int32
 	deviceStop          func(dev uint32, id uintptr) int32
 	cfStringGetCString  func(s uintptr, buf *byte, size int, encoding uint32) bool
 	cfRelease           func(ref uintptr)
-
-	// ioProc and listener are the callbacks Core Audio calls, made once:
-	// purego keeps a callback for good. They play to current. Each call
-	// through purego's callback path locks a mutex and allocates.
-	ioProc, listener uintptr
 )
 
 var (
@@ -117,9 +106,6 @@ func load() error {
 		purego.RegisterLibFunc(&getPropertyData, ca, "AudioObjectGetPropertyData")
 		purego.RegisterLibFunc(&getPropertyDataSize, ca, "AudioObjectGetPropertyDataSize")
 		purego.RegisterLibFunc(&setPropertyData, ca, "AudioObjectSetPropertyData")
-		purego.RegisterLibFunc(&addListener, ca, "AudioObjectAddPropertyListener")
-		purego.RegisterLibFunc(&removeListener, ca, "AudioObjectRemovePropertyListener")
-		purego.RegisterLibFunc(&createIOProcID, ca, "AudioDeviceCreateIOProcID")
 		purego.RegisterLibFunc(&destroyIOProcID, ca, "AudioDeviceDestroyIOProcID")
 		purego.RegisterLibFunc(&deviceStart, ca, "AudioDeviceStart")
 		purego.RegisterLibFunc(&deviceStop, ca, "AudioDeviceStop")
@@ -128,9 +114,7 @@ func load() error {
 		purego.RegisterLibFunc(&createInputProcID, ca, "AudioDeviceCreateIOProcID")
 		purego.RegisterLibFunc(&addInputListener, ca, "AudioObjectAddPropertyListener")
 		purego.RegisterLibFunc(&removeInputListener, ca, "AudioObjectRemovePropertyListener")
-		ioProc = purego.NewCallback(render)
 		recordProc = purego.NewCallback(record)
-		listener = purego.NewCallback(changed)
 		inputListener = purego.NewCallback(inputChanged)
 	})
 	return loadErr
@@ -203,10 +187,6 @@ func readString(id, selector, scope, element uint32) (string, error) {
 	return string(buf), nil
 }
 
-// outputChannels returns how many channels each of the device's output
-// buffers holds, in order.
-func outputChannels(dev uint32) ([]int, error) { return bufferChannels(dev, scopeOutput) }
-
 // bufferChannels returns how many channels each of the device's buffers
 // of scope holds, in order.
 func bufferChannels(dev, scope uint32) ([]int, error) {
@@ -227,10 +207,6 @@ func bufferChannels(dev, scope uint32) ([]int, error) {
 	return chans, nil
 }
 
-// streamLatency returns the latency of the device's first output stream,
-// and false where the device reports none.
-func streamLatency(dev uint32) (int, bool) { return firstStreamLatency(dev, scopeOutput) }
-
 // firstStreamLatency returns the latency of the device's first stream
 // of scope, and false where the device reports none.
 func firstStreamLatency(dev, scope uint32) (int, bool) {
@@ -245,152 +221,16 @@ func firstStreamLatency(dev, scope uint32) (int, bool) {
 	return int(lat), true
 }
 
-// A Device is the default output device, playing.
-type Device struct {
-	c    Config
-	dev  uint32
-	proc uintptr
-	info Info
-	// chans is how many channels each of the device's buffers holds,
-	// and stereo is Fill's room, as large as the device's largest
-	// buffer.
-	chans  []int
-	stereo []float32
-	// reset says Reset was called, or Close, so Reset is called once.
-	reset atomic.Bool
-	// rateMoved says the device's rate moved from Info.Rate while it
-	// played.
-	rateMoved atomic.Bool
-}
-
-// current is the device playing: Core Audio's callbacks play to it.
-var current atomic.Pointer[Device]
-
+// openMu guards the inputs opening and closing.
 var openMu sync.Mutex
-
-// followed is the device, and the rate asked of it, whose rate moved
-// under it: Open plays it at its own rate in place of setting it again.
-// openMu guards it.
-var followed struct {
-	dev  uint32
-	rate int
-}
-
-// Open opens the default output device and starts it playing, as c
-// says. One device plays at a time.
-func Open(c Config) (*Device, error) {
-	if c.Fill == nil {
-		return nil, errors.New("coreaudio: no Fill")
-	}
-	if err := load(); err != nil {
-		return nil, fmt.Errorf("coreaudio: %w", err)
-	}
-	openMu.Lock()
-	defer openMu.Unlock()
-	if current.Load() != nil {
-		return nil, errors.New("coreaudio: a device is playing already")
-	}
-	var dev uint32
-	if !get(systemObject, propDefaultOutputDevice, scopeGlobal, &dev) || dev == 0 {
-		return nil, errors.New("coreaudio: there is no output device")
-	}
-	d := &Device{c: c, dev: dev}
-	d.info.Device = name(dev)
-
-	var f streamDescription
-	if !get(dev, propStreamFormat, scopeOutput, &f) {
-		return nil, fmt.Errorf("coreaudio: %s reports no format", d.info.Device)
-	}
-	if f.formatID != formatLinearPCM || f.formatFlags&formatIsFloat == 0 || f.bitsPerChannel != 32 {
-		return nil, fmt.Errorf("coreaudio: %s takes no 32-bit float samples", d.info.Device)
-	}
-	chans, err := outputChannels(dev)
-	if err != nil {
-		return nil, fmt.Errorf("%w, reading %s's outputs", err, d.info.Device)
-	}
-	d.chans = chans
-	for _, n := range d.chans {
-		d.info.Outputs += n
-	}
-	if d.info.Outputs == 0 {
-		return nil, fmt.Errorf("coreaudio: %s has no outputs", d.info.Device)
-	}
-
-	if c.Rate > 0 && (followed.dev != dev || followed.rate != c.Rate) {
-		followed.dev, followed.rate = 0, 0
-		d.setRate(c.Rate)
-	}
-	var rate float64
-	if !get(dev, propNominalSampleRate, scopeGlobal, &rate) || rate <= 0 {
-		return nil, fmt.Errorf("coreaudio: %s reports no rate", d.info.Device)
-	}
-	d.info.Rate = int(math.Round(rate))
-
-	var r valueRange
-	if get(dev, propBufferFrameRange, scopeGlobal, &r) {
-		d.info.MinBuffer, d.info.MaxBuffer = int(r.min), int(r.max)
-	}
-	if c.Buffer > 0 {
-		want := c.Buffer
-		if d.info.MaxBuffer > 0 {
-			want = min(max(want, d.info.MinBuffer), d.info.MaxBuffer)
-		}
-		if st := set(dev, propBufferFrameSize, scopeGlobal, uint32(want)); st != noErr {
-			d.logf("%s refuses a buffer of %d frames: %d", d.info.Device, want, st)
-		}
-	}
-	var size uint32
-	if !get(dev, propBufferFrameSize, scopeGlobal, &size) || size == 0 {
-		return nil, fmt.Errorf("coreaudio: %s reports no buffer size", d.info.Device)
-	}
-	d.info.Buffer = int(size)
-	var lat, safety uint32
-	if !get(dev, propLatency, scopeOutput, &lat) || !get(dev, propSafetyOffset, scopeOutput, &safety) {
-		return nil, fmt.Errorf("coreaudio: %s reports no latency", d.info.Device)
-	}
-	stream, ok := streamLatency(dev)
-	if !ok {
-		return nil, fmt.Errorf("coreaudio: %s reports no stream latency", d.info.Device)
-	}
-	d.info.Latency = d.info.Buffer + int(lat) + int(safety) + stream
-	d.stereo = make([]float32, 2*max(d.info.Buffer, d.info.MaxBuffer))
-
-	current.Store(d)
-	if st := createIOProcID(dev, ioProc, nil, &d.proc); st != noErr {
-		current.Store(nil)
-		return nil, fmt.Errorf("coreaudio: AudioDeviceCreateIOProcID: %d", st)
-	}
-	if st := deviceStart(dev, d.proc); st != noErr {
-		err := fmt.Errorf("coreaudio: AudioDeviceStart: %d", st)
-		if st := destroyIOProcID(dev, d.proc); st != noErr {
-			err = errors.Join(err, fmt.Errorf("coreaudio: AudioDeviceDestroyIOProcID: %d", st))
-		}
-		current.Store(nil)
-		return nil, err
-	}
-	if err := d.listen(); err != nil {
-		return nil, errors.Join(err, d.stop())
-	}
-	d.logf("%s plays at %d Hz, %d frames at a time (it allows %d to %d), %d frames of latency",
-		d.info.Device, d.info.Rate, d.info.Buffer, d.info.MinBuffer, d.info.MaxBuffer, d.info.Latency)
-	return d, nil
-}
-
-// setRate sets the device to rate, where it is not at it already, and
-// waits a moment for it to change, as the device changes in its own
-// time.
-func (d *Device) setRate(rate int) {
-	if err := setRate(d.dev, rate, d.info.Device); err != nil && d.c.Log != nil {
-		d.c.Log("%v", err)
-	}
-}
 
 // rateSet are the rates the process last set the devices to. openMu
 // guards it.
 var rateSet = map[uint32]int{}
 
-// setRate sets device dev, called name, to rate, as Device.setRate
-// does, and returns why it stays at another.
+// setRate sets device dev, called name, to rate, where it is not at it
+// already, and waits a moment for it to change, as the device changes in
+// its own time. It returns why the device stays at another rate.
 func setRate(dev uint32, rate int, name string) error {
 	var now float64
 	if rate <= 0 {
@@ -412,176 +252,4 @@ func setRate(dev uint32, rate int, name string) error {
 		}
 	}
 	return fmt.Errorf("coreaudio: %s stays at %v Hz in place of %d Hz", name, now, rate)
-}
-
-// A watched is a property a change of which opens the output again.
-type watched struct {
-	system   bool
-	selector uint32
-}
-
-// listened are the properties watched.
-var listened = []watched{
-	{true, propDefaultOutputDevice},
-	{false, propDeviceIsAlive},
-	{false, propNominalSampleRate},
-	{false, propBufferFrameSize},
-}
-
-// object returns the object w is a property of.
-func (d *Device) object(w watched) uint32 {
-	if w.system {
-		return systemObject
-	}
-	return d.dev
-}
-
-// listen adds the listener to the properties listened to, removing it
-// from those it was added to where one fails.
-func (d *Device) listen() error {
-	for i, w := range listened {
-		addr := propertyAddress{w.selector, scopeGlobal, elementMain}
-		if st := addListener(d.object(w), &addr, listener, nil); st != noErr {
-			err := fmt.Errorf("coreaudio: AudioObjectAddPropertyListener: %d", st)
-			return errors.Join(err, d.unlisten(listened[:i]))
-		}
-	}
-	return nil
-}
-
-// unlisten removes the listener from ws.
-func (d *Device) unlisten(ws []watched) error {
-	var errs []error
-	for _, w := range ws {
-		addr := propertyAddress{w.selector, scopeGlobal, elementMain}
-		if st := removeListener(d.object(w), &addr, listener, nil); st != noErr {
-			errs = append(errs, fmt.Errorf("coreaudio: AudioObjectRemovePropertyListener: %d", st))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// changed is told of a change of a property listened to, and asks for
-// the output to open again where it no longer plays as it opened. The
-// device's own settings, made as it opened, are told of too, a moment
-// later.
-func changed(id, n uint32, addrs, client unsafe.Pointer) int32 {
-	d := current.Load()
-	if d == nil || d.c.Reset == nil {
-		return noErr
-	}
-	var dev uint32
-	var rate float64
-	var size, alive uint32
-	same := get(systemObject, propDefaultOutputDevice, scopeGlobal, &dev) && dev == d.dev &&
-		get(d.dev, propDeviceIsAlive, scopeGlobal, &alive) && alive != 0
-	rated := get(d.dev, propNominalSampleRate, scopeGlobal, &rate)
-	moved := same && rated && int(math.Round(rate)) != d.info.Rate
-	if moved {
-		d.rateMoved.Store(true)
-	}
-	ok := same && rated && !moved && get(d.dev, propBufferFrameSize, scopeGlobal, &size) && int(size) == d.info.Buffer
-	if !ok && !d.reset.Swap(true) {
-		d.logf("%s changed: opening the output again", d.info.Device)
-		d.c.Reset()
-	}
-	return noErr
-}
-
-// render fills the device's buffers, on the device's thread.
-func render(dev uint32, now, in, inTime, out, outTime, client unsafe.Pointer) int32 {
-	n := int(*(*uint32)(out))
-	bufs := unsafe.Slice((*audioBuffer)(unsafe.Add(out, bufferListHeader)), n)
-	d := current.Load()
-	if d == nil || d.dev != dev || n == 0 || bufs[0].channels == 0 {
-		silence(bufs)
-		return noErr
-	}
-	frames := int(bufs[0].bytes) / 4 / int(bufs[0].channels)
-	if 2*frames > len(d.stereo) {
-		silence(bufs)
-		return noErr
-	}
-	st := d.stereo[:2*frames]
-	d.c.Fill(st)
-	// The pair goes to the device's first two channels, counted across
-	// its buffers, or averaged onto its one; the rest play silence.
-	ch := 0
-	for _, b := range bufs {
-		k := int(b.channels)
-		if k == 0 || b.data == nil {
-			continue
-		}
-		s := unsafe.Slice((*float32)(b.data), int(b.bytes)/4)
-		clear(s)
-		for c := range k {
-			src := ch + c
-			if src > 1 {
-				break
-			}
-			for i := range min(frames, len(s)/k) {
-				if d.info.Outputs == 1 {
-					s[i*k+c] = (st[2*i] + st[2*i+1]) / 2
-				} else {
-					s[i*k+c] = st[2*i+src]
-				}
-			}
-		}
-		ch += k
-	}
-	return noErr
-}
-
-func silence(bufs []audioBuffer) {
-	for _, b := range bufs {
-		if b.data != nil {
-			clear(unsafe.Slice((*byte)(b.data), b.bytes))
-		}
-	}
-}
-
-func (d *Device) logf(format string, args ...any) {
-	if d.c.Log != nil {
-		d.c.Log("coreaudio: "+format, args...)
-	}
-}
-
-// Info says how the device plays.
-func (d *Device) Info() Info { return d.info }
-
-// ControlPanel opens Audio MIDI Setup, where the device's own settings
-// are.
-func (d *Device) ControlPanel() error {
-	return exec.CommandContext(context.Background(), "open", "-b", "com.apple.audio.AudioMIDISetup").Run()
-}
-
-// Close stops the device and lets it go. Fill is not called once it
-// returns.
-func (d *Device) Close() error {
-	openMu.Lock()
-	defer openMu.Unlock()
-	if current.Load() != d {
-		return nil
-	}
-	d.reset.Store(true)
-	if d.rateMoved.Load() {
-		followed.dev, followed.rate = d.dev, d.c.Rate
-	}
-	return errors.Join(d.unlisten(listened), d.stop())
-}
-
-// stop stops the device, lets its IOProc go and clears current, each
-// step taken where one before it fails.
-func (d *Device) stop() error {
-	// Stopped from outside its thread, the device stops before
-	// AudioDeviceStop returns.
-	var errs []error
-	if st := deviceStop(d.dev, d.proc); st != noErr {
-		errs = append(errs, fmt.Errorf("coreaudio: AudioDeviceStop: %d", st))
-	}
-	if st := destroyIOProcID(d.dev, d.proc); st != noErr {
-		errs = append(errs, fmt.Errorf("coreaudio: AudioDeviceDestroyIOProcID: %d", st))
-	}
-	current.Store(nil)
-	return errors.Join(errs...)
 }
