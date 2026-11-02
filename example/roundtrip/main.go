@@ -1,5 +1,5 @@
-// Command roundtrip plays and records through AAudio on Android, and
-// shows how: a click each second through the speakers, the microphone's
+// Command roundtrip plays and records through AAudio on Android, or
+// WASAPI on Windows, and shows how: a click each second through the speakers, the microphone's
 // level, the delays the speaker reports, and the times the sound ran
 // dry. A tap on the screen measures the round trip: a click played,
 // heard by the microphone, and found in the recording by its stamp, as
@@ -8,18 +8,25 @@
 //
 //	go run ./tools/gunimapk -permissions microphone -run ./example/roundtrip
 //
-// It asks for the microphone as it starts. Elsewhere than Android it
+// On Windows:
+//
+//	go run ./example/roundtrip
+//
+// -driver names another driver to play through, such as an ASIO
+// driver's name. It asks for the microphone as it starts. Elsewhere it
 // plays through the system's sound, and says why it records nothing.
 package main
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,6 +51,12 @@ func main() {
 }
 
 func run() error {
+	def := audiodriver.AAudio
+	if runtime.GOOS == "windows" {
+		def = audiodriver.WASAPI
+	}
+	through := flag.String("driver", def, "the driver to play and record through")
+	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	err := gunim.Main(ctx, func(a *gunim.App) error {
@@ -53,7 +66,7 @@ func run() error {
 			return err
 		}
 		mix := audio.NewMixer()
-		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: audiodriver.AAudio, Record: true})
+		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: *through, Record: true})
 		if err != nil {
 			return err
 		}

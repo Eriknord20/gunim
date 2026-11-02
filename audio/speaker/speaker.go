@@ -5,7 +5,9 @@
 // and on Linux through JACK, where a JACK server answers, or
 // PipeWire's. On Android 11 and newer, [Options].Driver set to
 // [driver.AAudio] plays through AAudio, gunim's own, in low-latency
-// mode, and records with [Options].Record.
+// mode, and records with [Options].Record. On Windows, [driver.WASAPI]
+// plays through WASAPI by gunim's own code, at the device's rate, and
+// records the default input with [Options].Record.
 // On macOS the device asks for each buffer on its own thread, as
 // package audio/coreaudio plays it, as an ASIO driver does, so Buffer
 // and Direct set how soon the sound is heard there too.
@@ -58,7 +60,8 @@ type Options struct {
 	Name string
 	// Driver is the driver to play through, by its name from
 	// [driver.Drivers]: an ASIO driver, [driver.JACK] for JACK, which that
-	// lists on Linux where a server answers, or [driver.AAudio] on Android. Empty plays
+	// lists on Linux where a server answers, [driver.AAudio] on Android,
+	// or [driver.WASAPI] on Windows. Empty plays
 	// through the system's own sound, as does a driver that fails to
 	// open, or JACK's server shut down: [State] tells why.
 	Driver string
@@ -112,7 +115,8 @@ type Options struct {
 	// FlexASIO and ASIO4ALL open Windows'
 	// microphone, so leave it unset to play alone. Through [driver.AAudio] it
 	// records the microphone, which shows the system's sign of a
-	// microphone in use while the application is in front.
+	// microphone in use while the application is in front. Through
+	// [driver.WASAPI] it records Windows' default input.
 	Record bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [driver.Channels] lists them; nil plays on its
@@ -298,17 +302,20 @@ func (s *Speaker) open() (output, error) {
 	s.problem = nil
 	s.reads.Store(0)
 	ahead := time.Duration(s.ahead.Load())
-	if s.o.Driver == driver.AAudio || (s.o.Driver == "" && aaudioFirst) {
-		out, err := openAAudio(s, s.o, s.o.Driver == driver.AAudio)
-		if err == nil {
-			s.m.SetRate(out.rate())
-			out.start(ahead)
-			return out, nil
-		}
-		s.problem = err
-		s.logf("%v; playing through the system's sound", err)
-	} else if s.o.Driver != "" {
-		out, err := s.openDriver()
+	var out startedOutput
+	var err error
+	tried := true
+	switch {
+	case s.o.Driver == driver.AAudio || (s.o.Driver == "" && aaudioFirst):
+		out, err = openAAudio(s, s.o, s.o.Driver == driver.AAudio)
+	case s.o.Driver == "" && wasapiFirst:
+		out, err = openWasapi(s, s.o, false)
+	case s.o.Driver != "":
+		out, err = s.openDriver()
+	default:
+		tried = false
+	}
+	if tried {
 		if err == nil {
 			s.m.SetRate(out.rate())
 			out.start(ahead)
@@ -327,13 +334,13 @@ func (s *Speaker) open() (output, error) {
 		s.problem = errors.Join(s.problem, err)
 		s.logf("%v; playing through oto", err)
 	}
-	out, err := openOto(s, s.o)
+	oto, err := openOto(s, s.o)
 	if err != nil {
 		return nil, err
 	}
-	s.m.SetRate(out.rate())
-	out.start(ahead)
-	return out, nil
+	s.m.SetRate(oto.rate())
+	oto.start(ahead)
+	return oto, nil
 }
 
 // A startedOutput is an output that starts once the speaker holds it.
@@ -342,10 +349,14 @@ type startedOutput interface {
 	start(ahead time.Duration)
 }
 
-// openDriver opens the driver s.o names: JACK, or an ASIO driver.
+// openDriver opens the driver s.o names: JACK, WASAPI, or an ASIO
+// driver.
 func (s *Speaker) openDriver() (startedOutput, error) {
-	if s.o.Driver == driver.JACK {
+	switch s.o.Driver {
+	case driver.JACK:
 		return openJackOutput(s, s.o)
+	case driver.WASAPI:
+		return openWasapi(s, s.o, true)
 	}
 	return openRing(s, s.o, false)
 }
@@ -595,6 +606,8 @@ func (s *Speaker) ControlPanel() error {
 			return o.dev.ControlPanel()
 		case *jackOutput:
 			return errJackPanel
+		case *wasOutput:
+			return errWasPanel
 		}
 	}
 	s.mu.Lock()
