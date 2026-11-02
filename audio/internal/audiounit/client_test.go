@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -187,6 +188,51 @@ func TestHeardFollowsTheClock(t *testing.T) {
 			}
 			last = got
 		}
+	}
+}
+
+// A buffer that comes late lets the frame heard run on to the end of
+// the frames taken; where its time stamp places the frame heard behind
+// that, Heard keeps to the frame it returned, then moves on once the
+// stamps pass it. A buffer Core Audio stamped with no time leaves the
+// one before it to place the frames.
+func TestHeardNeverGoesBack(t *testing.T) {
+	f := newSystem(speakers)
+	cl := openFake(t, f, Config{})
+	cl.Write(ramp(0, 4000))
+	f.render(t, bufFrames, 2, start)
+	f.render(t, bufFrames, 2, start+period)
+	took := int64(2 * bufFrames)
+	// The second buffer's stamp places 144 at the ear by now, past the
+	// frames taken: the frame heard runs to the end of them.
+	late := int64(start + period + 200*frameNs)
+	f.setClock(late)
+	if got, _ := cl.Heard(); got != took {
+		t.Fatalf("past the buffers taken: heard %d, want %d", got, took)
+	}
+	// The next buffer, 40 frames later than its turn: its stamp places
+	// the frame heard at 104, 24 behind.
+	f.render(t, bufFrames, 2, uint64(start+2*period+40*frameNs))
+	if at, _ := cl.heardAt(late); at != 104 {
+		t.Fatalf("the late stamp places the frame heard at %d, want 104", at)
+	}
+	last := took
+	for ns := late; ns < late+period; ns += 3 * frameNs {
+		f.setClock(ns)
+		got, ok := cl.Heard()
+		if !ok || got < last {
+			t.Fatalf("%d ns on: heard %d, %v, after %d", ns-late, got, ok, last)
+		}
+		last = got
+	}
+	if last != 104+63 {
+		t.Fatalf("63 frames on, heard %d, want %d", last, 104+63)
+	}
+	// A buffer with no time: the one before places the frames.
+	f.render(t, bufFrames, 2, 0)
+	f.setClock(late + period)
+	if got, ok := cl.Heard(); !ok || got < last {
+		t.Fatalf("after a buffer with no time: heard %d, %v, after %d", got, ok, last)
 	}
 }
 
@@ -485,6 +531,70 @@ func TestFailedInputWaitsForAnotherDevice(t *testing.T) {
 	f.tell(systemObject, propDefaultInputDevice)
 	if e := cl.Poll(); e.Reopen == "" {
 		t.Fatal("no reopen asked as the input changed")
+	}
+}
+
+// An input refused for its rate has the client listen to that rate:
+// once it agrees with the output's, Poll asks to open again, and
+// before, a change of it asks nothing.
+func TestRefusedInputWaitsForItsRate(t *testing.T) {
+	f := newSystem(speakers, mic)
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, 44100.0)
+	cl := openFake(t, f, Config{Record: true})
+	if cl.Info().InputProblem == nil {
+		t.Fatal("recorded at another rate")
+	}
+	f.mu.Lock()
+	n := f.listeners[propKey{mic.id, propNominalSampleRate, scopeGlobal, 0}]
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d listeners on the refused input's rate, want 1", n)
+	}
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, 48000.0)
+	f.tell(mic.id, propNominalSampleRate)
+	if e := cl.Poll(); !e.Changed || e.Reopen != "" {
+		t.Fatalf("events %+v with the rates still apart", e)
+	}
+	f.put(mic.id, propNominalSampleRate, scopeGlobal, 0, float64(testRate))
+	f.tell(mic.id, propNominalSampleRate)
+	if e := cl.Poll(); e.Reopen == "" {
+		t.Fatal("no reopen asked as the rates came to agree")
+	}
+	// Opened again, it records.
+	if err := cl.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cl = openFake(t, f, Config{Record: true})
+	if i := cl.Info(); i.InputProblem != nil || i.Recorded != 2 {
+		t.Fatalf("opened again: %+v", i)
+	}
+}
+
+// Close removes the listeners of a device gone with no error, as Core
+// Audio says '!obj' of it; any other failure makes one error, however
+// many listeners fail.
+func TestCloseAfterADeviceWentAway(t *testing.T) {
+	f := newSystem(speakers, mic)
+	cl := openFake(t, f, Config{Record: true})
+	f.mu.Lock()
+	f.unlistenFails[speakers.id] = badObject
+	f.unlistenFails[mic.id] = badObject
+	f.mu.Unlock()
+	if err := cl.Close(); err != nil {
+		t.Fatalf("closing with the devices gone: %v", err)
+	}
+
+	f = newSystem(speakers, mic)
+	cl = openFake(t, f, Config{Record: true})
+	f.mu.Lock()
+	f.unlistenFails[speakers.id] = -50
+	f.mu.Unlock()
+	err := cl.Close()
+	if err == nil {
+		t.Fatal("no error as the listeners failed to go")
+	}
+	if lines := strings.Count(err.Error(), "\n") + 1; lines != 1 || !strings.Contains(err.Error(), "-50, for 6 of 12 listeners") {
+		t.Fatalf("the error tells %d lines: %v", lines, err)
 	}
 }
 

@@ -172,13 +172,13 @@ func (t *tester) record(ctx context.Context) {
 	for ctx.Err() == nil {
 		d, ok := capture.DriverInputs(t.spk)
 		if !ok {
-			t.say(&t.recording, "nothing to record from")
+			t.stopped("nothing to record from")
 			time.Sleep(time.Second)
 			continue
 		}
 		in, err := capture.Open(capture.Options{Device: d.ID, Speaker: t.spk})
 		if err != nil {
-			t.say(&t.recording, err.Error())
+			t.stopped(err.Error())
 			time.Sleep(time.Second)
 			continue
 		}
@@ -197,7 +197,7 @@ func (t *tester) read(ctx context.Context, in *capture.Stream) {
 		case <-ctx.Done():
 			return
 		case <-in.Done():
-			t.say(&t.recording, fmt.Sprintf("the input ended: %v", in.Err()))
+			t.stopped(fmt.Sprintf("the input ended: %v", in.Err()))
 			return
 		default:
 		}
@@ -226,6 +226,14 @@ func (t *tester) read(ctx context.Context, in *capture.Stream) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
+}
+
+// stopped says why nothing records, and clears the peak, which was the
+// last recording's.
+func (t *tester) stopped(why string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recording, t.peak = why, 0
 }
 
 func (t *tester) say(s *string, v string) {

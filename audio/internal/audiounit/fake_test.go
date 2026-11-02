@@ -31,6 +31,9 @@ type fakeCA struct {
 	denied    bool
 	// refuse makes setting a unit's property fail, by its number.
 	refuse map[uint32]bool
+	// unlistenFails makes removing a listener from an object fail, by
+	// the object, with the status given.
+	unlistenFails map[uint32]int32
 	// masked says the calls run inside masked now; unmasked counts the
 	// units made, readied or started outside it.
 	masked   bool
@@ -48,7 +51,7 @@ type fakeUnit struct {
 
 func newFakeCA() *fakeCA {
 	return &fakeCA{props: map[propKey][]byte{}, names: map[propKey]string{}, units: map[uintptr]*fakeUnit{},
-		listeners: map[propKey]int{}, refuse: map[uint32]bool{}}
+		listeners: map[propKey]int{}, refuse: map[uint32]bool{}, unlistenFails: map[uint32]int32{}}
 }
 
 // A fakeDevice says what a device of the fake's is.
@@ -178,6 +181,9 @@ func (f *fakeCA) use(t *testing.T) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			k := propKey{obj, addr.selector, addr.scope, addr.element}
+			if st := f.unlistenFails[obj]; st != noErr {
+				return st
+			}
 			if f.listeners[k] == 0 {
 				return -1
 			}

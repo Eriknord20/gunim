@@ -11,6 +11,9 @@ import (
 // Core Audio's own numbers.
 const (
 	noErr = 0
+	// badObject is kAudioHardwareBadObjectError, '!obj': the object
+	// named is gone, as a device unplugged is.
+	badObject = 0x216f626a
 
 	systemObject = 1
 
