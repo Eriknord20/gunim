@@ -5,7 +5,14 @@
 // screen, or a click, measures the round trip: a click played, heard by
 // the microphone, and found in the recording by its stamp, as package
 // audio/capture's Measure finds it. An offset near zero says the stamps
-// line a take up with what the singer heard.
+// line a take up with what the singer heard. A dot lights as each click
+// is heard, at the mixer frame the speaker says plays now: it should
+// light with the click, neither before nor after.
+//
+// Below the text, a guided check takes a tester through the device's
+// own speaker, recording, headphones, and the application going away,
+// a step at a time. Done logs the state as each step ends, after
+// "CHECKSTEP n done", for whoever reads the log.
 //
 //	go run ./tools/gunimapk -permissions microphone -run ./example/roundtrip
 //	go run ./example/roundtrip -driver "Core Audio"   # on macOS
@@ -26,6 +33,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image/color"
 	"log"
 	"math"
 	"os"
@@ -76,12 +84,22 @@ func run() error {
 			return err
 		}
 		defer func() { _ = spk.Close() }()
-		t := &tester{mix: mix, spk: spk}
-		mix.Play(&ticks{rate: mix.Rate()}, audio.Options{})
+		tk := &ticks{rate: mix.Rate(), mix: mix}
+		tk.start.Store(-1)
+		t := &tester{mix: mix, spk: spk, ticks: tk}
+		mix.Play(tk, audio.Options{})
 		go func() { t.allowed.Store(a.Ask(driver.PermissionMicrophone)) }()
 		go t.record(ctx)
 		go t.report(ctx)
-		gunim.RegisterView(w, "roundtrip", func(struct{}) *view { return &view{t: t, label: widget.NewLabel("")} }, nil)
+		gunim.RegisterView(w, "roundtrip", func(struct{}) *view {
+			v := &view{t: t, label: widget.NewLabel(""), guide: widget.NewLabel(""), done: widget.NewButton("Done")}
+			v.done.Kind = widget.ButtonPrimary
+			v.done.OnClick = func(*gunim.UI) gunim.Intent {
+				v.next()
+				return nil
+			}
+			return v
+		}, nil)
 		c := w.Client()
 		if err := c.Mount(gunim.Root, "roundtrip", "roundtrip", struct{}{}); err != nil {
 			return err
@@ -104,9 +122,16 @@ func run() error {
 type ticks struct {
 	rate int
 	n    int
+	mix  *audio.Mixer
+	// start is the mixer frame the first click starts at, or -1 before
+	// the mixer first reads: the dot lights as each click is heard.
+	start atomic.Int64
 }
 
 func (t *ticks) Read(dst []float32) (int, error) {
+	if t.start.Load() < 0 {
+		t.start.Store(t.mix.Mixed())
+	}
 	for i := 0; i+1 < len(dst); i += 2 {
 		v := float32(0)
 		if at := t.n % t.rate; at < t.rate/50 {
@@ -121,6 +146,7 @@ func (t *ticks) Read(dst []float32) (int, error) {
 // A tester records the microphone, and measures the round trip when
 // asked.
 type tester struct {
+	ticks   *ticks
 	mix     *audio.Mixer
 	spk     *speaker.Speaker
 	allowed atomic.Bool
@@ -261,14 +287,56 @@ func (t *tester) text() string {
 type view struct {
 	t     *tester
 	label *widget.Label
+	// guide shows the step of the check to do now, and done goes on to
+	// the next, logging the state for whoever reads the log.
+	guide *widget.Label
+	done  *widget.Button
+	step  int
+	// began is when the step began, for the timer beside it.
+	began time.Time
+	// doneAt is where done sits, so a tap on it measures nothing.
+	doneAt geom.Rect
 }
 
-func (v *view) Children() []gunim.Node { return []gunim.Node{v.label} }
+// steps is the check, a step at a time.
+var steps = []string{
+	"Step 1 of 6: the device's own speaker. Headphones off. Let it click for a minute. " +
+		"Then tap or click above this text three times, waiting for each result. Then press Done.",
+	"Step 2 of 6: recording. Clap or sing for a few seconds while it clicks. Then press Done.",
+	"Step 3 of 6: headphones, Bluetooth ones where you have them. Connect them while it clicks. " +
+		"Listen for a minute: any crackle, gaps or wrong device? Does the dot light with the click? " +
+		"Note what you hear. Then press Done.",
+	"Step 4 of 6: the headphones' delay. Hold one earbud or ear cup against the device's microphone, " +
+		"in a quiet room. Tap or click above this text three times, waiting for each result. The offset " +
+		"is the delay the system leaves out. Then press Done.",
+	"Step 5 of 6: headphones off and on. Disconnect them, wait 5 s, connect them again, wait 5 s. " +
+		"Do it three times. Then press Done.",
+	"Step 6 of 6: going away. Lock the screen, wait 5 s, unlock. Then switch to another application " +
+		"for 10 s and come back. Watch the system's microphone indicator while away: it should go out. " +
+		"Then press Done.",
+	"All done. Thank you!",
+}
+
+// next logs the state as the step ends, for a screenshot from it, and
+// goes on to the next step.
+func (v *view) next() {
+	if v.step >= len(steps)-1 {
+		return
+	}
+	v.step++
+	v.began = time.Now()
+	log.Printf("CHECKSTEP %d done\n%s", v.step, v.t.text())
+}
+
+func (v *view) Children() []gunim.Node { return []gunim.Node{v.label, v.guide, v.done} }
 
 // Handle implements [gunim.Handler].
 func (v *view) Handle(e input.Event, _ *gunim.UI) bool {
-	switch e.(type) {
+	switch e := e.(type) {
 	case input.PointerUp:
+		if v.doneAt.Contains(e.Pos) {
+			return false
+		}
 		v.t.measure.Store(true)
 		return true
 	case input.WindowHidden:
@@ -283,19 +351,82 @@ func (v *view) Handle(e input.Event, _ *gunim.UI) bool {
 	return false
 }
 
-// WakeIn has the text follow the speaker each second.
-func (v *view) WakeIn() time.Duration { return time.Second }
+// Step draws every frame while the dot is lit.
+func (v *view) Step(time.Duration) bool { return v.flash() > 0 }
+
+// WakeIn wakes the window as the next click is heard, and each second
+// at the latest, for the text.
+func (v *view) WakeIn() time.Duration {
+	since, ok := v.sinceClick()
+	if !ok {
+		return time.Second
+	}
+	rate := int64(v.t.mix.Rate())
+	return max(time.Millisecond, min(time.Second, audio.DurationAt(rate-since, int(rate))))
+}
+
+// sinceClick returns how many frames ago the last click was heard, at
+// the mixer frame the speaker plays now, and false before the first.
+func (v *view) sinceClick() (int64, bool) {
+	start := v.t.ticks.start.Load()
+	if start < 0 {
+		return 0, false
+	}
+	h := v.t.mix.Heard() - start
+	if h < 0 {
+		return 0, false
+	}
+	return h % int64(v.t.mix.Rate()), true
+}
+
+// flash returns how bright the dot is now, 0 to 1: full as a click is
+// heard, and fading over 150 ms.
+func (v *view) flash() float32 {
+	since, ok := v.sinceClick()
+	fade := int64(v.t.mix.Rate()) * 15 / 100
+	if !ok || since >= fade {
+		return 0
+	}
+	return 1 - float32(since)/float32(fade)
+}
 
 func (v *view) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	v.label.Text = v.t.text()
+	if v.began.IsZero() {
+		v.began = time.Now()
+	}
+	el := time.Since(v.began)
+	v.guide.Text = fmt.Sprintf("%s\n\nTime on this step: %d:%02d", steps[v.step], int(el.Minutes()), int(el.Seconds())%60)
+	w := c.Max.W - 32
+	i := 0
 	for kid := range kids.All {
-		kid.Layout(gunim.Tight(geom.Sz(c.Max.W-32, c.Max.H-96)))
-		kid.Place(geom.Pt(16, 64))
+		switch i {
+		case 0:
+			kid.Layout(gunim.Tight(geom.Sz(w, c.Max.H*0.45)))
+			kid.Place(geom.Pt(16, 64))
+		case 1:
+			kid.Layout(gunim.Tight(geom.Sz(w, c.Max.H*0.25)))
+			kid.Place(geom.Pt(16, 64+c.Max.H*0.45))
+		case 2:
+			sz := kid.Layout(gunim.Loose(geom.Sz(w, 64)))
+			at := geom.Pt(16, c.Max.H-sz.H-48)
+			kid.Place(at)
+			v.doneAt = geom.Rect{Min: at, Max: at.Add(geom.Pt(sz.W, sz.H))}
+		}
+		i++
 	}
 	return c.Max
 }
 
-func (v *view) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+func (v *view) Paint(p *paint.Painter, _ gunim.Frame, size geom.Size, kids gunim.Children) {
+	// The dot, right of the text: it lights as each click is heard.
+	const d = 120
+	at := geom.Pt(size.W-d-24, size.H*0.30)
+	r := geom.Rect{Min: at, Max: at.Add(geom.Pt(d, d))}
+	p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 60, G: 60, B: 70, A: 255}))
+	if f := v.flash(); f > 0 {
+		p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 80, G: 220, B: 120, A: uint8(255 * f)}))
+	}
 	for kid := range kids.All {
 		kid.Paint(p)
 	}
