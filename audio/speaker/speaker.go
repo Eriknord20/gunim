@@ -32,9 +32,16 @@
 // runs no Go as it does. The server owns the rate and the buffer size:
 // the speaker follows them.
 //
+// On macOS, a driver named [driver.CoreAudio] plays through the default
+// output device the same way, by a HAL output unit: Core Audio's
+// real-time thread takes each buffer from a ring and runs no Go. The
+// speaker plays at the device's rate, and opens again as the default
+// device changes, goes away or changes its rate.
+//
 // Package audio/capture records the inputs of the driver the speakers
-// play through, an ASIO driver's or JACK's, where [Options].Record is
-// set, and stamps what it records with [Speaker.Heard].
+// play through, an ASIO driver's, JACK's or Core Audio's default input,
+// where [Options].Record is set, and stamps what it records with
+// [Speaker.Heard].
 //
 // [Speaker.Anchor] ties the mixer's frames to the clock [time.Now]
 // reads, so a host sends MIDI for a frame to leave as it is heard, and
@@ -67,8 +74,8 @@ type Options struct {
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
-	// refuses a rate plays at its own, and JACK at its server's. The
-	// system's own sound may convert the rate on its way to the device,
+	// refuses a rate plays at its own, JACK at its server's, and
+	// [driver.CoreAudio] at the device's. The system's own sound may convert the rate on its way to the device,
 	// as Windows converts to the format its device is set to. [State]
 	// tells both rates.
 	Rate int
@@ -93,7 +100,9 @@ type Options struct {
 	// control panel sets. The latency is never less than a buffer and
 	// the driver's own latency, whatever Latency asks for. On macOS it
 	// sets the system's own sound's buffer too: the process's own, as
-	// other applications playing keep theirs. Zero keeps the device's.
+	// other applications playing keep theirs. Zero keeps the device's;
+	// through [driver.CoreAudio], zero asks for a quarter of Latency,
+	// from 64 to 1024 frames.
 	Buffer int
 	// Direct mixes each buffer an ASIO driver takes on the driver's own
 	// thread, as it takes it, in place of reading the mixer ahead into a
@@ -116,13 +125,19 @@ type Options struct {
 	// microphone, so leave it unset to play alone. Through [driver.AAudio] it
 	// records the microphone, which shows the system's sign of a
 	// microphone in use while the application is in front. Through
-	// [driver.WASAPI] it records Windows' default input.
+	// [driver.WASAPI] it records Windows' default input. Through
+	// [driver.CoreAudio] it records the default input device, where it
+	// runs at the output's rate and the application may record: macOS
+	// asks the user the first time, and [State].Problem tells why it
+	// records nothing.
 	Record bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [driver.Channels] lists them; nil plays on its
 	// first two. Through JACK they are the system's ports it lists, and
-	// an output missing leaves its port unconnected, for a patchbay. The mixer plays on the first two named, or on the one
-	// named alone. Those named past two play what Aux fills, in step
+	// an output missing leaves its port unconnected, for a patchbay.
+	// Through [driver.CoreAudio] they are the default output device's
+	// channels, and one missing plays nowhere. The mixer plays on the
+	// first two named, or on the one named alone. Those named past two play what Aux fills, in step
 	// with the mixer, at the same latency. The system's own sound plays
 	// the mixer's two alone: [State].Aux tells how many more play.
 	Outputs []int
@@ -195,6 +210,16 @@ type Speaker struct {
 	smu            sync.Mutex
 	stopped, faded bool
 	asked          int
+	// auChurn counts the Core Audio outputs opened in a row, each less
+	// than auSteady after the one before, and auOpened is when the last
+	// opened, in Unix nanoseconds: a device that changes again as soon
+	// as it opens, as AirPods switching their rate as their microphone
+	// opens, waits longer each time before it opens again.
+	auChurn, auOpened atomic.Int64
+	// waiting says an output closed while the device was stopped, to
+	// open again as it resumes: opened then, it would start the device,
+	// and the microphone, while the application is away.
+	waiting atomic.Bool
 	// q rounds the sound as it leaves, as bits and dither say: q is
 	// the one thread's that pulls, the feed's or the driver's, and the
 	// settings anyone's, so neither waits.
@@ -355,6 +380,8 @@ func (s *Speaker) openDriver() (startedOutput, error) {
 	switch s.o.Driver {
 	case driver.JACK:
 		return openJackOutput(s, s.o)
+	case driver.CoreAudio:
+		return openAUOutput(s, s.o)
 	case driver.WASAPI:
 		return openWasapi(s, s.o, true)
 	}
@@ -516,13 +543,30 @@ func (s *Speaker) reopenLocked() error {
 			s.logf("%v; opening the output again all the same", err)
 		}
 	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		s.waiting.Store(true)
+		s.logf("suspended: the output opens again as it resumes")
+		return nil
+	}
 	out, err := s.open()
 	if err != nil {
 		s.problem = err
 		return err
 	}
 	s.anchor.reset()
+	s.smu.Lock()
 	s.out.Store(&outlet{out})
+	if s.stopped {
+		// Suspend stopped the device while this opened, and found no
+		// output to stop.
+		if err := out.suspend(); err != nil {
+			s.logf("suspending the output opened: %v", err)
+		}
+	}
+	s.smu.Unlock()
 	s.logf("opened again, at %d Hz, working %v ahead", out.rate(), s.Latency())
 	select {
 	case s.changed <- struct{}{}:
@@ -540,8 +584,8 @@ func (s *Speaker) Changed() <-chan struct{} { return s.changed }
 // A State says how the speakers play.
 type State struct {
 	// Driver is the driver playing: an ASIO driver, [driver.JACK] for
-	// JACK, [driver.AAudio] for AAudio, or empty for the system's own
-	// sound.
+	// JACK, [driver.AAudio] for AAudio, [driver.CoreAudio] for Core
+	// Audio's HAL output unit, or empty for the system's own sound.
 	Driver string
 	// Rate is the rate the mixer and the output play at, in frames a
 	// second. DeviceRate is the rate the system converts it to on its
@@ -606,6 +650,8 @@ func (s *Speaker) ControlPanel() error {
 			return o.dev.ControlPanel()
 		case *jackOutput:
 			return errJackPanel
+		case *auOutput:
+			return auControlPanel()
 		case *wasOutput:
 			return errWasPanel
 		}
@@ -643,7 +689,10 @@ const SuspendFade = 150 * time.Millisecond
 // background on a phone. The mixer stops with it. Sound playing fades
 // out first, over [SuspendFade]: Suspend returns at once, and the
 // device stops once the fade has been heard, unless Resume comes
-// first.
+// first. While the device is stopped, a change that opens the output
+// again, as the system's default device changing or a call of Set,
+// closes it and waits: the output opens as Resume is called, so the
+// device and its microphone stay off until then.
 func (s *Speaker) Suspend() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
@@ -668,20 +717,34 @@ func (s *Speaker) Suspend() error {
 	return nil
 }
 
-// stopLocked stops the device. It runs with smu held.
+// stopLocked stops the device: the output, where one is open, and any
+// opened until Resume. It runs with smu held.
 func (s *Speaker) stopLocked() error {
+	s.stopped = true
 	out := s.out.Load()
 	if out == nil {
 		return nil
 	}
-	s.stopped = true
 	return out.suspend()
 }
 
 // Resume starts a suspended device again, and fades back in the sound
 // Suspend faded out, over [SuspendFade]. Where nothing sounded as it
-// suspended, a sound played as it resumes starts at once.
+// suspended, a sound played as it resumes starts at once. An output
+// that was to open again while the device was stopped, as its device
+// changed, opens now.
 func (s *Speaker) Resume() error {
+	err := s.restart()
+	if s.waiting.Swap(false) {
+		s.mu.Lock()
+		err = errors.Join(err, s.reopenLocked())
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// restart is Resume, but for an output waiting to open.
+func (s *Speaker) restart() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.asked++
