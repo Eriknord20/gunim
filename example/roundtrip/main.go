@@ -67,6 +67,11 @@ func run() error {
 	if runtime.GOOS == "windows" {
 		def = audiodriver.WASAPI
 	}
+	if runtime.GOOS == "android" && os.Getenv("GUNIM_DEBUG_AUDIO") == "" {
+		// The speaker's log is the one place to read what AAudio says,
+		// and Android passes the application no environment to ask for it.
+		_ = os.Setenv("GUNIM_DEBUG_AUDIO", "1")
+	}
 	through := flag.String("driver", def, "the driver to play and record through, as package "+
 		"audio/driver names it: \"Core Audio\" on macOS, JACK on Linux")
 	flag.Parse()

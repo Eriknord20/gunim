@@ -137,6 +137,9 @@ type aaOutput struct {
 	// clock: dry spells until then leave the latency as it is.
 	opening atomic.Int64
 	calm    atomic.Int64
+	// told is when the feed last logged the streams' raw timestamps,
+	// where the speaker logs.
+	told int64
 	// Opening again: the opener's own count of attempts that failed in a
 	// row, and when it may try next.
 	fails, ifails int
@@ -586,6 +589,11 @@ func (a *aaOutput) failed(run *aaRun, now int64) bool {
 // poll reads the streams' timestamps: where the device is in the frames
 // it took, and how far behind the frames the callback carried.
 func (a *aaOutput) poll() {
+	if now := a.clock(); a.s.debug && now-a.told >= int64(time.Second) {
+		a.told = now
+		a.tell("plays", a.run.Load(), false, a.delay.Load())
+		a.tell("records", a.irun.Load(), true, a.inDelay.Load())
+	}
 	if run := a.run.Load(); run != nil {
 		run.most.Store(run.sh.Most.Load())
 		if behind, first, ok := a.fit(run, &a.org, false); first {
@@ -608,6 +616,31 @@ func (a *aaOutput) poll() {
 			a.inDelay.Store(smooth(a.inDelay.Load(), ahead))
 		}
 	}
+}
+
+// tell logs what run's timestamp says as it stands, fitted or not,
+// beside the delay the output tells, to check one against the other.
+func (a *aaOutput) tell(does string, run *aaRun, input bool, told int64) {
+	if run == nil {
+		return
+	}
+	pos, at, cnow, ok := run.st.Timestamp()
+	carried := run.sh.Frames.Load()
+	if !ok {
+		a.s.logf("AAudio %s: no timestamp yet; %d frames carried", does, carried)
+		return
+	}
+	// As Oboe's calculateLatencyMillis reckons it.
+	gap := float64(carried-pos)/float64(a.hz) - float64(cnow-at)/1e9
+	if input {
+		gap = -gap
+	}
+	info := run.st.Info()
+	a.s.logf("AAudio %s: frame %d at the device %v ago, %d carried: %v between; the output tells %v; "+
+		"%d in a row did not fit; buffer %d of %d, burst %d, exclusive %v, %d xruns",
+		does, pos, time.Duration(cnow-at).Round(time.Microsecond), carried,
+		time.Duration(gap*1e9).Round(100*time.Microsecond), audio.DurationAt(told, a.hz).Round(100*time.Microsecond),
+		run.odd, info.Buffer, info.Capacity, info.Burst, info.Exclusive, run.st.XRuns())
 }
 
 // fit reads run's timestamp into org, the origin of its frames, where
@@ -641,6 +674,10 @@ func (a *aaOutput) fit(run *aaRun, org *atomic.Uint64, input bool) (gap int64, f
 	g := gapAt(raw)
 	if g < -slack || g > audio.FramesAt(MaxLatency, a.hz) || (run.fitted && abs64(g-run.gap) > audio.FramesAt(aaShift, a.hz)) {
 		run.odd++
+		if a.s.debug {
+			a.s.logf("AAudio's timestamp does not fit: %v between, after %v", audio.DurationAt(g, a.hz),
+				audio.DurationAt(run.gap, a.hz))
+		}
 		return 0, false, false
 	}
 	first = !run.fitted
