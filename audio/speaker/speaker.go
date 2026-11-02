@@ -2,7 +2,10 @@
 // speakers: through PulseAudio or PipeWire, else ALSA, on Linux,
 // WASAPI on Windows, Core Audio on macOS and Oboe on Android; and on
 // Windows through an ASIO driver too, as package audio/asio plays; and
-// on Linux through JACK, where a JACK server answers, or PipeWire's.
+// on Linux through JACK, where a JACK server answers, or PipeWire's. On
+// Android 11 and newer, [Options].Driver set to [AAudio] plays through
+// AAudio, gunim's own, in low-latency mode, and records with
+// [Options].Record.
 // On macOS the device asks for each buffer on its own thread, as
 // package audio/coreaudio plays it, as an ASIO driver does, so Buffer
 // and Direct set how soon the sound is heard there too.
@@ -54,10 +57,10 @@ type Options struct {
 	// Name names the application to the system's volume controls.
 	Name string
 	// Driver is the ASIO driver to play through, by its name from
-	// [asio.Drivers], or [asio.JACK] for JACK, which that lists on
-	// Linux where a server answers. Empty plays through the system's own
-	// sound, as does a driver that fails to open, or JACK's server shut
-	// down: [State] tells why.
+	// [asio.Drivers], [asio.JACK] for JACK, which that lists on Linux
+	// where a server answers, or [AAudio] on Android. Empty plays
+	// through the system's own sound, as does a driver that fails to
+	// open, or JACK's server shut down: [State] tells why.
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
@@ -104,9 +107,12 @@ type Options struct {
 	// a ring is always between it and the mixer.
 	Direct bool
 	// Record opens the inputs of the ASIO driver too, or each of the
-	// system's inputs JACK lists, for package audio/capture to record. A driver may then open a device of its
-	// own to record from, as FlexASIO and ASIO4ALL open Windows'
-	// microphone, so leave it unset to play alone.
+	// system's inputs JACK lists, for package audio/capture to record.
+	// A driver may then open a device of its own to record from, as
+	// FlexASIO and ASIO4ALL open Windows'
+	// microphone, so leave it unset to play alone. Through [AAudio] it
+	// records the microphone, which shows the system's sign of a
+	// microphone in use while the application is in front.
 	Record bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [asio.Channels] lists them; nil plays on its
@@ -292,7 +298,16 @@ func (s *Speaker) open() (output, error) {
 	s.problem = nil
 	s.reads.Store(0)
 	ahead := time.Duration(s.ahead.Load())
-	if s.o.Driver != "" {
+	if s.o.Driver == AAudio || (s.o.Driver == "" && aaudioFirst) {
+		out, err := openAAudio(s, s.o, s.o.Driver == AAudio)
+		if err == nil {
+			s.m.SetRate(out.rate())
+			out.start(ahead)
+			return out, nil
+		}
+		s.problem = err
+		s.logf("%v; playing through the system's sound", err)
+	} else if s.o.Driver != "" {
 		out, err := s.openDriver()
 		if err == nil {
 			s.m.SetRate(out.rate())

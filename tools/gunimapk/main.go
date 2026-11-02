@@ -22,6 +22,7 @@
 //
 // -permissions names what the program may do beyond drawing, sound and
 // a light buzz: music, to read the phone's music once the user lets it,
+// microphone, to record once the user lets it,
 // and playback, to play on in the background, in the system's media
 // controls, as gunim's App.SetNowPlaying asks. Google Play asks the
 // developer why an app plays in the background, so leave playback out
@@ -142,7 +143,7 @@ func main() {
 	version := flag.String("version", "", "the version name users see, as 1.0.0; the commit and the time it was built by default")
 	iconPNG := flag.String("icon", "", "a PNG file for the launcher's icon, square, 288 pixels or more")
 	iconBG := flag.String("icon-background", "", "the colour under the launcher's icon, as #rrggbb; the colour of the icon's edge by default")
-	permList := flag.String("permissions", "", "what the program may do beyond drawing and sound, comma separated: music, to read the phone's music, and playback, to play on in the background with the system's media controls")
+	permList := flag.String("permissions", "", "what the program may do beyond drawing and sound, comma separated: music, to read the phone's music, microphone, to record, and playback, to play on in the background with the system's media controls")
 	category := flag.String("category", "", "what kind of app the program is, by Android's name, as game; a game keeps -orientation on a tablet")
 	orientation := flag.String("orientation", "", "hold the screen one way, by Android's name, as portrait or landscape; it turns with the phone by default")
 	abiList := flag.String("abi", "arm64-v8a,x86_64", "the ABIs to build for, comma separated")
@@ -181,7 +182,7 @@ func main() {
 		perms = strings.Split(*permList, ",")
 		for _, p := range perms {
 			if _, ok := permissions[p]; !ok {
-				log.Fatalf("gunimapk: no permission %q; there are music and playback", p)
+				log.Fatalf("gunimapk: no permission %q; there are music, microphone and playback", p)
 			}
 		}
 	}
@@ -856,13 +857,17 @@ func pack(out, linked string, rename func(string) string, files []packed) (err e
 // permissions are the manifest's lines for each permission a program
 // may need, by -permissions' names. music is the one a program asks for
 // with gunim's App.Ask to read the phone's music: its own permission
-// since Android 13, and part of reading storage before. playback lets a
+// since Android 13, and part of reading storage before. microphone is
+// the one a program asks for with App.Ask to record, as package
+// audio/speaker records through AAudio. playback lets a
 // program that calls App.SetNowPlaying play on unseen, as a foreground
 // service, which Google Play asks a developer to explain; a program
 // without it plays while it is in front, and shows no media controls.
 var permissions = map[string]string{
 	"music": `	<uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 	<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+`,
+	"microphone": `	<uses-permission android:name="android.permission.RECORD_AUDIO"/>
 `,
 	"playback": `	<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>

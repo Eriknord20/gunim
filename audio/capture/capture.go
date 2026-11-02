@@ -3,7 +3,11 @@
 // output. It records through PulseAudio or PipeWire on Linux, WASAPI
 // on Windows, Core Audio on macOS, and through the ASIO driver the
 // speakers play through too, as package audio/speaker opens it: on
-// Windows an ASIO driver, and on Linux JACK.
+// Windows an ASIO driver, and on Linux JACK. On Android it records the
+// microphone through AAudio, where the speakers play through it, as an
+// ASIO driver's inputs: its device is [DriverInputs]'s, and the
+// application asks for the permission to record first, with gunim's
+// App.Ask.
 //
 // Each block recorded carries a stamp: the mixer frame of the speakers
 // that was being heard as the block's first frame reached the input.
@@ -16,7 +20,7 @@
 //	// b.Frames came in as mixer frame b.Heard played.
 //
 // Through ASIO and JACK the stamps are exact, from the driver's own
-// buffers.
+// buffers; through AAudio, from the two streams' timestamps.
 // Elsewhere they are reckoned from the system's latencies and
 // smoothed; [Measure] plays a click and finds it in the recording, to
 // tell how far they are off. They settle over a stream's first
@@ -184,8 +188,9 @@ type Info struct {
 	// that holds it, as the device reports it.
 	Latency time.Duration
 	// Exact says the stamps are exact, from the buffers of an ASIO
-	// driver that plays and records in one; otherwise they are
-	// reckoned from the latencies the system reports.
+	// driver that plays and records in one, or from AAudio's
+	// timestamps; otherwise they are reckoned from the latencies the
+	// system reports.
 	Exact bool
 	// Problem is why the stream records otherwise than asked, and nil
 	// where it records as asked. On macOS it tells of a device that
