@@ -168,6 +168,15 @@ const (
 	// aaWaitStamp is how long what was recorded waits for the streams'
 	// timestamps, to be stamped from them.
 	aaWaitStamp = 500 * time.Millisecond
+	// aaProven is how long a stream runs before the attempts that
+	// failed before it are forgotten: one that fails to start, or dies
+	// sooner, counts as one more that failed.
+	aaProven = 2 * time.Second
+	// aaMicGiveUp is how many attempts in a row may fail to open the
+	// microphone before it is tried only every aaMicSlow, as each try
+	// may hold the output up a moment.
+	aaMicGiveUp = 10
+	aaMicSlow   = 10 * time.Second
 	// aaMostCallback is the most frames a callback is counted to ask
 	// for at once, as a Bluetooth headset's large bursts do.
 	aaMostCallback = 16384
@@ -351,8 +360,14 @@ func (a *aaOutput) start(ahead time.Duration) {
 	}
 	a.mu.Lock()
 	a.started = true
-	a.startOut()
-	a.startIn()
+	if !a.startOut() {
+		a.fails++
+		a.next = a.clock() + int64(retryDelay(a.fails))
+	}
+	if !a.startIn() {
+		a.ifails++
+		a.inext = a.clock() + int64(micRetry(a.ifails))
+	}
 	a.mu.Unlock()
 	go a.loop(buf)
 	go a.keep()
@@ -360,23 +375,28 @@ func (a *aaOutput) start(ahead time.Duration) {
 
 // startOut starts the output stream, where it is open, and closes it
 // where it fails to start. It runs with mu held.
-func (a *aaOutput) startOut() {
+// It returns false where it failed to start.
+func (a *aaOutput) startOut() bool {
 	if run := a.run.Load(); run != nil {
 		if err := run.st.Start(); err != nil {
 			a.s.logf("%v", err)
 			a.dropOut()
+			return false
 		}
 	}
+	return true
 }
 
 // startIn starts the input stream as startOut does the output.
-func (a *aaOutput) startIn() {
+func (a *aaOutput) startIn() bool {
 	if run := a.irun.Load(); run != nil {
 		if err := run.st.Start(); err != nil {
 			a.s.logf("%v", err)
 			a.dropIn()
+			return false
 		}
 	}
+	return true
 }
 
 // chunk is the most frames the goroutine reads the mixer for at once.
@@ -456,11 +476,29 @@ func retryDelay(fails int) time.Duration {
 // micRetry is how long to wait before opening the microphone again
 // after fails attempts in a row failed: half a second at first, as the
 // user may be answering the prompt for the permission to record, and
-// twice as long each time after, to 2 s. Any error counts so: before
-// the permission is given, Android 16 fails the open with
-// AAUDIO_ERROR_INTERNAL, and earlier ones with others.
+// twice as long each time after, to 2 s; after aaMicGiveUp, every
+// aaMicSlow. Any error counts so: before the permission is given,
+// Android 16 fails the open with AAUDIO_ERROR_INTERNAL, and earlier
+// ones with others.
 func micRetry(fails int) time.Duration {
+	if fails >= aaMicGiveUp {
+		return aaMicSlow
+	}
 	return min(500*time.Millisecond<<min(max(fails-1, 0), 2), 2*time.Second)
+}
+
+// lived says how a stream that is closing ran: one that ran aaProven
+// clears the count of attempts that failed, and is opened again at
+// once; one that died sooner counts as an attempt that failed. It
+// returns when to try next.
+func (a *aaOutput) lived(run *aaRun, fails *int, delay func(int) time.Duration) int64 {
+	now := a.clock()
+	if now-run.opened >= int64(aaProven) {
+		*fails = 0
+		return now
+	}
+	*fails++
+	return now + int64(delay(*fails))
 }
 
 // watch marks the stream p holds dead where it failed, as failed
@@ -515,39 +553,46 @@ func (a *aaOutput) keepOpen() (wait time.Duration, ok bool) {
 	if a.paused.Load() {
 		return 0, false
 	}
+	// The count of attempts that failed is cleared only by a stream
+	// that ran aaProven, so one that opens and fails at once waits as
+	// one that fails to open.
 	if run := a.run.Load(); run != nil && run.dead.Load() {
+		a.next = a.lived(run, &a.fails, retryDelay)
 		a.dropOut()
-		a.next = a.clock()
 	}
 	if a.run.Load() == nil && a.clock() >= a.next {
 		done := a.busy()
-		if err := a.openOut(); err != nil {
+		err := a.openOut()
+		if err == nil {
+			// The feed fills the ring as the stream starts.
+			a.wakeFeed()
+			if !a.startOut() {
+				err = errors.New("speaker: AAudio's output did not start")
+			}
+		}
+		if err != nil {
 			a.fails++
 			a.next = a.clock() + int64(retryDelay(a.fails))
 			a.s.logf("%v; trying again in %v", err, retryDelay(a.fails))
-		} else {
-			a.fails = 0
-			// The feed fills the ring as the stream starts.
-			a.wakeFeed()
-			a.startOut()
 		}
 		done()
 	}
 	if a.in != nil {
 		if run := a.irun.Load(); run != nil && run.dead.Load() {
+			a.inext = a.lived(run, &a.ifails, micRetry)
 			a.dropIn()
-			a.inext = a.clock()
 		}
 		if a.irun.Load() == nil && a.clock() >= a.inext {
 			done := a.busy()
-			if err := a.openIn(); err != nil {
+			err := a.openIn()
+			if err == nil && !a.startIn() {
+				err = errors.New("speaker: the microphone did not start")
+			}
+			if err != nil {
 				// The permission to record may come later: try again.
 				a.ifails++
 				a.inext = a.clock() + int64(micRetry(a.ifails))
 				a.s.logf("%v; trying again in %v", err, micRetry(a.ifails))
-			} else {
-				a.ifails = 0
-				a.startIn()
 			}
 			done()
 		}
@@ -924,6 +969,9 @@ func (a *aaOutput) resume() error {
 		run.moved.Store(a.clock())
 		a.startOut()
 	}
+	// The user may have allowed recording meanwhile: try the
+	// microphone at once, its count of failures kept.
+	a.inext = a.clock()
 	a.wakeFeed()
 	a.wakeOpener()
 	return nil
