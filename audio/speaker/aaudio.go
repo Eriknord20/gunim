@@ -147,8 +147,9 @@ const (
 	// aaJump is how far a timestamp may place a device from where the
 	// last ones did before it is taken as it is, unsmoothed.
 	aaJump = 5 * time.Millisecond
-	// aaSettle is how long a stream starting runs before a buffer it
-	// finds short counts as the sound running dry.
+	// aaSettle is how long a stream starting or resuming runs before a
+	// buffer it finds short, or an xrun AAudio counts, counts as the
+	// sound running dry.
 	aaSettle = 250 * time.Millisecond
 	// aaShift is how far a stream's delay may move from one timestamp
 	// to the next: further, it counts its frames anew.
@@ -520,8 +521,10 @@ func (a *aaOutput) poll() {
 			a.delay.Store(smooth(a.delay.Load(), behind))
 		}
 		if x := run.st.XRuns(); x > run.xruns {
-			for range min(x-run.xruns, 100) {
-				a.s.ranDry()
+			if a.clock()-a.settle.Load() > int64(aaSettle) {
+				for range min(x-run.xruns, 100) {
+					a.s.ranDry()
+				}
 			}
 			run.xruns = x
 		}
