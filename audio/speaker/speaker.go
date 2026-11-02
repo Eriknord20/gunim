@@ -210,6 +210,10 @@ type Speaker struct {
 	smu            sync.Mutex
 	stopped, faded bool
 	asked          int
+	// waiting says an output closed while the device was stopped, to
+	// open again as it resumes: opened then, it would start the device,
+	// and the microphone, while the application is away.
+	waiting atomic.Bool
 	// q rounds the sound as it leaves, as bits and dither say: q is
 	// the one thread's that pulls, the feed's or the driver's, and the
 	// settings anyone's, so neither waits.
@@ -533,13 +537,30 @@ func (s *Speaker) reopenLocked() error {
 			s.logf("%v; opening the output again all the same", err)
 		}
 	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		s.waiting.Store(true)
+		s.logf("suspended: the output opens again as it resumes")
+		return nil
+	}
 	out, err := s.open()
 	if err != nil {
 		s.problem = err
 		return err
 	}
 	s.anchor.reset()
+	s.smu.Lock()
 	s.out.Store(&outlet{out})
+	if s.stopped {
+		// Suspend stopped the device while this opened, and found no
+		// output to stop.
+		if err := out.suspend(); err != nil {
+			s.logf("suspending the output opened: %v", err)
+		}
+	}
+	s.smu.Unlock()
 	s.logf("opened again, at %d Hz, working %v ahead", out.rate(), s.Latency())
 	select {
 	case s.changed <- struct{}{}:
@@ -662,7 +683,10 @@ const SuspendFade = 150 * time.Millisecond
 // background on a phone. The mixer stops with it. Sound playing fades
 // out first, over [SuspendFade]: Suspend returns at once, and the
 // device stops once the fade has been heard, unless Resume comes
-// first.
+// first. While the device is stopped, a change that opens the output
+// again, as the system's default device changing or a call of Set,
+// closes it and waits: the output opens as Resume is called, so the
+// device and its microphone stay off until then.
 func (s *Speaker) Suspend() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
@@ -687,20 +711,34 @@ func (s *Speaker) Suspend() error {
 	return nil
 }
 
-// stopLocked stops the device. It runs with smu held.
+// stopLocked stops the device: the output, where one is open, and any
+// opened until Resume. It runs with smu held.
 func (s *Speaker) stopLocked() error {
+	s.stopped = true
 	out := s.out.Load()
 	if out == nil {
 		return nil
 	}
-	s.stopped = true
 	return out.suspend()
 }
 
 // Resume starts a suspended device again, and fades back in the sound
 // Suspend faded out, over [SuspendFade]. Where nothing sounded as it
-// suspended, a sound played as it resumes starts at once.
+// suspended, a sound played as it resumes starts at once. An output
+// that was to open again while the device was stopped, as its device
+// changed, opens now.
 func (s *Speaker) Resume() error {
+	err := s.restart()
+	if s.waiting.Swap(false) {
+		s.mu.Lock()
+		err = errors.Join(err, s.reopenLocked())
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// restart is Resume, but for an output waiting to open.
+func (s *Speaker) restart() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.asked++
