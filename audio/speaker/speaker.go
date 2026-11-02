@@ -210,6 +210,12 @@ type Speaker struct {
 	smu            sync.Mutex
 	stopped, faded bool
 	asked          int
+	// auChurn counts the Core Audio outputs opened in a row, each less
+	// than auSteady after the one before, and auOpened is when the last
+	// opened, in Unix nanoseconds: a device that changes again as soon
+	// as it opens, as AirPods switching their rate as their microphone
+	// opens, waits longer each time before it opens again.
+	auChurn, auOpened atomic.Int64
 	// waiting says an output closed while the device was stopped, to
 	// open again as it resumes: opened then, it would start the device,
 	// and the microphone, while the application is away.

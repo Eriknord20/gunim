@@ -1,6 +1,7 @@
 package speaker
 
 import (
+	"fmt"
 	"math/bits"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,20 @@ type auDevice interface {
 	Resume() error
 	Close() error
 }
+
+// The pace of opening again as the devices change.
+const (
+	// auSteady is how long an output plays before a change no longer
+	// counts as one more in a row.
+	auSteady = 10 * time.Second
+	// auWait is how long a change waits before the output opens again,
+	// from the third in a row, doubling with each after, as far as
+	// auWaitMost.
+	auWait     = time.Second
+	auWaitMost = 16 * time.Second
+	// auChurned is how many in a row State.Problem tells of.
+	auChurned = 3
+)
 
 // openAU opens Core Audio's devices; a test puts a device of its own
 // here.
@@ -76,9 +91,18 @@ type auOutput struct {
 	quit    chan struct{}
 	done    chan struct{}
 	closing sync.Once
-	// What the pump alone keeps: the frames it wrote, ever; a reopen
-	// asked for; and the cycles as the pump last saw them change.
+	// opened is when the output opened, churn how many opened in a row
+	// before it, as Speaker.auChurn counts them, and problem why it
+	// opened in a row so often, until it has played auSteady.
+	opened  time.Time
+	churn   int64
+	problem atomic.Pointer[error]
+	// What the pump alone keeps: the frames it wrote, ever; why it is to
+	// open again, and when; whether it asked; and the cycles as the pump
+	// last saw them change.
 	written  int64
+	reopen   string
+	reopenAt time.Time
 	asked    bool
 	cycles   int64
 	cycledAt time.Time
@@ -106,8 +130,22 @@ func openAUOutput(s *Speaker, o Options) (*auOutput, error) {
 		return nil, err
 	}
 	info := dev.Info()
-	u := &auOutput{s: s, dev: dev, hz: dev.Rate(), chans: dev.Channels(), info: info,
+	now := time.Now()
+	churn := int64(0)
+	if last := s.auOpened.Load(); last != 0 && now.Sub(time.Unix(0, last)) < auSteady {
+		churn = s.auChurn.Add(1)
+	} else {
+		s.auChurn.Store(0)
+	}
+	s.auOpened.Store(now.UnixNano())
+	u := &auOutput{s: s, dev: dev, hz: dev.Rate(), chans: dev.Channels(), info: info, opened: now, churn: churn,
 		quit: make(chan struct{}), done: make(chan struct{})}
+	if churn >= auChurned {
+		err := fmt.Errorf("speaker: Core Audio: the devices changed %d times in a row as the output opened, "+
+			"as AirPods do as their microphone opens: it opens again more slowly, from %v apart", churn, u.wait())
+		u.problem.Store(&err)
+		s.logf("%v", err)
+	}
 	s.logf("Core Audio: %s at %d Hz, %d frames a buffer, plays on %v of %d; %d frames from a buffer to the ear",
 		info.Device, info.Rate, info.Buffer, info.Played, len(info.Outputs), dev.Delay())
 	if info.InputProblem != nil {
@@ -255,10 +293,26 @@ func (u *auOutput) hear() {
 		u.info = info
 		u.mu.Unlock()
 	}
-	if e.Reopen != "" && !u.asked {
+	now := time.Now()
+	if e.Reopen != "" && u.reopen == "" {
+		u.reopen = e.Reopen
+		u.reopenAt = u.opened.Add(u.wait())
+		if now.Sub(u.opened) >= auSteady {
+			// Played steady: a change now is the first of a row.
+			u.reopenAt = now
+		}
+		if wait := u.reopenAt.Sub(now); wait > 0 {
+			s.logf("Core Audio: %s; opening again in %v, as the devices changed %d times in a row",
+				e.Reopen, wait.Round(time.Millisecond), u.churn+1)
+		}
+	}
+	if u.reopen != "" && !u.asked && !now.Before(u.reopenAt) {
 		u.asked = true
-		s.logf("Core Audio: %s; opening again", e.Reopen)
+		s.logf("Core Audio: %s; opening again", u.reopen)
 		s.askReset()
+	}
+	if u.reopen == "" && u.problem.Load() != nil && now.Sub(u.opened) >= auSteady {
+		u.problem.Store(nil)
 	}
 	if e.Cycles != u.cycles {
 		u.cycles, u.cycledAt, u.stalled = e.Cycles, time.Now(), false
@@ -266,6 +320,16 @@ func (u *auOutput) hear() {
 		u.stalled = true
 		s.logf("Core Audio: the device has asked for no sound in %v", time.Since(u.cycledAt).Round(time.Millisecond))
 	}
+}
+
+// wait returns how long after it opened the output waits to open again
+// as the devices change: not at all for the first two in a row, then
+// auWait, doubling, as far as auWaitMost.
+func (u *auOutput) wait() time.Duration {
+	if u.churn < 2 {
+		return 0
+	}
+	return min(auWait<<min(u.churn-2, 8), auWaitMost)
 }
 
 func (u *auOutput) rate() int { return u.hz }
@@ -304,6 +368,9 @@ func (u *auOutput) fill(st *State) {
 		MaxBuffer: i.MaxBuffer, PreferredBuffer: i.Buffer, Latency: i.Buffer + i.Safety + i.Latency, Bits: 32,
 		Float: true, Outputs: len(i.Outputs), OutputNames: i.Outputs, Played: i.Played,
 		Inputs: len(i.Inputs), Recorded: i.Recorded, InputNames: i.Inputs[:i.Recorded], InputLatency: i.InputLatency}
+	if p := u.problem.Load(); p != nil && st.Problem == nil {
+		st.Problem = *p
+	}
 	if st.Problem == nil {
 		st.Problem = i.InputProblem
 	}
