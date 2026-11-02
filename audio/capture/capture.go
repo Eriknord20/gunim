@@ -1,12 +1,13 @@
 // Package capture records sound from the computer's inputs: a
 // microphone, a guitar plugged into an audio interface, a synth's
 // output. It records through PulseAudio or PipeWire on Linux, WASAPI
-// on Windows, Core Audio on macOS, and on Windows through the ASIO
-// driver the speakers play through too, as package audio/speaker opens
-// it. On Android it records the microphone through AAudio, where the
-// speakers play through it, as an ASIO driver's inputs: its device is
-// [DriverInputs]'s, and the application asks for the permission to
-// record first, with gunim's App.Ask.
+// on Windows, Core Audio on macOS, and through the ASIO driver the
+// speakers play through too, as package audio/speaker opens it: on
+// Windows an ASIO driver, and on Linux JACK. On Android it records the
+// microphone through AAudio, where the speakers play through it, as an
+// ASIO driver's inputs: its device is [DriverInputs]'s, and the
+// application asks for the permission to record first, with gunim's
+// App.Ask.
 //
 // Each block recorded carries a stamp: the mixer frame of the speakers
 // that was being heard as the block's first frame reached the input.
@@ -18,8 +19,8 @@
 //	b := in.Read(buf)
 //	// b.Frames came in as mixer frame b.Heard played.
 //
-// Through ASIO the stamps are exact, from the driver's own buffers;
-// through AAudio, from the two streams' timestamps.
+// Through ASIO and JACK the stamps are exact, from the driver's own
+// buffers; through AAudio, from the two streams' timestamps.
 // Elsewhere they are reckoned from the system's latencies and
 // smoothed; [Measure] plays a click and finds it in the recording, to
 // tell how far they are off. They settle over a stream's first

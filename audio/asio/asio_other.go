@@ -2,8 +2,16 @@
 
 package asio
 
-// Drivers lists the ASIO drivers installed: none, on this system.
-func Drivers() ([]Driver, error) { return nil, nil }
+import "github.com/marrasen/gunim/audio/internal/jack"
+
+// Drivers lists the ASIO drivers installed: none, on this system; and
+// [JACK], where a JACK server answers.
+func Drivers() ([]Driver, error) {
+	if jack.Available() {
+		return []Driver{{Name: JACK}}, nil
+	}
+	return nil, nil
+}
 
 // A Device is an open ASIO driver, playing.
 type Device struct{}
@@ -22,9 +30,15 @@ func (*Device) ControlPanel() error { return ErrUnsupported }
 // it returns [ErrUnsupported].
 func ControlPanel(string) error { return ErrUnsupported }
 
-// Channels lists the names of the driver's inputs and outputs; on
-// this system it returns [ErrUnsupported].
-func Channels(string) (inputs, outputs []string, err error) { return nil, nil, ErrUnsupported }
+// Channels lists the names of the driver's inputs and outputs: for
+// [JACK], the system's ports, as the server names them. For another
+// driver it returns [ErrUnsupported] on this system.
+func Channels(name string) (inputs, outputs []string, err error) {
+	if name == JACK {
+		return jack.Ports()
+	}
+	return nil, nil, ErrUnsupported
+}
 
 // Close stops the driver and lets it go.
 func (*Device) Close() error { return nil }
