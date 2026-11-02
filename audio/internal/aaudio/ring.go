@@ -14,6 +14,7 @@ package aaudio
 import (
 	"errors"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -160,4 +161,35 @@ type Info struct {
 	// Exclusive says the stream has the device to itself, and
 	// LowLatency that it runs in low-latency mode.
 	Exclusive, LowLatency bool
+}
+
+// Route is what Android's Java side tells of the device an output
+// plays on. Package aaudio asks it through gunim's Android driver,
+// where the program has it.
+type Route struct {
+	// Known says the driver answered; the rest is zero where not.
+	Known bool
+	// Type is the device's type, as android.media.AudioDeviceInfo
+	// numbers them, or 0 where no output device has the stream's ID.
+	Type int
+	// Bluetooth says the device is a Bluetooth headset, speaker or
+	// hearing aid.
+	Bluetooth bool
+	// Latency is the latency Android's mixer reports for the output
+	// media plays through, as AudioManager's hidden getOutputLatency
+	// tells it, or -1 where it tells none. On Bluetooth it holds the
+	// headset's own delay.
+	Latency time.Duration
+}
+
+// Probe is what a Java AudioTrack playing silence beside the stream
+// reports, for the speaker's log.
+type Probe struct {
+	// Behind is how far behind the frames written the AudioTrack's
+	// public timestamp places the device, or -1.
+	Behind time.Duration
+	// Latency is the hidden AudioTrack.getLatency, or -1.
+	Latency time.Duration
+	// Buffer is the AudioTrack's buffer, in frames.
+	Buffer int
 }

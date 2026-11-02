@@ -33,9 +33,11 @@ typedef struct {
 	gunim_ring *blocks; // input: each block's first frame and length
 } gunim_shared;
 
-// gunim_aa_open opens a stream: an input where input is set. It
-// returns NULL, or what failed.
-const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int input, int rate, int chans, int exclusive);
+// gunim_aa_open opens a stream: an input where input is set. An output
+// is for a game where quick is set, else for media. It returns NULL, or
+// what failed.
+const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int input, int rate, int chans, int exclusive,
+	int quick);
 
 // gunim_aa_api returns the device's Android API level.
 int gunim_aa_api(void);
@@ -44,3 +46,15 @@ int gunim_aa_api(void);
 // were recorded, on CLOCK_MONOTONIC, and the clock now. It returns 0,
 // or AAudio's error.
 int gunim_aa_timestamp(AAudioStream *s, int64_t *pos, int64_t *at, int64_t *now);
+
+// gunim_aa_route asks Java of the output device whose ID is device:
+// its type, 1 where it is Bluetooth, and the latency Android reports for
+// media's output, in ms. It writes n ints at most into r, and returns
+// how many, or 0 where the Android driver is not linked in.
+int gunim_aa_route(int device, int *r, int n);
+
+// gunim_aa_probe plays a second of silence through a Java AudioTrack:
+// it writes into r how far behind the frames written its timestamp
+// places the device, in us, AudioTrack.getLatency in ms, and its buffer
+// in frames. It returns as gunim_aa_route does.
+int gunim_aa_probe(int quick, int *r, int n);

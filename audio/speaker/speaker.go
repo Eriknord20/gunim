@@ -131,6 +131,18 @@ type Options struct {
 	// asks the user the first time, and [State].Problem tells why it
 	// records nothing.
 	Record bool
+	// Quick asks for the shortest delay the system offers to a wireless
+	// headset, for an instrument or a game: a sound heard soon after a
+	// touch. Unset asks for smooth playing, for music. Through
+	// [driver.AAudio] it tells Android the sound is a game's in place of
+	// media's. On Bluetooth LE Audio, Android then sets the link up for
+	// low latency in place of high reliability, which may cost sound
+	// quality. On classic Bluetooth (A2DP) it changes little or nothing:
+	// Android asks the headset for a low-latency mode only for a game's
+	// stream in AAudio's low-latency mode, and a Pixel 8 Pro opens
+	// streams to A2DP earbuds without it. It changes nothing on wires or the phone's own
+	// speaker, nor through other drivers.
+	Quick bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [driver.Channels] lists them; nil plays on its
 	// first two. Through JACK they are the system's ports it lists, and
@@ -508,7 +520,7 @@ func (s *Speaker) SetLatency(d time.Duration) {
 }
 
 // Set changes how the speakers play. A change of driver or rate, or of
-// Buffer, Record, Direct or Outputs while a driver plays, opens the output
+// Buffer, Record, Quick, Direct or Outputs while a driver plays, opens the output
 // again, with a moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
 // far ahead the mixer works from where it is.
@@ -527,7 +539,7 @@ func (s *Speaker) Set(o Options) error {
 	pulls := o.Driver != "" || openSystem != nil
 	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
 		(pulls && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
-		(o.Driver != "" && (o.Record != prev.Record || !slices.Equal(o.Outputs, prev.Outputs))) {
+		(o.Driver != "" && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil
@@ -620,6 +632,11 @@ type State struct {
 	// [Options].Aux fills: as many as Options.Outputs names past two,
 	// while an ASIO driver plays; none through the system's own sound.
 	Aux int
+	// Bluetooth says the sound plays on a Bluetooth headset, speaker
+	// or hearing aid, whose delay is long enough to feel in an
+	// instrument or a game. Through [driver.AAudio] Android tells it;
+	// elsewhere it stays false.
+	Bluetooth bool
 	// Problem is why the output asked for plays otherwise, or not at
 	// all.
 	Problem error
