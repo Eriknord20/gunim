@@ -87,6 +87,10 @@ type aaRun struct {
 	// or 0 where it reports none, as the opener last asked.
 	bluetooth atomic.Bool
 	mixer     atomic.Int64
+	// asked counts the opener's questions of the route, and ask is when
+	// it asks next, on the output's clock.
+	asked int
+	ask   atomic.Int64
 }
 
 // aaOutput plays through AAudio. AAudio's thread takes each buffer from
@@ -135,7 +139,7 @@ type aaOutput struct {
 	// timestamps place the device, in frames, and unstamped what plays
 	// on past that where they leave out part of the route's delay.
 	delay      atomic.Int64
-	unstamped  atomic.Int64
+	unstamped  atomic.Pointer[glide]
 	inDelay    atomic.Int64
 	org, iorg  atomic.Uint64
 	problem    atomic.Pointer[error]
@@ -192,7 +196,16 @@ const (
 	aaMicSlow   = 10 * time.Second
 	// aaRouteEvery is how often the opener asks Android again of the
 	// output's device, as a headset's delay may change while it plays.
+	// It asks sooner too, aaRouteSoon and aaRouteLater after a stream
+	// opens: as earbuds connect, Android may tell the delay of the device
+	// before them at first.
 	aaRouteEvery = 2 * time.Second
+	aaRouteSoon  = 250 * time.Millisecond
+	aaRouteLater = time.Second
+	// aaSlew is how many frames play for each frame the route's delay
+	// moves by, once a stream plays: a delay grown at once would stop
+	// the frame heard, which never goes back, for as long.
+	aaSlew = 2
 	// aaMostCallback is the most frames a callback is counted to ask
 	// for at once, as a Bluetooth headset's large bursts do.
 	aaMostCallback = 16384
@@ -284,8 +297,9 @@ func (a *aaOutput) openOut() error {
 	a.delay.Store(int64(info.Buffer))
 	a.primed.Store(false)
 	a.route(run, true)
+	run.ask.Store(run.opened + int64(aaRouteSoon))
+	a.setUnstamped(run, true)
 	a.run.Store(run)
-	a.setUnstamped(run)
 	a.setTarget()
 	a.s.logf("AAudio plays at %d Hz, %d frames a burst, %d in the device (of %d), device %d, exclusive %v, low latency %v, quick %v",
 		info.Rate, info.Burst, info.Buffer, info.Capacity, info.Device, info.Exclusive, info.LowLatency, a.quick)
@@ -296,18 +310,22 @@ func (a *aaOutput) openOut() error {
 }
 
 // route asks Android of the device run plays on, as it opens, which
-// first says, and every aaRouteEvery after, on the opener: the call goes
-// through Java. It logs what it finds where that changed.
+// first says, and as run.ask says after, on the opener: the call goes
+// through Java. It logs what it finds where that changed. Where Android
+// tells nothing, or no latency, it keeps what it told before.
 func (a *aaOutput) route(run *aaRun, first bool) {
 	r := run.st.Route()
-	mixer := int64(0)
-	if r.Latency > 0 {
-		mixer = audio.FramesAt(r.Latency, a.hz)
+	if !r.Known {
+		return
 	}
 	was, wasMixer := run.bluetooth.Load(), run.mixer.Load()
+	mixer := wasMixer
+	if r.Latency >= 0 {
+		mixer = audio.FramesAt(r.Latency, a.hz)
+	}
 	run.bluetooth.Store(r.Bluetooth)
 	run.mixer.Store(mixer)
-	if r.Known && (first || r.Bluetooth != was || mixer != wasMixer) {
+	if first || r.Bluetooth != was || mixer != wasMixer {
 		a.s.logf("AAudio's device is of type %d, Bluetooth %v; Android's mixer reports %v for media's output",
 			r.Type, r.Bluetooth, r.Latency)
 	}
@@ -322,16 +340,66 @@ func (a *aaOutput) probe(st aaStream) {
 	}
 	a.s.logf("AudioTrack beside it: its timestamp places the device %v behind its frames, buffer %d; "+
 		"getLatency %v; the output tells %v", p.Behind.Round(100*time.Microsecond), p.Buffer, p.Latency,
-		audio.DurationAt(a.delay.Load()+a.unstamped.Load(), a.hz).Round(100*time.Microsecond))
+		audio.DurationAt(a.delay.Load()+a.extra(), a.hz).Round(100*time.Microsecond))
 }
 
-// setUnstamped sets what of run's route its timestamps leave out.
-func (a *aaOutput) setUnstamped(run *aaRun) {
-	u := int64(0)
-	if run.bluetooth.Load() {
-		u = unstamped(a.delay.Load(), int64(run.info.Buffer), int64(run.info.Burst), run.mixer.Load())
+// askRoute asks Android of the route again where run.ask says it is
+// time, and sets when to ask next. It runs on the opener.
+func (a *aaOutput) askRoute() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	run := a.run.Load()
+	if run == nil || a.paused.Load() || a.clock() < run.ask.Load() {
+		// keep waits for none while paused, and Resume wakes it.
+		return
 	}
-	a.unstamped.Store(u)
+	a.route(run, false)
+	run.asked++
+	next := a.clock() + int64(aaRouteEvery)
+	if run.asked == 1 {
+		next = run.opened + int64(aaRouteLater)
+	}
+	run.ask.Store(next)
+}
+
+// A glide is a delay moving from one value to another, a frame for each
+// aaSlew played, from a time on the output's clock.
+type glide struct{ from, to, at int64 }
+
+// now returns where s stands at time now, at rate hz.
+func (s *glide) now(now int64, hz int) int64 {
+	moved := audio.FramesAt(time.Duration(max(0, now-s.at)), hz) / aaSlew
+	if s.to >= s.from {
+		return min(s.to, s.from+moved)
+	}
+	return max(s.to, s.from-moved)
+}
+
+// extra returns what plays on past the output's timestamps, in frames,
+// as it stands now.
+func (a *aaOutput) extra() int64 {
+	if s := a.unstamped.Load(); s != nil {
+		return s.now(a.clock(), a.hz)
+	}
+	return 0
+}
+
+// setUnstamped sets what of run's route its timestamps leave out: at
+// once where jump says, as a stream opens, and otherwise moving there
+// from where it stands, a frame for each aaSlew played, either way.
+func (a *aaOutput) setUnstamped(run *aaRun, jump bool) {
+	want := int64(0)
+	if run.bluetooth.Load() {
+		want = unstamped(a.delay.Load(), int64(run.info.Buffer), int64(run.info.Burst), run.mixer.Load())
+	}
+	now := a.clock()
+	was := a.unstamped.Load()
+	switch {
+	case jump || was == nil:
+		a.unstamped.Store(&glide{want, want, now})
+	case want != was.to:
+		a.unstamped.Store(&glide{was.now(now, a.hz), want, now})
+	}
 }
 
 // unstamped returns how much of a Bluetooth route's delay a stream's
@@ -342,17 +410,21 @@ func (a *aaOutput) setUnstamped(run *aaRun) {
 // A shared stream's timestamp on Bluetooth may come from the mixer
 // rather than the device, where the device tells no position: it then
 // places the device at most a burst past the stream's own buffer, and
-// leaves out all the mixer reports, the headset's delay with it. Java's
-// AudioTrack.getTimestamp takes the mixer's latency off such a
-// timestamp, and so plays in step there; AAudio's does not. A timestamp
-// from the device counts the mixer's latency itself: whatever it places
-// past the buffer and a burst counts as part of it, and only the rest of
-// the mixer's latency is added. Where the two agree, that rest is a
-// burst at most.
+// leaves out all the mixer reports, the headset's delay with it. On a
+// Pixel 8 Pro with WF-1000XM4 earbuds, AAudio's timestamp places the
+// device about 50 ms behind, Java's AudioTrack.getTimestamp about 40 ms,
+// and the earbuds play about 270 ms behind; AudioManager's hidden
+// getOutputLatency reports 200 ms, the headset's delay with the
+// Bluetooth HAL's buffer. A timestamp from the device counts the mixer's
+// latency itself: whatever it places past the buffer and a burst counts
+// as part of it, and only the rest of the mixer's latency is added.
+// Where the two agree, that rest is a burst at most.
 //
-// Sources: AudioTrack::getTimestamp_l and ExtendedTimestamp's
-// getBestTimestamp in AOSP's frameworks/av (media/libaudioclient), and
-// AudioStreamTrack::getTimestamp in media/libaaudio/src/legacy.
+// Sources: ExtendedTimestamp's getBestTimestamp in AOSP's frameworks/av
+// (media/libaudioclient), AudioStreamTrack::getTimestamp in
+// media/libaaudio/src/legacy, PlaybackThread::latency_l in
+// services/audioflinger, and out_get_latency_ms in the Bluetooth
+// module's system/audio_bluetooth_hw.
 func unstamped(delay, buffer, burst, mixer int64) int64 {
 	if mixer <= 0 {
 		return 0
@@ -617,24 +689,22 @@ func (a *aaOutput) wakeFeed() {
 // may try next, until the output closes. The feed plays on meanwhile.
 func (a *aaOutput) keep() {
 	defer close(a.kept)
-	ask := time.NewTicker(aaRouteEvery)
-	defer ask.Stop()
 	for {
-		var next <-chan time.Time
+		var next, ask <-chan time.Time
 		if wait, ok := a.keepOpen(); ok {
 			next = time.After(wait)
+		}
+		if run := a.run.Load(); run != nil && !a.paused.Load() {
+			// Resume wakes the opener, to ask again.
+			ask = time.After(time.Duration(max(0, run.ask.Load()-a.clock())))
 		}
 		select {
 		case <-a.quit:
 			return
 		case <-a.reopen:
 		case <-next:
-		case <-ask.C:
-			a.mu.Lock()
-			if run := a.run.Load(); run != nil && !a.paused.Load() {
-				a.route(run, false)
-			}
-			a.mu.Unlock()
+		case <-ask:
+			a.askRoute()
 		}
 	}
 }
@@ -731,7 +801,7 @@ func (a *aaOutput) failed(run *aaRun, now int64) bool {
 func (a *aaOutput) poll() {
 	if now := a.clock(); a.s.debug && now-a.told >= int64(time.Second) {
 		a.told = now
-		a.tell("plays", a.run.Load(), false, a.delay.Load()+a.unstamped.Load())
+		a.tell("plays", a.run.Load(), false, a.delay.Load()+a.extra())
 		a.tell("records", a.irun.Load(), true, a.inDelay.Load())
 	}
 	if run := a.run.Load(); run != nil {
@@ -741,7 +811,7 @@ func (a *aaOutput) poll() {
 		} else if ok {
 			a.delay.Store(smooth(a.delay.Load(), behind))
 		}
-		a.setUnstamped(run)
+		a.setUnstamped(run, false)
 		if x := run.st.XRuns(); x > run.xruns {
 			if now := a.clock(); now-a.settle.Load() > int64(aaSettle) {
 				a.ranDry(min(x-run.xruns, 100), now)
@@ -783,7 +853,7 @@ func (a *aaOutput) tell(does string, run *aaRun, input bool, told int64) {
 		does, pos, time.Duration(cnow-at).Round(time.Microsecond), carried,
 		time.Duration(gap*1e9).Round(100*time.Microsecond), audio.DurationAt(told, a.hz).Round(100*time.Microsecond),
 		run.odd, info.Buffer, info.Capacity, info.Burst, info.Exclusive, run.st.XRuns(),
-		run.bluetooth.Load(), audio.DurationAt(run.mixer.Load(), a.hz), audio.DurationAt(a.unstamped.Load(), a.hz))
+		run.bluetooth.Load(), audio.DurationAt(run.mixer.Load(), a.hz), audio.DurationAt(a.extra(), a.hz))
 }
 
 // fit reads run's timestamp into org, the origin of its frames, where
@@ -855,7 +925,7 @@ func (a *aaOutput) setTarget() {
 	if run := a.run.Load(); run != nil {
 		least += 2 * max(run.most.Load(), int64(run.info.Burst))
 	}
-	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load()-a.unstamped.Load(), least)
+	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load()-a.extra(), least)
 	a.target.Store(min(t, a.q.Size()-int64(a.chunk())))
 }
 
@@ -957,7 +1027,7 @@ func (a *aaOutput) stamp(pos int64) int64 {
 	if math.IsNaN(out) {
 		out = float64(run.sh.Frames.Load()-a.delay.Load()) - float64(now)*k
 	}
-	out -= float64(a.unstamped.Load())
+	out -= float64(a.extra())
 	in := math.Float64frombits(a.iorg.Load())
 	if math.IsNaN(in) {
 		in = float64(irun.sh.Frames.Load()+a.inDelay.Load()) - float64(now)*k
@@ -972,9 +1042,9 @@ func (a *aaOutput) playing(run *aaRun) (at, carried int64) {
 	carried = run.sh.Frames.Load()
 	org := math.Float64frombits(a.org.Load())
 	if math.IsNaN(org) {
-		return carried - a.delay.Load() - a.unstamped.Load(), carried
+		return carried - a.delay.Load() - a.extra(), carried
 	}
-	at = int64(org+float64(a.clock())*float64(a.hz)/1e9) - a.unstamped.Load()
+	at = int64(org+float64(a.clock())*float64(a.hz)/1e9) - a.extra()
 	// Not past what it was given, as while it is paused, nor further
 	// behind than the speaker ever works.
 	return min(max(at, carried-audio.FramesAt(MaxLatency, a.hz)), carried), carried
@@ -1004,7 +1074,7 @@ func (a *aaOutput) setAhead(d time.Duration) {
 }
 
 func (a *aaOutput) latency() time.Duration {
-	return audio.DurationAt(a.target.Load()+a.delay.Load()+a.unstamped.Load(), a.hz)
+	return audio.DurationAt(a.target.Load()+a.delay.Load()+a.extra(), a.hz)
 }
 
 func (a *aaOutput) rate() int { return a.hz }
@@ -1014,7 +1084,7 @@ func (a *aaOutput) fill(st *State) {
 		st.Driver = driver.AAudio
 	}
 	info := driver.Info{Driver: driver.AAudio, Rate: a.hz, Bits: 32, Float: true, Outputs: 2, Played: []int{0, 1},
-		Latency: int(a.delay.Load() + a.unstamped.Load())}
+		Latency: int(a.delay.Load() + a.extra())}
 	if run := a.run.Load(); run != nil {
 		st.Bluetooth = run.bluetooth.Load()
 		info.Buffer, info.MinBuffer, info.PreferredBuffer = run.info.Burst, run.info.Burst, run.info.Burst

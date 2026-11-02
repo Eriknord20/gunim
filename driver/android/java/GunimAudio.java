@@ -63,6 +63,7 @@ final class GunimAudio {
 	// but open to applications, as ExoPlayer calls AudioTrack's
 	// getLatency. It is AudioFlinger's latency of the output media plays
 	// through: the HAL's, which on Bluetooth counts the headset's delay.
+	// It returns -1 where the call fails.
 	private static synchronized int latency(AudioManager am) {
 		if (!looked) {
 			looked = true;
@@ -78,7 +79,8 @@ final class GunimAudio {
 		try {
 			return (Integer) outputLatency.invoke(am, AudioManager.STREAM_MUSIC);
 		} catch (Exception e) {
-			outputLatency = null;
+			// As where the audio service failed a moment: the next call
+			// may answer.
 			return -1;
 		}
 	}

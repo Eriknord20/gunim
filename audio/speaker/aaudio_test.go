@@ -405,8 +405,22 @@ func TestAAudioOpensAgainWhereTheDeviceGoes(t *testing.T) {
 // played as the block's first frame was at the microphone, from the
 // first block on, and the blocks follow one another without a gap.
 func TestAAudioStampsWhatItRecords(t *testing.T) {
+	t.Run("speaker", func(t *testing.T) { testAAudioStamps(t, 4800, nil) })
+	// On a Bluetooth headset whose timestamps, the mixer's, leave out
+	// what Android's mixer reports, the stamps count it too.
+	t.Run("Bluetooth", func(t *testing.T) {
+		testAAudioStamps(t, 600, &aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 220 * time.Millisecond})
+	})
+}
+
+func testAAudioStamps(t *testing.T, delay int64, route *aaudio.Route) {
 	synctest.Test(t, func(t *testing.T) {
-		f := &fakeAA{rate: 48000, burst: 240, delay: 4800, ahead: 96}
+		f := &fakeAA{rate: 48000, burst: 240, delay: delay, ahead: 96}
+		f.route.Store(route)
+		extra := int64(0)
+		if route != nil {
+			extra = unstamped(f.delay, 2*240, 240, audio.FramesAt(route.Latency, 48000))
+		}
 		useFakeAA(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
@@ -440,7 +454,7 @@ func TestAAudioStampsWhatItRecords(t *testing.T) {
 			// Frame pos was at the microphone as the input's device moved
 			// pos - ahead frames; the output's, the same, played that less
 			// its delay.
-			if want := b.pos - f.ahead - f.delay; abs64(b.heard-want) > 2 {
+			if want := b.pos - f.ahead - f.delay - extra; abs64(b.heard-want) > 2 {
 				t.Fatalf("block %d, from frame %d, is stamped %d, want %d", i, b.pos, b.heard, want)
 			}
 		}
@@ -881,8 +895,18 @@ func TestAAudioCountsWhatBluetoothStampsLeaveOut(t *testing.T) {
 		if !s.State().Bluetooth {
 			t.Error("on the headset the state says it is not Bluetooth")
 		}
-		f.route.Store(&aaudio.Route{Known: true, Type: 2, Latency: 40 * time.Millisecond})
+		// Android tells nothing a while, as where its audio service
+		// failed: the output keeps what it told before.
+		f.route.Store(&aaudio.Route{})
 		time.Sleep(aaRouteEvery + 200*time.Millisecond)
+		check("with the route untold", f.delay+extra)
+		if !s.State().Bluetooth {
+			t.Error("with the route untold the state says it is not Bluetooth")
+		}
+		f.route.Store(&aaudio.Route{Known: true, Type: 2, Latency: 40 * time.Millisecond})
+		// The opener asks within aaRouteEvery, and the delay moves to the
+		// speaker's over twice its own length.
+		time.Sleep(aaRouteEvery + aaSlew*mixer + 200*time.Millisecond)
 		check("on the speaker", f.delay)
 		if s.State().Bluetooth {
 			t.Error("on the speaker the state says it is Bluetooth")
@@ -907,6 +931,60 @@ func TestAAudioQuickMarksTheStream(t *testing.T) {
 		outs, _ := f.streams()
 		if len(outs) != 2 || outs[0].c.quick || !outs[1].c.quick {
 			t.Fatalf("opened %d outputs; want two, the second alone quick", len(outs))
+		}
+	})
+}
+
+// TestAAudioMovesTheBluetoothDelaySmoothly connects a fake headset whose
+// delay Android tells late, as the Pixel 8 Pro told 20 ms at first and
+// 200 ms a moment later: the opener asks again soon after the stream
+// opens, and the frame heard moves on every 10 ms at half speed or
+// more, never stopping, until it counts the delay in full.
+func TestAAudioMovesTheBluetoothDelaySmoothly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 960, delay: 2400}
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 20 * time.Millisecond})
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		openAA(t, m, Options{Latency: 20 * time.Millisecond}, v)
+		outs, _ := f.streams()
+		time.Sleep(100 * time.Millisecond)
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 200 * time.Millisecond})
+		step := audio.FramesAt(10*time.Millisecond, 48000)
+		h := m.Heard()
+		for i := range 100 {
+			time.Sleep(10 * time.Millisecond)
+			synctest.Wait()
+			got := m.Heard()
+			if d := got - h; h > 0 && (d < step/2-2 || d > step*3/2+2) {
+				t.Fatalf("at %v the frame heard moved %d frames in 10 ms; want %d to %d", time.Duration(i)*10*time.Millisecond,
+					d, step/2, step*3/2)
+			}
+			h = got
+		}
+		want := outs[0].carried(aaClock()) - f.delay - audio.FramesAt(200*time.Millisecond, 48000)
+		if got := m.Heard(); abs64(got-want) > 2 {
+			t.Errorf("after a second the speaker hears frame %d; the device plays %d", got, want)
+		}
+	})
+}
+
+// TestAAudioWorksAheadOfTheBluetoothDelay asks for 400 ms of latency on
+// a headset whose timestamps leave out 220 ms: the latency stays 400 ms,
+// the ring holding the less.
+func TestAAudioWorksAheadOfTheBluetoothDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 960, delay: 2400}
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 220 * time.Millisecond})
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openAA(t, m, Options{Latency: 400 * time.Millisecond, Fixed: true}, v)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if l := s.Latency(); l < 390*time.Millisecond || l > 420*time.Millisecond {
+			t.Errorf("the latency is %v; want 400 ms", l)
 		}
 	})
 }

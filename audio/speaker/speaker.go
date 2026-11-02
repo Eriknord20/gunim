@@ -137,10 +137,11 @@ type Options struct {
 	// [driver.AAudio] it tells Android the sound is a game's in place of
 	// media's. On Bluetooth LE Audio, Android then sets the link up for
 	// low latency in place of high reliability, which may cost sound
-	// quality. On classic Bluetooth (A2DP) it asks
-	// for the low-latency mode where the phone and headset have one, and
-	// changes nothing elsewhere. It changes nothing on wires or the
-	// phone's own speaker, nor through other drivers.
+	// quality. On classic Bluetooth (A2DP) it changes little or nothing:
+	// Android asks the headset for a low-latency mode only for a game's
+	// stream in AAudio's low-latency mode, and a Pixel 8 Pro opens
+	// streams to A2DP earbuds without it. It changes nothing on wires or the phone's own
+	// speaker, nor through other drivers.
 	Quick bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [driver.Channels] lists them; nil plays on its
