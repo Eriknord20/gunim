@@ -470,23 +470,27 @@ func (s *scrolling) shift(d float32) {
 }
 
 // reveal scrolls just far enough to bring r, in the widget's own
-// space, fully into view, with a little room around it.
+// space (from the top of the view, not of the content), fully into
+// view, with a little room around it. For a box in the content, use
+// revealContent.
 func (s *scrolling) reveal(r geom.Rect, u *gunim.UI) {
-	const room = 8
-	offset := s.offset.Value()
-	switch {
-	case r.Min.Y < 0:
-		s.ScrollTo(offset+r.Min.Y-room, Quick.Get(u.Theme()))
-	case r.Max.Y > s.viewport:
-		s.ScrollTo(offset+r.Max.Y-s.viewport+room, Quick.Get(u.Theme()))
-	}
+	// r is where the view shows it now, at the offset the spring has
+	// reached.
+	s.revealContent(r.Add(geom.Pt(0, s.offset.Value())), u)
 }
 
 // revealContent is reveal for r in the content's space, measured from
-// its top rather than from the top of the view.
+// its top rather than from the top of the view. It counts from where
+// the view is going, not where it is on the way: a reveal while a
+// scroll still moves keeps to the place that scroll lands.
 func (s *scrolling) revealContent(r geom.Rect, u *gunim.UI) {
-	off := s.offset.Value()
-	s.reveal(geom.Rect{Min: geom.Pt(r.Min.X, r.Min.Y-off), Max: geom.Pt(r.Max.X, r.Max.Y-off)}, u)
+	const room = 8
+	switch {
+	case r.Min.Y < s.target:
+		s.ScrollTo(r.Min.Y-room, Quick.Get(u.Theme()))
+	case r.Max.Y > s.target+s.viewport:
+		s.ScrollTo(r.Max.Y-s.viewport+room, Quick.Get(u.Theme()))
+	}
 }
 
 // fit takes the content's height and the view's size from a layout,

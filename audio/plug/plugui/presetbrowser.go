@@ -171,6 +171,7 @@ func (b *PresetBrowser) Follow(u *gunim.UI) {
 	if b.query == "" && ok && (cur.Bank != b.bank || cur.Group != b.group) && b.hasGroup(cur.Bank, cur.Group) {
 		b.bank, b.group = cur.Bank, cur.Group
 		b.fill(u)
+		b.jumpToCurrent()
 	} else {
 		b.glide(u)
 	}
@@ -183,11 +184,25 @@ func (b *PresetBrowser) reveal(u *gunim.UI) {
 		return
 	}
 	if i := b.groups.index(b.bank, b.group); i >= 0 {
-		b.gs.Reveal(b.groups.rowRect(i), u)
+		b.gs.RevealContent(b.groups.rowRect(i), u)
 	}
 	if i := b.presets.current(); i >= 0 {
-		b.ps.Reveal(b.presets.rowRect(i), u)
+		b.ps.RevealContent(b.presets.rowRect(i), u)
 	}
+}
+
+// jumpToCurrent puts the presets column, new content, where the preset
+// playing shows, at once, as a group picked opens at its top. The
+// column's scroll still holds the old group's height, so a scroll
+// there would stop short of a row past it.
+func (b *PresetBrowser) jumpToCurrent() {
+	y := float32(0)
+	if i := b.presets.current(); i >= 0 {
+		const room = 8
+		r := b.presets.rows[i]
+		y = max(0, r.y+r.h+room-b.colH)
+	}
+	b.ps.JumpTo(y)
 }
 
 // showGroup shows the presets of a group: while no search runs, the
