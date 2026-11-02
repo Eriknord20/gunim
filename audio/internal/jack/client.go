@@ -43,7 +43,11 @@ type Client struct {
 	// input ring the next frame is.
 	polled struct{ short, xruns, lost, graphs uint64 }
 	seen   uint64
-	closed bool
+	// closing says Close has begun: SinceCycle, which any goroutine
+	// calls, then calls libjack no more, and Close waits out the
+	// readers in it before the client is let go.
+	closing atomic.Bool
+	readers atomic.Int32
 }
 
 // Available reports whether a JACK server answers.
@@ -98,6 +102,9 @@ func (cl *Client) start(cfg Config) error {
 	info := Info{Client: a.clientName(c), Library: a.path, Rate: rate, Buffer: buffer,
 		Outputs: a.ports(c, portIsPhysical|portIsInput), Inputs: a.ports(c, portIsPhysical|portIsOutput)}
 	info.Played = layout(cfg.Outputs, len(info.Outputs))
+	if len(info.Played) == 0 {
+		return fmt.Errorf("jack: the server has none of the outputs %v", cfg.Outputs)
+	}
 	if cfg.Record {
 		info.Recorded = min(len(info.Inputs), MaxPorts)
 	}
@@ -353,9 +360,11 @@ func (cl *Client) Read(dst []float32) (n int, at int64, ok bool) {
 
 // SinceCycle returns how many frames have passed since the server
 // started the buffer it plays now: the server's frame time. It is 0
-// once the server has shut down.
+// once the server has shut down, or the client closes.
 func (cl *Client) SinceCycle() int {
-	if atomic.LoadUint64(&cl.st.shutdown) != 0 {
+	cl.readers.Add(1)
+	defer cl.readers.Add(-1)
+	if cl.closing.Load() || atomic.LoadUint64(&cl.st.shutdown) != 0 {
 		return 0
 	}
 	return int(cl.a.sinceCycle(cl.c))
@@ -413,11 +422,15 @@ func (cl *Client) Err() error {
 }
 
 // Close stops the client and lets it go.
+// Calls after the first return nil.
 func (cl *Client) Close() error {
-	if cl.closed {
+	if !cl.closing.CompareAndSwap(false, true) {
 		return nil
 	}
-	cl.closed = true
+	// A SinceCycle that read closing as false may be in libjack still.
+	for cl.readers.Load() > 0 {
+		time.Sleep(10 * time.Microsecond)
+	}
 	cl.a.deactivate(cl.c)
 	err := error(nil)
 	if cl.a.clientClose(cl.c) != 0 && atomic.LoadUint64(&cl.st.shutdown) == 0 {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -439,4 +441,76 @@ func TestRingsAcrossThreads(t *testing.T) {
 	if last == 0 || read == 0 {
 		t.Fatalf("played up to %v, read %d", last, read)
 	}
+}
+
+// Outputs naming none fails to open, and lets the client go.
+func TestNoOutputsFails(t *testing.T) {
+	f := newFakeServer(48000, 128, []string{"a", "b"}, nil)
+	f.use(t)
+	if _, err := Open(Config{Outputs: []int{}}); err == nil {
+		t.Fatal("opened with no outputs")
+	}
+	if f.closes != 1 {
+		t.Fatalf("closes = %d, want 1", f.closes)
+	}
+}
+
+// SinceCycle, called from any goroutine, never reaches libjack once the
+// client is closed: Close waits out a call in libjack before it lets the
+// client go, and calls after return 0 at once.
+func TestSinceCycleNeverOutlivesTheClient(t *testing.T) {
+	f := newFakeServer(48000, 128, []string{"a", "b"}, nil)
+	cl := openFake(t, f, Config{})
+	var gone atomic.Bool
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	cl.a.sinceCycle = func(uintptr) uint32 {
+		if gone.Load() {
+			t.Error("jack_frames_since_cycle_start called on a closed client")
+		}
+		once.Do(func() {
+			close(inside)
+			<-release
+		})
+		return 7
+	}
+	close0 := cl.a.clientClose
+	cl.a.clientClose = func(c uintptr) int32 {
+		gone.Store(true)
+		return close0(c)
+	}
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					cl.SinceCycle()
+				}
+			}
+		}()
+	}
+	<-inside
+	closed := make(chan error)
+	go func() { closed <- cl.Close() }()
+	select {
+	case <-closed:
+		t.Fatal("Close let the client go while SinceCycle was in libjack")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if got := cl.SinceCycle(); got != 0 {
+		t.Errorf("SinceCycle = %d after Close, want 0", got)
+	}
+	close(stop)
+	wg.Wait()
 }

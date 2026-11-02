@@ -34,6 +34,9 @@ type fakeJack struct {
 	ins    []fakeIn
 	closed bool
 	failed error
+	// closeErr is what Close returns; closes counts its calls.
+	closeErr error
+	closes   int
 }
 
 type fakeIn struct {
@@ -61,6 +64,9 @@ func (f *fakeJack) open(c jack.Config) (jackDevice, error) {
 	}
 	f.cfg, f.opens, f.closed = c, f.opens+1, false
 	f.info.Played = jackLayout(c.Outputs, len(f.info.Outputs))
+	if len(f.info.Played) == 0 {
+		return nil, errors.New("jack: the server has none of the outputs []")
+	}
 	if c.Record {
 		f.info.Recorded = len(f.info.Inputs)
 	} else {
@@ -201,7 +207,8 @@ func (d fakeJackDevice) Close() error {
 	d.f.mu.Lock()
 	defer d.f.mu.Unlock()
 	d.f.closed = true
-	return nil
+	d.f.closes++
+	return d.f.closeErr
 }
 
 // jackOf returns the JACK output s plays through.
@@ -513,5 +520,92 @@ func TestJackSuspendPauses(t *testing.T) {
 	f.mu.Unlock()
 	if paused {
 		t.Fatal("resumed, the server stays paused")
+	}
+}
+
+// held, Heard and Anchor read the output from other goroutines, as the
+// UI does each frame, while the output opens again and closes: nothing
+// races, and nothing reads a device past its close but SinceCycle,
+// which package jack guards.
+func TestJackHeldWhileReopening(t *testing.T) {
+	useJack(t, stereoInfo())
+	m := audio.NewMixer()
+	s, err := Open(m, Options{Driver: asio.JACK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = s.held()
+				_ = m.Heard()
+				_ = s.Anchor()
+				_ = s.Latency()
+				_ = s.State()
+			}
+		}()
+	}
+	o := Options{Driver: asio.JACK}
+	for i := range 30 {
+		o.Latency = time.Duration(20+i) * time.Millisecond
+		o.Record = i%2 == 0
+		if err := s.Set(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(stop)
+	wg.Wait()
+}
+
+// A client that fails to close is let go all the same: the speaker
+// opens the next, and closes it, with no second close of the first.
+func TestJackFailedCloseLetsGo(t *testing.T) {
+	f := useJack(t, stereoInfo())
+	s, err := Open(audio.NewMixer(), Options{Driver: asio.JACK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.closeErr = errors.New("jack: closing the client failed")
+	f.mu.Unlock()
+	first := jackOf(t, s)
+	if err := s.Set(Options{Driver: asio.JACK, Record: true}); err != nil {
+		t.Fatalf("Set = %v, want the output opened again", err)
+	}
+	if jackOf(t, s) == first {
+		t.Fatal("the speaker kept the output that failed to close")
+	}
+	if err := first.close(); err != nil {
+		t.Errorf("a second close = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closes != 2 {
+		t.Errorf("clients closed %d times, want 2", f.closes)
+	}
+}
+
+// Outputs naming none fails to open JACK, as an ASIO driver fails, and
+// the speaker does not start a pump of no channels.
+func TestJackNoOutputsFails(t *testing.T) {
+	useJack(t, stereoInfo())
+	_, err := openJackOutput(&Speaker{debug: false}, Options{Driver: asio.JACK, Outputs: []int{}})
+	if err == nil {
+		t.Fatal("JACK opened with no outputs")
 	}
 }

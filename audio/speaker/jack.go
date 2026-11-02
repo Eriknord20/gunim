@@ -71,10 +71,11 @@ type jackOutput struct {
 	primed, paused atomic.Bool
 	tap            atomic.Pointer[duplex.Tap]
 	// mu guards info.
-	mu   sync.Mutex
-	info jack.Info
-	quit chan struct{}
-	done chan struct{}
+	mu      sync.Mutex
+	info    jack.Info
+	quit    chan struct{}
+	done    chan struct{}
+	closing sync.Once
 	// What the pump alone keeps: the frames it wrote, ever; the server
 	// having shut down; and the cycles as the pump last saw them change.
 	written  int64
@@ -319,11 +320,19 @@ func (j *jackOutput) resume() error {
 	return nil
 }
 
+// close stops the pump and lets the client go, once: later calls do
+// nothing. A client that fails to close is gone all the same, so the
+// failure is logged, not returned: the speaker would keep the output.
 func (j *jackOutput) close() error {
-	if tap := j.tap.Load(); tap != nil {
-		duplex.Withdraw(tap)
-	}
-	close(j.quit)
-	<-j.done
-	return j.dev.Close()
+	j.closing.Do(func() {
+		if tap := j.tap.Load(); tap != nil {
+			duplex.Withdraw(tap)
+		}
+		close(j.quit)
+		<-j.done
+		if err := j.dev.Close(); err != nil {
+			j.s.logf("JACK: %v", err)
+		}
+	})
+	return nil
 }
