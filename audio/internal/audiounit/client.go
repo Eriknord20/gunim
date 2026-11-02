@@ -92,8 +92,19 @@ func Open(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	playing.Store(cl.dev)
 	return cl, nil
 }
+
+// playing is the output device of the client opened last, until it
+// closes.
+var playing atomic.Uint32
+
+// Playing returns the output device, by its AudioObjectID, that a
+// client plays through now, or 0 where none plays. A program that sets
+// a device's rate or buffer leaves this one's be: either change would
+// have the client open again.
+func Playing() uint32 { return playing.Load() }
 
 func (cl *Client) logf(format string, args ...any) {
 	if cl.log != nil {
@@ -841,6 +852,7 @@ func (cl *Client) Close() error {
 		return nil
 	}
 	cl.closed = true
+	playing.CompareAndSwap(cl.dev, 0)
 	var err error
 	cl.a.masked(func() { err = cl.teardown() })
 	return err

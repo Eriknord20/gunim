@@ -3,6 +3,7 @@ package speaker
 import (
 	"fmt"
 	"math/bits"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,7 +71,10 @@ var openAU = func(c audiounit.Config) (auDevice, error) {
 type auOutput struct {
 	s   *Speaker
 	dev auDevice
-	hz  int
+	// byName says Options.Driver named Core Audio: State tells it as
+	// the driver. Otherwise it plays as the system's own sound.
+	byName bool
+	hz     int
 	// chans is how many channels a frame of the ring holds: the
 	// mixer's pair, or the one it is averaged onto, then those
 	// Options.Aux fills.
@@ -120,10 +124,17 @@ func auBuffer(o Options, ahead time.Duration, rate int) int {
 	return min(max(1<<(bits.Len64(uint64(quarter))-1), 64), 1024)
 }
 
+// coreAudioFirst plays through Core Audio's HAL output unit where
+// Options names no driver, on macOS; a test sets it elsewhere.
+var coreAudioFirst = runtime.GOOS == "darwin"
+
+// driverFirst says a driver plays where Options names none.
+func driverFirst() bool { return aaudioFirst || wasapiFirst || coreAudioFirst }
+
 // openAUOutput opens Core Audio's default output, playing on the
 // channels Options.Outputs names, and the default input where
-// Options.Record says.
-func openAUOutput(s *Speaker, o Options) (*auOutput, error) {
+// Options.Record says. byName says Options.Driver named it.
+func openAUOutput(s *Speaker, o Options, byName bool) (*auOutput, error) {
 	buffer := auBuffer(o, time.Duration(s.ahead.Load()), o.rate())
 	dev, err := openAU(audiounit.Config{Outputs: o.Outputs, Record: o.Record, Buffer: buffer, Hold: MaxLatency, Log: s.logf})
 	if err != nil {
@@ -138,7 +149,7 @@ func openAUOutput(s *Speaker, o Options) (*auOutput, error) {
 		s.auChurn.Store(0)
 	}
 	s.auOpened.Store(now.UnixNano())
-	u := &auOutput{s: s, dev: dev, hz: dev.Rate(), chans: dev.Channels(), info: info, opened: now, churn: churn,
+	u := &auOutput{s: s, dev: dev, byName: byName, hz: dev.Rate(), chans: dev.Channels(), info: info, opened: now, churn: churn,
 		quit: make(chan struct{}), done: make(chan struct{})}
 	if churn >= auChurned {
 		err := fmt.Errorf("speaker: Core Audio: the devices changed %d times in a row as the output opened, "+
@@ -362,7 +373,9 @@ func (u *auOutput) fill(st *State) {
 	u.mu.Lock()
 	i := u.info
 	u.mu.Unlock()
-	st.Driver = driver.CoreAudio
+	if u.byName {
+		st.Driver = driver.CoreAudio
+	}
 	st.Aux = max(u.chans-2, 0)
 	st.Info = &driver.Info{Driver: driver.CoreAudio, Rate: i.Rate, Buffer: i.Buffer, MinBuffer: i.MinBuffer,
 		MaxBuffer: i.MaxBuffer, PreferredBuffer: i.Buffer, Latency: i.Buffer + i.Safety + i.Latency, Bits: 32,

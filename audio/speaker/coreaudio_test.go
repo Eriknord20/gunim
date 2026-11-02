@@ -587,8 +587,47 @@ func TestCoreAudioSuspendAndClose(t *testing.T) {
 func TestCoreAudioFailsOver(t *testing.T) {
 	f := useAU(t, macInfo())
 	f.failed = audiounit.ErrNoOutput
-	_, err := openAUOutput(&Speaker{}, Options{Driver: driver.CoreAudio})
+	_, err := openAUOutput(&Speaker{}, Options{Driver: driver.CoreAudio}, true)
 	if !errors.Is(err, audiounit.ErrNoOutput) {
 		t.Fatalf("openAUOutput = %v", err)
+	}
+}
+
+// On macOS, with no driver named, the speaker plays through Core Audio
+// as the system's own sound: State names no driver but tells Core
+// Audio's Info, and a change of Record, Outputs or Buffer opens it
+// again, as it does a driver.
+func TestCoreAudioIsTheDefault(t *testing.T) {
+	was := coreAudioFirst
+	coreAudioFirst = true
+	t.Cleanup(func() { coreAudioFirst = was })
+	f := useAU(t, macInfo())
+	s, err := Open(audio.NewMixer(), Options{Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f.mu.Lock()
+	opens, rec := f.opens, f.cfg.Record
+	f.mu.Unlock()
+	if opens != 1 || !rec {
+		t.Fatalf("opened Core Audio %d times, recording %v", opens, rec)
+	}
+	st := s.State()
+	if st.Driver != "" || st.Info == nil || st.Info.Driver != driver.CoreAudio || st.Info.Inputs != 2 ||
+		st.Problem != nil {
+		t.Fatalf("state %+v, info %+v", st, st.Info)
+	}
+	for i, o := range []Options{{}, {Outputs: []int{1, 0}}, {Outputs: []int{1, 0}, Buffer: 512}} {
+		if err := s.Set(o); err != nil {
+			t.Fatal(err)
+		}
+		f.mu.Lock()
+		opens, cfg := f.opens, f.cfg
+		f.mu.Unlock()
+		if opens != 2+i || cfg.Record != o.Record || !slices.Equal(cfg.Outputs, o.Outputs) ||
+			(o.Buffer != 0 && cfg.Buffer != o.Buffer) {
+			t.Fatalf("after Set(%+v): opened %d times, with %+v", o, opens, cfg)
+		}
 	}
 }

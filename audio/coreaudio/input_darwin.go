@@ -12,10 +12,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/marrasen/gunim/audio/internal/audiounit"
 	"github.com/marrasen/gunim/audio/internal/micaccess"
 )
 
-// The inputs record by an IOProc of their own, as the output plays: the
+// The inputs record by an IOProc of their own: the
 // device's thread hands each buffer on as it fills. Each input is a
 // slot of inputs, which the one callback, made once, finds by the
 // client data Core Audio hands it back.
@@ -265,10 +266,9 @@ func OpenInput(c InputConfig) (*Input, error) {
 		return nil, fmt.Errorf("coreaudio: %s has no inputs", in.info.Device)
 	}
 
-	// The device the output plays through keeps its rate and its buffer:
-	// either set here would open the output again.
-	out := current.Load()
-	playing := out != nil && out.dev == dev
+	// The device the speaker plays through keeps its rate and its
+	// buffer: either set here would open the speaker again.
+	playing := audiounit.Playing() == dev
 	followed := c.Rate > 0 && inputFollowed[dev] == c.Rate
 	var refused error
 	if c.Rate > 0 && !playing && !followed {

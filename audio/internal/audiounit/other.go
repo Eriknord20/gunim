@@ -15,6 +15,9 @@ func Ports() (inputs, outputs []string, err error) { return nil, nil, ErrUnsuppo
 // ControlPanel opens Audio MIDI Setup; here it returns [ErrUnsupported].
 func ControlPanel() error { return ErrUnsupported }
 
+// Playing returns the output device a client plays through: none, here.
+func Playing() uint32 { return 0 }
+
 // Open opens a client; here it returns [ErrUnsupported].
 func Open(Config) (*Client, error) { return nil, ErrUnsupported }
 

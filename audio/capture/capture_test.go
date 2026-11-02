@@ -341,4 +341,15 @@ func TestDriverInputsListsTheDriversInputsBeforeTheyOpen(t *testing.T) {
 	if _, ok := driverDevice(speaker.State{Driver: "Out only", Info: &driver.Info{}}, nil); ok {
 		t.Fatal("a driver with no inputs lists them")
 	}
+	// A driver playing as the system's own sound, as Core Audio does on
+	// macOS where Options names no driver, lists its inputs too.
+	sys := speaker.State{Rate: 48000, Info: &driver.Info{Driver: driver.CoreAudio, Inputs: 2}}
+	d, ok = driverDevice(sys, nil)
+	if !ok || d.ID != driverPrefix+driver.CoreAudio || d.Channels != 2 {
+		t.Fatalf("Core Audio as the system's sound: %+v, %v", d, ok)
+	}
+	d, ok = driverDevice(sys, duplex.NewTap(driver.CoreAudio, 48000, 64, 32, []string{"Mic 1"}))
+	if !ok || d.Channels != 1 || d.ChannelNames[0] != "Mic 1" {
+		t.Fatalf("Core Audio as the system's sound, its inputs open: %+v, %v", d, ok)
+	}
 }

@@ -47,9 +47,6 @@ type ringOutput struct {
 	tap atomic.Pointer[duplex.Tap]
 	// records says the driver was opened with its inputs.
 	records bool
-	// system says the device is the system's own sound, as openSystem
-	// opens it, and no ASIO driver.
-	system bool
 	// chans is how many channels a frame of the ring holds: the
 	// mixer's two, then those Options.Aux fills.
 	chans int
@@ -79,18 +76,11 @@ type ringOutput struct {
 	main, aux    []float32
 }
 
-// openRing opens the ASIO driver o names, or, where system is set, the
-// system's own sound as openSystem opens it: its first two outputs, and
-// no inputs.
-func openRing(s *Speaker, o Options, system bool) (*ringOutput, error) {
+// openRing opens the ASIO driver o names.
+func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
-		direct: o.Direct, system: system}
+		direct: o.Direct}
 	c := driver.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
-	open := openPull
-	if system {
-		c.Name, c.Outputs, open = "", nil, openSystem
-		o.Outputs, o.Record = nil, false
-	}
 	if len(o.Outputs) > 2 {
 		r.chans = len(o.Outputs)
 		c.FillN = r.takeN
@@ -101,7 +91,7 @@ func openRing(s *Speaker, o Options, system bool) (*ringOutput, error) {
 		c.Record, c.Recording = r.record, r.recording
 		r.records = true
 	}
-	dev, err := open(c)
+	dev, err := openPull(c)
 	if err != nil {
 		return nil, err
 	}
@@ -337,9 +327,7 @@ func (r *ringOutput) latency() time.Duration {
 }
 
 func (r *ringOutput) fill(st *State) {
-	if !r.system {
-		st.Driver = r.info.Driver
-	}
+	st.Driver = r.info.Driver
 	st.Aux = r.chans - 2
 	info := r.info
 	st.Info = &info
