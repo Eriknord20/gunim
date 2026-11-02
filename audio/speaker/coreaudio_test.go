@@ -2,8 +2,10 @@ package speaker
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -312,6 +314,70 @@ func TestCoreAudioHeldFollowsTheStamps(t *testing.T) {
 	}
 	if got, want := s.Latency(), audio.DurationAt(target+128+40+300, 44100); got != want {
 		t.Errorf("latency %v, want %v", got, want)
+	}
+}
+
+// held counts the frames the mixer mixed, not those in the ring: read
+// after the pump mixed a chunk and before it wrote it to the ring, as
+// Aux runs, it counts that chunk too. Counted from the ring, Heard would
+// come out a chunk too far on there, and stick, as it never goes back.
+func TestCoreAudioHeldCountsTheMixer(t *testing.T) {
+	info := macInfo()
+	info.Outputs = []string{"1", "2", "3"}
+	f := useAU(t, info)
+	m := audio.NewMixer()
+	var mu sync.Mutex
+	var bad []string
+	var opened atomic.Pointer[Speaker]
+	var checks int
+	aux := func(dst []float32, _ int, _ int64) {
+		s := opened.Load()
+		if s == nil {
+			return
+		}
+		u, ok := s.out.Load().output.(*auOutput)
+		if !ok {
+			return
+		}
+		// The fake moves nothing while Aux runs: the pump alone writes.
+		mixed := m.Mixed() - u.base.Load()
+		want := mixed - 50
+		f.mu.Lock()
+		if !f.stamped {
+			want = mixed - (f.written - int64(len(f.q)/f.chans)) + 128 + 40 + 300
+		}
+		f.mu.Unlock()
+		got := s.held()
+		mu.Lock()
+		defer mu.Unlock()
+		checks++
+		if got != want {
+			bad = append(bad, fmt.Sprintf("held %d mid-feed, want the %d mixed", got, want))
+		}
+	}
+	s, err := Open(m, Options{Driver: driver.CoreAudio, Outputs: []int{0, 1, 2}, Aux: aux, Fixed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Store(s)
+	defer func() { _ = s.Close() }()
+	waitFor(t, "the ring to fill", auOf(t, s).primed.Load)
+	for k := range 10 {
+		if k == 5 {
+			f.mu.Lock()
+			f.heard, f.stamped = 50, true
+			f.mu.Unlock()
+		}
+		f.take()
+		time.Sleep(3 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if checks == 0 {
+		t.Fatal("Aux never ran mid-feed")
+	}
+	if len(bad) > 0 {
+		t.Fatalf("%d of %d reads: %s", len(bad), checks, bad[0])
 	}
 }
 

@@ -270,16 +270,22 @@ func (u *auOutput) hear() {
 
 func (u *auOutput) rate() int { return u.hz }
 
-// held counts the frames written that are still to be heard, as the
+// held counts the frames mixed that are still to be heard, as the
 // device's time stamps place the frame heard: so it moves on through a
 // buffer, not a buffer at a time, and silence played while the ring ran
 // dry counts for nothing. Before the device has stamped a buffer, it is
-// the frames in the ring and the device's delay.
+// the frames mixed and not taken, and the device's delay. It counts from
+// the mixer's own count of the frames it mixed, not the ring's: the pump
+// mixes a chunk before it adds it to the ring, and the mixer's Heard,
+// which never goes back, would keep a frame heard read in between, a
+// chunk too far on.
 func (u *auOutput) held() int64 {
+	mixed := u.s.m.Mixed() - u.base.Load()
 	if at, ok := u.dev.Heard(); ok {
-		return max(0, u.dev.Written()-at)
+		return max(0, mixed-at)
 	}
-	return u.dev.Queued() + u.device()
+	taken := u.dev.Written() - u.dev.Queued()
+	return max(0, mixed-taken) + u.device()
 }
 
 func (u *auOutput) setAhead(d time.Duration) { u.ahead.Store(int64(d)) }
