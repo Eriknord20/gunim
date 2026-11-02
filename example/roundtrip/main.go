@@ -5,9 +5,13 @@
 // screen, or a click, measures the round trip: a click played, heard by
 // the microphone, and found in the recording by its stamp, as package
 // audio/capture's Measure finds it. An offset near zero says the stamps
-// line a take up with what the singer heard. A dot lights as each click
-// is heard, at the mixer frame the speaker says plays now: it should
-// light with the click, neither before nor after.
+// line a take up with what the singer heard. Two dots light as each
+// click is heard. The right one lights in the frame that shows as the
+// click is heard, at the mixer frame heard at the frame's present time:
+// it should light with the click, neither before nor after. The left
+// one lights in the frame drawn as the click is heard, as gunim drew it
+// before it knew when frames show: a few refreshes late. The text says
+// how long after it is drawn a frame lights the screen.
 //
 // Below the text, a guided check takes a tester through the device's
 // own speaker, recording, headphones, and the application going away,
@@ -164,6 +168,9 @@ type tester struct {
 	peak      float32
 	result    string
 	recording string
+	// lead is how long after it was drawn a frame lit the screen, on
+	// average over the last second.
+	lead time.Duration
 }
 
 // record records from the speaker's microphone, opening it again as it
@@ -279,6 +286,7 @@ func (t *tester) text() string {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	fmt.Fprintf(&b, "A frame lights the screen %v after it is drawn.\n", t.lead.Round(100*time.Microsecond))
 	if !t.allowed.Load() {
 		b.WriteString("The microphone is not allowed.\n")
 	}
@@ -301,15 +309,24 @@ type view struct {
 	began time.Time
 	// doneAt is where done sits, so a tap on it measures nothing.
 	doneAt geom.Rect
+	// ui is the window's UI, for the time the frame being drawn shows.
+	ui *gunim.UI
+	// leads sums how long after it was drawn each frame since leadFrom
+	// shows, over n frames.
+	leads    time.Duration
+	n        int
+	leadFrom time.Time
 }
 
 // steps is the check, a step at a time.
 var steps = []string{
-	"Step 1 of 6: the device's own speaker. Headphones off. Let it click for a minute. " +
+	"Step 1 of 6: the device's own speaker. Headphones off. Let it click for a minute. Which dot lights " +
+		"with the click, the right or the left? " +
 		"Then tap or click above this text three times, waiting for each result. Then press Done.",
 	"Step 2 of 6: recording. Clap or sing for a few seconds while it clicks. Then press Done.",
 	"Step 3 of 6: headphones, Bluetooth ones where you have them. Connect them while it clicks. " +
-		"Listen for a minute: any crackle, gaps or wrong device? Does the dot light with the click? " +
+		"Listen for a minute: any crackle, gaps or wrong device? Which dot lights with the click, the right " +
+		"one (aimed at when the frame shows) or the left (aimed at when it is drawn)? " +
 		"Note what you hear. Then press Done.",
 	"Step 4 of 6: the headphones' delay. Hold one earbud or ear cup against the device's microphone, " +
 		"in a quiet room. Tap or click above this text three times, waiting for each result. The offset " +
@@ -356,13 +373,25 @@ func (v *view) Handle(e input.Event, _ *gunim.UI) bool {
 	return false
 }
 
-// Step draws every frame while the dot is lit.
-func (v *view) Step(time.Duration) bool { return v.flash() > 0 }
+// present returns when the frame being drawn lights the screen, and
+// the zero time, which [audio.Mixer.HeardAt] takes as now, before the
+// first frame.
+func (v *view) present() time.Time {
+	if v.ui == nil {
+		return time.Time{}
+	}
+	return v.ui.Present()
+}
+
+// Step draws every frame while a dot is lit.
+func (v *view) Step(time.Duration) bool {
+	return v.flash(v.present()) > 0 || v.flash(time.Time{}) > 0
+}
 
 // WakeIn wakes the window as the next click is heard, and each second
 // at the latest, for the text.
 func (v *view) WakeIn() time.Duration {
-	since, ok := v.sinceClick()
+	since, ok := v.sinceClick(v.present())
 	if !ok {
 		return time.Second
 	}
@@ -370,24 +399,25 @@ func (v *view) WakeIn() time.Duration {
 	return max(time.Millisecond, min(time.Second, audio.DurationAt(rate-since, int(rate))))
 }
 
-// sinceClick returns how many frames ago the last click was heard, at
-// the mixer frame the speaker plays now, and false before the first.
-func (v *view) sinceClick() (int64, bool) {
+// sinceClick returns how many frames before the mixer frame heard at
+// t the last click was heard, and false before the first. The zero
+// time is now.
+func (v *view) sinceClick(t time.Time) (int64, bool) {
 	start := v.t.ticks.start.Load()
 	if start < 0 {
 		return 0, false
 	}
-	h := v.t.mix.Heard() - start
+	h := v.t.mix.HeardAt(t) - start
 	if h < 0 {
 		return 0, false
 	}
 	return h % int64(v.t.ticks.rate), true
 }
 
-// flash returns how bright the dot is now, 0 to 1: full as a click is
+// flash returns how bright a dot is at t, 0 to 1: full as a click is
 // heard, and fading over 150 ms.
-func (v *view) flash() float32 {
-	since, ok := v.sinceClick()
+func (v *view) flash(t time.Time) float32 {
+	since, ok := v.sinceClick(t)
 	fade := int64(v.t.ticks.rate) * 15 / 100
 	if !ok || since >= fade {
 		return 0
@@ -395,7 +425,9 @@ func (v *view) flash() float32 {
 	return 1 - float32(since)/float32(fade)
 }
 
-func (v *view) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+func (v *view) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
+	v.ui = f.UI()
+	v.lead(f.Present)
 	v.label.Text = v.t.text()
 	if v.began.IsZero() {
 		v.began = time.Now()
@@ -423,14 +455,36 @@ func (v *view) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) g
 	return c.Max
 }
 
-func (v *view) Paint(p *paint.Painter, _ gunim.Frame, size geom.Size, kids gunim.Children) {
-	// The dot, right of the text: it lights as each click is heard.
+// lead counts how long after now the frame drawn now lights the
+// screen, at present, and hands the tester the average each second.
+func (v *view) lead(present time.Time) {
+	now := time.Now()
+	if v.leadFrom.IsZero() {
+		v.leadFrom = now
+	}
+	v.leads += present.Sub(now)
+	v.n++
+	if now.Sub(v.leadFrom) < time.Second {
+		return
+	}
+	v.t.mu.Lock()
+	v.t.lead = v.leads / time.Duration(v.n)
+	v.t.mu.Unlock()
+	v.leads, v.n, v.leadFrom = 0, 0, now
+}
+
+func (v *view) Paint(p *paint.Painter, f gunim.Frame, size geom.Size, kids gunim.Children) {
+	// The dots, right of the text: each lights as a click is heard. The
+	// right one is aimed at the time the frame shows, the left one at
+	// the time it is drawn.
 	const d = 120
-	at := geom.Pt(size.W-d-24, size.H*0.30)
-	r := geom.Rect{Min: at, Max: at.Add(geom.Pt(d, d))}
-	p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 60, G: 60, B: 70, A: 255}))
-	if f := v.flash(); f > 0 {
-		p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 80, G: 220, B: 120, A: uint8(255 * f)}))
+	for i, t := range []time.Time{{}, f.Present} {
+		at := geom.Pt(size.W-float32(2-i)*(d+24), size.H*0.30)
+		r := geom.Rect{Min: at, Max: at.Add(geom.Pt(d, d))}
+		p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 60, G: 60, B: 70, A: 255}))
+		if fl := v.flash(t); fl > 0 {
+			p.RRect(r, d/2, paint.Solid(color.NRGBA{R: 80, G: 220, B: 120, A: uint8(255 * fl)}))
+		}
 	}
 	for kid := range kids.All {
 		kid.Paint(p)

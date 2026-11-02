@@ -33,6 +33,11 @@ int gunim_egl_init(void);
 int gunim_egl_attach(ANativeWindow *w);
 void gunim_egl_detach(void);
 int gunim_egl_swap(void);
+// gunim_egl_stamps says the surface keeps frame timestamps, and
+// gunim_egl_lag returns how long the last frame they told of took from
+// its swap's return to the screen, in nanoseconds, or -1 before one has.
+int gunim_egl_stamps(void);
+long long gunim_egl_lag(void);
 void gunim_window_release(ANativeWindow *w);
 
 // gunim_log writes a line to the system log.

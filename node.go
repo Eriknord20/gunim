@@ -387,10 +387,21 @@ func (c Constraints) Constrain(s geom.Size) geom.Size {
 
 // Frame is the per-frame context handed to layout and paint.
 type Frame struct {
-	// Now is when this frame is predicted to reach the screen. Every
-	// node in a frame sees the same value, so two animations started
-	// together stay together.
+	// Now is the frame's time: the refresh it is drawn for, in step
+	// with the frames before. Every node in a frame sees the same value,
+	// so two animations started together stay together. Timers and
+	// [UI.Now] count by it.
 	Now time.Time
+	// Present is when the frame is expected to light the screen: Now,
+	// plus how late the frames before lit it, which the system's
+	// compositor and the display add. Where the platform says when
+	// frames lit the screen it is measured; elsewhere it is estimated, a
+	// refresh or two late. A node that shows something on another clock
+	// draws it as it is at Present: a playhead or a level as heard then
+	// ([audio.Mixer.HeardAt]), or a video's frame shown then. It is
+	// never before the frame was built. In a window stepped by
+	// [Window.Frame] it is Now.
+	Present time.Time
 	// Delta is how long since the previous frame.
 	Delta time.Duration
 	// Scale is device pixels per logical pixel, from the monitor this

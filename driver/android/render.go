@@ -90,6 +90,9 @@ func (d *Driver) render() {
 				continue
 			}
 			attached = true
+			if C.gunim_egl_stamps() == 0 {
+				log.Print("gunim: android: no frame timestamps: frames are taken to light the screen two refreshes after the swap")
+			}
 		case <-d.wake:
 		}
 		if !attached {
@@ -154,7 +157,7 @@ func (d *Driver) frame(g gl.Context, shared *render.Shared, c *compositor) {
 	}
 	var jobs []job
 	var stack []layer
-	scale, surfW, surfH := d.density, d.surfW, d.surfH
+	scale, surfW, surfH, rate := d.density, d.surfW, d.surfH, d.rate
 	pan, panning := d.panLocked(time.Now())
 	for _, w := range d.windows {
 		r := w.rectLocked()
@@ -254,15 +257,40 @@ func (d *Driver) frame(g gl.Context, shared *render.Shared, c *compositor) {
 		d.kick() // the next frame slides on
 	}
 	now := time.Now()
+	lag := swapLag(rate)
 	for _, j := range jobs {
 		if j.again {
 			continue
 		}
 		select {
-		case j.w.presented <- driver.Frame{Shown: now}:
+		case j.w.presented <- driver.Frame{Shown: now, Lag: lag}:
 		case <-j.w.quit:
 		}
 	}
+}
+
+// lagTold says the log has the first lag the frame timestamps measured.
+// It belongs to the render thread.
+var lagTold bool
+
+// swapLag returns how long after its swap returns a frame lights the
+// screen: as Android's frame timestamps measured it, where the surface
+// keeps them, and two refreshes at rate where not. SurfaceFlinger takes
+// a frame swapped in at one refresh and shows it at the next, at the
+// soonest, and a frame swapped while another waits waits a refresh more.
+func swapLag(rate float64) time.Duration {
+	if ns := C.gunim_egl_lag(); ns >= 0 {
+		if !lagTold {
+			lagTold = true
+			log.Printf("gunim: android: a frame lit the screen %v after its swap, as Android's frame timestamps tell",
+				time.Duration(ns).Round(100*time.Microsecond))
+		}
+		return time.Duration(ns)
+	}
+	if rate <= 0 {
+		rate = 60
+	}
+	return 2 * time.Duration(float64(time.Second)/rate)
 }
 
 // sharpenAt has w draw its last frame again at the time at, the zero

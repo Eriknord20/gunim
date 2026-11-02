@@ -515,6 +515,13 @@ type Window struct {
 	unshown, unreleased int
 	shown               time.Time
 	due                 time.Time
+	// dues holds the due time of each frame handed and not yet shown,
+	// oldest first. late is how long after its due time a frame lights
+	// the screen, smoothed over the frames shown, and lateKnown says a
+	// frame has been shown to tell it; see presentAt.
+	dues      []time.Time
+	late      time.Duration
+	lateKnown bool
 	// sent is when the frame in flight was handed to the driver, for GUNIM_DEBUG_POINTER to say when one is slow.
 	sent time.Time
 	// uiTimes sums how long frames take to build, for GUNIM_DEBUG_FRAMES.
@@ -1062,7 +1069,7 @@ func (w *Window) Frame(delta time.Duration) {
 	w.applyPending()
 	w.clock = w.clock.Add(delta)
 	w.ui.stepped = true
-	w.ui.frame(w.clock, delta)
+	w.ui.frame(w.clock, w.clock, delta)
 }
 
 // PaintWhenLooked has a window from [NewOffscreen] paint a frame only
@@ -1412,6 +1419,7 @@ func (w *Window) wait() bool {
 			w.unreleased = max(w.unreleased-1, 0)
 		}
 		w.shown = f.Shown
+		w.learnLate(f)
 		if w.ui.arriving && w.ui.arrivedAt.IsZero() {
 			w.ui.arrivedAt = w.shown
 			if w.shown.IsZero() {
@@ -1454,18 +1462,56 @@ func (w *Window) draw() {
 	}
 	w.resumed = false
 	w.due = due
+	w.dues = append(w.dues, due)
 	start := time.Now()
-	w.ui.frame(due, delta)
+	present := w.presentAt(due, start)
+	w.ui.frame(due, present, delta)
 	w.sent = time.Now()
 	if took := w.sent.Sub(start); took > slowFrame {
 		pointerf("a frame took %.0f ms to build", float64(took.Microseconds())/1000)
 	}
 	if uiFramesDebug {
-		w.uiTimes.add(w, applied, w.sent.Sub(start))
+		w.uiTimes.add(w, applied, w.sent.Sub(start), present.Sub(start))
 	}
 	w.unshown++
 	w.unreleased++
 }
+
+// presentAt returns when a frame due at due is expected to light the
+// screen, built from start: its due time plus how late the frames
+// before lit it. One rule serves every platform; a driver that knows
+// when frames lit the screen tells it through [driver.Frame.Lag], and
+// one that does not estimates it. A frame lights the screen after it
+// is built, whatever the frames before said.
+func (w *Window) presentAt(due, start time.Time) time.Time {
+	return later(due.Add(w.late), start)
+}
+
+// learnLate takes in how late after its due time the frame f reports
+// lit the screen. The first report counts whole; each after it moves
+// the average an eighth of the way, which follows a change in the
+// system's pipeline within a few dozen frames and smooths a frame
+// shown a refresh off.
+func (w *Window) learnLate(f driver.Frame) {
+	if len(w.dues) == 0 {
+		return
+	}
+	due := w.dues[0]
+	w.dues = w.dues[:copy(w.dues, w.dues[1:])]
+	if f.Shown.IsZero() || due.IsZero() {
+		return
+	}
+	e := min(max(f.Shown.Sub(due)+f.Lag, -maxLate), maxLate)
+	if !w.lateKnown {
+		w.late, w.lateKnown = e, true
+		return
+	}
+	w.late += (e - w.late) / 8
+}
+
+// maxLate bounds how early or late a frame is taken to light the
+// screen, so a driver's wild report is not believed.
+const maxLate = 500 * time.Millisecond
 
 // later returns the later of a and b.
 func later(a, b time.Time) time.Time {
@@ -1722,6 +1768,9 @@ type UI struct {
 	textSent, textSeq uint64
 
 	now time.Time
+	// present is when the current frame is expected to light the
+	// screen; see [Frame.Present].
+	present time.Time
 	// theme is the window's live theme, stepped every frame.
 	theme *theme.Live
 	// seq counts frames; see [Frame].
@@ -1961,6 +2010,11 @@ func (u *UI) appRoot() *state {
 
 // Now is the current frame's timestamp.
 func (u *UI) Now() time.Time { return u.now }
+
+// Present is when the current frame is expected to light the screen:
+// [Frame.Present], for a node that reads it outside Layout and Paint,
+// as in Step or WakeIn.
+func (u *UI) Present() time.Time { return u.present }
 
 // Theme returns the window's live theme, for reading tokens outside
 // Layout and Paint, such as the motion a Handle animates with.
@@ -2592,8 +2646,8 @@ func (u *UI) needsFrame() bool { return u.animating || u.invalid }
 
 // frame runs one complete cycle: advance time, settle the tree, lay
 // out, paint, present.
-func (u *UI) frame(now time.Time, delta time.Duration) {
-	u.now = now
+func (u *UI) frame(now, present time.Time, delta time.Duration) {
+	u.now, u.present = now, present
 	// Timers run first, so what they invalidate is drawn in this frame
 	u.runTimers()
 	u.calm = !u.invalid && !u.stirred && !u.dragOver
@@ -2614,7 +2668,7 @@ func (u *UI) frame(now time.Time, delta time.Duration) {
 		u.dragHover(u.dragOverAt, u.dragOverData)
 	}
 	u.seq++
-	f := Frame{Now: now, Delta: delta, Scale: u.w.dw.Scale(), Theme: u.theme, seq: u.seq, u: u}
+	f := Frame{Now: now, Present: present, Delta: delta, Scale: u.w.dw.Scale(), Theme: u.theme, seq: u.seq, u: u}
 	if sa, ok := u.w.dw.(driver.SafeAreaer); ok {
 		f.Safe = sa.SafeArea()
 	}

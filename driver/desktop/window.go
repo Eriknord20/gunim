@@ -1262,7 +1262,7 @@ func (w *Window) render() {
 				}
 				release()
 				select {
-				case w.presented <- driver.Frame{Shown: last}:
+				case w.presented <- driver.Frame{Shown: last, Lag: w.lag()}:
 				case <-w.quit:
 					return
 				}
@@ -1359,7 +1359,7 @@ func (w *Window) render() {
 			continue
 		}
 		select {
-		case w.presented <- driver.Frame{Shown: last}:
+		case w.presented <- driver.Frame{Shown: last, Lag: w.lag()}:
 		case <-w.quit:
 			return
 		}
@@ -1466,6 +1466,32 @@ func (ft *frameTimes) skip(w *Window, rate float64, fbW, fbH int) {
 	}
 	log.Printf("gunim frames %p %dx%d at %.0f Hz: no frame drawn, %d unchanged and not drawn", w, fbW, fbH, rate, ft.skipped)
 	*ft = frameTimes{from: now}
+}
+
+// lag returns how long after its Shown a frame lights the screen: as
+// DXGI measured it, where the window presents through DXGI and DXGI has
+// said; elsewhere one refresh of the window's monitor. Shown is the
+// vertical blank the frame went out on, or the swap's return, and a
+// compositor shows what a window hands it at the vertical blank after:
+// Windows' DWM, macOS's WindowServer, and the compositor of a Linux
+// desktop.
+//
+// It is an estimate on Linux and macOS. GLX_OML_sync_control tells when
+// the X server took a swap, but not when the compositor showed it; a
+// display link tells when the display refreshes, but not which frame.
+func (w *Window) lag() time.Duration {
+	if w.pres != nil {
+		if d, ok := w.pres.lag(); ok {
+			return d
+		}
+	}
+	w.mu.Lock()
+	rate := w.rate
+	w.mu.Unlock()
+	if rate <= 0 {
+		rate = 60
+	}
+	return time.Duration(float64(time.Second) / rate)
 }
 
 // pace returns the time a frame reached the screen, given when the

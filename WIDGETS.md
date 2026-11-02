@@ -153,6 +153,10 @@ Everything moves; nothing jumps once the user can see it.
   engine keeps the node until it reports settled.
 - **Frames only while moving.** `Step` reports true only while something moves. A widget out of sight (on a hidden
   tab, scrolled away) asks for no frames.
+- **Draw another clock at `Frame.Present`.** A frame lights the screen a few refreshes after it is drawn. A playhead,
+  a meter or anything else that follows the sound or a video draws it as it is at `f.Present` (`ui.Present()` in
+  `Step`): `Mixer.HeardAt(f.Present)`, `Voice.PositionAt(f.Present)`, or `Analyzer.At = f.Present` before it measures.
+  Springs and fades keep to `Delta`.
 - **Sound cues.** Play the cue for what happened: `CuePress` (an activation), `CueToggleOn`/`CueToggleOff`,
   `CueSelect` (a choice among several), `CueTick` (a step on a scale), `CueOpen`/`CueClose` (something shown or put
   away). `act` plays it for you.
