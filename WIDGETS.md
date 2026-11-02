@@ -171,7 +171,9 @@ it. The test helper `spills(ops, box, reach)` lists anything drawn outside.
   implements `gunim.PopupPadder`.
 - **Too much content scrolls.** Inside `widget`, embed `scrolling` (as `Scroll`, `VirtualList` and `Menu` do). It
   gives the wheel, a finger, the scroll bar, springs past the ends, and the fade at an edge with more past it.
-  Implement `gunim.Revealer` to scroll the focused part into view.
+  Implement `gunim.Revealer` to scroll the focused part into view. `Scroll.Reveal` takes a box measured from the
+  top of what shows; a row's box measured from the top of the content goes to `Scroll.RevealContent`. Mixing them
+  up scrolls past the row by however far the view was already scrolled.
 
 **Work only on what shows.** A widget that holds a collection does work for the items in view, per frame, per key
 and on open. 100 000 items must cost the same per frame as 100.

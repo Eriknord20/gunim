@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
+	"github.com/marrasen/gunim/widget"
 )
 
 // presetHost is a source of presets that plays the one picked.
@@ -86,6 +87,144 @@ func TestSkipsGoRoundTheGroup(t *testing.T) {
 	if len(src.picked) != 3 || src.picked[0] != want[0] || src.picked[1] != want[1] || src.picked[2] != want[2] {
 		t.Fatalf("the skips picked %v, want %v", src.picked, want)
 	}
+}
+
+// frames runs n frames of w.
+func frames(w *gunim.Window, n int) {
+	for range n {
+		w.Frame(time.Second / 60)
+	}
+}
+
+// viewOf is the height of scroll s as w last showed it.
+func viewOf(t *testing.T, w *gunim.Window, s *widget.Scroll) float32 {
+	t.Helper()
+	var view geom.Rect
+	gunim.RegisterPatch(w, "browser", func(_ *PresetBrowser, _ struct{}, u *gunim.UI) { view, _ = u.Bounds(s) })
+	if err := w.Client().Patch("browser", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	return view.Size().H
+}
+
+// shows fails unless row, a box in s's content, stands wholly in s's
+// view.
+func shows(t *testing.T, w *gunim.Window, s *widget.Scroll, row geom.Rect, what string) {
+	t.Helper()
+	h := viewOf(t, w, s)
+	if top, bottom := row.Min.Y-s.Offset(), row.Max.Y-s.Offset(); top < 0 || bottom > h {
+		t.Fatalf("%s stands at %v to %v in a view %v tall, scrolled to %v", what, top, bottom, h, s.Offset())
+	}
+}
+
+// patch sends fn to the browser in w, and lets it run a second.
+func patch(t *testing.T, w *gunim.Window, fn func(b *PresetBrowser, u *gunim.UI)) {
+	t.Helper()
+	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, _ struct{}, u *gunim.UI) { fn(b, u) })
+	if err := w.Client().Patch("browser", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	frames(w, 60)
+}
+
+// kits is a host of one group of n presets, and of a group of a few
+// before it.
+func kits(n int) *presetHost {
+	src := &presetHost{}
+	for i := range 3 {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Bass", Name: "Bass " + strconv.Itoa(i)})
+	}
+	for i := range n {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Kits", Name: "Kit " + strconv.Itoa(i)})
+	}
+	return src
+}
+
+// TestTheNextPresetOfAScrolledColumnKeepsItInView: a step to the
+// preset below the one playing, in a column scrolled down, scrolls only
+// as far as the row needs. It once read the row's place in the list as
+// its place in the view, and scrolled past it by as far again.
+func TestTheNextPresetOfAScrolledColumnKeepsItInView(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[33]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	// Scrolled down, the preset playing a little below the view's top.
+	b.ps.JumpTo(b.presets.rowRect(b.presets.current()).Min.Y - 60)
+	frames(w, 10)
+	before := b.ps.Offset()
+	if before <= 0 {
+		t.Fatalf("the column stands at %v, want it scrolled", before)
+	}
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Skip(1, u) })
+	row := b.presets.rowRect(b.presets.current())
+	shows(t, w, b.ps, row, "the preset picked")
+	if moved := b.ps.Offset() - before; moved > 2*row.Size().H {
+		t.Fatalf("a step to the next preset scrolled the column %v, more than two rows", moved)
+	}
+}
+
+// TestTheNextGroupOfAScrolledColumnKeepsItInView: the groups' column,
+// scrolled down, scrolls only as far as the group of the preset playing
+// needs, as the presets' does.
+func TestTheNextGroupOfAScrolledColumnKeepsItInView(t *testing.T) {
+	src := &presetHost{}
+	for i := range 60 {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Group " + strconv.Itoa(100+i), Name: "Sound " + strconv.Itoa(i)})
+	}
+	src.cur = src.list[30]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	i := b.groups.index("Factory", "Group 130")
+	b.gs.JumpTo(b.groups.rowRect(i).Min.Y - 60)
+	frames(w, 10)
+	before := b.gs.Offset()
+	if before <= 0 {
+		t.Fatalf("the groups' column stands at %v, want it scrolled", before)
+	}
+	src.cur = src.list[31]
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
+	row := b.groups.rowRect(b.groups.index("Factory", "Group 131"))
+	shows(t, w, b.gs, row, "the group of the preset playing")
+	if moved := b.gs.Offset() - before; moved > 2*row.Size().H {
+		t.Fatalf("a step to the next group scrolled the column %v, more than two rows", moved)
+	}
+}
+
+// TestFollowingIntoALongGroupShowsThePresetPlaying: a preset set
+// elsewhere, far down a long group, shows once the browser follows it
+// from a short group, though the column's scroll last held the short
+// group's height.
+func TestFollowingIntoALongGroupShowsThePresetPlaying(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[1]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	if b.group != "Bass" {
+		t.Fatalf("the browser shows %q, want Bass", b.group)
+	}
+	src.cur = src.list[3+50]
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
+	shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), "Kit 50")
+}
+
+// TestARevealWhileTheColumnStillScrollsLandsOnTheRow: a step back
+// while the step before still scrolls the column lands on the row
+// stepped to, not where that scroll was going.
+func TestARevealWhileTheColumnStillScrollsLandsOnTheRow(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[len(src.list)-1]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
+	// Round to the first, then at once back to the last, before the
+	// column has moved from the bottom.
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) {
+		b.Skip(1, u)
+		b.Skip(-1, u)
+	})
+	shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), "the last preset")
 }
 
 func TestASearchFindsWhatAPresetIs(t *testing.T) {
