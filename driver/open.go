@@ -87,6 +87,9 @@ type Permission int
 const (
 	// PermissionMusic reads the user's music and other sound files.
 	PermissionMusic Permission = iota + 1
+	// PermissionMicrophone records from the microphone, as package
+	// audio/speaker does through AAudio with Options.Record set.
+	PermissionMicrophone
 )
 
 // A Permitter is a [Driver] whose system has the user grant

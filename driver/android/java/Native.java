@@ -142,12 +142,16 @@ public final class Native {
 
 	// permissionNames names permission p, as driver.Permission numbers
 	// it, as this Android names it: reading music is its own
-	// permission since Android 13, and part of reading storage before.
+	// permission since Android 13, and part of reading storage before;
+	// 2 records from the microphone.
 	static String[] permissionNames(int p) {
 		if (p == 1) {
 			return Build.VERSION.SDK_INT >= 33
 				? new String[] {"android.permission.READ_MEDIA_AUDIO"}
 				: new String[] {"android.permission.READ_EXTERNAL_STORAGE"};
+		}
+		if (p == 2) {
+			return new String[] {"android.permission.RECORD_AUDIO"};
 		}
 		return null;
 	}
