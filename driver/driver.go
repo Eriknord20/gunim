@@ -268,11 +268,17 @@ type Zoomer interface {
 
 // Frame reports one presented frame.
 type Frame struct {
-	// Shown is when the frame reached the screen: when the swap
-	// returned, or the display's own timestamp for it where the
-	// platform has one. The engine predicts the next frame's
-	// presentation time from it.
+	// Shown is when the driver handed the frame on: when the swap
+	// returned, or the vertical blank it was presented on. The engine
+	// paces its frames by it, and predicts when the next one goes out.
 	Shown time.Time
+	// Lag is how long after Shown a frame lights the screen: the time
+	// the system's compositor and the display take past the point Shown
+	// marks. A driver reads it from the platform's record of the frames
+	// before, where the platform keeps one, and estimates it where not.
+	// The engine adds it to the time it predicts a frame goes out, to
+	// tell nodes when the frame shows.
+	Lag time.Duration
 }
 
 // Monitor is an attached display.

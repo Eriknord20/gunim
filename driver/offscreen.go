@@ -245,7 +245,11 @@ func (w *OffscreenWindow) Input() <-chan any { return w.input }
 // A real driver reports each frame as its swap returns. This one waits
 // for the test, so a test decides exactly when the display is ready for
 // the next frame.
-func (w *OffscreenWindow) Tick() { w.presented <- Frame{Shown: time.Now()} }
+func (w *OffscreenWindow) Tick() { w.TickWith(Frame{Shown: time.Now()}) }
+
+// TickWith is [OffscreenWindow.Tick] with the report f: for a test that
+// says when the frame was shown, and how late it lit the screen.
+func (w *OffscreenWindow) TickWith(f Frame) { w.presented <- f }
 
 // Post delivers a platform event, blocking until the window reads it.
 func (w *OffscreenWindow) Post(ev any) { w.input <- ev }

@@ -4,6 +4,7 @@ package desktop
 
 import (
 	"errors"
+	"time"
 
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/gl"
@@ -23,3 +24,4 @@ func (w *Window) startPresenter(gl.Context) (*presenter, error) { return nil, er
 func (p *presenter) begin(int, int) (uint32, error) { return 0, errNoDXGI }
 func (p *presenter) present([]geom.Rect) error      { return errNoDXGI }
 func (p *presenter) close()                         {}
+func (p *presenter) lag() (time.Duration, bool)     { return 0, false }

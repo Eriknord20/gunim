@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <android/native_window_jni.h>
 #include <android/log.h>
 #include <EGL/egl.h>
@@ -429,6 +430,50 @@ int gunim_egl_init(void) {
 	return 0;
 }
 
+// Frame timestamps, EGL_ANDROID_get_frame_timestamps: Android records
+// when each frame swapped lit the screen, from SurfaceFlinger's present
+// fence. stamps says the surface keeps them. sent holds the frames
+// swapped whose present time is still to come, oldest first: each one's
+// frame ID and the CLOCK_MONOTONIC time its swap returned. lag is how
+// long the last frame read took from that return to the screen, in
+// nanoseconds, or -1 before one has been read.
+static PFNEGLGETNEXTFRAMEIDANDROIDPROC nextFrameId;
+static PFNEGLGETFRAMETIMESTAMPSANDROIDPROC frameTimestamps;
+static PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC timestampSupported;
+static int stamps;
+#define SENT 8
+static struct { EGLuint64KHR id; int64_t swapped; } sent[SENT];
+static int nsent;
+static int64_t lag = -1;
+
+static int64_t monotonic(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+// stampsOn has the surface keep frame timestamps, where EGL can and
+// they tell when a frame lit the screen: an emulator keeps them, but
+// without that.
+static void stampsOn(void) {
+	stamps = 0;
+	nsent = 0;
+	const char *ext = eglQueryString(dpy, EGL_EXTENSIONS);
+	if (ext == NULL || strstr(ext, "EGL_ANDROID_get_frame_timestamps") == NULL) {
+		return;
+	}
+	nextFrameId = (PFNEGLGETNEXTFRAMEIDANDROIDPROC)eglGetProcAddress("eglGetNextFrameIdANDROID");
+	frameTimestamps = (PFNEGLGETFRAMETIMESTAMPSANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampsANDROID");
+	timestampSupported = (PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampSupportedANDROID");
+	if (nextFrameId == NULL || frameTimestamps == NULL || timestampSupported == NULL) {
+		return;
+	}
+	if (!timestampSupported(dpy, surf, EGL_DISPLAY_PRESENT_TIME_ANDROID)) {
+		return;
+	}
+	stamps = eglSurfaceAttrib(dpy, surf, EGL_TIMESTAMPS_ANDROID, EGL_TRUE) == EGL_TRUE;
+}
+
 int gunim_egl_attach(ANativeWindow *w) {
 	gunim_egl_detach();
 	surf = eglCreateWindowSurface(dpy, cfg, w, NULL);
@@ -439,8 +484,11 @@ int gunim_egl_attach(ANativeWindow *w) {
 		return eglGetError();
 	}
 	eglSwapInterval(dpy, 1);
+	stampsOn();
 	return 0;
 }
+
+int gunim_egl_stamps(void) { return stamps; }
 
 void gunim_egl_detach(void) {
 	if (surf == EGL_NO_SURFACE) {
@@ -452,11 +500,56 @@ void gunim_egl_detach(void) {
 }
 
 int gunim_egl_swap(void) {
+	EGLuint64KHR id = 0;
+	int known = stamps && nextFrameId(dpy, surf, &id);
 	if (!eglSwapBuffers(dpy, surf)) {
 		return eglGetError();
 	}
+	if (!known) {
+		return 0;
+	}
+	if (nsent == SENT) {
+		memmove(&sent[0], &sent[1], (SENT - 1) * sizeof sent[0]);
+		nsent--;
+	}
+	sent[nsent].id = id;
+	sent[nsent].swapped = monotonic();
+	nsent++;
+	// Read the frames before. The newest that lit the screen gives the
+	// lag. Each frame up to the newest Android has told of is done
+	// with: one left pending behind it, as a frame dropped may be,
+	// never will be. A frame EGL can't read, as one too old for the
+	// record, is let go alone.
+	const EGLint name = EGL_DISPLAY_PRESENT_TIME_ANDROID;
+	int8_t state[SENT]; // 0 pending, 1 told, -1 unread
+	int told = -1;
+	for (int i = 0; i < nsent; i++) {
+		EGLnsecsANDROID at = EGL_TIMESTAMP_INVALID_ANDROID;
+		if (!frameTimestamps(dpy, surf, sent[i].id, 1, &name, &at)) {
+			state[i] = -1;
+			continue;
+		}
+		if (at == EGL_TIMESTAMP_PENDING_ANDROID) {
+			state[i] = 0;
+			continue;
+		}
+		state[i] = 1;
+		told = i;
+		if (at > sent[i].swapped) {
+			lag = at - sent[i].swapped;
+		}
+	}
+	int kept = 0;
+	for (int i = told + 1; i < nsent; i++) {
+		if (state[i] == 0) {
+			sent[kept++] = sent[i];
+		}
+	}
+	nsent = kept;
 	return 0;
 }
+
+long long gunim_egl_lag(void) { return lag; }
 
 void gunim_window_release(ANativeWindow *w) {
 	ANativeWindow_release(w);
