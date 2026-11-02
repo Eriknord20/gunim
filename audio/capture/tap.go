@@ -6,7 +6,7 @@ import (
 	"github.com/marrasen/gunim/audio/internal/duplex"
 )
 
-// tapIn records the inputs of the ASIO driver the speakers play
+// tapIn records the inputs of the driver the speakers play
 // through, in the driver's own buffers, as they play.
 type tapIn struct {
 	s *Stream
@@ -20,7 +20,7 @@ type tapIn struct {
 func openTap(s *Stream, driver string) (format, error) {
 	t := duplex.Current()
 	if t == nil || t.Driver != driver {
-		return format{}, fmt.Errorf("capture: the speakers play through no ASIO driver called %q", driver)
+		return format{}, fmt.Errorf("capture: the speakers play through no driver called %q", driver)
 	}
 	if len(t.Names) == 0 {
 		return format{}, fmt.Errorf("capture: %s records none of its inputs", driver)

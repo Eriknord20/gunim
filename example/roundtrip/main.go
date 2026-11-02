@@ -28,6 +28,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/capture"
+	audiodriver "github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
@@ -52,7 +53,7 @@ func run() error {
 			return err
 		}
 		mix := audio.NewMixer()
-		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: speaker.AAudio, Record: true})
+		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: audiodriver.AAudio, Record: true})
 		if err != nil {
 			return err
 		}
@@ -193,10 +194,10 @@ func (t *tester) text() string {
 	}
 	fmt.Fprintf(&b, "Playing through %s at %d Hz.\n", through, st.Rate)
 	fmt.Fprintf(&b, "Latency %v.\n", st.Latency.Round(100*time.Microsecond))
-	if st.ASIO != nil {
+	if st.Info != nil {
 		fmt.Fprintf(&b, "Device delay %v, input %v, burst %d frames.\n",
-			audio.DurationAt(int64(st.ASIO.Latency), st.Rate).Round(100*time.Microsecond),
-			audio.DurationAt(int64(st.ASIO.InputLatency), st.Rate).Round(100*time.Microsecond), st.ASIO.Buffer)
+			audio.DurationAt(int64(st.Info.Latency), st.Rate).Round(100*time.Microsecond),
+			audio.DurationAt(int64(st.Info.InputLatency), st.Rate).Round(100*time.Microsecond), st.Info.Buffer)
 	}
 	fmt.Fprintf(&b, "Ran dry %d times.\n", st.Dropouts)
 	if st.Problem != nil {

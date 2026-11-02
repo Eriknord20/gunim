@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/rt"
 )
@@ -14,14 +14,14 @@ import (
 // A pullDevice is a device that asks for its sound, as an ASIO driver
 // does: it calls Fill each time it takes a buffer.
 type pullDevice interface {
-	Info() asio.Info
+	Info() driver.Info
 	ControlPanel() error
 	Close() error
 }
 
 // openPull opens an ASIO driver; a test puts a device of its own here.
-var openPull = func(c asio.Config) (pullDevice, error) {
-	d, err := asio.Open(c)
+var openPull = func(c driver.Config) (pullDevice, error) {
+	d, err := driver.Open(c)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +36,7 @@ var openPull = func(c asio.Config) (pullDevice, error) {
 type ringOutput struct {
 	s    *Speaker
 	dev  pullDevice
-	info asio.Info
+	info driver.Info
 	q    atomic.Pointer[ring]
 	// base is the mixer frame the output's first frame is: the feed, or
 	// the device's thread where it mixes, alone reads the mixer, so
@@ -85,7 +85,7 @@ type ringOutput struct {
 func openRing(s *Speaker, o Options, system bool) (*ringOutput, error) {
 	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
 		direct: o.Direct, system: system}
-	c := asio.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
+	c := driver.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
 	open := openPull
 	if system {
 		c.Name, c.Outputs, open = "", nil, openSystem
@@ -342,7 +342,7 @@ func (r *ringOutput) fill(st *State) {
 	}
 	st.Aux = r.chans - 2
 	info := r.info
-	st.ASIO = &info
+	st.Info = &info
 }
 
 func (r *ringOutput) err() error { return nil }
@@ -375,7 +375,7 @@ func (r *ringOutput) close() error {
 		deadline := time.Now().Add(mixWait)
 		for r.mixing.Load() {
 			if time.Now().After(deadline) {
-				return errors.Join(asio.ErrNotAnswering, r.dev.Close())
+				return errors.Join(driver.ErrNotAnswering, r.dev.Close())
 			}
 			time.Sleep(100 * time.Microsecond)
 		}

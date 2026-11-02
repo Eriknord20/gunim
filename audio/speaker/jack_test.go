@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/internal/jack"
 )
@@ -233,7 +233,7 @@ func TestJackPlaysTheMixer(t *testing.T) {
 	f := useJack(t, stereoInfo())
 	m := audio.NewMixer()
 	m.Play(steady(0.25), audio.Options{})
-	s, err := Open(m, Options{Name: "My app", Driver: asio.JACK, Rate: 48000, Latency: 50 * time.Millisecond, Fixed: true})
+	s, err := Open(m, Options{Name: "My app", Driver: driver.JACK, Rate: 48000, Latency: 50 * time.Millisecond, Fixed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,9 +245,9 @@ func TestJackPlaysTheMixer(t *testing.T) {
 		t.Errorf("opened with %+v", f.cfg)
 	}
 	st := s.State()
-	if st.Driver != asio.JACK || st.ASIO == nil || st.ASIO.Latency != 256+512 || st.ASIO.Buffer != 256 ||
-		!slices.Equal(st.ASIO.Played, []int{0, 1}) || st.ASIO.Recorded != 0 {
-		t.Errorf("state %+v, info %+v", st, st.ASIO)
+	if st.Driver != driver.JACK || st.Info == nil || st.Info.Latency != 256+512 || st.Info.Buffer != 256 ||
+		!slices.Equal(st.Info.Played, []int{0, 1}) || st.Info.Recorded != 0 {
+		t.Errorf("state %+v, info %+v", st, st.Info)
 	}
 	if want := 50 * time.Millisecond; st.Latency < want-time.Millisecond || st.Latency > want+time.Millisecond {
 		t.Errorf("working %v ahead, want %v", st.Latency, want)
@@ -273,7 +273,7 @@ func TestJackPlaysTheMixer(t *testing.T) {
 func TestJackHeldFollowsTheFrameTime(t *testing.T) {
 	f := useJack(t, stereoInfo())
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: asio.JACK, Latency: 40 * time.Millisecond, Fixed: true})
+	s, err := Open(m, Options{Driver: driver.JACK, Latency: 40 * time.Millisecond, Fixed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestJackHeldFollowsTheFrameTime(t *testing.T) {
 // of the pump's ticks.
 func TestJackLatencyHasAFloor(t *testing.T) {
 	useJack(t, stereoInfo())
-	s, err := Open(audio.NewMixer(), Options{Driver: asio.JACK, Latency: time.Millisecond, Fixed: true})
+	s, err := Open(audio.NewMixer(), Options{Driver: driver.JACK, Latency: time.Millisecond, Fixed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestJackRunningDryAndXruns(t *testing.T) {
 	info := stereoInfo()
 	info.Buffer = 4410
 	f := useJack(t, info)
-	s, err := Open(audio.NewMixer(), Options{Driver: asio.JACK, Latency: 20 * time.Millisecond})
+	s, err := Open(audio.NewMixer(), Options{Driver: driver.JACK, Latency: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestJackRunningDryAndXruns(t *testing.T) {
 func TestJackShutdownAndRateOpenAgain(t *testing.T) {
 	f := useJack(t, stereoInfo())
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: asio.JACK})
+	s, err := Open(m, Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,15 +382,15 @@ func TestJackShutdownAndRateOpenAgain(t *testing.T) {
 // latency, with no opening again.
 func TestJackBufferChangeFollows(t *testing.T) {
 	f := useJack(t, stereoInfo())
-	s, err := Open(audio.NewMixer(), Options{Driver: asio.JACK})
+	s, err := Open(audio.NewMixer(), Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
 	f.tell(func(e *jack.Events) { e.Buffer = 1024 })
-	waitFor(t, "the new buffer", func() bool { return s.State().ASIO.Buffer == 1024 })
-	if st := s.State(); st.ASIO.Latency != 1024+512 {
-		t.Errorf("latency %d, want %d", st.ASIO.Latency, 1024+512)
+	waitFor(t, "the new buffer", func() bool { return s.State().Info.Buffer == 1024 })
+	if st := s.State(); st.Info.Latency != 1024+512 {
+		t.Errorf("latency %d, want %d", st.Info.Latency, 1024+512)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -405,13 +405,13 @@ func TestJackBufferChangeFollows(t *testing.T) {
 func TestJackRecordsStamped(t *testing.T) {
 	f := useJack(t, stereoInfo())
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: asio.JACK, Record: true, Latency: 30 * time.Millisecond, Fixed: true})
+	s, err := Open(m, Options{Driver: driver.JACK, Record: true, Latency: 30 * time.Millisecond, Fixed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
 	tap := duplex.Current()
-	if tap == nil || tap.Driver != asio.JACK || len(tap.Names) != 2 || tap.Latency != 300 {
+	if tap == nil || tap.Driver != driver.JACK || len(tap.Names) != 2 || tap.Latency != 300 {
 		t.Fatalf("tap %+v", tap)
 	}
 	j := jackOf(t, s)
@@ -461,7 +461,7 @@ func TestJackAuxAndMono(t *testing.T) {
 			dst[i] = float32(1 + i%channels)
 		}
 	}
-	s, err := Open(m, Options{Driver: asio.JACK, Outputs: []int{0, 1, 2, 3}, Aux: aux})
+	s, err := Open(m, Options{Driver: driver.JACK, Outputs: []int{0, 1, 2, 3}, Aux: aux})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +480,7 @@ func TestJackAuxAndMono(t *testing.T) {
 	f = useJack(t, info)
 	m = audio.NewMixer()
 	m.Play(steady(0.5), audio.Options{})
-	s, err = Open(m, Options{Driver: asio.JACK})
+	s, err = Open(m, Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestJackAuxAndMono(t *testing.T) {
 func TestJackSuspendPauses(t *testing.T) {
 	f := useJack(t, stereoInfo())
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: asio.JACK})
+	s, err := Open(m, Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +530,7 @@ func TestJackSuspendPauses(t *testing.T) {
 func TestJackHeldWhileReopening(t *testing.T) {
 	useJack(t, stereoInfo())
 	m := audio.NewMixer()
-	s, err := Open(m, Options{Driver: asio.JACK})
+	s, err := Open(m, Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestJackHeldWhileReopening(t *testing.T) {
 			}
 		}()
 	}
-	o := Options{Driver: asio.JACK}
+	o := Options{Driver: driver.JACK}
 	for i := range 30 {
 		o.Latency = time.Duration(20+i) * time.Millisecond
 		o.Record = i%2 == 0
@@ -573,7 +573,7 @@ func TestJackHeldWhileReopening(t *testing.T) {
 // opens the next, and closes it, with no second close of the first.
 func TestJackFailedCloseLetsGo(t *testing.T) {
 	f := useJack(t, stereoInfo())
-	s, err := Open(audio.NewMixer(), Options{Driver: asio.JACK})
+	s, err := Open(audio.NewMixer(), Options{Driver: driver.JACK})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestJackFailedCloseLetsGo(t *testing.T) {
 	f.closeErr = errors.New("jack: closing the client failed")
 	f.mu.Unlock()
 	first := jackOf(t, s)
-	if err := s.Set(Options{Driver: asio.JACK, Record: true}); err != nil {
+	if err := s.Set(Options{Driver: driver.JACK, Record: true}); err != nil {
 		t.Fatalf("Set = %v, want the output opened again", err)
 	}
 	if jackOf(t, s) == first {
@@ -604,7 +604,7 @@ func TestJackFailedCloseLetsGo(t *testing.T) {
 // the speaker does not start a pump of no channels.
 func TestJackNoOutputsFails(t *testing.T) {
 	useJack(t, stereoInfo())
-	_, err := openJackOutput(&Speaker{debug: false}, Options{Driver: asio.JACK, Outputs: []int{}})
+	_, err := openJackOutput(&Speaker{debug: false}, Options{Driver: driver.JACK, Outputs: []int{}})
 	if err == nil {
 		t.Fatal("JACK opened with no outputs")
 	}

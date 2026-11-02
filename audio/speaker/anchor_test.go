@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 )
 
 // card is a sound card whose clock runs ppm parts in a million fast,
@@ -292,7 +292,7 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 	was := clock
 	clock = func() time.Time { return start.Add(time.Duration(at.Load())) }
 	t.Cleanup(func() { clock = was })
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32})
 	m := audio.NewMixer()
 	s, err := Open(m, Options{Driver: "Fake", Latency: 30 * time.Millisecond, Fixed: true})
 	if err != nil {

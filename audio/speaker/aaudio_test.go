@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/aaudio"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 )
@@ -210,7 +211,7 @@ func (f *fakeAA) playedFrames() []int64 {
 // as the test ends, its voices stopped, and the mixer's teller let go.
 func openAA(t *testing.T, m *audio.Mixer, o Options, voices ...*audio.Voice) *Speaker {
 	t.Helper()
-	o.Driver = AAudio
+	o.Driver = driver.AAudio
 	s, err := Open(m, o)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +245,7 @@ func TestAAudioPlaysTheMixerAsHeard(t *testing.T) {
 		v := m.Play(&ramp{}, audio.Options{})
 		s := openAA(t, m, Options{Latency: 20 * time.Millisecond}, v)
 		st := s.State()
-		if st.Driver != AAudio || st.Rate != 48000 || st.ASIO == nil || st.ASIO.Buffer != 192 {
+		if st.Driver != driver.AAudio || st.Rate != 48000 || st.Info == nil || st.Info.Buffer != 192 {
 			t.Fatalf("the state says %+v", st)
 		}
 		outs, _ := f.streams()
@@ -361,7 +362,7 @@ func TestAAudioStampsWhatItRecords(t *testing.T) {
 		v := m.Play(&ramp{}, audio.Options{})
 		s := openAA(t, m, Options{Record: true}, v)
 		tap := duplex.Current()
-		if tap == nil || tap.Driver != AAudio || len(tap.Names) != 1 {
+		if tap == nil || tap.Driver != driver.AAudio || len(tap.Names) != 1 {
 			t.Fatalf("the tap is %+v", tap)
 		}
 		type block struct{ pos, heard int64 }
@@ -535,7 +536,7 @@ func TestAAudioKeepsALongDelay(t *testing.T) {
 				if l := s.Latency(); l < delay || l > delay+30*time.Millisecond {
 					t.Errorf("the latency is %v, the device alone delays %v", l, delay)
 				}
-				if in := s.State().ASIO.InputLatency; abs64(int64(in)-d) > int64(f.burst) {
+				if in := s.State().Info.InputLatency; abs64(int64(in)-d) > int64(f.burst) {
 					t.Errorf("the input's latency is %d frames, the device's %d", in, d)
 				}
 			})

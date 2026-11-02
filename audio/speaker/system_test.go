@@ -5,16 +5,16 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 )
 
 // useFakeSystem puts a fake device in place of the system's own sound
 // for the test; fail has it fail to open.
-func useFakeSystem(t *testing.T, info asio.Info, fail bool) *fakeDriver {
+func useFakeSystem(t *testing.T, info driver.Info, fail bool) *fakeDriver {
 	t.Helper()
 	f := &fakeDriver{info: info}
 	was := openSystem
-	openSystem = func(c asio.Config) (pullDevice, error) {
+	openSystem = func(c driver.Config) (pullDevice, error) {
 		if fail {
 			return nil, errors.New("no device")
 		}
@@ -29,7 +29,7 @@ func useFakeSystem(t *testing.T, info asio.Info, fail bool) *fakeDriver {
 // at the buffer asked, the state telling no driver, and a new buffer
 // opens it again.
 func TestTheSystemsSoundMixesOnItsThread(t *testing.T) {
-	f := useFakeSystem(t, asio.Info{Driver: "Speakers", Rate: 48000, Buffer: 128, Latency: 419, Bits: 32, Float: true}, false)
+	f := useFakeSystem(t, driver.Info{Driver: "Speakers", Rate: 48000, Buffer: 128, Latency: 419, Bits: 32, Float: true}, false)
 	m := audio.NewMixer()
 	m.Play(steady(0.25), audio.Options{})
 	s, err := Open(m, Options{Buffer: 128, Direct: true, Fixed: true, Outputs: []int{4, 5}, Record: true})
@@ -44,7 +44,7 @@ func TestTheSystemsSoundMixesOnItsThread(t *testing.T) {
 		t.Errorf("opened with %+v", cfg)
 	}
 	st := s.State()
-	if st.Driver != "" || st.ASIO == nil || st.ASIO.Buffer != 128 || st.Aux != 0 {
+	if st.Driver != "" || st.Info == nil || st.Info.Buffer != 128 || st.Aux != 0 {
 		t.Errorf("state %+v", st)
 	}
 	if want := audio.DurationAt(419, 48000); st.Latency != want {
@@ -74,7 +74,7 @@ func TestTheSystemsSoundMixesOnItsThread(t *testing.T) {
 // TestTheSystemsSoundFallsBackToOto plays through oto where the
 // system's device fails to open, the state telling why.
 func TestTheSystemsSoundFallsBackToOto(t *testing.T) {
-	useFakeSystem(t, asio.Info{}, true)
+	useFakeSystem(t, driver.Info{}, true)
 	m := audio.NewMixer()
 	s, err := Open(m, Options{Buffer: 128, Direct: true})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestTheSystemsSoundFallsBackToOto(t *testing.T) {
 	if _, ok := s.out.Load().output.(*otoOutput); !ok {
 		t.Errorf("plays through %T, want oto", s.out.Load().output)
 	}
-	if st := s.State(); st.Problem == nil || st.Problem.Error() != "no device" || st.ASIO != nil {
+	if st := s.State(); st.Problem == nil || st.Problem.Error() != "no device" || st.Info != nil {
 		t.Errorf("state %+v", st)
 	}
 }
