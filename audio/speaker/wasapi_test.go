@@ -26,6 +26,10 @@ import (
 // they played none, so a test reads the truth from it.
 type fakeWas struct {
 	rate, period, buffer, latency, chans, inputs int
+	// startAfter is how long each device takes, once started, before
+	// its time moves; frozen, where set, opens each device frozen.
+	startAfter time.Duration
+	frozen     atomic.Bool
 	// failOpen fails as many opens; nextRate and nextInputs, where set,
 	// are the next device's.
 	failOpen, nextRate, nextInputs atomic.Int64
@@ -83,6 +87,7 @@ func (f *fakeWas) open(c wasapi.Config) (wasDevice, error) {
 		info.InputLatency = f.period
 	}
 	d := &fakeWasDev{f: f, info: info}
+	d.frozen.Store(f.frozen.Load())
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.devs = append(f.devs, d)
@@ -111,7 +116,7 @@ func (d *fakeWasDev) elapsed(now int64) int64 {
 	if !d.running {
 		now = d.stoppedAt
 	}
-	return (now - d.t0) * int64(d.info.Rate) / 1e9
+	return max(0, now-d.t0) * int64(d.info.Rate) / 1e9
 }
 
 // advance has the engine take the periods that ended by now. It runs
@@ -120,7 +125,7 @@ func (d *fakeWasDev) advance(now int64) {
 	if !d.running || d.frozen.Load() {
 		return
 	}
-	for d.periods < (now-d.t0)/d.periodNs() {
+	for d.periods < max(0, now-d.t0)/d.periodNs() {
 		k := min(d.info.Period, len(d.q))
 		d.played = append(d.played, d.q[:k]...)
 		d.q = d.q[k:]
@@ -175,7 +180,7 @@ func (d *fakeWasDev) Start() error {
 		return errors.New("fake: started already")
 	}
 	if !d.ever {
-		d.t0, d.ever = now, true
+		d.t0, d.ever = now+int64(d.f.startAfter), true
 	} else {
 		d.t0 += now - d.stoppedAt
 	}
@@ -714,4 +719,70 @@ func TestSilencesPlaceTheClock(t *testing.T) {
 	if got := l.before(5); got != 68 {
 		t.Errorf("before a run let go = %d, want the oldest kept's 68", got)
 	}
+}
+
+// TestWASAPIWaitsForASlowDevice plays through a device whose clock
+// first moves 2.5 s after it starts, as a Bluetooth headset waking up:
+// the output waits for it, with no opening again, and hears it play.
+func TestWASAPIWaitsForASlowDevice(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 480, chans: 2, startAfter: 2500 * time.Millisecond}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openWas(t, m, Options{}, v)
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		dev, n := f.dev(-1)
+		if n != 1 {
+			t.Fatalf("%d devices opened, want 1", n)
+		}
+		hearsAsPlayed(t, m, dev, 2*time.Second)
+		if p := s.State().Problem; p != nil {
+			t.Errorf("the state tells %v", p)
+		}
+	})
+}
+
+// TestWASAPIBacksOffADeviceThatNeverPlays opens devices whose clock
+// never moves: the output opens them again ever more slowly, and the
+// state says so; once a device plays, the problem goes.
+func TestWASAPIBacksOffADeviceThatNeverPlays(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 480, chans: 2}
+		f.frozen.Store(true)
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openWas(t, m, Options{}, v)
+		time.Sleep(60 * time.Second)
+		synctest.Wait()
+		_, n := f.dev(-1)
+		// Opened again at once after the first stall, then after 1, 2, 4
+		// and 8 s: six in a minute, where with no backing off there
+		// would be twelve, one each wasStartup.
+		if n < 4 || n > 7 {
+			t.Errorf("%d devices opened in a minute, want 4 to 7", n)
+		}
+		if p := s.State().Problem; p == nil {
+			t.Error("the state tells no problem while nothing plays")
+		}
+		// The next device plays. (The ramp tops out at 1.0, a million
+		// frames, so the test hears it soon.)
+		f.frozen.Store(false)
+		for range 300 {
+			if _, now := f.dev(-1); now > n {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		dev, now := f.dev(-1)
+		if now != n+1 {
+			t.Fatalf("no device opened after the clock moved again: %d opened", now)
+		}
+		hearsAsPlayed(t, m, dev, time.Second)
+		if p := s.State().Problem; p != nil {
+			t.Errorf("playing again, the state tells %v", p)
+		}
+	})
 }

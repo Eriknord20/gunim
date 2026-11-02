@@ -55,9 +55,17 @@ const (
 	// wasSettle is how long a device starting or resuming plays before a
 	// buffer the ring leaves short counts as the sound running dry.
 	wasSettle = 250 * time.Millisecond
-	// wasStalled is how long a started device's clock may stand still
-	// before it is opened again, as one gone untold.
+	// wasStalled is how long a playing device's clock may stand still
+	// before it is opened again, as one gone untold. wasStartup is how
+	// long a device starting or resuming may take before its clock first
+	// moves, as a Bluetooth headset or an HDMI display waking up does.
 	wasStalled = time.Second
+	wasStartup = 5 * time.Second
+	// wasStallWait is how long the render goroutine waits before it
+	// opens a device again after its second stall in a row, doubling with
+	// each stall after, as far as wasStallMost.
+	wasStallWait = time.Second
+	wasStallMost = 16 * time.Second
 	// wasJump is how far a clock reading may place the device from
 	// where the last ones did before it is taken as it is, unsmoothed.
 	wasJump = 5 * time.Millisecond
@@ -138,6 +146,11 @@ type wasOutput struct {
 	settle  int64
 	pos     int64
 	movedAt int64
+	// moved says the clock has moved since the device started or
+	// resumed; stalls counts the devices in a row whose clock stood
+	// still.
+	moved   bool
+	stalls  int
 	fails   int
 	next    int64
 	buf, in []float32
@@ -238,7 +251,7 @@ func (a *wasOutput) drop() {
 // startDevice fills the device's buffer and starts it.
 func (a *wasOutput) startDevice() {
 	now := a.clock()
-	a.settle, a.movedAt = now, now
+	a.settle, a.movedAt, a.moved = now, now, false
 	if err := a.write(now); err != nil {
 		a.lose(err)
 		return
@@ -319,7 +332,10 @@ func (a *wasOutput) reopen() bool {
 		return false
 	}
 	a.fails = 0
-	a.problem.Store(nil)
+	if a.stalls == 0 {
+		// A stall's problem stands until a device's clock moves.
+		a.problem.Store(nil)
+	}
 	// What waited was mixed for the device gone; the new one starts from
 	// the next frame mixed.
 	a.q.r.Store(a.q.w.Load())
@@ -332,9 +348,24 @@ func (a *wasOutput) reopen() bool {
 // lose closes a device that went away, failed or stalled; the loop
 // opens the default one again.
 func (a *wasOutput) lose(err error) {
-	a.s.logf("WASAPI: %v; opening the default device again", err)
 	a.drop()
 	a.next = a.clock()
+	if !errors.Is(err, errStalled) {
+		a.s.logf("WASAPI: %v; opening the default device again", err)
+		return
+	}
+	// A device whose clock never moves plays nothing, opened again or
+	// not: once more at once, then ever more slowly, and say so.
+	a.stalls++
+	if a.stalls == 1 {
+		a.s.logf("WASAPI: %v; opening the default device again", err)
+		return
+	}
+	wait := min(wasStallWait<<min(a.stalls-2, 8), wasStallMost)
+	a.next += int64(wait)
+	p := fmt.Errorf("speaker: WASAPI: the device's clock stood still %d times in a row: it plays nothing", a.stalls)
+	a.problem.Store(&p)
+	a.s.logf("WASAPI: %v; opening the default device again in %v", p, wait)
 }
 
 // pause stops the device, keeping what its buffer holds, or starts it
@@ -358,7 +389,7 @@ func (a *wasOutput) pause(p bool) {
 	}
 	now := a.clock()
 	a.org.Store(none)
-	a.settle, a.movedAt = now, now
+	a.settle, a.movedAt, a.moved = now, now, false
 	if err := a.dev.Start(); err != nil {
 		a.lose(err)
 	}
@@ -376,9 +407,19 @@ func (a *wasOutput) cycle() error {
 		return err
 	}
 	if pos != a.pos {
-		a.pos, a.movedAt = pos, now
-	} else if now-a.movedAt > int64(wasStalled) {
-		return errStalled
+		a.pos, a.movedAt, a.moved = pos, now, true
+		if a.stalls > 0 {
+			a.stalls = 0
+			a.problem.Store(nil)
+		}
+	} else {
+		limit := wasStalled
+		if !a.moved {
+			limit = wasStartup
+		}
+		if now-a.movedAt > int64(limit) {
+			return errStalled
+		}
 	}
 	if pos > 0 {
 		a.place(pos, at, now)

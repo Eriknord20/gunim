@@ -1,6 +1,7 @@
 package speaker
 
 import (
+	"errors"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -12,8 +13,9 @@ import (
 	"github.com/marrasen/gunim/audio/internal/wasapi"
 )
 
-// liveDevice reports whether Windows has a default output, as a build
-// server has none.
+// liveDevice opens the default output and returns what it says of
+// itself. It skips where Windows has no output, as a build server has
+// none, and fails on any other error, as of a bug in the COM code.
 func liveDevice(t *testing.T) wasapi.Info {
 	t.Helper()
 	got := make(chan wasapi.Info, 1)
@@ -31,7 +33,12 @@ func liveDevice(t *testing.T) wasapi.Info {
 	}()
 	select {
 	case err := <-errc:
-		t.Skipf("no default output: %v", err)
+		// ErrLost stands for E_NOTFOUND, AUDCLNT_E_DEVICE_INVALIDATED
+		// and AUDCLNT_E_SERVICE_NOT_RUNNING.
+		if errors.Is(err, wasapi.ErrLost) {
+			t.Skipf("no default output: %v", err)
+		}
+		t.Fatalf("opening the default output: %v", err)
 	case info := <-got:
 		t.Logf("%+v", info)
 		return info
