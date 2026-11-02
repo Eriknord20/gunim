@@ -76,17 +76,22 @@ type aaRun struct {
 	// opened is when the stream opened, on the output's clock.
 	opened int64
 	moved  atomic.Int64
+	// dead says the feed found the stream failed, for the opener to
+	// open another.
+	dead atomic.Bool
 }
 
 // aaOutput plays through AAudio. AAudio's thread takes each buffer from
-// a ring in C memory, and a goroutine keeps the ring filled from the
-// mixer, a chunk at a time, as ringOutput's feed does. Where Record is
-// set, AAudio's thread puts each block recorded in another ring, which
-// the goroutine stamps and hands to package audio/capture. Each stream
-// tells by its timestamps which frame the device plays or records when,
-// on one clock, which places the frames heard, and the frame heard as
-// each block recorded came in. The goroutine opens a stream again where
-// its device goes away, as a headset unplugged.
+// a ring in C memory, and a goroutine, the feed, keeps the ring filled
+// from the mixer, a chunk at a time, as ringOutput's feed does. Where
+// Record is set, AAudio's thread puts each block recorded in another
+// ring, which the feed stamps and hands to package audio/capture. Each
+// stream tells by its timestamps which frame the device plays or
+// records when, on one clock, which places the frames heard, and the
+// frame heard as each block recorded came in. Another goroutine, the
+// opener, opens a stream again where its device goes away, as a headset
+// unplugged, and the microphone until it opens. Opening a stream takes
+// AAudio as long as 200 ms, and the feed must never wait that long.
 type aaOutput struct {
 	s      *Speaker
 	hz     int
@@ -124,8 +129,19 @@ type aaOutput struct {
 	iproblem   atomic.Pointer[error]
 	wake, quit chan struct{}
 	done       chan struct{}
-	// Opening again: the goroutine's own count of attempts that failed in
-	// a row, and when it may try next.
+	// reopen wakes the opener, and kept closes as it ends.
+	reopen chan struct{}
+	kept   chan struct{}
+	// opening counts the streams being opened or started now, and calm
+	// is when the last of those ended, plus aaSettle, on the output's
+	// clock: dry spells until then leave the latency as it is.
+	opening atomic.Int64
+	calm    atomic.Int64
+	// told is when the feed last logged the streams' raw timestamps,
+	// where the speaker logs.
+	told int64
+	// Opening again: the opener's own count of attempts that failed in a
+	// row, and when it may try next.
 	fails, ifails int
 	next, inext   int64
 }
@@ -152,6 +168,15 @@ const (
 	// aaWaitStamp is how long what was recorded waits for the streams'
 	// timestamps, to be stamped from them.
 	aaWaitStamp = 500 * time.Millisecond
+	// aaProven is how long a stream runs before the attempts that
+	// failed before it are forgotten: one that fails to start, or dies
+	// sooner, counts as one more that failed.
+	aaProven = 2 * time.Second
+	// aaMicGiveUp is how many attempts in a row may fail to open the
+	// microphone before it is tried only every aaMicSlow, as each try
+	// may hold the output up a moment.
+	aaMicGiveUp = 10
+	aaMicSlow   = 10 * time.Second
 	// aaMostCallback is the most frames a callback is counted to ask
 	// for at once, as a Bluetooth headset's large bursts do.
 	aaMostCallback = 16384
@@ -167,7 +192,8 @@ func openAAudio(s *Speaker, o Options, byName bool) (*aaOutput, error) {
 		return nil, aaudio.ErrUnsupported
 	}
 	a := &aaOutput{s: s, hz: o.rate(), byName: byName, clock: aaClock,
-		wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{})}
+		wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
+		reopen: make(chan struct{}, 1), kept: make(chan struct{})}
 	a.org.Store(none)
 	a.iorg.Store(none)
 	a.q = aaudio.NewRing[float32](int(audio.FramesAt(MaxLatency, a.hz))+2*aaMostCallback, 2)
@@ -185,22 +211,40 @@ func openAAudio(s *Speaker, o Options, byName bool) (*aaOutput, error) {
 		a.mu.Lock()
 		if err := a.openIn(); err != nil {
 			a.ifails = 1
-			s.logf("%v; trying again as it plays", err)
+			a.inext = a.clock() + int64(micRetry(1))
+			s.logf("%v; trying again in %v", err, micRetry(1))
 		}
 		a.mu.Unlock()
 	}
 	return a, nil
 }
 
-// openOut opens the output stream, stopped, as the device's own where
-// it lets it. It runs with mu held.
-func (a *aaOutput) openOut() error {
-	c := aaConfig{rate: a.hz, chans: 2, exclusive: true, data: a.q}
+// openStream opens a stream as c says, as the device's own where it
+// lets it, and shared where it does not.
+func (a *aaOutput) openStream(c aaConfig) (aaStream, error) {
+	c.exclusive = true
 	st, err := openAAStream(c)
 	if err != nil {
 		c.exclusive = false
 		st, err = openAAStream(c)
 	}
+	return st, err
+}
+
+// busy marks a stream being opened or started, until the func it
+// returns runs: dry spells meanwhile, and for aaSettle after, leave the
+// latency as it is.
+func (a *aaOutput) busy() func() {
+	a.opening.Add(1)
+	return func() {
+		a.calm.Store(a.clock() + int64(aaSettle))
+		a.opening.Add(-1)
+	}
+}
+
+// openOut opens the output stream, stopped. It runs with mu held.
+func (a *aaOutput) openOut() error {
+	st, err := a.openStream(aaConfig{rate: a.hz, chans: 2, data: a.q})
 	if err != nil {
 		a.problem.Store(&err)
 		return err
@@ -232,12 +276,7 @@ func (a *aaOutput) openOut() error {
 
 // openIn opens the input stream, stopped. It runs with mu held.
 func (a *aaOutput) openIn() error {
-	c := aaConfig{input: true, rate: a.hz, chans: 1, exclusive: true, data: a.in, blocks: a.blocks}
-	st, err := openAAStream(c)
-	if err != nil {
-		c.exclusive = false
-		st, err = openAAStream(c)
-	}
+	st, err := a.openStream(aaConfig{input: true, rate: a.hz, chans: 1, data: a.in, blocks: a.blocks})
 	if err == nil && st.Info().Rate != a.hz {
 		_ = st.Close()
 		err = errors.New("speaker: the microphone records at another rate than the output plays")
@@ -249,7 +288,8 @@ func (a *aaOutput) openIn() error {
 		return err
 	}
 	a.iproblem.Store(nil)
-	// Blocks of a stream gone count frames of their own.
+	// Blocks of a stream gone count frames of their own. The feed reads
+	// the rings only while an input is open, so it is still now.
 	a.blocks.Drop()
 	a.in.Drop()
 	info := st.Info()
@@ -307,17 +347,6 @@ func (a *aaOutput) enter() bool {
 
 func (a *aaOutput) leave() { a.readers.Add(-1) }
 
-// check says the stream p holds failed, as failed tells, reading it as
-// a reader of the streams.
-func (a *aaOutput) check(p *atomic.Pointer[aaRun], now int64) bool {
-	if !a.enter() {
-		return false
-	}
-	defer a.leave()
-	run := p.Load()
-	return run != nil && a.failed(run, now)
-}
-
 // start fills the ring and starts the streams, and the goroutine that
 // keeps them going.
 func (a *aaOutput) start(ahead time.Duration) {
@@ -331,31 +360,43 @@ func (a *aaOutput) start(ahead time.Duration) {
 	}
 	a.mu.Lock()
 	a.started = true
-	a.startOut()
-	a.startIn()
+	if !a.startOut() {
+		a.fails++
+		a.next = a.clock() + int64(retryDelay(a.fails))
+	}
+	if !a.startIn() {
+		a.ifails++
+		a.inext = a.clock() + int64(micRetry(a.ifails))
+	}
 	a.mu.Unlock()
 	go a.loop(buf)
+	go a.keep()
 }
 
 // startOut starts the output stream, where it is open, and closes it
 // where it fails to start. It runs with mu held.
-func (a *aaOutput) startOut() {
+// It returns false where it failed to start.
+func (a *aaOutput) startOut() bool {
 	if run := a.run.Load(); run != nil {
 		if err := run.st.Start(); err != nil {
 			a.s.logf("%v", err)
 			a.dropOut()
+			return false
 		}
 	}
+	return true
 }
 
 // startIn starts the input stream as startOut does the output.
-func (a *aaOutput) startIn() {
+func (a *aaOutput) startIn() bool {
 	if run := a.irun.Load(); run != nil {
 		if err := run.st.Start(); err != nil {
 			a.s.logf("%v", err)
 			a.dropIn()
+			return false
 		}
 	}
+	return true
 }
 
 // chunk is the most frames the goroutine reads the mixer for at once.
@@ -368,10 +409,11 @@ func (a *aaOutput) burst() int {
 	return 0
 }
 
-// loop keeps the streams going until the output closes: it tops the
-// ring up, reads the timestamps, hands on what was recorded, and opens
-// a stream again whose device went away. It runs at the system's audio
-// priority, where there is one, as ringOutput's feed does.
+// loop is the feed. It keeps the streams going until the output closes:
+// it tops the ring up, reads the timestamps, hands on what was
+// recorded, and tells the opener of a stream that failed. It runs at
+// the system's audio priority, where there is one, as ringOutput's
+// feed does, and never opens or closes a stream: that waits too long.
 func (a *aaOutput) loop(buf []float32) {
 	defer close(a.done)
 	leave := rt.Enter()
@@ -398,12 +440,13 @@ func (a *aaOutput) loop(buf []float32) {
 			continue
 		}
 		now := a.clock()
-		a.keepOpen(now, buf)
-		// Suspend and Resume may close a stream meanwhile, once no
-		// reader reads it.
+		// The opener, Suspend and Resume may close a stream meanwhile,
+		// once no reader reads it.
 		if !a.enter() {
 			return
 		}
+		a.watch(&a.run, now)
+		a.watch(&a.irun, now)
 		if now-polled >= int64(aaPoll) {
 			polled = now
 			a.poll()
@@ -415,7 +458,7 @@ func (a *aaOutput) loop(buf []float32) {
 	}
 }
 
-// retryDelay is how long to wait before opening a stream again after
+// retryDelay is how long to wait before opening the output again after
 // fails attempts in a row failed: soon at first, for a device about to
 // be ready, then once a second, for one gone a while.
 func retryDelay(fails int) time.Duration {
@@ -430,59 +473,139 @@ func retryDelay(fails int) time.Duration {
 	return time.Second
 }
 
-// keepOpen opens a stream again whose device went away, or that
-// stopped taking buffers, and one that failed to open, when it may try
-// next.
-func (a *aaOutput) keepOpen(now int64, buf []float32) {
-	if a.check(&a.run, now) {
-		a.mu.Lock()
-		if !a.paused.Load() {
-			a.dropOut()
-			a.next = now
-		}
-		a.mu.Unlock()
+// micRetry is how long to wait before opening the microphone again
+// after fails attempts in a row failed: half a second at first, as the
+// user may be answering the prompt for the permission to record, and
+// twice as long each time after, to 2 s; after aaMicGiveUp, every
+// aaMicSlow. Any error counts so: before the permission is given,
+// Android 16 fails the open with AAUDIO_ERROR_INTERNAL, and earlier
+// ones with others.
+func micRetry(fails int) time.Duration {
+	if fails >= aaMicGiveUp {
+		return aaMicSlow
 	}
-	if a.run.Load() == nil && now >= a.next {
-		a.mu.Lock()
-		if a.run.Load() == nil && !a.paused.Load() {
-			if err := a.openOut(); err != nil {
-				a.fails++
-				a.next = now + int64(retryDelay(a.fails))
-				a.s.logf("%v; trying again in %v", err, retryDelay(a.fails))
-			} else {
-				a.fails = 0
-				a.topUp(buf)
-				a.startOut()
+	return min(500*time.Millisecond<<min(max(fails-1, 0), 2), 2*time.Second)
+}
+
+// lived says how a stream that is closing ran: one that ran aaProven
+// clears the count of attempts that failed, and is opened again at
+// once; one that died sooner counts as an attempt that failed. It
+// returns when to try next.
+func (a *aaOutput) lived(run *aaRun, fails *int, delay func(int) time.Duration) int64 {
+	now := a.clock()
+	if now-run.opened >= int64(aaProven) {
+		*fails = 0
+		return now
+	}
+	*fails++
+	return now + int64(delay(*fails))
+}
+
+// watch marks the stream p holds dead where it failed, as failed
+// tells, and wakes the opener to open another. It runs on the feed, as
+// a reader of the streams.
+func (a *aaOutput) watch(p *atomic.Pointer[aaRun], now int64) {
+	if run := p.Load(); run != nil && !run.dead.Load() && a.failed(run, now) {
+		run.dead.Store(true)
+		a.wakeOpener()
+	}
+}
+
+func (a *aaOutput) wakeOpener() {
+	select {
+	case a.reopen <- struct{}{}:
+	default:
+	}
+}
+
+func (a *aaOutput) wakeFeed() {
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
+}
+
+// keep is the opener: it opens a stream again whose device went away,
+// or that stopped taking buffers, and one that failed to open, when it
+// may try next, until the output closes. The feed plays on meanwhile.
+func (a *aaOutput) keep() {
+	defer close(a.kept)
+	for {
+		var next <-chan time.Time
+		if wait, ok := a.keepOpen(); ok {
+			next = time.After(wait)
+		}
+		select {
+		case <-a.quit:
+			return
+		case <-a.reopen:
+		case <-next:
+		}
+	}
+}
+
+// keepOpen closes the streams the feed found dead, and opens those
+// closed whose time has come. It returns how long until the next it
+// must try, and false where it waits for none.
+func (a *aaOutput) keepOpen() (wait time.Duration, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.paused.Load() {
+		return 0, false
+	}
+	// The count of attempts that failed is cleared only by a stream
+	// that ran aaProven, so one that opens and fails at once waits as
+	// one that fails to open.
+	if run := a.run.Load(); run != nil && run.dead.Load() {
+		a.next = a.lived(run, &a.fails, retryDelay)
+		a.dropOut()
+	}
+	if a.run.Load() == nil && a.clock() >= a.next {
+		done := a.busy()
+		err := a.openOut()
+		if err == nil {
+			// The feed fills the ring as the stream starts.
+			a.wakeFeed()
+			if !a.startOut() {
+				err = errors.New("speaker: AAudio's output did not start")
 			}
 		}
-		a.mu.Unlock()
+		if err != nil {
+			a.fails++
+			a.next = a.clock() + int64(retryDelay(a.fails))
+			a.s.logf("%v; trying again in %v", err, retryDelay(a.fails))
+		}
+		done()
 	}
-	if a.in == nil {
-		return
-	}
-	if a.check(&a.irun, now) {
-		a.mu.Lock()
-		if !a.paused.Load() {
+	if a.in != nil {
+		if run := a.irun.Load(); run != nil && run.dead.Load() {
+			a.inext = a.lived(run, &a.ifails, micRetry)
 			a.dropIn()
-			a.inext = now
 		}
-		a.mu.Unlock()
-	}
-	if a.irun.Load() == nil && now >= a.inext {
-		a.mu.Lock()
-		if a.irun.Load() == nil && !a.paused.Load() {
-			if err := a.openIn(); err != nil {
-				// The permission to record may come later: try again,
-				// every two seconds at most.
-				a.ifails++
-				a.inext = now + int64(min(retryDelay(a.ifails), 2*time.Second))
-			} else {
-				a.ifails = 0
-				a.startIn()
+		if a.irun.Load() == nil && a.clock() >= a.inext {
+			done := a.busy()
+			err := a.openIn()
+			if err == nil && !a.startIn() {
+				err = errors.New("speaker: the microphone did not start")
 			}
+			if err != nil {
+				// The permission to record may come later: try again.
+				a.ifails++
+				a.inext = a.clock() + int64(micRetry(a.ifails))
+				a.s.logf("%v; trying again in %v", err, micRetry(a.ifails))
+			}
+			done()
 		}
-		a.mu.Unlock()
 	}
+	now := a.clock()
+	wait = time.Duration(math.MaxInt64)
+	if a.run.Load() == nil {
+		wait, ok = time.Duration(a.next-now), true
+	}
+	if a.in != nil && a.irun.Load() == nil {
+		wait, ok = min(wait, time.Duration(a.inext-now)), true
+	}
+	return max(wait, 0), ok
 }
 
 // failed says run's device went away, its timestamps no longer fit
@@ -511,6 +634,11 @@ func (a *aaOutput) failed(run *aaRun, now int64) bool {
 // poll reads the streams' timestamps: where the device is in the frames
 // it took, and how far behind the frames the callback carried.
 func (a *aaOutput) poll() {
+	if now := a.clock(); a.s.debug && now-a.told >= int64(time.Second) {
+		a.told = now
+		a.tell("plays", a.run.Load(), false, a.delay.Load())
+		a.tell("records", a.irun.Load(), true, a.inDelay.Load())
+	}
 	if run := a.run.Load(); run != nil {
 		run.most.Store(run.sh.Most.Load())
 		if behind, first, ok := a.fit(run, &a.org, false); first {
@@ -519,10 +647,8 @@ func (a *aaOutput) poll() {
 			a.delay.Store(smooth(a.delay.Load(), behind))
 		}
 		if x := run.st.XRuns(); x > run.xruns {
-			if a.clock()-a.settle.Load() > int64(aaSettle) {
-				for range min(x-run.xruns, 100) {
-					a.s.ranDry()
-				}
+			if now := a.clock(); now-a.settle.Load() > int64(aaSettle) {
+				a.ranDry(min(x-run.xruns, 100), now)
 			}
 			run.xruns = x
 		}
@@ -535,6 +661,31 @@ func (a *aaOutput) poll() {
 			a.inDelay.Store(smooth(a.inDelay.Load(), ahead))
 		}
 	}
+}
+
+// tell logs what run's timestamp says as it stands, fitted or not,
+// beside the delay the output tells, to check one against the other.
+func (a *aaOutput) tell(does string, run *aaRun, input bool, told int64) {
+	if run == nil {
+		return
+	}
+	pos, at, cnow, ok := run.st.Timestamp()
+	carried := run.sh.Frames.Load()
+	if !ok {
+		a.s.logf("AAudio %s: no timestamp yet; %d frames carried", does, carried)
+		return
+	}
+	// As Oboe's calculateLatencyMillis reckons it.
+	gap := float64(carried-pos)/float64(a.hz) - float64(cnow-at)/1e9
+	if input {
+		gap = -gap
+	}
+	info := run.st.Info()
+	a.s.logf("AAudio %s: frame %d at the device %v ago, %d carried: %v between; the output tells %v; "+
+		"%d in a row did not fit; buffer %d of %d, burst %d, exclusive %v, %d xruns",
+		does, pos, time.Duration(cnow-at).Round(time.Microsecond), carried,
+		time.Duration(gap*1e9).Round(100*time.Microsecond), audio.DurationAt(told, a.hz).Round(100*time.Microsecond),
+		run.odd, info.Buffer, info.Capacity, info.Burst, info.Exclusive, run.st.XRuns())
 }
 
 // fit reads run's timestamp into org, the origin of its frames, where
@@ -568,6 +719,10 @@ func (a *aaOutput) fit(run *aaRun, org *atomic.Uint64, input bool) (gap int64, f
 	g := gapAt(raw)
 	if g < -slack || g > audio.FramesAt(MaxLatency, a.hz) || (run.fitted && abs64(g-run.gap) > audio.FramesAt(aaShift, a.hz)) {
 		run.odd++
+		if a.s.debug {
+			a.s.logf("AAudio's timestamp does not fit: %v between, after %v", audio.DurationAt(g, a.hz),
+				audio.DurationAt(run.gap, a.hz))
+		}
 		return 0, false, false
 	}
 	first = !run.fitted
@@ -638,11 +793,24 @@ func (a *aaOutput) count(now int64) {
 	}
 	if u := run.sh.Underruns.Load(); u > run.underruns {
 		if a.primed.Load() && now-a.settle.Load() > int64(aaSettle) {
-			for range min(u-run.underruns, 100) {
-				a.s.ranDry()
-			}
+			a.ranDry(min(u-run.underruns, 100), now)
 		}
 		run.underruns = u
+	}
+}
+
+// ranDry counts n dry spells. Those while a stream opens or starts,
+// and for aaSettle after, count as dropouts but leave the latency as
+// it is: an input opening may hold the system up a moment, once, and a
+// latency grown for that would stay grown.
+func (a *aaOutput) ranDry(n, now int64) {
+	steady := a.opening.Load() == 0 && now >= a.calm.Load()
+	for range n {
+		if steady {
+			a.s.ranDry()
+		} else {
+			a.s.ranDryOnce()
+		}
 	}
 }
 
@@ -654,7 +822,12 @@ func (a *aaOutput) drain(buf []float32, now int64) {
 	if a.in == nil {
 		return
 	}
-	if irun := a.irun.Load(); irun != nil && now-irun.opened < int64(aaWaitStamp) &&
+	// The rings are the opener's while no input is open.
+	irun := a.irun.Load()
+	if irun == nil {
+		return
+	}
+	if now-irun.opened < int64(aaWaitStamp) &&
 		(math.IsNaN(math.Float64frombits(a.org.Load())) || math.IsNaN(math.Float64frombits(a.iorg.Load()))) {
 		return
 	}
@@ -796,10 +969,11 @@ func (a *aaOutput) resume() error {
 		run.moved.Store(a.clock())
 		a.startOut()
 	}
-	select {
-	case a.wake <- struct{}{}:
-	default:
-	}
+	// The user may have allowed recording meanwhile: try the
+	// microphone at once, its count of failures kept.
+	a.inext = a.clock()
+	a.wakeFeed()
+	a.wakeOpener()
 	return nil
 }
 
@@ -809,6 +983,7 @@ func (a *aaOutput) close() error {
 	}
 	close(a.quit)
 	<-a.done
+	<-a.kept
 	a.mu.Lock()
 	a.dropOut()
 	a.dropIn()

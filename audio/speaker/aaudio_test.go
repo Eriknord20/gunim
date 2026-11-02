@@ -32,12 +32,34 @@ type fakeAA struct {
 	failPause       atomic.Bool
 	// more adds to every output's delay from when it is set, as
 	// earbuds connecting to a device already playing.
-	more      atomic.Int64
-	mu        sync.Mutex
-	outs, ins []*fakeAAStream
+	more atomic.Int64
+	// inTakes is how long an input's open takes, as AAudio's take as
+	// long as 200 ms; inOpens holds when each began, and whether it
+	// asked for the device to itself.
+	inTakes time.Duration
+	inOpens []fakeOpen
+	// opening counts the inputs opening now. dryWhileOpening has every
+	// output's callback find its ring short meanwhile, and starve at
+	// any time, as a system too busy to run the feed.
+	opening         atomic.Int64
+	dryWhileOpening bool
+	starve          atomic.Bool
+	// failStartIn fails every input's Start. dryAfterOpen has every
+	// output's callback find its ring short for as long after an input
+	// opens, until starveTill, in Unix nanoseconds.
+	failStartIn  atomic.Bool
+	dryAfterOpen time.Duration
+	starveTill   atomic.Int64
+	mu           sync.Mutex
+	outs, ins    []*fakeAAStream
 	// played holds each frame played, the first sample of its pair, as
 	// devices play them, one after another.
 	played []float32
+}
+
+type fakeOpen struct {
+	at        time.Time
+	exclusive bool
 }
 
 type fakeAAStream struct {
@@ -70,9 +92,18 @@ func (f *fakeAA) open(c aaConfig) (aaStream, error) {
 	fails := &f.failOut
 	if c.input {
 		fails = &f.failIn
+		f.mu.Lock()
+		f.inOpens = append(f.inOpens, fakeOpen{time.Now(), c.exclusive})
+		f.mu.Unlock()
+		f.opening.Add(1)
+		time.Sleep(f.inTakes)
+		f.opening.Add(-1)
 	}
 	if fails.Add(-1) >= 0 {
 		return nil, errors.New("fake: refused")
+	}
+	if c.input && f.dryAfterOpen > 0 {
+		f.starveTill.Store(time.Now().Add(f.dryAfterOpen).UnixNano())
 	}
 	fails.Store(0)
 	s := &fakeAAStream{f: f, c: c, sh: aaudio.NewShared(c.data, c.blocks), closed: make(chan struct{}),
@@ -93,6 +124,9 @@ func (s *fakeAAStream) carried(t int64) int64 {
 }
 
 func (s *fakeAAStream) Start() error {
+	if s.c.input && s.f.failStartIn.Load() {
+		return errors.New("fake: would not start")
+	}
 	if s.paused.Swap(false) {
 		// Paused, the device stood still.
 		s.start.Add(aaClock() - s.pausedAt)
@@ -132,7 +166,11 @@ func (s *fakeAAStream) run() {
 				s.sh.Dropped.Add(int64(n))
 			}
 		} else {
-			got := s.c.data.Pop(buf)
+			got := 0
+			if !s.f.starve.Load() && (!s.f.dryWhileOpening || s.f.opening.Load() == 0) &&
+				time.Now().UnixNano() >= s.f.starveTill.Load() {
+				got = s.c.data.Pop(buf)
+			}
 			clear(buf[got*2:])
 			if got < n {
 				s.sh.Silence.Add(int64(n - got))
@@ -426,6 +464,182 @@ func TestAAudioOpensTheMicrophoneOnceAllowed(t *testing.T) {
 		}
 		if p := s.State().Problem; p != nil {
 			t.Errorf("once recording, the state tells %v", p)
+		}
+	})
+}
+
+// TestAAudioPlaysOnAsTheMicrophoneWillNotOpen opens the speaker as on
+// a Pixel 8 Pro whose user has yet to allow recording: the output's
+// device takes a burst each 2 ms, and each open of the microphone takes
+// 200 ms and fails, 15 in a row. The output never runs short and its
+// latency stays as it was, the opens are spaced half a second apart and
+// then further, to 2 s, and once the microphone opens it records every
+// block.
+func TestAAudioPlaysOnAsTheMicrophoneWillNotOpen(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 96, delay: 192, inTakes: 200 * time.Millisecond}
+		f.failIn.Store(15)
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openAA(t, m, Options{Record: true}, v)
+		time.Sleep(300 * time.Millisecond)
+		synctest.Wait()
+		lat := s.Latency()
+		var blocks atomic.Int64
+		var last atomic.Int64
+		var gaps atomic.Int64
+		last.Store(-1)
+		detach := duplex.Current().Attach(func(in []float32, _ int, _ int64) {
+			pos := int64(math.Round(float64(in[0]) * 1e6))
+			if l := last.Swap(pos); l >= 0 && pos != l+int64(len(in)) {
+				gaps.Add(1)
+			}
+			blocks.Add(1)
+		})
+		defer detach()
+		for range 200 {
+			time.Sleep(100 * time.Millisecond)
+			synctest.Wait()
+			if d := s.State().Dropouts; d != 0 {
+				t.Fatalf("the output ran dry %d times as the microphone opened", d)
+			}
+			if l := s.Latency(); l > lat+time.Millisecond {
+				t.Fatalf("the latency grew from %v to %v as the microphone opened", lat, l)
+			}
+		}
+		f.mu.Lock()
+		opens := append([]fakeOpen(nil), f.inOpens...)
+		f.mu.Unlock()
+		if len(opens) != 16 {
+			t.Fatalf("the microphone was opened %d times, want 16: 15 that failed, and one", len(opens))
+		}
+		// Each try asks for the device to itself, then shares it: 400 ms
+		// for two that fail, then the wait.
+		want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second, 2 * time.Second,
+			2 * time.Second, 2 * time.Second}
+		for i, w := range want {
+			a, b := opens[2*i], opens[2*i+2]
+			if !a.exclusive || !b.exclusive || opens[2*i+1].exclusive {
+				t.Fatalf("try %d asked for the device to itself %v, then %v", i, a.exclusive, opens[2*i+1].exclusive)
+			}
+			if gap := b.at.Sub(a.at) - 400*time.Millisecond; gap < w || gap > w+10*time.Millisecond {
+				t.Errorf("try %d came %v after the one before failed, want %v", i+1, gap, w)
+			}
+		}
+		if blocks.Load() < 100 {
+			t.Errorf("the tap heard %d blocks once the microphone opened", blocks.Load())
+		}
+		if gaps.Load() != 0 {
+			t.Errorf("%d blocks did not follow the one before", gaps.Load())
+		}
+		if p := s.State().Problem; p != nil {
+			t.Errorf("once recording, the state tells %v", p)
+		}
+	})
+}
+
+// TestAAudioGrowsNoLatencyAsAStreamOpens has the output's callback find
+// its ring short while each open of the microphone takes 200 ms, as a
+// system held up by the open would: the dropouts count, the latency
+// stays as it was. Dry spells once all is open grow it, as before.
+func TestAAudioGrowsNoLatencyAsAStreamOpens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 96, delay: 192, inTakes: 200 * time.Millisecond, dryWhileOpening: true}
+		f.failIn.Store(6)
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		s := openAA(t, m, Options{Record: true})
+		time.Sleep(300 * time.Millisecond)
+		synctest.Wait()
+		lat, ahead := s.Latency(), s.ahead.Load()
+		time.Sleep(6 * time.Second)
+		synctest.Wait()
+		if _, ins := f.streams(); len(ins) != 1 {
+			t.Fatalf("%d microphones opened, want 1", len(ins))
+		}
+		if s.State().Dropouts == 0 {
+			t.Error("the dry spells as the microphone opened counted no dropouts")
+		}
+		if l := s.Latency(); l > lat+time.Millisecond || s.ahead.Load() != ahead {
+			t.Errorf("the latency grew from %v to %v as the microphone opened", lat, l)
+		}
+		f.starve.Store(true)
+		time.Sleep(time.Second)
+		f.starve.Store(false)
+		synctest.Wait()
+		if l := s.Latency(); l <= lat {
+			t.Errorf("the latency stayed %v as the sound ran dry with all open", l)
+		}
+	})
+}
+
+// TestAAudioBacksOffAMicrophoneThatWillNotStart has every microphone
+// open and then fail to start: each try waits as long as one that
+// failed to open, half a second, then longer, to every 2 s, and every
+// 10 s after ten. A dry spell between tries still grows the latency.
+func TestAAudioBacksOffAMicrophoneThatWillNotStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 96, delay: 192}
+		f.failStartIn.Store(true)
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		s := openAA(t, m, Options{Record: true})
+		time.Sleep(26 * time.Second)
+		lat := s.Latency()
+		// Tries at 25.5 s and 35.5 s: a dry spell between them.
+		f.starve.Store(true)
+		time.Sleep(time.Second)
+		f.starve.Store(false)
+		synctest.Wait()
+		if l := s.Latency(); l <= lat {
+			t.Errorf("the latency stayed %v as the sound ran dry between tries", l)
+		}
+		time.Sleep(20 * time.Second)
+		synctest.Wait()
+		f.mu.Lock()
+		opens := append([]fakeOpen(nil), f.inOpens...)
+		f.mu.Unlock()
+		// The first open is as the speaker opens; each that would not
+		// start counts one failure more.
+		if len(opens) != 13 {
+			t.Errorf("in 47 s the microphone was opened %d times, want 13", len(opens))
+		}
+		for i := 1; i < len(opens); i++ {
+			want := micRetry(i)
+			if gap := opens[i].at.Sub(opens[i-1].at); gap < want || gap > want+10*time.Millisecond {
+				t.Errorf("try %d came %v after the one before, want %v", i, gap, want)
+			}
+		}
+	})
+}
+
+// TestAAudioGrowsNoLatencyJustAfterAStreamOpens has the output's
+// callback find its ring short for 200 ms right after the microphone
+// opens: inside aaSettle of the open, those dropouts count, and leave
+// the latency as it was.
+func TestAAudioGrowsNoLatencyJustAfterAStreamOpens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 96, delay: 192, dryAfterOpen: 200 * time.Millisecond}
+		// The first try, as the speaker opens, fails; the next, half a
+		// second later, opens.
+		f.failIn.Store(2)
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		s := openAA(t, m, Options{Record: true})
+		time.Sleep(300 * time.Millisecond)
+		synctest.Wait()
+		lat, ahead := s.Latency(), s.ahead.Load()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if _, ins := f.streams(); len(ins) != 1 {
+			t.Fatalf("%d microphones opened, want 1", len(ins))
+		}
+		if s.State().Dropouts == 0 {
+			t.Error("the dry spell after the microphone opened counted no dropouts")
+		}
+		if l := s.Latency(); l > lat+time.Millisecond || s.ahead.Load() != ahead {
+			t.Errorf("the latency grew from %v to %v just after the microphone opened", lat, l)
 		}
 	})
 }
