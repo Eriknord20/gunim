@@ -29,8 +29,11 @@ type fakeAA struct {
 	// went away.
 	failIn, failOut atomic.Int64
 	failPause       atomic.Bool
-	mu              sync.Mutex
-	outs, ins       []*fakeAAStream
+	// more adds to every output's delay from when it is set, as
+	// earbuds connecting to a device already playing.
+	more      atomic.Int64
+	mu        sync.Mutex
+	outs, ins []*fakeAAStream
 	// played holds each frame played, the first sample of its pair, as
 	// devices play them, one after another.
 	played []float32
@@ -172,7 +175,8 @@ func (s *fakeAAStream) Timestamp() (pos, at, now int64, ok bool) {
 	if s.c.input {
 		return c + s.f.ahead, now, now, true
 	}
-	return c - s.f.delay, now, now, c > s.f.delay
+	d := s.f.delay + s.f.more.Load()
+	return c - d, now, now, c > d
 }
 
 func (s *fakeAAStream) Shared() *aaudio.Shared { return s.sh }
@@ -506,6 +510,58 @@ func TestAAudioOpensAgainAStreamThatWouldNotPause(t *testing.T) {
 		synctest.Wait()
 		if got := m.Heard() - h; abs64(got-24000) > 2*int64(f.burst) {
 			t.Errorf("in 500 ms after resuming the speaker heard %d frames, want 24000", got)
+		}
+	})
+}
+
+// TestAAudioKeepsALongDelay plays and records through devices as slow
+// as Bluetooth earbuds: one stream each serves throughout, and the
+// latency the speaker tells counts the whole delay.
+func TestAAudioKeepsALongDelay(t *testing.T) {
+	for _, delay := range []time.Duration{200 * time.Millisecond, 300 * time.Millisecond} {
+		t.Run(delay.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				d := audio.FramesAt(delay, 48000)
+				f := &fakeAA{rate: 48000, burst: 480, delay: d, ahead: d}
+				useFakeAA(t, f)
+				m := audio.NewMixer()
+				s := openAA(t, m, Options{Record: true})
+				time.Sleep(5 * time.Second)
+				synctest.Wait()
+				outs, ins := f.streams()
+				if len(outs) != 1 || len(ins) != 1 {
+					t.Errorf("in 5 s %d outputs and %d inputs opened, want 1 each", len(outs), len(ins))
+				}
+				if l := s.Latency(); l < delay || l > delay+30*time.Millisecond {
+					t.Errorf("the latency is %v, the device alone delays %v", l, delay)
+				}
+				if in := s.State().ASIO.InputLatency; abs64(int64(in)-d) > int64(f.burst) {
+					t.Errorf("the input's latency is %d frames, the device's %d", in, d)
+				}
+			})
+		})
+	}
+}
+
+// TestAAudioFollowsADelayThatGrows has the device's delay grow from
+// 100 ms to 300 ms as it plays, as where earbuds connect: the output
+// opens its stream again once at most, and then keeps it, telling the
+// new delay.
+func TestAAudioFollowsADelayThatGrows(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 480, delay: audio.FramesAt(100*time.Millisecond, 48000)}
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		s := openAA(t, m, Options{})
+		time.Sleep(2 * time.Second)
+		f.more.Store(audio.FramesAt(200*time.Millisecond, 48000))
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if outs, _ := f.streams(); len(outs) > 2 {
+			t.Errorf("after the delay grew %d outputs opened, want 2 at most", len(outs))
+		}
+		if l := s.Latency(); l < 300*time.Millisecond || l > 330*time.Millisecond {
+			t.Errorf("the latency is %v, the device alone delays 300ms", l)
 		}
 	})
 }

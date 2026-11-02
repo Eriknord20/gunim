@@ -75,9 +75,15 @@ type aaRun struct {
 	underruns, xruns int64
 	frames           int64
 	// odd counts the timestamps in a row that did not fit the frames,
-	// and fitted says one has.
+	// fitted says one has, and gap is how far the last that did placed
+	// the device from the frames carried.
 	odd    int
 	fitted bool
+	gap    int64
+	// most is the most frames a callback has carried, as the goroutine
+	// last read it from sh, for setTarget to read from any goroutine:
+	// sh is let go as the stream closes.
+	most atomic.Int64
 	// opened is when the stream opened, on the output's clock.
 	opened int64
 	moved  atomic.Int64
@@ -517,7 +523,10 @@ func (a *aaOutput) failed(run *aaRun, now int64) bool {
 // it took, and how far behind the frames the callback carried.
 func (a *aaOutput) poll() {
 	if run := a.run.Load(); run != nil {
-		if behind, ok := a.fit(run, &a.org, a.delay.Load(), false); ok {
+		run.most.Store(run.sh.Most.Load())
+		if behind, first, ok := a.fit(run, &a.org, false); first {
+			a.delay.Store(behind)
+		} else if ok {
 			a.delay.Store(smooth(a.delay.Load(), behind))
 		}
 		if x := run.st.XRuns(); x > run.xruns {
@@ -531,7 +540,9 @@ func (a *aaOutput) poll() {
 		a.setTarget()
 	}
 	if run := a.irun.Load(); run != nil {
-		if ahead, ok := a.fit(run, &a.iorg, a.inDelay.Load(), true); ok {
+		if ahead, first, ok := a.fit(run, &a.iorg, true); first {
+			a.inDelay.Store(ahead)
+		} else if ok {
 			a.inDelay.Store(smooth(a.inDelay.Load(), ahead))
 		}
 	}
@@ -541,21 +552,23 @@ func (a *aaOutput) poll() {
 // it fits the frames its callback carried: an output's device plays
 // behind them, an input's records ahead of them, by as much as
 // MaxLatency, and by two callbacks at most the other way; and, once a
-// timestamp of run's has fitted, within aaShift of was, the delay they
-// told. It returns how far. One that does not fit is let be, and
-// counted in run.odd: a stream may count its frames anew under AAudio,
-// as where the system's sound server restarted and the stream with it.
-func (a *aaOutput) fit(run *aaRun, org *atomic.Uint64, was int64, input bool) (int64, bool) {
+// timestamp of run's has fitted, within aaShift of the last that did.
+// It returns how far, and first for the first of run's that fits, which
+// is taken as it is: the delay the stream was opened with is a guess.
+// One that does not fit is let be, and counted in run.odd: a stream may
+// count its frames anew under AAudio, as where the system's sound
+// server restarted and the stream with it.
+func (a *aaOutput) fit(run *aaRun, org *atomic.Uint64, input bool) (gap int64, first, ok bool) {
 	pos, at, cnow, ok := run.st.Timestamp()
 	if !ok || pos <= 0 {
-		return 0, false
+		return 0, false, false
 	}
 	now := a.clock()
 	// The timestamp on a.clock, as the two clocks stood just now.
 	at -= cnow - now
 	k := float64(a.hz) / 1e9
 	raw := float64(pos) - float64(at)*k
-	gap := func(org float64) int64 {
+	gapAt := func(org float64) int64 {
 		g := run.sh.Frames.Load() - int64(org+float64(now)*k)
 		if input {
 			return -g
@@ -563,13 +576,14 @@ func (a *aaOutput) fit(run *aaRun, org *atomic.Uint64, was int64, input bool) (i
 		return g
 	}
 	slack := 2 * max(run.sh.Most.Load(), int64(run.info.Burst))
-	g := gap(raw)
-	if g < -slack || g > audio.FramesAt(MaxLatency, a.hz) || (run.fitted && abs64(g-was) > audio.FramesAt(aaShift, a.hz)) {
+	g := gapAt(raw)
+	if g < -slack || g > audio.FramesAt(MaxLatency, a.hz) || (run.fitted && abs64(g-run.gap) > audio.FramesAt(aaShift, a.hz)) {
 		run.odd++
-		return 0, false
+		return 0, false, false
 	}
-	run.odd, run.fitted = 0, true
-	return max(0, gap(a.steady(org, raw))), true
+	first = !run.fitted
+	run.odd, run.fitted, run.gap = 0, true, g
+	return max(0, gapAt(a.steady(org, raw))), first, true
 }
 
 // steady moves the origin org holds an eighth of the way to now, as
@@ -597,7 +611,7 @@ func smooth(was, now int64) int64 { return was + (now-was)/4 }
 func (a *aaOutput) setTarget() {
 	least := int64(a.chunk())
 	if run := a.run.Load(); run != nil {
-		least += 2 * max(run.sh.Most.Load(), int64(run.info.Burst))
+		least += 2 * max(run.most.Load(), int64(run.info.Burst))
 	}
 	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load(), least)
 	a.target.Store(min(t, a.q.Size()-int64(a.chunk())))
