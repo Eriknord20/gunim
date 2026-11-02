@@ -1,20 +1,25 @@
-// Command roundtrip plays and records through AAudio on Android, and
-// shows how: a click each second through the speakers, the microphone's
-// level, the delays the speaker reports, and the times the sound ran
-// dry. A tap on the screen measures the round trip: a click played,
-// heard by the microphone, and found in the recording by its stamp, as
-// package audio/capture's Measure finds it. An offset near zero says
-// the stamps line a take up with what the singer heard.
+// Command roundtrip plays and records through AAudio on Android, or the
+// driver -driver names elsewhere, and shows how: a click each second
+// through the speakers, the microphone's level, the delays the speaker
+// reports, and the times the sound ran dry. A tap on the screen, or a
+// click, measures the round trip: a click played, heard by the
+// microphone, and found in the recording by its stamp, as package
+// audio/capture's Measure finds it. An offset near zero says the stamps
+// line a take up with what the singer heard.
 //
 //	go run ./tools/gunimapk -permissions microphone -run ./example/roundtrip
+//	go run ./example/roundtrip -driver "Core Audio"   # on macOS
+//	go run ./example/roundtrip -driver JACK           # on Linux
 //
-// It asks for the microphone as it starts. Elsewhere than Android it
-// plays through the system's sound, and says why it records nothing.
+// It asks for the microphone as it starts. Where the driver fails to
+// open, it plays through the system's sound, and says why it records
+// nothing.
 package main
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -44,6 +49,9 @@ func main() {
 }
 
 func run() error {
+	name := flag.String("driver", audiodriver.AAudio, "the driver to play and record through, as "+
+		"package audio/driver names it: \"Core Audio\" on macOS, JACK on Linux")
+	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	err := gunim.Main(ctx, func(a *gunim.App) error {
@@ -53,7 +61,7 @@ func run() error {
 			return err
 		}
 		mix := audio.NewMixer()
-		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: audiodriver.AAudio, Record: true})
+		spk, err := speaker.Open(mix, speaker.Options{Name: "gunim round trip", Driver: *name, Record: true})
 		if err != nil {
 			return err
 		}
@@ -62,6 +70,7 @@ func run() error {
 		mix.Play(&ticks{rate: mix.Rate()}, audio.Options{})
 		go func() { t.allowed.Store(a.Ask(driver.PermissionMicrophone)) }()
 		go t.record(ctx)
+		go t.report(ctx)
 		gunim.RegisterView(w, "roundtrip", func(struct{}) *view { return &view{t: t, label: widget.NewLabel("")} }, nil)
 		c := w.Client()
 		if err := c.Mount(gunim.Root, "roundtrip", "roundtrip", struct{}{}); err != nil {
@@ -182,6 +191,30 @@ func (t *tester) say(s *string, v string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	*s = v
+}
+
+// report prints the text to the terminal every five seconds, and as a
+// measurement ends, so it can be copied, until ctx ends.
+func (t *tester) report(ctx context.Context) {
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		case <-time.After(200 * time.Millisecond):
+			t.mu.Lock()
+			r := t.result
+			t.mu.Unlock()
+			if r == last || r == "measuring…" {
+				continue
+			}
+			last = r
+		}
+		log.Printf("\n%s", t.text())
+	}
 }
 
 // text says how the speaker plays and records now.

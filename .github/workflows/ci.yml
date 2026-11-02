@@ -57,8 +57,9 @@ jobs:
           CGO_ENABLED: 0
 
   # Linux on 64-bit ARM. The audio packages hold assembly for arm64, the
-  # JACK client's callbacks, which their tests run through a fake server:
-  # this is where that assembly runs at all in CI.
+  # JACK client's callbacks and the Core Audio client's, which their
+  # tests run through fakes: with the macOS job, this is where that
+  # assembly runs at all in CI.
   arm64:
     name: Vet, test audio (ubuntu-24.04-arm)
     runs-on: ubuntu-24.04-arm
@@ -78,7 +79,35 @@ jobs:
         run: go test ./audio/...
 
       - name: Test audio without cgo
-        run: go test ./audio/internal/jack/ ./audio/speaker/
+        run: go test ./audio/internal/jack/ ./audio/internal/audiounit/ ./audio/speaker/
+        env:
+          CGO_ENABLED: 0
+
+  # macOS on Apple silicon. The Core Audio client's tests run its arm64
+  # callbacks through a fake under Apple's calling convention, which
+  # keeps x18 for itself, and load every function it calls from the
+  # system's frameworks. The runners have no sound device, so the test
+  # that plays through one skips.
+  macos:
+    name: Vet, test Core Audio (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: Test Core Audio
+        run: go test -race ./audio/internal/audiounit/ ./audio/driver/
+
+      - name: Test Core Audio without cgo
+        run: go test ./audio/internal/audiounit/ ./audio/driver/
         env:
           CGO_ENABLED: 0
 

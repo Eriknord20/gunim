@@ -2,15 +2,22 @@
 
 package driver
 
-import "github.com/marrasen/gunim/audio/internal/jack"
+import (
+	"github.com/marrasen/gunim/audio/internal/audiounit"
+	"github.com/marrasen/gunim/audio/internal/jack"
+)
 
 // Drivers lists the ASIO drivers installed: none, on this system; and
-// [JACK], where a JACK server answers.
+// [JACK], where a JACK server answers; and [CoreAudio] on macOS.
 func Drivers() ([]Driver, error) {
+	var list []Driver
 	if jack.Available() {
-		return []Driver{{Name: JACK}}, nil
+		list = append(list, Driver{Name: JACK})
 	}
-	return nil, nil
+	if audiounit.Available() {
+		list = append(list, Driver{Name: CoreAudio})
+	}
+	return list, nil
 }
 
 // A Device is an open ASIO driver, playing.
@@ -31,11 +38,15 @@ func (*Device) ControlPanel() error { return ErrUnsupported }
 func ControlPanel(string) error { return ErrUnsupported }
 
 // Channels lists the names of the driver's inputs and outputs: for
-// [JACK], the system's ports, as the server names them. For another
-// driver it returns [ErrUnsupported] on this system.
+// [JACK], the system's ports, as the server names them; for
+// [CoreAudio], the channels of the default input and output devices.
+// For another driver it returns [ErrUnsupported] on this system.
 func Channels(name string) (inputs, outputs []string, err error) {
-	if name == JACK {
+	switch name {
+	case JACK:
 		return jack.Ports()
+	case CoreAudio:
+		return audiounit.Ports()
 	}
 	return nil, nil, ErrUnsupported
 }

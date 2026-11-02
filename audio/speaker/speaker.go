@@ -30,9 +30,16 @@
 // runs no Go as it does. The server owns the rate and the buffer size:
 // the speaker follows them.
 //
+// On macOS, a driver named [driver.CoreAudio] plays through the default
+// output device the same way, by a HAL output unit: Core Audio's
+// real-time thread takes each buffer from a ring and runs no Go. The
+// speaker plays at the device's rate, and opens again as the default
+// device changes, goes away or changes its rate.
+//
 // Package audio/capture records the inputs of the driver the speakers
-// play through, an ASIO driver's or JACK's, where [Options].Record is
-// set, and stamps what it records with [Speaker.Heard].
+// play through, an ASIO driver's, JACK's or Core Audio's default input,
+// where [Options].Record is set, and stamps what it records with
+// [Speaker.Heard].
 //
 // [Speaker.Anchor] ties the mixer's frames to the clock [time.Now]
 // reads, so a host sends MIDI for a frame to leave as it is heard, and
@@ -64,8 +71,8 @@ type Options struct {
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
-	// refuses a rate plays at its own, and JACK at its server's. The
-	// system's own sound may convert the rate on its way to the device,
+	// refuses a rate plays at its own, JACK at its server's, and
+	// [driver.CoreAudio] at the device's. The system's own sound may convert the rate on its way to the device,
 	// as Windows converts to the format its device is set to. [State]
 	// tells both rates.
 	Rate int
@@ -90,7 +97,9 @@ type Options struct {
 	// control panel sets. The latency is never less than a buffer and
 	// the driver's own latency, whatever Latency asks for. On macOS it
 	// sets the system's own sound's buffer too: the process's own, as
-	// other applications playing keep theirs. Zero keeps the device's.
+	// other applications playing keep theirs. Zero keeps the device's;
+	// through [driver.CoreAudio], zero asks for a quarter of Latency,
+	// from 64 to 1024 frames.
 	Buffer int
 	// Direct mixes each buffer an ASIO driver takes on the driver's own
 	// thread, as it takes it, in place of reading the mixer ahead into a
@@ -112,13 +121,19 @@ type Options struct {
 	// FlexASIO and ASIO4ALL open Windows'
 	// microphone, so leave it unset to play alone. Through [driver.AAudio] it
 	// records the microphone, which shows the system's sign of a
-	// microphone in use while the application is in front.
+	// microphone in use while the application is in front. Through
+	// [driver.CoreAudio] it records the default input device, where it
+	// runs at the output's rate and the application may record: macOS
+	// asks the user the first time, and [State].Problem tells why it
+	// records nothing.
 	Record bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
 	// index from 0, as [driver.Channels] lists them; nil plays on its
 	// first two. Through JACK they are the system's ports it lists, and
-	// an output missing leaves its port unconnected, for a patchbay. The mixer plays on the first two named, or on the one
-	// named alone. Those named past two play what Aux fills, in step
+	// an output missing leaves its port unconnected, for a patchbay.
+	// Through [driver.CoreAudio] they are the default output device's
+	// channels, and one missing plays nowhere. The mixer plays on the
+	// first two named, or on the one named alone. Those named past two play what Aux fills, in step
 	// with the mixer, at the same latency. The system's own sound plays
 	// the mixer's two alone: [State].Aux tells how many more play.
 	Outputs []int
@@ -344,8 +359,11 @@ type startedOutput interface {
 
 // openDriver opens the driver s.o names: JACK, or an ASIO driver.
 func (s *Speaker) openDriver() (startedOutput, error) {
-	if s.o.Driver == driver.JACK {
+	switch s.o.Driver {
+	case driver.JACK:
 		return openJackOutput(s, s.o)
+	case driver.CoreAudio:
+		return openAUOutput(s, s.o)
 	}
 	return openRing(s, s.o, false)
 }
@@ -529,8 +547,8 @@ func (s *Speaker) Changed() <-chan struct{} { return s.changed }
 // A State says how the speakers play.
 type State struct {
 	// Driver is the driver playing: an ASIO driver, [driver.JACK] for
-	// JACK, [driver.AAudio] for AAudio, or empty for the system's own
-	// sound.
+	// JACK, [driver.AAudio] for AAudio, [driver.CoreAudio] for Core
+	// Audio's HAL output unit, or empty for the system's own sound.
 	Driver string
 	// Rate is the rate the mixer and the output play at, in frames a
 	// second. DeviceRate is the rate the system converts it to on its
@@ -595,6 +613,8 @@ func (s *Speaker) ControlPanel() error {
 			return o.dev.ControlPanel()
 		case *jackOutput:
 			return errJackPanel
+		case *auOutput:
+			return auControlPanel()
 		}
 	}
 	s.mu.Lock()

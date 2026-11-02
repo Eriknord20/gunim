@@ -22,7 +22,9 @@
 // On Linux, [Drivers] lists JACK too, under the name [JACK], where a
 // JACK server answers, or PipeWire's. Package audio/speaker plays and
 // records through it as through a driver, and [Channels] lists the
-// system's ports JACK connects to. [Open] opens ASIO drivers alone.
+// system's ports JACK connects to. On macOS it lists [CoreAudio], the
+// default devices, played and recorded the same way. [Open] opens ASIO
+// drivers alone.
 //
 // A process plays through one driver at a time:
 //
@@ -67,6 +69,19 @@ const JACK = "JACK"
 // speakers play through the system's sound, as through a driver that
 // fails to open.
 const AAudio = "AAudio"
+
+// CoreAudio is the name [Drivers] lists Core Audio under, on macOS:
+// package audio/speaker plays through the default output device by a
+// HAL output unit, gunim's own, where its Options.Driver names it. The
+// device's own real-time thread takes each buffer from a ring and runs
+// no Go as it does. The speaker plays at the device's rate, as Audio
+// MIDI Setup sets it, and opens again as the default device changes,
+// goes away or changes its rate. With Options.Record set it records the
+// default input too, stamped with the mixer frame heard as each buffer
+// came in; an application bundle needs NSMicrophoneUsageDescription in
+// its Info.plist, as macOS ends one without it as it asks for the
+// microphone. Without leave to record, it plays and records nothing.
+const CoreAudio = "Core Audio"
 
 // Config says how to open a driver.
 type Config struct {
