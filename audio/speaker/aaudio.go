@@ -708,17 +708,22 @@ func (a *aaOutput) playing(run *aaRun) (at, carried int64) {
 	return min(max(at, carried-audio.FramesAt(MaxLatency, a.hz)), carried), carried
 }
 
+// held counts from the mixer's own count of the frames it mixed, not
+// the ring's: the goroutine mixes a chunk before it adds it to the ring,
+// and the mixer's Heard, which never goes back, would keep a frame heard
+// read in between, a chunk too far on.
 func (a *aaOutput) held() int64 {
 	if !a.enter() {
 		return 0
 	}
 	defer a.leave()
+	written := a.s.m.Mixed() - a.base
 	run := a.run.Load()
 	if run == nil {
-		return a.q.Len()
+		return max(0, written-a.q.Read())
 	}
 	at, _ := a.playing(run)
-	return max(0, a.q.Written()-run.start+run.sh.Silence.Load()-at)
+	return max(0, written-run.start+run.sh.Silence.Load()-at)
 }
 
 func (a *aaOutput) setAhead(d time.Duration) {
