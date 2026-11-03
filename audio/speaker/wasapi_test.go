@@ -34,6 +34,11 @@ type fakeWas struct {
 	// its time moves; frozen, where set, opens each device frozen.
 	startAfter time.Duration
 	frozen     atomic.Bool
+	// stampEnd stamps each input packet as its last frame came in, as
+	// the MOTU M Series does on a fresh open on Windows; lateStamp, where
+	// set, stamps the packet of that number that much later.
+	stampEnd          bool
+	lateStamp, lateBy int64
 	// failOpen fails as many opens; nextRate, nextInputs and
 	// nextLatency, where set, are the next device's.
 	failOpen, nextRate, nextInputs, nextLatency atomic.Int64
@@ -292,11 +297,23 @@ func (d *fakeWasDev) Read(dst []float32) (n int, at int64, ok bool, err error) {
 		return 0, 0, false, nil
 	}
 	at = d.t0 + d.packets*d.periodNs()
+	first := at
+	if d.f.stampEnd {
+		at += d.periodNs()
+	}
+	late := d.f.lateBy != 0 && d.packets == d.f.lateStamp
+	if late {
+		at += d.f.lateBy
+	}
 	d.packets++
 	n = d.info.Period
 	clear(dst[:n*d.info.Inputs])
 	dst[0] = -1
-	if v := d.truthLocked(at); v >= 0 {
+	if late && d.info.Inputs > 1 {
+		// Its second channel tells the test which it is.
+		dst[1] = 1
+	}
+	if v := d.truthLocked(first); v >= 0 {
 		dst[0] = float32(v) * 1e-6
 	}
 	return n, at, true, nil
@@ -502,10 +519,23 @@ func TestWASAPIOpensAgainWhereTheDeviceGoes(t *testing.T) {
 // TestWASAPIStampsWhatItRecords records the input as it plays: each
 // packet reaches the tap stamped with the mixer frame the speakers
 // played as its first frame came in, and the packets follow one
-// another.
+// another. That holds where WASAPI stamps a packet as its first frame
+// came in, as Windows says, and where it stamps it as its last did, as
+// the MOTU M Series does on a fresh open, the packet read microseconds
+// after its stamp. One stamp 3 ms off misleads neither.
 func TestWASAPIStampsWhatItRecords(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		end  bool
+	}{{"first frame", false}, {"last frame", true}} {
+		t.Run(c.name, func(t *testing.T) { stampsWhatItRecords(t, c.end) })
+	}
+}
+
+func stampsWhatItRecords(t *testing.T, end bool) {
 	synctest.Test(t, func(t *testing.T) {
-		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 2400, chans: 2, inputs: 2}
+		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 2400, chans: 2, inputs: 2, stampEnd: end,
+			lateStamp: 100, lateBy: int64(3 * time.Millisecond)}
 		useFakeWas(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
@@ -517,7 +547,10 @@ func TestWASAPIStampsWhatItRecords(t *testing.T) {
 		if st := s.State(); st.Info.Recorded != 2 || st.Info.InputNames[0] != "Microphone 1" {
 			t.Errorf("the state says %+v", st.Info)
 		}
-		type packet struct{ truth, heard int64 }
+		type packet struct {
+			truth, heard int64
+			late         bool
+		}
 		var (
 			mu      sync.Mutex
 			packets []packet
@@ -532,7 +565,7 @@ func TestWASAPIStampsWhatItRecords(t *testing.T) {
 			if in[0] >= 0 {
 				truth = int64(math.Round(float64(in[0]) * 1e6))
 			}
-			packets = append(packets, packet{truth, heard})
+			packets = append(packets, packet{truth, heard, in[1] == 1})
 		})
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
@@ -541,7 +574,7 @@ func TestWASAPIStampsWhatItRecords(t *testing.T) {
 		defer mu.Unlock()
 		checked := 0
 		for i, p := range packets {
-			if p.truth < 0 {
+			if p.truth < 0 || p.late {
 				continue
 			}
 			checked++
@@ -551,6 +584,13 @@ func TestWASAPIStampsWhatItRecords(t *testing.T) {
 		}
 		if checked < 150 {
 			t.Fatalf("%d packets of %d came in as the ramp played, want 150", checked, len(packets))
+		}
+		late := false
+		for _, p := range packets {
+			late = late || p.late
+		}
+		if !late {
+			t.Fatal("the packet stamped late never came in")
 		}
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
@@ -932,10 +972,16 @@ func TestWASAPILogsItsStamps(t *testing.T) {
 	for _, want := range []string{
 		// 50 ms to start, then its latency, a period, before its clock
 		// tells a frame heard, read at the next period's end.
-		"the device's clock first moved 70ms after it started",
+		// Then it had taken a period, the fake's latency, past what it
+		// tells, and holds its buffer full.
+		"the device's clock first moved 70ms after it started, to frame 480; by then 1920 frames were written, " +
+			"0 of them silence, and its buffer held 960, so the engine had taken 960, 480 past the frame the clock told",
 		"WASAPI input: a packet of 480 frames at device position ",
-		" read 10ms after its stamp, the soonest in 5s; the input's period is 480 frames (10ms)",
-		"WASAPI output: the clock read 0s after its stamp",
+		// A packet read a period after its stamp is stamped as its first
+		// frame came in: nothing moves back.
+		" read 10ms after its stamp, the soonest in 5s; the input's period is 480 frames (10ms); stamps moved back 0s",
+		"WASAPI output: the clock read 0s after its stamp, the soonest in 5s, with 1440 frames written past the " +
+			"position it told: 960 in its buffer, 480 taken by the engine; 0 frames of silence written",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the log tells no %q:\n%s", want, out)
