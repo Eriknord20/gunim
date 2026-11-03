@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -608,4 +609,66 @@ func TestJackNoOutputsFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("JACK opened with no outputs")
 	}
+}
+
+// TestJackGrowsNoLeadFromAnOpening plays through a JACK server that
+// shuts down and comes back with its sink on Bluetooth, as PipeWire's
+// moves, its ports' latency 7788 frames longer. Buffers short as the
+// client starts count as dropouts, and leave the lead as it was. Then
+// buffers run short while it plays steadily: the lead grows by 10 ms,
+// not by the ports' latency. With the sink back on the wired output,
+// the speaker works as far ahead as before, and the 10 ms more.
+func TestJackGrowsNoLeadFromAnOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := useJack(t, stereoInfo())
+		s, err := Open(audio.NewMixer(), Options{Driver: driver.JACK})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Close() }()
+		waitFor(t, "the ring to fill", jackOf(t, s).primed.Load)
+		before := s.Latency()
+
+		bluetooth := stereoInfo()
+		bluetooth.Latency = 8300
+		f.mu.Lock()
+		f.next = &bluetooth
+		f.mu.Unlock()
+		f.tell(func(e *jack.Events) { e.Shutdown = true })
+		select {
+		case <-s.Changed():
+		case <-time.After(3 * time.Second):
+			t.Fatal("the speaker never opened again after the server shut down")
+		}
+		waitFor(t, "the ring to fill", jackOf(t, s).primed.Load)
+		drops := s.State().Dropouts
+		f.take()
+		f.tell(func(e *jack.Events) { e.Short = 3 })
+		time.Sleep(time.Second)
+		if d := s.State().Dropouts - drops; d != 3 {
+			t.Errorf("the client starting ran dry %d times, want 3", d)
+		}
+		if g := s.margin.Load(); g != 0 || s.ahead.Load() != int64(30*time.Millisecond) {
+			t.Fatalf("the client starting grew the lead by %v, and set it to %v",
+				time.Duration(g), time.Duration(s.ahead.Load()))
+		}
+
+		// Short while playing steadily: 10 ms more.
+		f.take()
+		f.tell(func(e *jack.Events) { e.Short = 3 })
+		time.Sleep(time.Second)
+		if g := time.Duration(s.margin.Load()); g != 10*time.Millisecond {
+			t.Fatalf("the dry spell grew the lead by %v, want 10 ms", g)
+		}
+
+		// The sink moves back to the wired output.
+		f.mu.Lock()
+		f.info.Latency = stereoInfo().Latency
+		f.mu.Unlock()
+		f.tell(func(e *jack.Events) { e.Graph = true })
+		time.Sleep(100 * time.Millisecond)
+		if l, want := s.Latency(), before+10*time.Millisecond; l < want-time.Millisecond || l > want+time.Millisecond {
+			t.Errorf("back on the wired output the speaker works %v ahead, want %v: %v as before, and 10 ms grown", l, want, before)
+		}
+	})
 }

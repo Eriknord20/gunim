@@ -111,6 +111,9 @@ type auOutput struct {
 	cycles   int64
 	cycledAt time.Time
 	stalled  bool
+	// settle tells the short buffers of the device starting or resuming
+	// from those of the sound running dry.
+	settle settling
 }
 
 // auBuffer returns the buffer to ask the device for: Options.Buffer, or
@@ -135,7 +138,7 @@ func driverFirst() bool { return aaudioFirst || wasapiFirst || coreAudioFirst }
 // channels Options.Outputs names, and the default input where
 // Options.Record says. byName says Options.Driver named it.
 func openAUOutput(s *Speaker, o Options, byName bool) (*auOutput, error) {
-	buffer := auBuffer(o, time.Duration(s.ahead.Load()), o.rate())
+	buffer := auBuffer(o, time.Duration(s.ahead.Load()+s.margin.Load()), o.rate())
 	// As the system's own sound, it sets the device to the rate asked,
 	// as the older output did; named as a driver, it follows the
 	// device's.
@@ -193,11 +196,17 @@ func (u *auOutput) device() int64 { return int64(u.dev.Delay()) }
 
 // target returns how many frames the ring is kept at: what Latency
 // leaves after the device's own, and a buffer and two of the pump's
-// ticks at least.
+// ticks at least; and past that, the margin dry spells grew.
 func (u *auOutput) target() int64 {
 	least := int64(u.dev.Buffer()) + audio.FramesAt(2*pumpTick, u.hz)
-	return max(audio.FramesAt(time.Duration(u.ahead.Load()), u.hz)-u.device(), least)
+	return max(audio.FramesAt(time.Duration(u.ahead.Load()), u.hz)-u.device(), least) +
+		audio.FramesAt(time.Duration(u.s.margin.Load()), u.hz)
 }
+
+// remargin takes the margin the speaker grew: target reads it as it
+// goes. The device's delay is what it reports, and Bluetooth
+// headphones report a long one.
+func (u *auOutput) remargin() {}
 
 // pump keeps the ring filled to its target, hands the input on, and
 // hears what the device tells, until the output closes. The device waits
@@ -295,10 +304,8 @@ func (u *auOutput) record(in []float32) {
 func (u *auOutput) hear() {
 	e := u.dev.Poll()
 	s := u.s
-	if e.Short > 0 && u.primed.Load() && !u.paused.Load() {
-		for range min(e.Short, 100) {
-			s.ranDry()
-		}
+	if u.primed.Load() && !u.paused.Load() {
+		u.settle.count(s, e.Short, e.Cycles, time.Now())
 	}
 	if e.Lost > 0 {
 		s.logf("Core Audio: the input found its ring full: %d frames lost", e.Lost)
@@ -407,6 +414,7 @@ func (u *auOutput) suspend() error {
 }
 
 func (u *auOutput) resume() error {
+	u.settle.restart()
 	err := u.dev.Resume()
 	u.paused.Store(false)
 	return err

@@ -202,7 +202,8 @@ const chunk = 5 * time.Millisecond
 // A Speaker plays a mixer. Its methods are safe from any goroutine.
 type Speaker struct {
 	m *audio.Mixer
-	// mu guards o and problem, and opening and closing the output.
+	// mu guards o and problem, opening and closing the output, and
+	// changing how far ahead the mixer works.
 	mu      sync.Mutex
 	o       Options
 	problem error
@@ -301,9 +302,10 @@ type output interface {
 // A margined output keeps what dry spells grow, the speaker's margin,
 // apart from how far ahead the mixer works: it adds the margin to the
 // frames it keeps past its device's delay. Its latency counts the
-// delay as its device's clock measures it, and that may come in long
-// after the device opens: a lead grown from it would keep the extra
-// on the next device, and so would never come back down.
+// delay as its device measures or reports it, and that may read long
+// for a while after the device opens, or belong to a slow device, as
+// Bluetooth earbuds: a lead grown from it would keep the extra on the
+// next device, and so would never come back down.
 type margined interface {
 	// remargin takes the margin the speaker grew.
 	remargin()
@@ -432,6 +434,54 @@ func (s *Speaker) ranDry() {
 // is too small.
 func (s *Speaker) ranDryOnce() { s.dropouts.Add(1) }
 
+// settleFor is how long a device that counts the buffers it takes, as
+// Core Audio's and JACK's do, plays once it takes its first after it
+// opens or resumes, before a buffer it finds short counts as the sound
+// running dry for good, as wasSettle is for WASAPI.
+const settleFor = 250 * time.Millisecond
+
+// settling tells the short buffers of a device opening from those of a
+// device playing steadily, for an output whose device counts the
+// buffers it takes. Its pump alone calls count; restart may come from
+// any goroutine.
+type settling struct {
+	// cycles is the device's count of buffers taken as count last saw
+	// it, and began when it first moved since the device opened or
+	// resumed, zero until then.
+	cycles int64
+	began  time.Time
+	// restarted says the device resumed: it settles again from the next
+	// buffer it takes.
+	restarted atomic.Bool
+}
+
+// restart has the device settle again, as it resumes.
+func (g *settling) restart() { g.restarted.Store(true) }
+
+// count counts short buffers the device found short, at now, where it
+// has taken cycles buffers ever: as dropouts of the opening until it
+// has played settleFor since it first took one, and as the sound
+// running dry after.
+func (g *settling) count(s *Speaker, short, cycles int64, now time.Time) {
+	if g.restarted.Swap(false) {
+		g.began, g.cycles = time.Time{}, cycles
+	}
+	if cycles != g.cycles {
+		g.cycles = cycles
+		if g.began.IsZero() {
+			g.began = now
+		}
+	}
+	steady := !g.began.IsZero() && now.Sub(g.began) > settleFor
+	for range min(short, 100) {
+		if steady {
+			s.ranDry()
+		} else {
+			s.ranDryOnce()
+		}
+	}
+}
+
 // askReset asks the watch to open the output again.
 func (s *Speaker) askReset() {
 	select {
@@ -510,8 +560,12 @@ func (s *Speaker) watch() {
 // grow works 10 ms further ahead, as far as MaxLatency: from how far
 // ahead the output works, which may be further than asked, as a
 // driver's buffer is long; or, for a margined output, by its margin.
+// It holds mu, so SetLatency and Set, which reset the lead, come
+// wholly before it or wholly after.
 func (s *Speaker) grow() {
 	const step = 10 * time.Millisecond
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	out := s.out.Load()
 	if out == nil {
 		return
@@ -549,9 +603,9 @@ func (s *Speaker) setAhead(d time.Duration) {
 func (s *Speaker) SetLatency(d time.Duration) {
 	s.mu.Lock()
 	s.o.Latency = d
-	s.mu.Unlock()
 	s.margin.Store(0)
 	s.setAhead(max(d, device))
+	s.mu.Unlock()
 	s.logf("working %v ahead", s.Latency())
 }
 

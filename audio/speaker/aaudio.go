@@ -80,6 +80,10 @@ type aaRun struct {
 	// opened is when the stream opened, on the output's clock.
 	opened int64
 	moved  atomic.Int64
+	// waitPast is the frames carried the stream must pass for its
+	// device to have started, as it opens or resumes, or -1 once it
+	// has: the output settles from then.
+	waitPast atomic.Int64
 	// dead says the feed found the stream failed, for the opener to
 	// open another.
 	dead atomic.Bool
@@ -134,7 +138,9 @@ type aaOutput struct {
 	ahead     atomic.Int64
 	target    atomic.Int64
 	primed    atomic.Bool
-	// settle is when the output stream last started or resumed.
+	// settle is when the output stream last opened or resumed, and
+	// then when it first carried a buffer after: a stream may start
+	// its device late, as one at a Bluetooth headset does.
 	settle atomic.Int64
 	// delay is how far behind the frames carried the output's
 	// timestamps place the device, in frames, and unstamped what plays
@@ -813,7 +819,7 @@ func (a *aaOutput) poll() {
 		}
 		a.setUnstamped(run, false)
 		if x := run.st.XRuns(); x > run.xruns {
-			if now := a.clock(); now-a.settle.Load() > int64(aaSettle) {
+			if now := a.clock(); a.settled(run, now) {
 				a.ranDry(min(x-run.xruns, 100), now)
 			}
 			run.xruns = x
@@ -919,15 +925,23 @@ func smooth(was, now int64) int64 { return was + (now-was)/4 }
 // setTarget sets how full the goroutine keeps the ring: what ahead
 // leaves past the device's delay, and enough for two of the largest
 // callbacks and a chunk more at the least, as a Bluetooth headset's
-// callbacks are large, and come late and two at once.
+// callbacks are large, and come late and two at once; and past that,
+// the margin dry spells grew.
 func (a *aaOutput) setTarget() {
 	least := int64(a.chunk())
 	if run := a.run.Load(); run != nil {
 		least += 2 * max(run.most.Load(), int64(run.info.Burst))
 	}
-	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load()-a.extra(), least)
+	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load()-a.extra(), least) +
+		audio.FramesAt(time.Duration(a.s.margin.Load()), a.hz)
 	a.target.Store(min(t, a.q.Size()-int64(a.chunk())))
 }
+
+// remargin takes the margin the speaker grew. The delay is what the
+// timestamps place, and Bluetooth's what Android reports past them:
+// both run long on a headset, and the first timestamp may place it
+// far off.
+func (a *aaOutput) remargin() { a.setTarget() }
 
 // topUp tops the ring up to its target, a chunk at a time.
 func (a *aaOutput) topUp(buf []float32) {
@@ -952,19 +966,28 @@ func (a *aaOutput) topUp(buf []float32) {
 
 // count counts the callbacks that found the ring short as the sound
 // running dry, once it has been full, and the stream has run a while
-// since it started or resumed: a stream starting may take several
-// buffers at once, to fill the device.
+// since it first carried a buffer after it opened or resumed: a stream
+// starting may take several buffers at once, to fill the device.
 func (a *aaOutput) count(now int64) {
 	run := a.run.Load()
 	if run == nil {
 		return
 	}
+	if w := run.waitPast.Load(); w >= 0 && run.sh.Frames.Load() > w && run.waitPast.CompareAndSwap(w, -1) {
+		a.settle.Store(now)
+	}
 	if u := run.sh.Underruns.Load(); u > run.underruns {
-		if a.primed.Load() && now-a.settle.Load() > int64(aaSettle) {
+		if a.primed.Load() && a.settled(run, now) {
 			a.ranDry(min(u-run.underruns, 100), now)
 		}
 		run.underruns = u
 	}
+}
+
+// settled says run's device has played aaSettle since it first
+// carried a buffer after it opened or resumed.
+func (a *aaOutput) settled(run *aaRun, now int64) bool {
+	return run.waitPast.Load() < 0 && now-a.settle.Load() > int64(aaSettle)
 }
 
 // ranDry counts n dry spells. Those while a stream opens or starts,
@@ -1137,6 +1160,7 @@ func (a *aaOutput) resume() error {
 	a.settle.Store(a.clock())
 	if run := a.run.Load(); run != nil {
 		run.moved.Store(a.clock())
+		run.waitPast.Store(run.sh.Frames.Load())
 		a.startOut()
 	}
 	// The user may have allowed recording meanwhile: try the
