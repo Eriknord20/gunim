@@ -2414,6 +2414,9 @@ func (u *UI) Focused() Node {
 	return u.focus.node
 }
 
+// FocusTakesText reports whether the node with keyboard focus takes typed text, as a text field does.
+func (u *UI) FocusTakesText() bool { return takingText(u.focus) }
+
 // HasFocus reports whether the keyboard is on n or on a node inside it.
 func (u *UI) HasFocus(n Node) bool {
 	s, ok := u.index[n]

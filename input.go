@@ -425,15 +425,42 @@ func (u *UI) keyEvent(ev any) {
 			// A modal holds the keys: what it and its contents leave
 			// goes no further, to the window's shortcuts or the
 			// catchers behind it. Tab still walks it.
-			if !u.bubbleTo(target, ev, m) && !u.catchKeyIn(ev, m) {
+			if !u.keyFirst(ev, m) && !u.bubbleTo(target, ev, m) && !u.catchKeyIn(ev, m) {
 				u.tab(ev)
 			}
 			return
 		}
-		if !u.bubble(target, ev) && !u.catchKey(ev) {
+		if !u.keyFirst(ev, nil) && !u.bubble(target, ev) && !u.catchKey(ev) {
 			u.tab(ev)
 		}
 	}
+}
+
+// keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, keeping to those
+// inside top when top is not nil, and reports whether one took it.
+func (u *UI) keyFirst(ev input.Event, top *state) bool {
+	k, ok := ev.(input.KeyPress)
+	if !ok || u.focus == nil {
+		return false
+	}
+	type first struct {
+		s *state
+		n KeyFirst
+	}
+	var above []first
+	for s := u.focus.parent; s != nil && (top == nil || s != top.parent); s = s.parent {
+		if n, ok := s.node.(KeyFirst); ok {
+			above = append(above, first{s, n})
+		}
+	}
+	for i := len(above) - 1; i >= 0; i-- {
+		f, took := above[i], false
+		u.on(f.s, func() { took = f.n.KeyFirst(k, u) })
+		if took {
+			return true
+		}
+	}
+	return false
 }
 
 // overhear tells the [Overhearer]s the last frame drew of ev, in paint
