@@ -23,13 +23,18 @@ func (b *spaceFirst) KeyFirst(e input.KeyPress, u *UI) bool {
 // spaceTaker is a focusable node that takes Space and F1, as a button does, and may take text.
 type spaceTaker struct {
 	Box
-	took int
-	text bool
+	took  int
+	text  bool
+	typed []string
 }
 
 func (k *spaceTaker) Focusable() bool { return true }
 func (k *spaceTaker) TakesText() bool { return k.text }
 func (k *spaceTaker) Handle(e input.Event, _ *UI) bool {
+	if t, ok := e.(input.TextInput); ok {
+		k.typed = append(k.typed, t.Text)
+		return true
+	}
 	if p, ok := e.(input.KeyPress); ok && (p.Key == input.KeySpace || p.Key == input.KeyF1) {
 		k.took++
 		return true
@@ -78,5 +83,22 @@ func TestAModalKeepsTheKeyFirstsOutsideItOut(t *testing.T) {
 	w.ui.handlePlatform(input.KeyPress{Key: input.KeySpace})
 	if outer.took != 0 || inside.took != 1 || button.took != 0 {
 		t.Fatalf("Space in a modal: outer KeyFirst took %d, the one in the modal %d, the button %d; want only the one in the modal", outer.took, inside.took, button.took)
+	}
+}
+
+// The text a press a KeyFirst took types goes to no one; the next press types as ever.
+func TestTheTextOfAPressAKeyFirstTookGoesToNoOne(t *testing.T) {
+	w := newTestWindow()
+	outer, list := &spaceFirst{}, &spaceTaker{}
+	w.ui.Insert(w.ui.Root(), outer)
+	w.ui.Insert(outer, list)
+	run(w, 1)
+	w.ui.Focus(list)
+	w.ui.handlePlatform(input.KeyPress{Key: input.KeySpace, Typed: true})
+	w.ui.handlePlatform(input.TextInput{Text: " "})
+	w.ui.handlePlatform(input.KeyPress{Key: input.KeyA, Typed: true})
+	w.ui.handlePlatform(input.TextInput{Text: "a"})
+	if outer.took != 1 || len(list.typed) != 1 || list.typed[0] != "a" {
+		t.Fatalf("Space taken first, then A: the list was typed %q; want only \"a\"", list.typed)
 	}
 }
