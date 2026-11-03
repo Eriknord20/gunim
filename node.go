@@ -245,6 +245,17 @@ type KeyCatcher interface {
 	CatchKey(e input.Event, u *UI) bool
 }
 
+// A KeyFirst is a node that hears each key press in it before the focused node does: a window whose Space plays
+// and stops whatever control has the focus. The engine offers the press to the KeyFirsts above the focused node,
+// the outermost first, until one returns true; what none takes goes to the focused node and bubbles as ever. A
+// modal that holds the keys keeps the KeyFirsts outside it out, and a popup's nodes have only the KeyFirsts inside
+// the popup above them. A KeyFirst that takes a press should leave alone a focused node that takes text, which
+// [UI.FocusTakesText] reports.
+type KeyFirst interface {
+	Node
+	KeyFirst(e input.KeyPress, u *UI) bool
+}
+
 // A CursorShaper is a node that names the pointer's shape over it, such
 // as a text field's I-beam or a divider's resize arrows. The engine asks
 // the node the pointer is over, and the nodes around it in turn, and
