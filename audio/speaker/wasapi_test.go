@@ -35,10 +35,12 @@ type fakeWas struct {
 	startAfter time.Duration
 	frozen     atomic.Bool
 	// stampEnd stamps each input packet as its last frame came in, as
-	// the MOTU M Series does on a fresh open on Windows; lateStamp, where
+	// the MOTU M Series does on a fresh open on Windows, read under mu;
+	// lateStamp, where lateBy is set, stamps lateCount packets from the
+	// one of that number that much later. Where
 	// set, stamps the packet of that number that much later.
-	stampEnd          bool
-	lateStamp, lateBy int64
+	stampEnd                     bool
+	lateStamp, lateCount, lateBy int64
 	// failOpen fails as many opens; nextRate, nextInputs and
 	// nextLatency, where set, are the next device's.
 	failOpen, nextRate, nextInputs, nextLatency atomic.Int64
@@ -301,7 +303,7 @@ func (d *fakeWasDev) Read(dst []float32) (n int, at int64, ok bool, err error) {
 	if d.f.stampEnd {
 		at += d.periodNs()
 	}
-	late := d.f.lateBy != 0 && d.packets == d.f.lateStamp
+	late := d.f.lateBy != 0 && d.packets >= d.f.lateStamp && d.packets < d.f.lateStamp+max(1, d.f.lateCount)
 	if late {
 		at += d.f.lateBy
 	}
@@ -522,20 +524,25 @@ func TestWASAPIOpensAgainWhereTheDeviceGoes(t *testing.T) {
 // another. That holds where WASAPI stamps a packet as its first frame
 // came in, as Windows says, and where it stamps it as its last did, as
 // the MOTU M Series does on a fresh open, the packet read microseconds
-// after its stamp. One stamp 3 ms off misleads neither.
+// after its stamp. One stamp 3 ms off misleads neither, nor two in a
+// row.
 func TestWASAPIStampsWhatItRecords(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		end  bool
-	}{{"first frame", false}, {"last frame", true}} {
-		t.Run(c.name, func(t *testing.T) { stampsWhatItRecords(t, c.end) })
+		late int64
+	}{
+		{"first frame", false, 1}, {"last frame", true, 1},
+		{"first frame, two late", false, 2}, {"last frame, two late", true, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) { stampsWhatItRecords(t, c.end, c.late) })
 	}
 }
 
-func stampsWhatItRecords(t *testing.T, end bool) {
+func stampsWhatItRecords(t *testing.T, end bool, late int64) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 2400, chans: 2, inputs: 2, stampEnd: end,
-			lateStamp: 100, lateBy: int64(3 * time.Millisecond)}
+			lateStamp: 100, lateCount: late, lateBy: int64(3 * time.Millisecond)}
 		useFakeWas(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
@@ -597,6 +604,69 @@ func stampsWhatItRecords(t *testing.T, end bool) {
 		}
 		if duplex.Current() != nil {
 			t.Error("the tap stays after the speaker closed")
+		}
+	})
+}
+
+// TestWASAPILearnsStampsAgainOnResume records from a device that
+// stamps each packet as its last frame came in, then suspends and
+// resumes it, after which it stamps the first frame: the packets
+// recorded after it resumes are stamped as their first frames came in,
+// not a period early.
+func TestWASAPILearnsStampsAgainOnResume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 480, chans: 2, inputs: 1, stampEnd: true}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openWas(t, m, Options{Record: true}, v)
+		var (
+			mu              sync.Mutex
+			checked, missed int
+			worst           int64
+		)
+		detach := duplex.Current().Attach(func(in []float32, _ int, heard int64) {
+			mu.Lock()
+			defer mu.Unlock()
+			// Silence, or the stopped ramp's zeros: nothing to tell.
+			if in[0] <= 0 {
+				return
+			}
+			checked++
+			if d := abs64(heard - int64(math.Round(float64(in[0])*1e6))); d > 2 {
+				missed++
+				worst = max(worst, d)
+			}
+		})
+		defer detach()
+		time.Sleep(time.Second)
+		v.Stop(0)
+		time.Sleep(100 * time.Millisecond)
+		if err := s.Suspend(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(SuspendFade + time.Second)
+		synctest.Wait()
+		f.mu.Lock()
+		f.stampEnd = false
+		f.mu.Unlock()
+		mu.Lock()
+		checked, missed = 0, 0
+		mu.Unlock()
+		v = m.Play(&ramp{at: m.Mixed()}, audio.Options{})
+		defer v.Stop(0)
+		if err := s.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+		if checked < 50 {
+			t.Fatalf("%d packets came in as the ramp played after it resumed, want 50", checked)
+		}
+		if missed > 0 {
+			t.Errorf("after it resumed %d packets of %d were stamped off, by as much as %d frames", missed, checked, worst)
 		}
 	})
 }

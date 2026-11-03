@@ -78,7 +78,10 @@ const (
 	// wasStampOff is how far an input stamp may lie off the line the
 	// stamps before it lie on and still count as on it. One further off
 	// is left out; two in a row start the line again, as after a gap.
-	wasStampOff = time.Millisecond
+	// A line teaches how late the stamps run only once wasStampAgree
+	// stamps in a row have lain on it.
+	wasStampOff   = time.Millisecond
+	wasStampAgree = 4
 )
 
 // errWasPanel is what ControlPanel returns while WASAPI plays.
@@ -170,12 +173,13 @@ type wasOutput struct {
 	// What the render goroutine learns of the input's stamps over an
 	// open: inFrames counts the frames read; inLine is where the line
 	// the stamps lie on puts frame 0, in nanoseconds, NaN for none, and
-	// inOff counts the stamps in a row off it; inBack is how much later
-	// than its first frame a packet's stamp marks, in nanoseconds.
-	inFrames int64
-	inLine   float64
-	inOff    int
-	inBack   int64
+	// inOff counts the stamps in a row off it, and inOn those on it
+	// since it was drawn; inBack is how much later than its first frame
+	// a packet's stamp marks, in nanoseconds.
+	inFrames    int64
+	inLine      float64
+	inOff, inOn int
+	inBack      int64
 }
 
 // openWasapi opens WASAPI's default output, and its default input
@@ -248,7 +252,7 @@ func (a *wasOutput) use(dev wasDevice) {
 	a.written = 0
 	a.sil = silences{}
 	a.pos = 0
-	a.inFrames, a.inLine, a.inOff, a.inBack = 0, math.NaN(), 0, 0
+	a.forgetStamps()
 	if a.q != nil {
 		a.from.Store(a.q.r.Load())
 	}
@@ -413,6 +417,8 @@ func (a *wasOutput) pause(p bool) {
 	}
 	now := a.clock()
 	a.org.Store(none)
+	// A device started again may stamp another frame of its packets.
+	a.forgetStamps()
 	a.settle, a.movedAt, a.moved = now, now, false
 	if err := a.dev.Start(); err != nil {
 		a.lose(err)
@@ -594,8 +600,9 @@ func (a *wasOutput) drain(now int64) error {
 // microseconds after its stamp. The first frame came in no later than
 // the packet was read less its length, so firstAt moves every stamp of
 // the open back by as much as the soonest packet read falls short of
-// that. It learns from the line the stamps lie on, one a frame's
-// length after the other, so one stamp off the line misleads nothing.
+// that, a packet's length at most. It learns from the line the stamps
+// lie on, one a frame's length after the other, once wasStampAgree
+// stamps in a row lie on it, so stamps off the line mislead nothing.
 // It runs on the render goroutine, and allocates nothing.
 func (a *wasOutput) firstAt(n int, at, read int64) int64 {
 	ns := 1e9 / float64(a.hz)
@@ -604,22 +611,31 @@ func (a *wasOutput) firstAt(n int, at, read int64) int64 {
 	off := float64(at) - f*ns
 	switch {
 	case math.IsNaN(a.inLine):
-		a.inLine, a.inOff = off, 0
+		a.inLine, a.inOff, a.inOn = off, 0, 0
 	case math.Abs(off-a.inLine) <= float64(wasStampOff):
 		a.inLine += (off - a.inLine) / 8
 		a.inOff = 0
+		a.inOn++
 	default:
 		a.inOff++
-		if a.inOff < 2 {
-			return at - a.inBack
+		if a.inOff >= 2 {
+			a.inLine, a.inOff, a.inOn = off, 0, 0
 		}
-		a.inLine, a.inOff = off, 0
+	}
+	if a.inOn < wasStampAgree {
+		return at - a.inBack
 	}
 	stamp := a.inLine + f*ns
-	if short := int64(float64(n)*ns - (float64(read) - stamp)); short > a.inBack {
+	if short := min(int64(float64(n)*ns-(float64(read)-stamp)), int64(float64(n)*ns)); short > a.inBack {
 		a.inBack = short
 	}
 	return at - a.inBack
+}
+
+// forgetStamps has firstAt learn the input's stamps anew, for a device
+// opened or started again.
+func (a *wasOutput) forgetStamps() {
+	a.inFrames, a.inLine, a.inOff, a.inOn, a.inBack = 0, math.NaN(), 0, 0, 0
 }
 
 // ringAt returns the ring frame heard at t, on the output's clock, now
