@@ -375,10 +375,18 @@ func TestRingsAcrossThreads(t *testing.T) {
 	cl := openFake(t, f, Config{Record: true})
 	const cycles = 3000
 	done := make(chan []float32)
+	// read counts the input frames read. The server keeps within half
+	// the log of it: a reader further behind than the whole log loses
+	// cycles, as Read says, and a loaded machine can hold the reader
+	// back that long.
+	var readSoFar atomic.Int64
 	go func() {
 		// The server: the input counts frames, the output is kept.
 		played := make([]float32, 0, 64*cycles)
 		for c := range cycles {
+			for wait := time.Now(); int64(c*64)-readSoFar.Load() > logSize/2*64 && time.Since(wait) < 5*time.Second; {
+				time.Sleep(20 * time.Microsecond)
+			}
 			f.mu.Lock()
 			_, p := f.byName("c1")
 			for i := range 64 {
@@ -424,6 +432,7 @@ func TestRingsAcrossThreads(t *testing.T) {
 				t.Fatalf("stamped %d, ahead of the %d taken", at, cl.Taken())
 			}
 			read += n
+			readSoFar.Store(int64(read))
 		}
 	}
 	// Played frames count up from 1, with silence only where the ring

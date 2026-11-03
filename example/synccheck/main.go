@@ -3,12 +3,14 @@
 // numbers, 1 to 4, as the speaker says each is heard. Buttons shift the
 // picture earlier or later until the two feel together; the shift left
 // is how far the delay the speaker reports is off. Other buttons switch
-// between AAudio and the system's sound, and turn Options.Quick on and
+// between gunim's own driver, AAudio on Android and PipeWire on Linux,
+// and the system's sound through oto, and turn Options.Quick on and
 // off. Done logs a line that starts "SYNCCHECK", with the shift and what
 // the speaker reports. On Android the speaker's log is on, for the
 // delays AAudio and the Bluetooth route report.
 //
 //	go run ./tools/gunimapk -run ./example/synccheck
+//	go run ./example/synccheck   # on Linux, through PipeWire
 package main
 
 import (
@@ -38,6 +40,16 @@ import (
 
 const name = "gunim sync check"
 
+// native is the driver of gunim's own the check plays through first:
+// PipeWire on Linux, AAudio elsewhere, which plays through the system's
+// sound but on Android.
+var native = func() string {
+	if runtime.GOOS == "linux" {
+		return audiodriver.PipeWire
+	}
+	return audiodriver.AAudio
+}()
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -58,7 +70,7 @@ func run() error {
 			return err
 		}
 		mix := audio.NewMixer()
-		spk, err := speaker.Open(mix, speaker.Options{Name: name, Driver: audiodriver.AAudio})
+		spk, err := speaker.Open(mix, speaker.Options{Name: name, Driver: native})
 		if err != nil {
 			return err
 		}
@@ -154,7 +166,7 @@ func through(st speaker.State) string {
 }
 
 func newView(mix *audio.Mixer, spk *speaker.Speaker, n *notes) *view {
-	v := &view{mix: mix, spk: spk, notes: n, driver: audiodriver.AAudio, digit: widget.NewLabel(""),
+	v := &view{mix: mix, spk: spk, notes: n, driver: native, digit: widget.NewLabel(""),
 		info: widget.NewLabel("")}
 	v.digit.Size = digitSize
 	for _, ms := range []int{-50, -10, 10, 50} {
@@ -167,10 +179,10 @@ func newView(mix *audio.Mixer, spk *speaker.Speaker, n *notes) *view {
 	}
 	sw := widget.NewButton("Switch driver")
 	sw.OnClick = func(*gunim.UI) gunim.Intent {
-		if v.driver == audiodriver.AAudio {
+		if v.driver == native {
 			v.driver = ""
 		} else {
-			v.driver = audiodriver.AAudio
+			v.driver = native
 		}
 		v.set()
 		return nil

@@ -1,6 +1,7 @@
 // Package driver lists the audio drivers the speakers can play
 // through, past the system's own sound, and plays through ASIO drivers.
-// [Drivers] lists ASIO drivers on Windows and [JACK] on Linux; [AAudio]
+// [Drivers] lists ASIO drivers on Windows, and [JACK] and [PipeWire] on
+// Linux; [AAudio]
 // names AAudio on Android, and [WASAPI] gunim's own WASAPI output on
 // Windows.
 //
@@ -97,6 +98,21 @@ const CoreAudio = "Core Audio"
 // new default. On another system the speakers play through the
 // system's sound, as through a driver that fails to open.
 const WASAPI = "WASAPI"
+
+// PipeWire is the name [Drivers] lists PipeWire under, on Linux, where
+// libpipewire 0.3.50 or newer loads and a PipeWire server listens:
+// package audio/speaker plays through it by gunim's own code, in place
+// of oto, where its Options.Driver names it. It plays to the default
+// output at the rate Options.Rate asks, which PipeWire converts to the
+// device's where they differ, and asks for cycles as short as
+// Options.Buffer, or a quarter of the latency. PipeWire's real-time
+// thread takes each cycle from a ring and runs no Go as it does. The
+// session manager moves the sound as the default output changes or
+// goes, and the speaker counts the delay PipeWire reports, a Bluetooth
+// headset's too. With Options.Record set it records the default input
+// too, stamped with the mixer frame heard as each cycle came in, as a
+// driver's inputs are.
+const PipeWire = "PipeWire"
 
 // Config says how to open a driver.
 type Config struct {
