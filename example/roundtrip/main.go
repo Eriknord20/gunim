@@ -278,7 +278,11 @@ func (t *tester) text() string {
 	st := t.spk.State()
 	var b strings.Builder
 	through := st.Driver
-	if through == "" {
+	switch {
+	case through != "":
+	case st.Info != nil && st.Info.Driver != "":
+		through = st.Info.Driver + ", the default"
+	default:
 		through = "the system's sound"
 	}
 	fmt.Fprintf(&b, "Playing through %s at %d Hz.\n", through, st.Rate)

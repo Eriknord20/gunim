@@ -3,6 +3,7 @@ package speaker
 import (
 	"errors"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,8 +16,8 @@ import (
 )
 
 // aaudioFirst plays through AAudio where Options names no driver, in
-// place of oto, on the Androids it plays on.
-const aaudioFirst = false
+// place of oto, on the Androids it plays on: from Android 11.
+var aaudioFirst = runtime.GOOS == "android"
 
 // micName names the AAudio input to package audio/capture.
 const micName = "Microphone"

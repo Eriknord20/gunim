@@ -1,11 +1,13 @@
 // Package speaker plays a [audio.Mixer] through the computer's
 // speakers: through PulseAudio or PipeWire, else ALSA, on Linux,
-// WASAPI on Windows, Core Audio on macOS and Oboe on Android; and on
+// WASAPI on Windows, Core Audio on macOS and Oboe on Android before
+// 11; and on
 // Windows through an ASIO driver too, as package audio/driver plays;
 // and on Linux through JACK, where a JACK server answers, or
-// PipeWire's. On Android 11 and newer, [Options].Driver set to
-// [driver.AAudio] plays through AAudio, gunim's own, in low-latency
-// mode, and records with [Options].Record. On Windows, [driver.WASAPI]
+// PipeWire's. On Android 11 and newer the speaker plays through
+// AAudio by gunim's own code, in low-latency mode, as [driver.AAudio]
+// does, with Options.Driver empty too, and records with
+// [Options].Record. On Windows, [driver.WASAPI]
 // plays through WASAPI by gunim's own code, at the device's rate, and
 // records the default input with [Options].Record.
 // On macOS the speaker plays through Core Audio's HAL output unit by
@@ -612,7 +614,8 @@ type State struct {
 	// Driver is the driver playing: an ASIO driver, [driver.JACK] for
 	// JACK, [driver.AAudio] for AAudio, [driver.CoreAudio] for Core
 	// Audio's HAL output unit, or empty for the system's own sound, as
-	// on macOS where Options names no driver.
+	// on macOS and Android where Options names no driver: Info then
+	// says which plays.
 	Driver string
 	// Rate is the rate the mixer and the output play at, in frames a
 	// second. DeviceRate is the rate the system converts it to on its
