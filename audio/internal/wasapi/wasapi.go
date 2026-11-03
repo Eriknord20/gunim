@@ -57,9 +57,11 @@ type Info struct {
 	// opened one, and Inputs how many channels it records, converted to
 	// Rate. InputBuffer is how many frames a packet holds at most, and
 	// InputLatency the input stream's latency and a period, in frames.
-	// InputErr is why the input did not open, where it did not.
-	InputName, InputID  string
-	Inputs, InputBuffer int
-	InputLatency        int
-	InputErr            error
+	// InputPeriod is the input's period, in frames: the engine hands
+	// on a packet about once a period. InputErr is why the input did not
+	// open, where it did not.
+	InputName, InputID        string
+	Inputs, InputBuffer       int
+	InputLatency, InputPeriod int
+	InputErr                  error
 }

@@ -209,9 +209,10 @@ type Speaker struct {
 	// out is the output playing, nil while it changes.
 	out atomic.Pointer[outlet]
 	// ahead is how far ahead the mixer works, as Latency set it and dry
-	// spells grew it, in nanoseconds.
-	ahead atomic.Int64
-	fixed atomic.Bool
+	// spells grew it, in nanoseconds. margin is what dry spells grew past
+	// it, for an output that keeps it apart: see margined.
+	ahead, margin atomic.Int64
+	fixed         atomic.Bool
 	// dry counts the reads that found the buffer empty: the sound ran
 	// out before the mixer filled it again. reads counts all of them, so
 	// the first, into an empty buffer, are let be. dropouts counts dry
@@ -297,6 +298,17 @@ type output interface {
 	close() error
 }
 
+// A margined output keeps what dry spells grow, the speaker's margin,
+// apart from how far ahead the mixer works: it adds the margin to the
+// frames it keeps past its device's delay. Its latency counts the
+// delay as its device's clock measures it, and that may come in long
+// after the device opens: a lead grown from it would keep the extra
+// on the next device, and so would never come back down.
+type margined interface {
+	// remargin takes the margin the speaker grew.
+	remargin()
+}
+
 // outlet holds an output, for an atomic pointer.
 type outlet struct{ output }
 
@@ -342,6 +354,8 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 func (s *Speaker) open() (output, error) {
 	s.problem = nil
 	s.reads.Store(0)
+	// Dry reads of the output closed tell nothing of the one opening.
+	s.dry.Store(0)
 	ahead := time.Duration(s.ahead.Load())
 	var out startedOutput
 	var err error
@@ -485,16 +499,37 @@ func (s *Speaker) watch() {
 					}
 				}
 			}
-			// Once might be a hiccup; more is the buffer too small. It
-			// grows from how far ahead the output works, which may be
-			// further than asked, as a driver's buffer is long.
-			ahead := max(time.Duration(s.ahead.Load()), s.Latency())
-			if dry >= 2 && !s.suspended.Load() && !s.fixed.Load() && ahead < MaxLatency {
-				s.setAhead(min(ahead+10*time.Millisecond, MaxLatency))
-				s.logf("working %v ahead", s.Latency())
+			// Once might be a hiccup; more is the buffer too small.
+			if dry >= 2 && !s.suspended.Load() && !s.fixed.Load() {
+				s.grow()
 			}
 		}
 	}
+}
+
+// grow works 10 ms further ahead, as far as MaxLatency: from how far
+// ahead the output works, which may be further than asked, as a
+// driver's buffer is long; or, for a margined output, by its margin.
+func (s *Speaker) grow() {
+	const step = 10 * time.Millisecond
+	out := s.out.Load()
+	if out == nil {
+		return
+	}
+	if m, ok := out.output.(margined); ok {
+		if s.Latency() >= MaxLatency {
+			return
+		}
+		s.margin.Store(min(s.margin.Load()+int64(step), int64(MaxLatency)))
+		m.remargin()
+	} else {
+		ahead := max(time.Duration(s.ahead.Load()), s.Latency())
+		if ahead >= MaxLatency {
+			return
+		}
+		s.setAhead(min(ahead+step, MaxLatency))
+	}
+	s.logf("working %v ahead", s.Latency())
 }
 
 // setAhead sets how far ahead the mixer works, as far as MaxLatency.
@@ -515,6 +550,7 @@ func (s *Speaker) SetLatency(d time.Duration) {
 	s.mu.Lock()
 	s.o.Latency = d
 	s.mu.Unlock()
+	s.margin.Store(0)
 	s.setAhead(max(d, device))
 	s.logf("working %v ahead", s.Latency())
 }
@@ -535,6 +571,7 @@ func (s *Speaker) Set(o Options) error {
 	s.setAux(o.Aux)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
+		s.margin.Store(0)
 		s.setAhead(o.latency())
 	}
 	// A rate asked reopens where the output plays at another. Buffer and

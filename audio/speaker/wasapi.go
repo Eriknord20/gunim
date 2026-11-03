@@ -33,6 +33,7 @@ type wasDevice interface {
 	Silence(n int) error
 	Clock() (pos, at int64, err error)
 	Read(dst []float32) (n int, at int64, ok bool, err error)
+	Position() int64
 	Changed() bool
 	Close()
 }
@@ -52,8 +53,11 @@ const (
 	wasWait = 20 * time.Millisecond
 	// wasTick is how often the feed tops the ring up.
 	wasTick = 2 * time.Millisecond
-	// wasSettle is how long a device starting or resuming plays before a
-	// buffer the ring leaves short counts as the sound running dry.
+	// wasSettle is how long a device plays, once its clock first moves
+	// after it starts or resumes, before a buffer the ring leaves short
+	// counts as the sound running dry for good, and grows the lead: until
+	// then it counts as a dropout of the opening. A device that just
+	// changed its rate may take a while to start its clock.
 	wasSettle = 250 * time.Millisecond
 	// wasStalled is how long a playing device's clock may stand still
 	// before it is opened again, as one gone untold. wasStartup is how
@@ -69,6 +73,8 @@ const (
 	// wasJump is how far a clock reading may place the device from
 	// where the last ones did before it is taken as it is, unsmoothed.
 	wasJump = 5 * time.Millisecond
+	// wasNoteEvery is how often the debug log tells of the stamps.
+	wasNoteEvery = 5 * time.Second
 )
 
 // errWasPanel is what ControlPanel returns while WASAPI plays.
@@ -123,6 +129,9 @@ type wasOutput struct {
 	problem atomic.Pointer[error]
 	tap     *duplex.Tap
 	started bool
+	// notes is what the debug log tells of the stamps, nil where the
+	// speaker logs nothing.
+	notes *wasNotes
 	// ctl carries Suspend's and Resume's asks to the render goroutine.
 	ctl     chan bool
 	begin   chan struct{}
@@ -407,6 +416,13 @@ func (a *wasOutput) cycle() error {
 		return err
 	}
 	if pos != a.pos {
+		if !a.moved {
+			// The device plays from now: it settles from here.
+			if a.notes != nil {
+				a.notes.moved.Store(now - a.settle)
+			}
+			a.settle = now
+		}
 		a.pos, a.movedAt, a.moved = pos, now, true
 		if a.stalls > 0 {
 			a.stalls = 0
@@ -423,6 +439,9 @@ func (a *wasOutput) cycle() error {
 	}
 	if pos > 0 {
 		a.place(pos, at, now)
+		if a.notes != nil {
+			a.notes.output(a.clock()-at, a.written-pos)
+		}
 	}
 	if err := a.drain(now); err != nil {
 		return err
@@ -457,9 +476,7 @@ func (a *wasOutput) write(now int64) error {
 	// period: what it holds then falls short of a period.
 	held := info.Buffer - room + n
 	if short := min(info.Period-held, room-n); short > 0 {
-		if a.primed.Load() && !a.paused.Load() && now-a.settle > int64(wasSettle) {
-			a.s.ranDry()
-		}
+		a.countDry(now)
 		if err := a.dev.Silence(short); err != nil {
 			return err
 		}
@@ -467,6 +484,20 @@ func (a *wasOutput) write(now int64) error {
 		a.written += int64(short)
 	}
 	return nil
+}
+
+// countDry counts a buffer the ring left short: none before the
+// ring first filled, or while the device's clock has yet to move, as
+// nothing plays then; a dropout of the opening for wasSettle after it
+// first moves; and the sound running dry after that.
+func (a *wasOutput) countDry(now int64) {
+	switch {
+	case !a.primed.Load() || a.paused.Load() || !a.moved:
+	case now-a.settle <= int64(wasSettle):
+		a.s.ranDryOnce()
+	default:
+		a.s.ranDry()
+	}
 }
 
 // place takes the device's frame pos heard at at: the ring frame heard
@@ -503,6 +534,9 @@ func (a *wasOutput) drain(now int64) error {
 		n, at, ok, err := a.dev.Read(a.in)
 		if err != nil || !ok {
 			return err
+		}
+		if a.notes != nil && at != 0 {
+			a.notes.input(n, a.dev.Position(), a.clock()-at)
 		}
 		if a.tap == nil || !a.tap.Attached() || n == 0 {
 			continue
@@ -545,8 +579,87 @@ func (a *wasOutput) start(ahead time.Duration) {
 		a.tap = duplex.NewTap(driver.WASAPI, a.hz, info.Period, info.InputLatency, channelNames(info.InputName, info.Inputs))
 		duplex.Publish(a.tap)
 	}
+	if a.s.debug {
+		a.notes = newWasNotes()
+		go a.report()
+	}
 	go a.feed(buf)
 	close(a.begin)
+}
+
+// wasNotes is what the render goroutine tells the debug log of the
+// stamps, through atomics, so it allocates nothing: of the packet the
+// input read soonest after its stamp, and the clock reading soonest
+// after its own, since the log last told.
+type wasNotes struct {
+	// inLag is how long after its stamp that packet was read, in
+	// nanoseconds, math.MaxInt64 for none; inFrames its frames, and inPos
+	// its device position.
+	inLag, inFrames, inPos atomic.Int64
+	// outLag is how long after its stamp the clock was read; outPast how
+	// many frames were written past the position it told.
+	outLag, outPast atomic.Int64
+	// moved is how long the device's clock took to first move after it
+	// started or resumed, 0 where the log told it already.
+	moved atomic.Int64
+}
+
+func newWasNotes() *wasNotes {
+	n := &wasNotes{}
+	n.inLag.Store(math.MaxInt64)
+	n.outLag.Store(math.MaxInt64)
+	return n
+}
+
+// input notes a packet of frames at device position pos, read lag
+// after its stamp.
+func (n *wasNotes) input(frames int, pos, lag int64) {
+	if lag < n.inLag.Load() {
+		n.inLag.Store(lag)
+		n.inFrames.Store(int64(frames))
+		n.inPos.Store(pos)
+	}
+}
+
+// output notes a clock reading made lag after its stamp, past frames
+// written past the position it told.
+func (n *wasNotes) output(lag, past int64) {
+	if lag < n.outLag.Load() {
+		n.outLag.Store(lag)
+		n.outPast.Store(past)
+	}
+}
+
+// report logs the notes every wasNoteEvery, until the output closes:
+// which end of a packet the input's stamp marks, and where the output's
+// clock places the frame heard. A packet read a period or more after
+// its stamp was stamped as its first frame came in; one read at once,
+// as its last did.
+func (a *wasOutput) report() {
+	t := time.NewTicker(wasNoteEvery)
+	defer t.Stop()
+	n := a.notes
+	for {
+		select {
+		case <-a.quit:
+			return
+		case <-t.C:
+		}
+		if d := n.moved.Swap(0); d > 0 {
+			a.s.logf("WASAPI: the device's clock first moved %v after it started", time.Duration(d))
+		}
+		info := a.info.Load()
+		if lag := n.inLag.Swap(math.MaxInt64); lag != math.MaxInt64 {
+			a.s.logf("WASAPI input: a packet of %d frames at device position %d, read %v after its stamp, the soonest "+
+				"in %v; the input's period is %d frames (%v)", n.inFrames.Load(), n.inPos.Load(), time.Duration(lag),
+				wasNoteEvery, info.InputPeriod, audio.DurationAt(int64(info.InputPeriod), a.hz))
+		}
+		if lag := n.outLag.Swap(math.MaxInt64); lag != math.MaxInt64 {
+			a.s.logf("WASAPI output: the clock read %v after its stamp, the soonest in %v, with %d frames written past "+
+				"the position it told; device delay %v", time.Duration(lag), wasNoteEvery, n.outPast.Load(),
+				audio.DurationAt(a.delay.Load(), a.hz))
+		}
+	}
 }
 
 // chunk is the most frames the feed reads the mixer for at once.
@@ -597,12 +710,16 @@ func (a *wasOutput) topUp(buf []float32) {
 
 // setTarget sets how full the feed keeps the ring: what ahead leaves
 // past the device's delay, and a period and two of the feed's ticks at
-// the least.
+// the least; and past that, the margin dry spells grew.
 func (a *wasOutput) setTarget() {
 	least := int64(a.info.Load().Period) + audio.FramesAt(2*wasTick, a.hz)
-	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load(), least)
+	t := max(audio.FramesAt(time.Duration(a.ahead.Load()), a.hz)-a.delay.Load(), least) +
+		audio.FramesAt(time.Duration(a.s.margin.Load()), a.hz)
 	a.target.Store(min(t, a.q.size()-int64(a.chunk())))
 }
+
+// remargin takes the margin the speaker grew.
+func (a *wasOutput) remargin() { a.setTarget() }
 
 // held counts from the mixer's own count of the frames it mixed, not
 // the ring's: the feed mixes a chunk before it adds it to the ring, and

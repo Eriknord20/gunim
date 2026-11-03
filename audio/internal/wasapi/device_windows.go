@@ -255,6 +255,7 @@ func (d *Device) openInput() error {
 	}
 	d.info.Inputs, d.info.InputBuffer = ch, int(size)
 	d.info.InputLatency = int(audio.FramesAt(time.Duration(latency+period)*100, rate))
+	d.info.InputPeriod = int(audio.FramesAt(time.Duration(period)*100, rate))
 	d.nextPacket = Method(d.capture, MGetNextPacketSize)
 	d.capGet, d.capRelease = Method(d.capture, MGetBuffer), Method(d.capture, MReleaseBuffer)
 	return nil
@@ -409,6 +410,11 @@ func (d *Device) Read(dst []float32) (n int, at int64, ok bool, err error) {
 	}
 	return n, at, true, nil
 }
+
+// Position returns the device position of the last packet Read took:
+// its first frame's, counted in frames from the input's start, as
+// WASAPI tells it.
+func (d *Device) Position() int64 { return int64(d.p.devPos) }
 
 // Changed says the device should open again: the default output
 // changed, or the default input where it records or was asked to, or
