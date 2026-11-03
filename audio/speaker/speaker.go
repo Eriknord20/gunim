@@ -234,6 +234,10 @@ type Speaker struct {
 	// as it opens, as AirPods switching their rate as their microphone
 	// opens, waits longer each time before it opens again.
 	auChurn, auOpened atomic.Int64
+	// wasChanged says the WASAPI output closed for an endpoint whose
+	// format changed: the next one opens on an endpoint that may be
+	// warming up still. See wasLate and reformatted.
+	wasChanged atomic.Bool
 	// waiting says an output closed while the device was stopped, to
 	// open again as it resumes: opened then, it would start the device,
 	// and the microphone, while the application is away.

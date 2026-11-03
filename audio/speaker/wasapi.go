@@ -65,6 +65,15 @@ const (
 	// moves, as a Bluetooth headset or an HDMI display waking up does.
 	wasStalled = time.Second
 	wasStartup = 5 * time.Second
+	// wasLate is how long after Start a device opened after a change may
+	// take before its clock first moves and still count as settled. On
+	// the MOTU M Series a fresh start moved it in 3 to 18 ms. After a
+	// format change in Windows' Sound settings it took 378 to 384 ms,
+	// and the clock then left frames the engine took uncounted, for the
+	// whole open: the device delay read 14 to 24 ms long. 100 ms lies
+	// well clear of both. A device that starts later than that is opened
+	// once more, on an endpoint that has settled.
+	wasLate = 100 * time.Millisecond
 	// wasStallWait is how long the render goroutine waits before it
 	// opens a device again after its second stall in a row, doubling with
 	// each stall after, as far as wasStallMost.
@@ -92,6 +101,7 @@ var errWasPanel = errors.New("speaker: WASAPI has no control panel of its own: s
 var (
 	errDefaultMoved = errors.New("the default device changed, or the device went or changed its format")
 	errStalled      = errors.New("the device's clock stood still")
+	errLate         = errors.New("the device's clock started late")
 )
 
 // wasOutput plays through WASAPI. A goroutine, the feed, reads the
@@ -165,11 +175,18 @@ type wasOutput struct {
 	// moved says the clock has moved since the device started or
 	// resumed; stalls counts the devices in a row whose clock stood
 	// still.
-	moved   bool
-	stalls  int
-	fails   int
-	next    int64
-	buf, in []float32
+	moved  bool
+	stalls int
+	// recheck says the device opened after its format changed, so a
+	// clock that first moves past wasLate has it opened once more; keep
+	// has reopen keep what the ring holds, for that open; again says the
+	// device playing is that open, which plays however late it starts.
+	// late is how long the device before it took to first move.
+	recheck, keep, again bool
+	late                 int64
+	fails                int
+	next                 int64
+	buf, in              []float32
 	// What the render goroutine learns of the input's stamps over an
 	// open: inFrames counts the frames read; inLine is where the line
 	// the stamps lie on puts frame 0, in nanoseconds, NaN for none, and
@@ -194,7 +211,7 @@ func openWasapi(s *Speaker, o Options, byName bool) (*wasOutput, error) {
 	}
 	a := &wasOutput{s: s, byName: byName, record: o.Record, clock: wasClock, ctl: make(chan bool),
 		begin: make(chan struct{}), wake: make(chan struct{}, 1), quit: make(chan struct{}),
-		done: make(chan struct{}), fed: make(chan struct{})}
+		done: make(chan struct{}), fed: make(chan struct{}), recheck: s.wasChanged.Swap(false)}
 	a.org.Store(none)
 	ready := make(chan error, 1)
 	go a.run(ready)
@@ -348,12 +365,13 @@ func (a *wasOutput) reopen() bool {
 		a.s.logf("%v; trying again in %v", err, retryDelay(a.fails))
 		return false
 	}
-	info := dev.Info()
+	info, last := dev.Info(), *a.info.Load()
 	if info.Rate != a.first.Rate || info.Inputs != a.first.Inputs {
 		// The mixer and the inputs' readers follow the first device: the
 		// speaker opens the output again for this one.
 		dev.Close()
 		a.waiting = true
+		a.s.wasChanged.Store(reformatted(last, info))
 		a.s.logf("WASAPI: %s plays at %d Hz and records %d channels, where the last played at %d Hz and recorded %d; "+
 			"opening the output again", info.Name, info.Rate, info.Inputs, a.first.Rate, a.first.Inputs)
 		a.s.askReset()
@@ -364,13 +382,35 @@ func (a *wasOutput) reopen() bool {
 		// A stall's problem stands until a device's clock moves.
 		a.problem.Store(nil)
 	}
-	// What waited was mixed for the device gone; the new one starts from
-	// the next frame mixed.
-	a.q.r.Store(a.q.w.Load())
+	if !a.keep {
+		// What waited was mixed for the device gone; the new one starts
+		// from the next frame mixed.
+		a.q.r.Store(a.q.w.Load())
+	}
+	a.recheck = !a.keep && reformatted(last, info)
+	a.again, a.keep = a.keep, false
 	a.use(dev)
 	a.s.logf("WASAPI plays %s again", info.Name)
 	a.startDevice()
 	return a.dev != nil
+}
+
+// reformatted reports whether now is the endpoint last played on, at
+// another rate or with other channels: its format changed in Windows'
+// Sound settings, and it may be warming up as it opens. Another
+// endpoint, as the default output moving to a headset, is no change of
+// format: it may take its time to wake, and is opened once.
+func reformatted(last, now wasapi.Info) bool {
+	return now.ID == last.ID && (now.Rate != last.Rate || now.Channels != last.Channels)
+}
+
+// lateAgain tells whether a device opened once more, its clock
+// starting late, started late again: it plays all the same.
+func lateAgain(late int64) string {
+	if late > int64(wasLate) {
+		return fmt.Sprintf(", past %v again: it plays as it is", wasLate)
+	}
+	return ""
 }
 
 // lose closes a device that went away, failed or stalled; the loop
@@ -378,6 +418,15 @@ func (a *wasOutput) reopen() bool {
 func (a *wasOutput) lose(err error) {
 	a.drop()
 	a.next = a.clock()
+	if errors.Is(err, errLate) {
+		// The device stays as it was: what the ring holds was mixed for
+		// it, and plays on the next open.
+		a.recheck, a.keep = false, true
+		a.s.logf("WASAPI: the device's clock first moved %v after it started, past %v: the endpoint was still "+
+			"warming up, and its clock may miss frames for the whole open; opening it once more",
+			time.Duration(a.late), wasLate)
+		return
+	}
 	if !errors.Is(err, errStalled) {
 		a.s.logf("WASAPI: %v; opening the default device again", err)
 		return
@@ -417,6 +466,8 @@ func (a *wasOutput) pause(p bool) {
 	}
 	now := a.clock()
 	a.org.Store(none)
+	// A device resumed is no new one: it plays however late it starts.
+	a.recheck, a.again = false, false
 	// A device started again may stamp another frame of its packets.
 	a.forgetStamps()
 	a.settle, a.movedAt, a.moved = now, now, false
@@ -438,10 +489,21 @@ func (a *wasOutput) cycle() error {
 	}
 	if pos != a.pos {
 		if !a.moved {
-			// The device plays from now: it settles from here.
+			late := now - a.settle
 			if a.notes != nil {
-				a.notes.firstMove(now-a.settle, pos, a.written, a.sil.total, a.padding())
+				a.notes.firstMove(late, pos, a.written, a.sil.total, a.padding())
 			}
+			if a.recheck && late > int64(wasLate) {
+				a.late = late
+				return errLate
+			}
+			if a.again {
+				a.again = false
+				a.s.logf("WASAPI: opened once more, the device's clock first moved %v after it started%s",
+					time.Duration(late), lateAgain(late))
+			}
+			a.recheck = false
+			// The device plays from now: it settles from here.
 			a.settle = now
 		}
 		a.pos, a.movedAt, a.moved = pos, now, true
