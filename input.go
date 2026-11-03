@@ -443,15 +443,19 @@ func (u *UI) keyFirst(ev input.Event, top *state) bool {
 	if !ok || u.focus == nil {
 		return false
 	}
-	var above []*state
+	type first struct {
+		s *state
+		n KeyFirst
+	}
+	var above []first
 	for s := u.focus.parent; s != nil && (top == nil || s != top.parent); s = s.parent {
-		if _, ok := s.node.(KeyFirst); ok {
-			above = append(above, s)
+		if n, ok := s.node.(KeyFirst); ok {
+			above = append(above, first{s, n})
 		}
 	}
 	for i := len(above) - 1; i >= 0; i-- {
-		s, took := above[i], false
-		u.on(s, func() { took = s.node.(KeyFirst).KeyFirst(k, u) })
+		f, took := above[i], false
+		u.on(f.s, func() { took = f.n.KeyFirst(k, u) })
 		if took {
 			return true
 		}
