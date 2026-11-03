@@ -93,10 +93,9 @@ func run() error {
 			return err
 		}
 		defer func() { _ = spk.Close() }()
-		tk := &ticks{rate: mix.Rate(), mix: mix}
-		tk.start.Store(-1)
-		t := &tester{mix: mix, spk: spk, ticks: tk}
-		mix.Play(tk, audio.Options{})
+		t := &tester{mix: mix, spk: spk}
+		t.play()
+		go t.follow(ctx)
 		go func() { t.allowed.Store(a.Ask(driver.PermissionMicrophone)) }()
 		go t.record(ctx)
 		go t.report(ctx)
@@ -129,9 +128,10 @@ func run() error {
 
 // ticks is a click of 20 ms at 1 kHz at the start of each second.
 type ticks struct {
-	rate int
-	n    int
-	mix  *audio.Mixer
+	rate  int
+	n     int
+	mix   *audio.Mixer
+	voice *audio.Voice
 	// start is the mixer frame the first click starts at, or -1 before
 	// the mixer first reads: the dot lights as each click is heard.
 	start atomic.Int64
@@ -152,10 +152,37 @@ func (t *ticks) Read(dst []float32) (int, error) {
 	return len(dst) / 2, nil
 }
 
+// play starts a click made for the mixer's rate, and stops the one
+// before.
+func (t *tester) play() {
+	tk := &ticks{rate: t.mix.Rate(), mix: t.mix}
+	tk.start.Store(-1)
+	if old := t.ticks.Swap(tk); old != nil {
+		old.voice.Stop(0)
+	}
+	tk.voice = t.mix.Play(tk, audio.Options{})
+}
+
+// follow plays the click again, made for the new rate, as the output
+// opens again at another, until ctx ends.
+func (t *tester) follow(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.spk.Changed():
+			if t.ticks.Load().rate != t.mix.Rate() {
+				t.play()
+			}
+		}
+	}
+}
+
 // A tester records the microphone, and measures the round trip when
 // asked.
 type tester struct {
-	ticks   *ticks
+	// ticks is the click playing, made for the mixer's rate.
+	ticks   atomic.Pointer[ticks]
 	mix     *audio.Mixer
 	spk     *speaker.Speaker
 	allowed atomic.Bool
@@ -403,34 +430,34 @@ func (v *view) Step(time.Duration) bool {
 // WakeIn wakes the window as the next click is heard, and each second
 // at the latest, for the text.
 func (v *view) WakeIn() time.Duration {
-	since, ok := v.sinceClick(v.present())
+	since, rate, ok := v.sinceClick(v.present())
 	if !ok {
 		return time.Second
 	}
-	rate := int64(v.t.ticks.rate)
-	return max(time.Millisecond, min(time.Second, audio.DurationAt(rate-since, int(rate))))
+	return max(time.Millisecond, min(time.Second, audio.DurationAt(int64(rate)-since, rate)))
 }
 
 // sinceClick returns how many frames before the mixer frame heard at
-// t the last click was heard, and false before the first. The zero
-// time is now.
-func (v *view) sinceClick(t time.Time) (int64, bool) {
-	start := v.t.ticks.start.Load()
+// t the last click was heard, and the rate the click is made for; false
+// before the first. The zero time is now.
+func (v *view) sinceClick(t time.Time) (since int64, rate int, ok bool) {
+	tk := v.t.ticks.Load()
+	start := tk.start.Load()
 	if start < 0 {
-		return 0, false
+		return 0, tk.rate, false
 	}
 	h := v.t.mix.HeardAt(t) - start
 	if h < 0 {
-		return 0, false
+		return 0, tk.rate, false
 	}
-	return h % int64(v.t.ticks.rate), true
+	return h % int64(tk.rate), tk.rate, true
 }
 
 // flash returns how bright a dot is at t, 0 to 1: full as a click is
 // heard, and fading over 150 ms.
 func (v *view) flash(t time.Time) float32 {
-	since, ok := v.sinceClick(t)
-	fade := int64(v.t.ticks.rate) * 15 / 100
+	since, rate, ok := v.sinceClick(t)
+	fade := int64(rate) * 15 / 100
 	if !ok || since >= fade {
 		return 0
 	}
