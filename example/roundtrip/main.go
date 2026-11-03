@@ -135,6 +135,9 @@ type ticks struct {
 	// start is the mixer frame the first click starts at, or -1 before
 	// the mixer first reads: the dot lights as each click is heard.
 	start atomic.Int64
+	// quiet plays silence in place of the clicks, keeping their time,
+	// while a measurement listens for its own click.
+	quiet atomic.Bool
 }
 
 func (t *ticks) Read(dst []float32) (int, error) {
@@ -143,7 +146,7 @@ func (t *ticks) Read(dst []float32) (int, error) {
 	}
 	for i := 0; i+1 < len(dst); i += 2 {
 		v := float32(0)
-		if at := t.n % t.rate; at < t.rate/50 {
+		if at := t.n % t.rate; at < t.rate/50 && !t.quiet.Load() {
 			v = 0.3 * float32(math.Sin(2*math.Pi*1000*float64(at)/float64(t.rate)))
 		}
 		dst[i], dst[i+1] = v, v
@@ -221,6 +224,17 @@ func (t *tester) record(ctx context.Context) {
 	}
 }
 
+// measureQuiet measures with the clicks silent: a click recorded just
+// before Measure's own would hide it. The mixer works ahead, so the
+// clicks it mixed already play out first.
+func (t *tester) measureQuiet(in *capture.Stream) (capture.Measurement, error) {
+	tk := t.ticks.Load()
+	tk.quiet.Store(true)
+	defer tk.quiet.Store(false)
+	time.Sleep(t.spk.Latency() + 100*time.Millisecond)
+	return capture.Measure(in, t.mix, 0, 3*time.Second)
+}
+
 // read reads in, measuring when asked, until it ends.
 func (t *tester) read(ctx context.Context, in *capture.Stream) {
 	buf := make([]float32, 4096)
@@ -237,10 +251,13 @@ func (t *tester) read(ctx context.Context, in *capture.Stream) {
 		}
 		if t.measure.Swap(false) {
 			t.say(&t.result, "measuring…")
-			m, err := capture.Measure(in, t.mix, 0, 3*time.Second)
-			if err != nil {
+			m, err := t.measureQuiet(in)
+			switch {
+			case errors.Is(err, capture.ErrNoClick):
+				t.say(&t.result, fmt.Sprintf("%v (loudest %.2f)", err, m.Level))
+			case err != nil:
 				t.say(&t.result, err.Error())
-			} else {
+			default:
 				t.say(&t.result, fmt.Sprintf("offset %v, round trip %v, level %.2f",
 					t.mix.Duration(m.Offset).Round(100*time.Microsecond), m.RoundTrip.Round(100*time.Microsecond), m.Level))
 			}
