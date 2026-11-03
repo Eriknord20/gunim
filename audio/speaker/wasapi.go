@@ -177,9 +177,9 @@ type wasOutput struct {
 	// still.
 	moved  bool
 	stalls int
-	// recheck says the device opened after a change, so a clock that
-	// first moves past wasLate has the device opened once more; keep has
-	// reopen keep what the ring holds, for that open; again says the
+	// recheck says the device opened after its format changed, so a
+	// clock that first moves past wasLate has it opened once more; keep
+	// has reopen keep what the ring holds, for that open; again says the
 	// device playing is that open, which plays however late it starts.
 	// late is how long the device before it took to first move.
 	recheck, keep, again bool
@@ -365,13 +365,13 @@ func (a *wasOutput) reopen() bool {
 		a.s.logf("%v; trying again in %v", err, retryDelay(a.fails))
 		return false
 	}
-	info := dev.Info()
+	info, last := dev.Info(), *a.info.Load()
 	if info.Rate != a.first.Rate || info.Inputs != a.first.Inputs {
 		// The mixer and the inputs' readers follow the first device: the
 		// speaker opens the output again for this one.
 		dev.Close()
 		a.waiting = true
-		a.s.wasChanged.Store(true)
+		a.s.wasChanged.Store(reformatted(last, info))
 		a.s.logf("WASAPI: %s plays at %d Hz and records %d channels, where the last played at %d Hz and recorded %d; "+
 			"opening the output again", info.Name, info.Rate, info.Inputs, a.first.Rate, a.first.Inputs)
 		a.s.askReset()
@@ -387,11 +387,21 @@ func (a *wasOutput) reopen() bool {
 		// from the next frame mixed.
 		a.q.r.Store(a.q.w.Load())
 	}
+	a.recheck = !a.keep && reformatted(last, info)
 	a.again, a.keep = a.keep, false
 	a.use(dev)
 	a.s.logf("WASAPI plays %s again", info.Name)
 	a.startDevice()
 	return a.dev != nil
+}
+
+// reformatted reports whether now is the endpoint last played on, at
+// another rate or with other channels: its format changed in Windows'
+// Sound settings, and it may be warming up as it opens. Another
+// endpoint, as the default output moving to a headset, is no change of
+// format: it may take its time to wake, and is opened once.
+func reformatted(last, now wasapi.Info) bool {
+	return now.ID == last.ID && (now.Rate != last.Rate || now.Channels != last.Channels)
 }
 
 // lateAgain tells whether a device opened once more, its clock
@@ -417,9 +427,6 @@ func (a *wasOutput) lose(err error) {
 			time.Duration(a.late), wasLate)
 		return
 	}
-	// A device gone or changed opens on an endpoint that may be warming
-	// up; one stalled opens on the same endpoint.
-	a.recheck = !errors.Is(err, errStalled)
 	if !errors.Is(err, errStalled) {
 		a.s.logf("WASAPI: %v; opening the default device again", err)
 		return
