@@ -34,6 +34,12 @@ type fakeWas struct {
 	// its time moves; frozen, where set, opens each device frozen.
 	startAfter time.Duration
 	frozen     atomic.Bool
+	// lateStarts is how many devices, of those started next, start late
+	// as an endpoint warming up does: lateFor after Start, past
+	// startAfter, with lateFrames more delay than they report.
+	lateStarts atomic.Int64
+	lateFor    time.Duration
+	lateFrames int64
 	// stampEnd stamps each input packet as its last frame came in, as
 	// the MOTU M Series does on a fresh open on Windows, read under mu;
 	// lateStamp, where lateBy is set, stamps lateCount packets from the
@@ -69,6 +75,8 @@ type fakeWasDev struct {
 	lost, changed, frozen atomic.Bool
 	closes                atomic.Int64
 	starts, stops         int
+	// extra is the delay it has past the latency it reports, in frames.
+	extra int64
 }
 
 func useFakeWas(t *testing.T, f *fakeWas) {
@@ -150,7 +158,7 @@ func (d *fakeWasDev) advance(now int64) {
 // heard returns the frame the speakers play at now, -1 for none yet.
 // It runs with f.mu held.
 func (d *fakeWasDev) heard(now int64) int64 {
-	return min(d.elapsed(now)-int64(d.info.Latency), int64(len(d.played))-1)
+	return min(d.elapsed(now)-int64(d.info.Latency)-d.extra, int64(len(d.played))-1)
 }
 
 // truthAt returns the ramp's frame the speakers play at now, or -1, and
@@ -195,6 +203,12 @@ func (d *fakeWasDev) Start() error {
 	}
 	if !d.ever {
 		d.t0, d.ever = now+int64(d.f.startAfter), true
+		if d.f.lateStarts.Add(-1) >= 0 {
+			d.t0 += int64(d.f.lateFor)
+			d.extra = d.f.lateFrames
+		} else {
+			d.f.lateStarts.Store(0)
+		}
 	} else {
 		d.t0 += now - d.stoppedAt
 	}
@@ -955,7 +969,9 @@ func TestWASAPIGrowsNoLeadFromAnOpening(t *testing.T) {
 		before := s.Latency()
 
 		// The device opens again at 44100 Hz, its clock first moving 300
-		// ms after it starts, past wasSettle, with 20 ms more delay.
+		// ms after it starts, past wasSettle, with 20 ms more delay. Late
+		// past wasLate, it opens once more, and starts as late again: the
+		// mixer is late as that one's clock starts.
 		f.startAfter = 300 * time.Millisecond
 		f.nextRate.Store(44100)
 		f.nextLatency.Store(914 + 882)
@@ -967,7 +983,7 @@ func TestWASAPIGrowsNoLeadFromAnOpening(t *testing.T) {
 			t.Fatal("the speaker never opened again for a device at another rate")
 		}
 		drops := s.State().Dropouts
-		r.stallAt(310*time.Millisecond, 80*time.Millisecond)
+		r.stallAt(610*time.Millisecond, 80*time.Millisecond)
 		time.Sleep(2 * time.Second)
 		synctest.Wait()
 		if d := s.State().Dropouts - drops; d < 2 {
@@ -1075,4 +1091,152 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// changeFormat has the fake's device go, and come back at rate, as a
+// format change in Windows' Sound settings does, and waits for the
+// speaker to open the output again. It returns the number of the first
+// device opened after.
+func changeFormat(t *testing.T, s *Speaker, f *fakeWas, rate int) int {
+	t.Helper()
+	dev, n := f.dev(-1)
+	f.nextRate.Store(int64(rate))
+	dev.lost.Store(true)
+	select {
+	case <-s.Changed():
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the speaker never opened again for the device at %d Hz", rate)
+	}
+	return n
+}
+
+// started returns how many devices started, of those opened from the
+// one of number from, and the last that did.
+func (f *fakeWas) started(from int) (n int, last *fakeWasDev) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, d := range f.devs[from:] {
+		if d.ever {
+			n++
+			last = d
+		}
+	}
+	return n, last
+}
+
+// TestWASAPIOpensOnceMoreAfterALateStart changes the device's format
+// to 44100 Hz and back, as the MOTU M Series did on Windows: back at
+// 48000 Hz, the endpoint starts its clock 380 ms late, with 13 ms more
+// delay than it tells. The output opens it once more, keeping the
+// ring, and that one starts as a fresh one does: the delay reads as
+// before the change, and the frame heard is the one played. The mixer
+// is late as the device opens once more: the dry reads count as
+// dropouts, and leave the lead as it was.
+func TestWASAPIOpensOnceMoreAfterALateStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 512, buffer: 1126, latency: 914, chans: 2, lateFor: 360 * time.Millisecond,
+			lateFrames: 640}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		r := &stalling{}
+		v := m.Play(r, audio.Options{})
+		s := openWas(t, m, Options{}, v)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		delay, ahead := s.State().Info.Latency, s.Latency()
+
+		from := changeFormat(t, s, f, 44100)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if n, _ := f.started(from); n != 1 {
+			t.Fatalf("%d devices started at 44100 Hz, the first starting at once, want 1", n)
+		}
+		f.lateStarts.Store(1)
+		from = changeFormat(t, s, f, 48000)
+		// The late clock first moves about 380 ms on, and the one opened
+		// once more about 20 ms after.
+		drops := s.State().Dropouts
+		r.stallAt(385*time.Millisecond, 80*time.Millisecond)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		n, dev := f.started(from)
+		if n != 2 {
+			t.Fatalf("%d devices started after the change, want 2: the one late, and one more", n)
+		}
+		if dev.extra != 0 {
+			t.Fatal("the device playing is the one that started late")
+		}
+		st := s.State()
+		if d := st.Info.Latency; d < delay-20 || d > delay+20 {
+			t.Errorf("the device delays %d frames, where it delayed %d before the change", d, delay)
+		}
+		if d := st.Dropouts - drops; d < 2 {
+			t.Errorf("the late mixer ran the device opened once more dry %d times, want 2 or more", d)
+		}
+		if g := s.margin.Load(); g != 0 {
+			t.Errorf("opening once more grew the lead by %v", time.Duration(g))
+		}
+		if l := s.Latency(); l < ahead-2*time.Millisecond || l > ahead+2*time.Millisecond {
+			t.Errorf("back at 48000 Hz the speaker works %v ahead, where it worked %v", l, ahead)
+		}
+		hearsAsPlayed(t, m, dev, time.Second)
+	})
+}
+
+// TestWASAPIOpensOnlyOnceMore changes the device's format twice, with
+// the debug log on. The first time, the device starts late, and so
+// does the one opened once more: that one plays, with no third, and
+// the log says so. The second time, the device starts in 90 ms, under
+// wasLate: it plays, with none opened more.
+func TestWASAPIOpensOnlyOnceMore(t *testing.T) {
+	t.Setenv("GUNIM_DEBUG_AUDIO", "1")
+	var buf syncBuffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 512, buffer: 1126, latency: 914, chans: 2, lateFor: 360 * time.Millisecond}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openWas(t, m, Options{}, v)
+		time.Sleep(time.Second)
+		synctest.Wait()
+
+		f.lateStarts.Store(5)
+		from := changeFormat(t, s, f, 44100)
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		n, dev := f.started(from)
+		if n != 2 {
+			t.Fatalf("%d devices started after the change, each late, want 2: the first, and one more", n)
+		}
+		hearsAsPlayed(t, m, dev, time.Second)
+		if g := s.margin.Load(); g != 0 {
+			t.Errorf("opening once more grew the lead by %v", time.Duration(g))
+		}
+
+		f.lateStarts.Store(0)
+		f.startAfter = 70 * time.Millisecond
+		from = changeFormat(t, s, f, 48000)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if n, _ := f.started(from); n != 1 {
+			t.Errorf("%d devices started after the change, the first starting in 90 ms, want 1", n)
+		}
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	out := buf.String()
+	for _, want := range []string{
+		// 360 ms late, and its latency, about 21 ms.
+		"WASAPI: the device's clock first moved 383.219954ms after it started, past 100ms: the endpoint was still " +
+			"warming up, and its clock may miss frames for the whole open; opening it once more",
+		"WASAPI: opened once more, the device's clock first moved 383.219954ms after it started, past 100ms again: " +
+			"it plays as it is",
+	} {
+		if strings.Count(out, want) != 1 {
+			t.Errorf("the log tells %q %d times, want once:\n%s", want, strings.Count(out, want), out)
+		}
+	}
 }
