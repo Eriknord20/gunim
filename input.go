@@ -420,10 +420,14 @@ func (u *UI) keyEvent(ev any) {
 		if _, ok := ev.(input.KeyPress); ok {
 			u.keyed = true
 			defer func() { u.keyed = false }()
-			u.firstTyped = false
+			u.firstTyped = nil
 		}
-		if _, ok := ev.(input.TextInput); ok && u.firstTyped {
-			u.firstTyped = false
+		if _, ok := ev.(input.TextInput); ok && u.firstTyped != nil {
+			s := u.firstTyped
+			u.firstTyped = nil
+			if h, ok := s.node.(Handler); ok && s.presence != Exiting {
+				u.on(s, func() { h.Handle(ev, u) })
+			}
 			return
 		}
 		if m := u.stopsAtModal(ev); m != nil {
@@ -442,8 +446,8 @@ func (u *UI) keyEvent(ev any) {
 }
 
 // keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, keeping to those
-// inside top when top is not nil, and reports whether one took it. The text a typing press taken types goes to no
-// one.
+// inside top when top is not nil, and reports whether one took it. The text a typing press taken types goes to the
+// KeyFirst that took it, as a [Handler], and to no one else.
 func (u *UI) keyFirst(ev input.Event, top *state) bool {
 	k, ok := ev.(input.KeyPress)
 	if !ok || u.focus == nil {
@@ -463,7 +467,9 @@ func (u *UI) keyFirst(ev input.Event, top *state) bool {
 		f, took := above[i], false
 		u.on(f.s, func() { took = f.n.KeyFirst(k, u) })
 		if took {
-			u.firstTyped = k.Typed
+			if k.Typed {
+				u.firstTyped = f.s
+			}
 			return true
 		}
 	}

@@ -9,7 +9,16 @@ import (
 // spaceFirst is a box that takes Space before the focused node inside it, unless that node takes text.
 type spaceFirst struct {
 	Box
-	took int
+	took  int
+	typed []string
+}
+
+func (b *spaceFirst) Handle(e input.Event, _ *UI) bool {
+	if t, ok := e.(input.TextInput); ok {
+		b.typed = append(b.typed, t.Text)
+		return true
+	}
+	return false
 }
 
 func (b *spaceFirst) KeyFirst(e input.KeyPress, u *UI) bool {
@@ -86,8 +95,8 @@ func TestAModalKeepsTheKeyFirstsOutsideItOut(t *testing.T) {
 	}
 }
 
-// The text a press a KeyFirst took types goes to no one; the next press types as ever.
-func TestTheTextOfAPressAKeyFirstTookGoesToNoOne(t *testing.T) {
+// The text a press a KeyFirst took types goes to that KeyFirst, not the focused node; the next press types as ever.
+func TestTheTextOfAPressAKeyFirstTookGoesToIt(t *testing.T) {
 	w := newTestWindow()
 	outer, list := &spaceFirst{}, &spaceTaker{}
 	w.ui.Insert(w.ui.Root(), outer)
@@ -98,7 +107,7 @@ func TestTheTextOfAPressAKeyFirstTookGoesToNoOne(t *testing.T) {
 	w.ui.handlePlatform(input.TextInput{Text: " "})
 	w.ui.handlePlatform(input.KeyPress{Key: input.KeyA, Typed: true})
 	w.ui.handlePlatform(input.TextInput{Text: "a"})
-	if outer.took != 1 || len(list.typed) != 1 || list.typed[0] != "a" {
-		t.Fatalf("Space taken first, then A: the list was typed %q; want only \"a\"", list.typed)
+	if outer.took != 1 || len(outer.typed) != 1 || outer.typed[0] != " " || len(list.typed) != 1 || list.typed[0] != "a" {
+		t.Fatalf("Space taken first, then A: the KeyFirst was typed %q and the list %q; want \" \" and \"a\"", outer.typed, list.typed)
 	}
 }
