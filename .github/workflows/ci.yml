@@ -57,7 +57,7 @@ jobs:
           CGO_ENABLED: 0
 
   # Linux on 64-bit ARM. The audio packages hold assembly for arm64, the
-  # JACK client's callbacks and the Core Audio client's, which their
+  # JACK, PipeWire and Core Audio clients' callbacks, which their
   # tests run through fakes: with the macOS job, this is where that
   # assembly runs at all in CI.
   arm64:
@@ -79,7 +79,7 @@ jobs:
         run: go test ./audio/...
 
       - name: Test audio without cgo
-        run: go test ./audio/internal/jack/ ./audio/internal/audiounit/ ./audio/speaker/
+        run: go test ./audio/internal/jack/ ./audio/internal/pipewire/ ./audio/internal/audiounit/ ./audio/speaker/
         env:
           CGO_ENABLED: 0
 

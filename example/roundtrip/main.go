@@ -1,5 +1,5 @@
 // Command roundtrip plays and records through AAudio on Android,
-// WASAPI on Windows, or the driver -driver names, and shows how: a click
+// WASAPI on Windows, PipeWire on Linux, or the driver -driver names, and shows how: a click
 // each second through the speakers, the microphone's level, the delays
 // the speaker reports, and the times the sound ran dry. A tap on the
 // screen, or a click, measures the round trip: a click played, heard by
@@ -20,7 +20,8 @@
 //
 //	go run ./tools/gunimapk -permissions microphone -run ./example/roundtrip
 //	go run ./example/roundtrip -driver "Core Audio"   # on macOS
-//	go run ./example/roundtrip -driver JACK           # on Linux
+//	go run ./example/roundtrip                        # on Linux, through PipeWire
+//	go run ./example/roundtrip -driver JACK           # on Linux, through JACK
 //
 // On Windows:
 //
@@ -68,8 +69,11 @@ func main() {
 
 func run() error {
 	def := audiodriver.AAudio
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		def = audiodriver.WASAPI
+	case "linux":
+		def = audiodriver.PipeWire
 	}
 	if runtime.GOOS == "android" && os.Getenv("GUNIM_DEBUG_AUDIO") == "" {
 		// The speaker's log is the one place to read what AAudio says,
@@ -77,7 +81,7 @@ func run() error {
 		_ = os.Setenv("GUNIM_DEBUG_AUDIO", "1")
 	}
 	through := flag.String("driver", def, "the driver to play and record through, as package "+
-		"audio/driver names it: \"Core Audio\" on macOS, JACK on Linux")
+		"audio/driver names it: \"Core Audio\" on macOS, PipeWire or JACK on Linux")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

@@ -34,6 +34,14 @@
 // runs no Go as it does. The server owns the rate and the buffer size:
 // the speaker follows them.
 //
+// Through PipeWire, chosen as a driver named [driver.PipeWire], the
+// speaker plays to the default output by gunim's own code, in place of
+// oto, the same way: PipeWire's real-time thread takes each cycle from
+// a ring and runs no Go. The speaker plays at the rate Options asks,
+// and PipeWire converts it to the device's. The sound follows the
+// default output as it changes, and the speaker counts the delay
+// PipeWire reports for it, a Bluetooth headset's too.
+//
 // On macOS, the speaker plays through the default output device the
 // same way, by a HAL output unit: Core Audio's real-time thread takes
 // each buffer from a ring and runs no Go. It does so where Options.Driver
@@ -42,7 +50,8 @@
 // device changes, goes away or changes its rate.
 //
 // Package audio/capture records the inputs of the driver the speakers
-// play through, an ASIO driver's, JACK's or Core Audio's default input,
+// play through, an ASIO driver's, JACK's, or PipeWire's or Core Audio's
+// default input,
 // where [Options].Record is set, and stamps what it records with
 // [Speaker.Heard].
 //
@@ -70,7 +79,8 @@ type Options struct {
 	Name string
 	// Driver is the driver to play through, by its name from
 	// [driver.Drivers]: an ASIO driver, [driver.JACK] for JACK, which that
-	// lists on Linux where a server answers, [driver.AAudio] on Android,
+	// lists on Linux where a server answers, [driver.PipeWire] for
+	// PipeWire, which it lists on Linux likewise, [driver.AAudio] on Android,
 	// [driver.WASAPI] on Windows, or [driver.CoreAudio] on macOS. Empty
 	// plays through the system's own sound, as does a driver that fails
 	// to open, or JACK's server shut down: [State] tells why. On macOS
@@ -106,7 +116,9 @@ type Options struct {
 	// the driver's own latency, whatever Latency asks for. On macOS it
 	// sets the device's buffer: the process's own, as other applications
 	// playing keep theirs. Zero there asks for a quarter of Latency, from
-	// 64 to 1024 frames.
+	// 64 to 1024 frames. Through [driver.PipeWire] it is the cycle the
+	// streams ask PipeWire for, with the same default; PipeWire runs at
+	// the shortest any stream asks, within its own limits.
 	Buffer int
 	// Direct mixes each buffer an ASIO driver takes on the driver's own
 	// thread, as it takes it, in place of reading the mixer ahead into a
@@ -128,7 +140,8 @@ type Options struct {
 	// microphone, so leave it unset to play alone. Through [driver.AAudio] it
 	// records the microphone, which shows the system's sign of a
 	// microphone in use while the application is in front. Through
-	// [driver.WASAPI] it records Windows' default input. On macOS it
+	// [driver.WASAPI] it records Windows' default input, and through
+	// [driver.PipeWire] PipeWire's default input. On macOS it
 	// records the default input device, where it
 	// runs at the output's rate and the application may record: macOS
 	// asks the user the first time, and [State].Problem tells why it
@@ -406,12 +419,14 @@ type startedOutput interface {
 	start(ahead time.Duration)
 }
 
-// openDriver opens the driver s.o names: JACK, WASAPI, or an ASIO
-// driver.
+// openDriver opens the driver s.o names: JACK, PipeWire, Core Audio,
+// WASAPI, or an ASIO driver.
 func (s *Speaker) openDriver() (startedOutput, error) {
 	switch s.o.Driver {
 	case driver.JACK:
 		return openJackOutput(s, s.o)
+	case driver.PipeWire:
+		return openPWOutput(s, s.o)
 	case driver.CoreAudio:
 		return openAUOutput(s, s.o, true)
 	case driver.WASAPI:
@@ -779,6 +794,8 @@ func (s *Speaker) ControlPanel() error {
 			return o.dev.ControlPanel()
 		case *jackOutput:
 			return errJackPanel
+		case *pwOutput:
+			return errPWPanel
 		case *auOutput:
 			return auControlPanel()
 		case *wasOutput:
