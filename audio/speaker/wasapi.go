@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +18,7 @@ import (
 
 // wasapiFirst plays through WASAPI where Options names no driver, in
 // place of oto, on Windows.
-const wasapiFirst = false
+var wasapiFirst = runtime.GOOS == "windows"
 
 // A wasDevice is a WASAPI device, as package audio/internal/wasapi opens
 // it: the output and its input. The render goroutine alone calls it,

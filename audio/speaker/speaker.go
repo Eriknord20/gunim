@@ -7,9 +7,10 @@
 // PipeWire's. On Android 11 and newer the speaker plays through
 // AAudio by gunim's own code, in low-latency mode, as [driver.AAudio]
 // does, with Options.Driver empty too, and records with
-// [Options].Record. On Windows, [driver.WASAPI]
-// plays through WASAPI by gunim's own code, at the device's rate, and
-// records the default input with [Options].Record.
+// [Options].Record. On Windows the speaker plays through WASAPI by
+// gunim's own code, at the device's rate, as [driver.WASAPI] does, with
+// Options.Driver empty too, and records the default input with
+// [Options].Record.
 // On macOS the speaker plays through Core Audio's HAL output unit by
 // gunim's own code, as [driver.CoreAudio] does, with Options.Driver
 // empty too, and records the default input with [Options].Record.
@@ -75,7 +76,8 @@ type Options struct {
 	// plays through the system's own sound, as does a driver that fails
 	// to open, or JACK's server shut down: [State] tells why. On macOS
 	// the system's own sound is Core Audio's HAL output unit, as
-	// [driver.CoreAudio] plays, and oto where that fails to open.
+	// [driver.CoreAudio] plays, on Windows WASAPI, as [driver.WASAPI]
+	// plays, and oto where either fails to open.
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that

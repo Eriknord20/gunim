@@ -116,10 +116,10 @@ func (o *stillOut) close() error              { return nil }
 // would grow it.
 func TestSpeakerForgetsTheDryReadsOfAnOutputClosed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		wasAA, wasCA, wasOto := aaudioFirst, coreAudioFirst, openSystemSound
-		aaudioFirst, coreAudioFirst = false, false
+		wasAA, wasCA, wasWA, wasOto := aaudioFirst, coreAudioFirst, wasapiFirst, openSystemSound
+		aaudioFirst, coreAudioFirst, wasapiFirst = false, false, false
 		openSystemSound = func(_ *Speaker, o Options) (startedOutput, error) { return &stillOut{hz: o.rate()}, nil }
-		t.Cleanup(func() { aaudioFirst, coreAudioFirst, openSystemSound = wasAA, wasCA, wasOto })
+		t.Cleanup(func() { aaudioFirst, coreAudioFirst, wasapiFirst, openSystemSound = wasAA, wasCA, wasWA, wasOto })
 		s, err := Open(audio.NewMixer(), Options{Rate: 48000})
 		if err != nil {
 			t.Fatal(err)
