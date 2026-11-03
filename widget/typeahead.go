@@ -35,6 +35,12 @@ func (a *TypeAhead) Typing(t time.Time) bool { return a.text != "" && t.Sub(a.la
 // Reset forgets the text typed.
 func (a *TypeAhead) Reset() { a.text = "" }
 
+// keeps reports whether a list that finds what is typed, as on says, keeps press e from the window's keys: a Space
+// while the search is under way, which goes into it.
+func (a *TypeAhead) keeps(e input.KeyPress, u *gunim.UI, on func(text string, u *gunim.UI) gunim.Intent) bool {
+	return on != nil && e.Key == input.KeySpace && e.Mods == 0 && a.Typing(u.Now())
+}
+
 // take works e for a list at from that sends on(text) with the text to find, and reports whether it took e: text
 // typed, and a Space while the search is under way, which the text that follows carries. A press of the pointer
 // starts the search again.

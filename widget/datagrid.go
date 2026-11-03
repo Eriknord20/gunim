@@ -1393,6 +1393,9 @@ func (g *DataGrid) send(v gunim.Intent, u *gunim.UI) {
 	}
 }
 
+// KeepsKey implements [gunim.KeyKeeper]: a Space while a search is under way goes into it.
+func (g *DataGrid) KeepsKey(e input.KeyPress, u *gunim.UI) bool { return g.typed.keeps(e, u, g.OnType) }
+
 // Handle implements [gunim.Handler].
 func (g *DataGrid) Handle(e input.Event, u *gunim.UI) bool {
 	th := u.Theme()

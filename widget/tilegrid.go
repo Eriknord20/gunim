@@ -397,6 +397,9 @@ func (g *TileGrid) inBand(band geom.Rect) [][2]int {
 	return runs
 }
 
+// KeepsKey implements [gunim.KeyKeeper]: a Space while a search is under way goes into it.
+func (g *TileGrid) KeepsKey(e input.KeyPress, u *gunim.UI) bool { return g.typed.keeps(e, u, g.OnType) }
+
 // Handle implements [gunim.Handler].
 func (g *TileGrid) Handle(e input.Event, u *gunim.UI) bool {
 	if g.barEvent(e, u) {

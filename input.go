@@ -445,13 +445,21 @@ func (u *UI) keyEvent(ev any) {
 	}
 }
 
-// keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, keeping to those
+// keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, unless the
+// focused node is a [KeyKeeper] that keeps it, keeping to those
 // inside top when top is not nil, and reports whether one took it. The text a typing press taken types goes to the
 // KeyFirst that took it, as a [Handler], and to no one else.
 func (u *UI) keyFirst(ev input.Event, top *state) bool {
 	k, ok := ev.(input.KeyPress)
 	if !ok || u.focus == nil {
 		return false
+	}
+	if kk, ok := u.focus.node.(KeyKeeper); ok {
+		var keeps bool
+		u.on(u.focus, func() { keeps = kk.KeepsKey(k, u) })
+		if keeps {
+			return false
+		}
 	}
 	type first struct {
 		s *state

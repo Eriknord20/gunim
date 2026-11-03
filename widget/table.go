@@ -420,6 +420,11 @@ func when(at time.Time, u *gunim.UI) time.Time {
 // findPause is how long typing rests before a new name starts.
 const findPause = time.Second
 
+// KeepsKey implements [gunim.KeyKeeper]: a Space while a name to find is typed goes into it.
+func (t *Table) KeepsKey(e input.KeyPress, u *gunim.UI) bool {
+	return e.Key == input.KeySpace && !e.Mods.Has(input.ModControl) && !e.Mods.Has(input.ModAlt) && t.finding(when(e.Time, u))
+}
+
 func (t *Table) finding(now time.Time) bool {
 	return t.typed != "" && now.Sub(t.typedAt) < findPause
 }

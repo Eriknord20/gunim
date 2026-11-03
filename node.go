@@ -257,6 +257,14 @@ type KeyFirst interface {
 	KeyFirst(e input.KeyPress, u *UI) bool
 }
 
+// A KeyKeeper is a node that keeps a key press from the [KeyFirst]s above it for now, while it has the focus: a
+// list keeps Space while the user types a name to find in it, so the Space goes into the name. The engine asks it
+// before it offers the press to the KeyFirsts.
+type KeyKeeper interface {
+	Node
+	KeepsKey(e input.KeyPress, u *UI) bool
+}
+
 // A CursorShaper is a node that names the pointer's shape over it, such
 // as a text field's I-beam or a divider's resize arrows. The engine asks
 // the node the pointer is over, and the nodes around it in turn, and
