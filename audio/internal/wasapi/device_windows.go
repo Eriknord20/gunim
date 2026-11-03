@@ -376,8 +376,10 @@ func (d *Device) Clock() (pos, at int64, err error) {
 
 // Read takes the next packet the input recorded into dst, as many
 // frames as it holds, of Info.Inputs channels, and returns how many,
-// and the moment its first frame came in, in nanoseconds of the
-// performance counter: 0 where WASAPI could not tell. ok is false
+// and its stamp, in nanoseconds of the performance counter: 0 where
+// WASAPI could not tell. Windows says the stamp marks the moment the
+// packet's first frame came in; some devices mark a later one, as late
+// as the last, on some opens and not others. ok is false
 // where no packet waits. A packet the device marks silent reads as
 // silence.
 func (d *Device) Read(dst []float32) (n int, at int64, ok bool, err error) {
@@ -412,8 +414,9 @@ func (d *Device) Read(dst []float32) (n int, at int64, ok bool, err error) {
 }
 
 // Position returns the device position of the last packet Read took:
-// its first frame's, counted in frames from the input's start, as
-// WASAPI tells it.
+// its first frame's, counted from the input's start, as WASAPI tells
+// it. Windows says it counts the stream's frames; the MOTU M Series
+// counts the device's own, at its own rate, where Windows converts it.
 func (d *Device) Position() int64 { return int64(d.p.devPos) }
 
 // Changed says the device should open again: the default output
