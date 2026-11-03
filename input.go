@@ -420,6 +420,11 @@ func (u *UI) keyEvent(ev any) {
 		if _, ok := ev.(input.KeyPress); ok {
 			u.keyed = true
 			defer func() { u.keyed = false }()
+			u.firstTyped = false
+		}
+		if _, ok := ev.(input.TextInput); ok && u.firstTyped {
+			u.firstTyped = false
+			return
 		}
 		if m := u.stopsAtModal(ev); m != nil {
 			// A modal holds the keys: what it and its contents leave
@@ -437,7 +442,8 @@ func (u *UI) keyEvent(ev any) {
 }
 
 // keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, keeping to those
-// inside top when top is not nil, and reports whether one took it.
+// inside top when top is not nil, and reports whether one took it. The text a typing press taken types goes to no
+// one.
 func (u *UI) keyFirst(ev input.Event, top *state) bool {
 	k, ok := ev.(input.KeyPress)
 	if !ok || u.focus == nil {
@@ -457,6 +463,7 @@ func (u *UI) keyFirst(ev input.Event, top *state) bool {
 		f, took := above[i], false
 		u.on(f.s, func() { took = f.n.KeyFirst(k, u) })
 		if took {
+			u.firstTyped = k.Typed
 			return true
 		}
 	}

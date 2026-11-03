@@ -1766,6 +1766,10 @@ type UI struct {
 	// is the seq of the last [input.TextEdit] the focus took.
 	textState         *input.TextState
 	textSent, textSeq uint64
+	// firstTyped is true from a typing press a [KeyFirst] took until the
+	// next press: the text it types is the KeyFirst's too, and goes to
+	// no one.
+	firstTyped bool
 
 	now time.Time
 	// present is when the current frame is expected to light the

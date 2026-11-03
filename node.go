@@ -249,7 +249,8 @@ type KeyCatcher interface {
 // and stops whatever control has the focus. The engine offers the press to the KeyFirsts above the focused node,
 // the outermost first, until one returns true; what none takes goes to the focused node and bubbles as ever. A
 // modal that holds the keys keeps the KeyFirsts outside it out, and a popup's nodes have only the KeyFirsts inside
-// the popup above them. A KeyFirst that takes a press should leave alone a focused node that takes text, which
+// the popup above them. The text a press taken types, such as Space's, goes to no one, so a list's type-ahead
+// does not find it. A KeyFirst that takes a press should leave alone a focused node that takes text, which
 // [UI.FocusTakesText] reports.
 type KeyFirst interface {
 	Node
