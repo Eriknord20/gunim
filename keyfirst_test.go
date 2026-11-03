@@ -111,3 +111,27 @@ func TestTheTextOfAPressAKeyFirstTookGoesToIt(t *testing.T) {
 		t.Fatalf("Space taken first, then A: the KeyFirst was typed %q and the list %q; want \" \" and \"a\"", outer.typed, list.typed)
 	}
 }
+
+// keeper is a focusable node that keeps Space from the KeyFirsts above it while keeping is set.
+type keeper struct {
+	spaceTaker
+	keeping bool
+}
+
+func (k *keeper) KeepsKey(e input.KeyPress, _ *UI) bool { return k.keeping && e.Key == input.KeySpace }
+
+// A focused KeyKeeper keeps a press from the KeyFirsts above it while it says so.
+func TestAKeyKeeperKeepsAPressFromTheKeyFirsts(t *testing.T) {
+	w := newTestWindow()
+	outer, list := &spaceFirst{}, &keeper{}
+	w.ui.Insert(w.ui.Root(), outer)
+	w.ui.Insert(outer, list)
+	run(w, 1)
+	w.ui.Focus(list)
+	w.ui.handlePlatform(input.KeyPress{Key: input.KeySpace})
+	list.keeping = true
+	w.ui.handlePlatform(input.KeyPress{Key: input.KeySpace})
+	if outer.took != 1 || list.took != 1 {
+		t.Fatalf("Space, then Space kept: the KeyFirst took %d and the keeper %d; want one each", outer.took, list.took)
+	}
+}
