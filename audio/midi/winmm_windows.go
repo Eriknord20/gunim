@@ -60,6 +60,7 @@ const (
 	mmAllocated   = 4
 	mmInvalHandle = 5
 	mmNoDriver    = 6
+	mmNoMem       = 7
 	midiNoDevice  = 68
 
 	// inBuffers sysex buffers of inBufferSize bytes each wait for sysex
@@ -80,6 +81,10 @@ func (e *mmError) Error() string {
 		return e.op + ": the system failed to open it"
 	case mmAllocated:
 		return e.op + ": another program has the port open"
+	case mmNoMem:
+		// Windows' own USB MIDI driver says "no memory" when another
+		// program has the port open: a port opens for one program at a time.
+		return e.op + ": the port is busy; another program may have it open"
 	case midiNoDevice, mmNoDriver:
 		return e.op + ": the device is gone"
 	}
