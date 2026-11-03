@@ -1,8 +1,12 @@
 package speaker
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"math"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,11 +34,11 @@ type fakeWas struct {
 	// its time moves; frozen, where set, opens each device frozen.
 	startAfter time.Duration
 	frozen     atomic.Bool
-	// failOpen fails as many opens; nextRate and nextInputs, where set,
-	// are the next device's.
-	failOpen, nextRate, nextInputs atomic.Int64
-	mu                             sync.Mutex
-	devs                           []*fakeWasDev
+	// failOpen fails as many opens; nextRate, nextInputs and
+	// nextLatency, where set, are the next device's.
+	failOpen, nextRate, nextInputs, nextLatency atomic.Int64
+	mu                                          sync.Mutex
+	devs                                        []*fakeWasDev
 	// misuse counts calls into a device after its Close.
 	misuse atomic.Int64
 }
@@ -73,7 +77,10 @@ func (f *fakeWas) open(c wasapi.Config) (wasDevice, error) {
 		return nil, errors.New("fake: no device")
 	}
 	f.failOpen.Store(0)
-	rate, inputs := f.rate, f.inputs
+	rate, inputs, latency := f.rate, f.inputs, f.latency
+	if l := f.nextLatency.Swap(0); l > 0 {
+		f.latency, latency = int(l), int(l)
+	}
 	if r := f.nextRate.Swap(0); r > 0 {
 		f.rate, rate = int(r), int(r)
 	}
@@ -81,10 +88,10 @@ func (f *fakeWas) open(c wasapi.Config) (wasDevice, error) {
 		f.inputs, inputs = int(n), int(n)
 	}
 	info := wasapi.Info{Name: "Speakers", ID: "out", Rate: rate, Channels: f.chans, Period: f.period, Buffer: f.buffer,
-		Latency: f.latency, LowLatency: true}
+		Latency: latency, LowLatency: true}
 	if c.Record {
 		info.InputName, info.InputID, info.Inputs, info.InputBuffer = "Microphone", "in", inputs, f.period
-		info.InputLatency = f.period
+		info.InputLatency, info.InputPeriod = f.period, f.period
 	}
 	d := &fakeWasDev{f: f, info: info}
 	d.frozen.Store(f.frozen.Load())
@@ -293,6 +300,12 @@ func (d *fakeWasDev) Read(dst []float32) (n int, at int64, ok bool, err error) {
 		dst[0] = float32(v) * 1e-6
 	}
 	return n, at, true, nil
+}
+
+func (d *fakeWasDev) Position() int64 {
+	d.f.mu.Lock()
+	defer d.f.mu.Unlock()
+	return max(0, d.packets-1) * int64(d.info.Period)
 }
 
 func (d *fakeWasDev) Changed() bool {
@@ -785,4 +798,165 @@ func TestWASAPIBacksOffADeviceThatNeverPlays(t *testing.T) {
 			t.Errorf("playing again, the state tells %v", p)
 		}
 	})
+}
+
+// stalling is a ramp whose Read stands still once, for stall, at the
+// first read at or after from: a mixer late to fill the ring, as a
+// busy moment makes it.
+type stalling struct {
+	ramp
+	from, stall atomic.Int64
+}
+
+func (r *stalling) Read(dst []float32) (int, error) {
+	if from := r.from.Load(); from > 0 && time.Now().UnixNano() >= from {
+		r.from.Store(0)
+		time.Sleep(time.Duration(r.stall.Load()))
+	}
+	return r.ramp.Read(dst)
+}
+
+// stallAt has r stand still for d at the first read after wait.
+func (r *stalling) stallAt(wait, d time.Duration) {
+	r.stall.Store(int64(d))
+	r.from.Store(time.Now().Add(wait).UnixNano())
+}
+
+// TestWASAPIGrowsNoLeadFromAnOpening plays as the MOTU M Series did on
+// Windows: the default format changes to 44100 Hz, so the output opens
+// again, on a device whose clock starts late and whose delay is 20 ms
+// longer, and the mixer is late once, just as the clock starts. Those
+// dry reads come from opening: they count as dropouts, but leave the
+// lead as it was. Then the mixer is late once while the device plays
+// steadily: the lead grows by 10 ms, not by the device's delay. Back at
+// 48000 Hz, on a device of the first delay, the speaker works as far
+// ahead as before, and the 10 ms more. On Windows the lead went from 38
+// to 88 ms, and stayed there.
+func TestWASAPIGrowsNoLeadFromAnOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 512, buffer: 1126, latency: 914, chans: 2}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		r := &stalling{}
+		v := m.Play(r, audio.Options{})
+		s := openWas(t, m, Options{}, v)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		before := s.Latency()
+
+		// The device opens again at 44100 Hz, its clock first moving 300
+		// ms after it starts, past wasSettle, with 20 ms more delay.
+		f.startAfter = 300 * time.Millisecond
+		f.nextRate.Store(44100)
+		f.nextLatency.Store(914 + 882)
+		dev, _ := f.dev(-1)
+		dev.lost.Store(true)
+		select {
+		case <-s.Changed():
+		case <-time.After(3 * time.Second):
+			t.Fatal("the speaker never opened again for a device at another rate")
+		}
+		drops := s.State().Dropouts
+		r.stallAt(310*time.Millisecond, 80*time.Millisecond)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if d := s.State().Dropouts - drops; d < 2 {
+			t.Fatalf("the late mixer ran the device dry %d times as it opened, want 2 or more", d)
+		}
+		if g := s.margin.Load(); g != 0 {
+			t.Fatalf("the dropouts of an opening grew the lead by %v", time.Duration(g))
+		}
+		if l := s.Latency(); l > before+25*time.Millisecond {
+			t.Fatalf("after the opening the speaker works %v ahead, where it worked %v; the device delays 20 ms more", l, before)
+		}
+
+		// Late once, playing steadily: 10 ms more, or 20 where the dry
+		// reads fall in two of the watch's looks.
+		drops = s.State().Dropouts
+		r.stallAt(0, 80*time.Millisecond)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if d := s.State().Dropouts - drops; d < 2 {
+			t.Fatalf("the late mixer ran the device dry %d times, want 2 or more", d)
+		}
+		grown := time.Duration(s.margin.Load())
+		if grown != 10*time.Millisecond && grown != 20*time.Millisecond {
+			t.Fatalf("the dry spell grew the lead by %v, want 10 ms or 20", grown)
+		}
+
+		// Back at 48000 Hz, on a device of the first delay.
+		f.nextRate.Store(48000)
+		f.nextLatency.Store(914)
+		dev, _ = f.dev(-1)
+		dev.lost.Store(true)
+		select {
+		case <-s.Changed():
+		case <-time.After(3 * time.Second):
+			t.Fatal("the speaker never opened again for the device back at 48000 Hz")
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if l, want := s.Latency(), before+grown; l < want-2*time.Millisecond || l > want+2*time.Millisecond {
+			t.Errorf("back at 48000 Hz the speaker works %v ahead, want %v: %v as before, and %v grown", l, want, before, grown)
+		}
+		dev, _ = f.dev(-1)
+		hearsAsPlayed(t, m, dev, time.Second)
+	})
+}
+
+// TestWASAPILogsItsStamps records with the debug log on: every
+// wasNoteEvery it tells of the packet read soonest after its stamp,
+// and the clock reading soonest after its own. The fake stamps a
+// packet as its first frame comes in, and hands it on a period later,
+// so the log tells it was read a period after its stamp.
+func TestWASAPILogsItsStamps(t *testing.T) {
+	t.Setenv("GUNIM_DEBUG_AUDIO", "1")
+	var buf syncBuffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeWas{rate: 48000, period: 480, buffer: 960, latency: 480, chans: 2, inputs: 1, startAfter: 50 * time.Millisecond}
+		useFakeWas(t, f)
+		m := audio.NewMixer()
+		v := m.Play(&ramp{}, audio.Options{})
+		s := openWas(t, m, Options{Record: true}, v)
+		detach := duplex.Current().Attach(func([]float32, int, int64) {})
+		defer detach()
+		time.Sleep(wasNoteEvery + time.Second)
+		synctest.Wait()
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	out := buf.String()
+	for _, want := range []string{
+		// 50 ms to start, then its latency, a period, before its clock
+		// tells a frame heard, read at the next period's end.
+		"the device's clock first moved 70ms after it started",
+		"WASAPI input: a packet of 480 frames at device position ",
+		" read 10ms after its stamp, the soonest in 5s; the input's period is 480 frames (10ms)",
+		"WASAPI output: the clock read 0s after its stamp",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the log tells no %q:\n%s", want, out)
+		}
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe from any goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
