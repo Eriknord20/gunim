@@ -101,9 +101,7 @@ func Open(cfg Config) (*Client, error) {
 		a.loopDestroy(cl.loop)
 		return nil, errors.New("pipewire: starting the thread loop failed")
 	}
-	a.loopLock(cl.loop)
-	err = cl.connect(name, rate, quantum, cfg.Record)
-	a.loopUnlock(cl.loop)
+	cl.locked(func() { err = cl.connect(name, rate, quantum, cfg.Record) })
 	if err == nil {
 		err = cl.wait()
 	}
@@ -191,6 +189,18 @@ func (cl *Client) wait() error {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// locked runs f with the thread loop locked. The lock is a mutex of
+// the thread that takes it, and PipeWire checks that the thread
+// calling it holds it: f runs on the one thread that locks and
+// unlocks, which a goroutine otherwise may leave between calls.
+func (cl *Client) locked(f func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	cl.a.loopLock(cl.loop)
+	defer cl.a.loopUnlock(cl.loop)
+	f()
 }
 
 // Info says how the client plays.
@@ -319,13 +329,17 @@ func (cl *Client) Held() int64 {
 
 // HeardAt returns the frame written, as Taken counts them, that is
 // heard at ns on CLOCK_MONOTONIC, before or after now, as the output's
-// last cycle places it. ok is false before the first cycle.
+// last cycle places it. Past that cycle's start it moves on as far as
+// the cycle's frames, as Held does: while the output's cycles stall the
+// frame heard waits, and never passes the frames taken. ok is false
+// before the first cycle.
 func (cl *Client) HeardAt(ns int64) (frame int64, ok bool) {
 	s, ok := cl.snap()
 	if !ok {
 		return 0, false
 	}
-	return int64(s.next) - cl.outDelay(s) + framesIn(ns-s.t.now, cl.info.Rate), true
+	since := min(framesIn(ns-s.t.now, cl.info.Rate), int64(s.took))
+	return int64(s.next) - cl.outDelay(s) + since, true
 }
 
 // Read takes what the input recorded in the oldest cycle not yet read,
@@ -425,21 +439,22 @@ func (cl *Client) errorText() string {
 	if cl.closed {
 		return ""
 	}
-	cl.a.loopLock(cl.loop)
-	defer cl.a.loopUnlock(cl.loop)
-	for _, s := range []uintptr{cl.st.outStream, cl.st.inStream} {
-		if s == 0 {
-			continue
-		}
-		var msg unsafe.Pointer
-		if State(cl.a.streamState(s, &msg)) == StateError {
-			if text := cString(msg); text != "" {
-				return text
+	text := ""
+	cl.locked(func() {
+		for _, s := range []uintptr{cl.st.outStream, cl.st.inStream} {
+			if s == 0 {
+				continue
 			}
-			return "unknown error"
+			var msg unsafe.Pointer
+			if State(cl.a.streamState(s, &msg)) == StateError {
+				if text = cString(msg); text == "" {
+					text = "unknown error"
+				}
+				return
+			}
 		}
-	}
-	return ""
+	})
+	return text
 }
 
 // Pause stops the output taking from the ring, and plays silence, or
@@ -478,13 +493,13 @@ func (cl *Client) Close() error {
 	a, st := cl.a, cl.st
 	// Destroying a stream takes it off the real-time thread first: no
 	// process function runs after.
-	a.loopLock(cl.loop)
-	for _, s := range []uintptr{st.outStream, st.inStream} {
-		if s != 0 {
-			a.streamDestroy(s)
+	cl.locked(func() {
+		for _, s := range []uintptr{st.outStream, st.inStream} {
+			if s != 0 {
+				a.streamDestroy(s)
+			}
 		}
-	}
-	a.loopUnlock(cl.loop)
+	})
 	a.loopStop(cl.loop)
 	a.loopDestroy(cl.loop)
 	// The server's threads read these until the streams went.

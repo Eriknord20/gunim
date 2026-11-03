@@ -176,8 +176,12 @@ func TestHeldCountsTheDelay(t *testing.T) {
 	if !ok || heard != 256-739 {
 		t.Fatalf("heard at the cycle's start: %d, %v; want %d", heard, ok, 256-739)
 	}
-	if heard, _ := cl.HeardAt(start + int64(10*time.Millisecond)); heard != 256-739+480 {
-		t.Fatalf("heard 10 ms on: %d, want %d", heard, 256-739+480)
+	if heard, _ := cl.HeardAt(start + int64(time.Millisecond)); heard != 256-739+48 {
+		t.Fatalf("heard 1 ms on: %d, want %d", heard, 256-739+48)
+	}
+	// 10 ms on, the next cycle is late: the frame heard waits a cycle on.
+	if heard, _ := cl.HeardAt(start + int64(10*time.Millisecond)); heard != 256-739+256 {
+		t.Fatalf("heard 10 ms on: %d, want %d", heard, 256-739+256)
 	}
 	if e := cl.Poll(); e.Quantum != 256 || e.DeviceRate != 44100 || e.Delay != 483 {
 		t.Fatalf("poll: quantum %d, device rate %d, delay %d; want 256, 44100, 483", e.Quantum, e.DeviceRate, e.Delay)
@@ -231,6 +235,38 @@ func TestReadStampsInputs(t *testing.T) {
 	f.record(t, at48k(start))
 	if _, _, ok := cl.Read(dst); ok {
 		t.Fatal("read a cycle that brought nothing")
+	}
+}
+
+// While the output's cycles stall, as through an xrun or a client
+// joining the graph, and the input's go on, no stamp passes the frames
+// the output took: the frame heard moves on a cycle at most past the
+// output's last cycle.
+func TestStampsWaitForAStalledOutput(t *testing.T) {
+	f := newFakeServer()
+	cl := openFake(t, f, Config{Record: true})
+	const start = int64(5 * time.Second)
+	cl.Write(ramp(0, 4000))
+	f.play(t, 256, pwTime{now: start, rateNum: 1, rateDenom: 48000, delay: 480, queued: 256})
+	dst := make([]float32, 2*256)
+	for k := range 20 {
+		// The input runs on, a cycle each 5.33 ms, for 100 ms.
+		now := start + int64(k)*int64(256*time.Second/48000)
+		f.record(t, pwTime{now: now, rateNum: 1, rateDenom: 48000, delay: 96}, ramp(256*k, 256))
+		for {
+			n, at, ok := cl.Read(dst)
+			if !ok {
+				break
+			}
+			if at+int64(n) > cl.Taken() {
+				t.Fatalf("input cycle %d stamped %d to %d, past the %d frames taken", k, at, at+int64(n), cl.Taken())
+			}
+		}
+	}
+	// Earlier than the output's last cycle, a stamp moves back freely.
+	heard, _ := cl.HeardAt(start - int64(time.Second))
+	if want := int64(256 - 736 - 48000); heard != want {
+		t.Fatalf("heard a second before the last cycle: %d, want %d", heard, want)
 	}
 }
 

@@ -13,8 +13,9 @@ import (
 // client plays silence and records for a few seconds
 // (GUNIM_PIPEWIRE_SECONDS sets how many). The output's cycles must
 // come in time and never find the ring dry, Held must stay within the
-// ring and the delay, and the input's stamps must move on with the
-// output's frames. Where no server listens, it skips.
+// ring and the delay, and no input stamp may pass the frames the
+// output took. Where the graph kept time, the input's stamps must move
+// on with the frames read. Where no server listens, it skips.
 func TestLiveServer(t *testing.T) {
 	if !Available() {
 		t.Skip("no PipeWire server listens")
@@ -51,6 +52,9 @@ func TestLiveServer(t *testing.T) {
 			if !ok {
 				break
 			}
+			if taken := cl.Taken(); at+int64(n) > taken {
+				t.Errorf("input stamped %d to %d, past the %d frames taken", at, at+int64(n), taken)
+			}
 			if stamps == 0 {
 				firstAt, firstRead = at, read
 			}
@@ -86,13 +90,20 @@ func TestLiveServer(t *testing.T) {
 	if maxHeld > ahead+int64(e.Delay)+2*int64(e.Quantum)+64 {
 		t.Errorf("held %d, past the ring's %d, the delay's %d and the quantum's %d", maxHeld, ahead, e.Delay, e.Quantum)
 	}
-	if stamps > 0 {
+	// A graph that stalls, as a busy machine's may, misses time the
+	// stamps count and the frames read do not: the stamps keep pace only
+	// where the graph ran every cycle, within one of the time.
+	kept := e.Cycles*int64(e.Quantum) >= int64(time.Since(start).Seconds()*48000)-2*int64(e.Quantum)
+	switch {
+	case stamps > 0 && kept:
 		// The input's clock and the output's run at one rate: the stamps
 		// keep pace with the frames read, within a cycle.
 		if d := lastAt - firstAt; d > int64(e.Quantum)+64 || d < -int64(e.Quantum)-64 {
 			t.Errorf("the stamps drifted %d frames from the frames read", d)
 		}
-	} else if e.In == StateStreaming {
+	case stamps > 0:
+		t.Logf("the graph ran %d cycles of %d frames in %v: no drift check", e.Cycles, e.Quantum, time.Since(start).Round(time.Millisecond))
+	case e.In == StateStreaming:
 		t.Error("the input streams and recorded nothing")
 	}
 }
