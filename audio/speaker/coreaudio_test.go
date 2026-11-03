@@ -599,9 +599,7 @@ func TestCoreAudioFailsOver(t *testing.T) {
 // Audio's Info, and a change of Record, Outputs or Buffer opens it
 // again, as it does a driver.
 func TestCoreAudioIsTheDefault(t *testing.T) {
-	was := coreAudioFirst
-	coreAudioFirst = true
-	t.Cleanup(func() { coreAudioFirst = was })
+	coreAudioFirstOnly(t)
 	f := useAU(t, macInfo())
 	s, err := Open(audio.NewMixer(), Options{Record: true})
 	if err != nil {
@@ -638,9 +636,7 @@ func TestCoreAudioIsTheDefault(t *testing.T) {
 // follows the device. Set reopens for a rate only where the output
 // plays another.
 func TestCoreAudioDefaultAsksTheRate(t *testing.T) {
-	was := coreAudioFirst
-	coreAudioFirst = true
-	t.Cleanup(func() { coreAudioFirst = was })
+	coreAudioFirstOnly(t)
 	f := useAU(t, macInfo()) // plays at 44100 Hz, whatever it is asked
 	s, err := Open(audio.NewMixer(), Options{Rate: 96000})
 	if err != nil {
@@ -680,9 +676,7 @@ func TestCoreAudioDefaultAsksTheRate(t *testing.T) {
 // Where Core Audio fails to open as the system's own sound, the speaker
 // falls back to oto and says why.
 func TestCoreAudioDefaultFallsBackToOto(t *testing.T) {
-	was := coreAudioFirst
-	coreAudioFirst = true
-	t.Cleanup(func() { coreAudioFirst = was })
+	coreAudioFirstOnly(t)
 	f := useAU(t, macInfo())
 	f.failed = audiounit.ErrNoOutput
 	errOto := errors.New("oto: here as a stand-in")
@@ -790,4 +784,12 @@ func TestCoreAudioGrowsNoLeadFromAnOpening(t *testing.T) {
 			t.Errorf("back on the speakers the speaker works %v ahead, want %v: %v as before, and 10 ms grown", l, want, before)
 		}
 	})
+}
+
+// coreAudioFirstOnly makes Core Audio the default for t, as on macOS,
+// with the other systems' defaults off.
+func coreAudioFirstOnly(t *testing.T) {
+	wasCA, wasAA, wasWA := coreAudioFirst, aaudioFirst, wasapiFirst
+	coreAudioFirst, aaudioFirst, wasapiFirst = true, false, false
+	t.Cleanup(func() { coreAudioFirst, aaudioFirst, wasapiFirst = wasCA, wasAA, wasWA })
 }
