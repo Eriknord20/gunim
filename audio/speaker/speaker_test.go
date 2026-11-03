@@ -3,7 +3,9 @@ package speaker
 import (
 	"math"
 	"os"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -87,4 +89,54 @@ func TestSetOpensTheSpeakersAgain(t *testing.T) {
 	if err := s.Err(); err != nil {
 		t.Error(err)
 	}
+}
+
+// stillOut is an output that plays nothing, at hz, as far ahead as
+// the speaker asks.
+type stillOut struct {
+	hz    int
+	ahead atomic.Int64
+}
+
+func (o *stillOut) start(ahead time.Duration) { o.setAhead(ahead) }
+func (o *stillOut) held() int64               { return 0 }
+func (o *stillOut) setAhead(d time.Duration)  { o.ahead.Store(int64(d)) }
+func (o *stillOut) latency() time.Duration    { return time.Duration(o.ahead.Load()) }
+func (o *stillOut) rate() int                 { return o.hz }
+func (o *stillOut) fill(*State)               {}
+func (o *stillOut) err() error                { return nil }
+func (o *stillOut) suspend() error            { return nil }
+func (o *stillOut) resume() error             { return nil }
+func (o *stillOut) close() error              { return nil }
+
+// TestSpeakerForgetsTheDryReadsOfAnOutputClosed has the output run dry
+// once, then opens another at a new rate, which runs dry once too,
+// all within one of the watch's looks. Once each is no sign the buffer
+// is too small: the lead stays as it was. Counted together, the two
+// would grow it.
+func TestSpeakerForgetsTheDryReadsOfAnOutputClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		wasAA, wasCA, wasOto := aaudioFirst, coreAudioFirst, openSystemSound
+		aaudioFirst, coreAudioFirst = false, false
+		openSystemSound = func(_ *Speaker, o Options) (startedOutput, error) { return &stillOut{hz: o.rate()}, nil }
+		t.Cleanup(func() { aaudioFirst, coreAudioFirst, openSystemSound = wasAA, wasCA, wasOto })
+		s, err := Open(audio.NewMixer(), Options{Rate: 48000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Close() }()
+		time.Sleep(300 * time.Millisecond)
+		s.ranDry()
+		if err := s.Set(Options{Rate: 44100}); err != nil {
+			t.Fatal(err)
+		}
+		s.ranDry()
+		time.Sleep(time.Second)
+		if l := s.Latency(); l != 30*time.Millisecond {
+			t.Errorf("working %v ahead, want 30ms: a dry read of the output closed counted against the one opened", l)
+		}
+		if d := s.State().Dropouts; d != 2 {
+			t.Errorf("%d dropouts, want 2", d)
+		}
+	})
 }

@@ -33,6 +33,10 @@ type fakeAA struct {
 	// more adds to every output's delay from when it is set, as
 	// earbuds connecting to a device already playing.
 	more atomic.Int64
+	// startAfter is how long each stream opened from when it is set
+	// takes to start its device after Start, as one at a Bluetooth
+	// headset may.
+	startAfter atomic.Int64
 	// inTakes is how long an input's open takes, as AAudio's take as
 	// long as 200 ms; inOpens holds when each began, and whether it
 	// asked for the device to itself.
@@ -78,6 +82,8 @@ type fakeAAStream struct {
 	// anew moves its timestamps back, as a stream that counts anew.
 	frozen atomic.Bool
 	anew   atomic.Int64
+	// late is how long it takes to start its device after Start.
+	late   int64
 	closed chan struct{}
 	done   chan struct{}
 	pauses atomic.Int64
@@ -110,7 +116,7 @@ func (f *fakeAA) open(c aaConfig) (aaStream, error) {
 	}
 	fails.Store(0)
 	s := &fakeAAStream{f: f, c: c, sh: aaudio.NewShared(c.data, c.blocks), closed: make(chan struct{}),
-		done: make(chan struct{})}
+		done: make(chan struct{}), late: f.startAfter.Load()}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if c.input {
@@ -137,7 +143,7 @@ func (s *fakeAAStream) Start() error {
 	if s.started.Swap(true) {
 		return nil
 	}
-	s.start.Store(aaClock())
+	s.start.Store(aaClock() + s.late)
 	go s.run()
 	return nil
 }
@@ -147,6 +153,11 @@ func (s *fakeAAStream) run() {
 	defer close(s.done)
 	period := time.Duration(int64(s.f.burst) * 1e9 / int64(s.f.rate))
 	buf := make([]float32, s.f.burst*s.c.chans)
+	select {
+	case <-s.closed:
+		return
+	case <-time.After(time.Duration(s.late)):
+	}
 	for {
 		select {
 		case <-s.closed:
@@ -985,6 +996,68 @@ func TestAAudioWorksAheadOfTheBluetoothDelay(t *testing.T) {
 		synctest.Wait()
 		if l := s.Latency(); l < 390*time.Millisecond || l > 420*time.Millisecond {
 			t.Errorf("the latency is %v; want 400 ms", l)
+		}
+	})
+}
+
+// TestAAudioGrowsNoLeadFromAnOpening plays on the phone's speaker, then
+// on Bluetooth earbuds, 280 ms slower, whose stream starts its device
+// 300 ms after it starts, and the mixer is late once just then. Those
+// dry spells come from opening: they leave the lead as it was, though
+// the stream opened 300 ms before. Then the mixer is late once while
+// the earbuds play steadily: the lead grows by 10 ms, not by the
+// earbuds' delay. Back on the speaker, the speaker works as far ahead
+// as before, and the 10 ms more.
+func TestAAudioGrowsNoLeadFromAnOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+		useFakeAA(t, f)
+		m := audio.NewMixer()
+		r := &stalling{}
+		v := m.Play(r, audio.Options{})
+		s := openAA(t, m, Options{}, v)
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		before := s.Latency()
+
+		// The speaker's stream fails as the earbuds take over.
+		f.startAfter.Store(int64(300 * time.Millisecond))
+		f.more.Store(audio.FramesAt(280*time.Millisecond, 48000))
+		outs, _ := f.streams()
+		outs[len(outs)-1].sh.Err.Store(-899)
+		r.stallAt(310*time.Millisecond, 80*time.Millisecond)
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		if outs, _ = f.streams(); len(outs) != 2 {
+			t.Fatalf("%d streams opened, want 2", len(outs))
+		}
+		if g := s.margin.Load(); g != 0 || s.ahead.Load() != int64(30*time.Millisecond) {
+			t.Fatalf("the dry spells of an opening grew the lead by %v, and set it to %v",
+				time.Duration(g), time.Duration(s.ahead.Load()))
+		}
+
+		// Late once, playing steadily: 10 ms more, or 20 where the dry
+		// spells fall in two of the watch's looks.
+		drops := s.State().Dropouts
+		r.stallAt(0, 80*time.Millisecond)
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if d := s.State().Dropouts - drops; d < 2 {
+			t.Fatalf("the late mixer ran the device dry %d times, want 2 or more", d)
+		}
+		grown := time.Duration(s.margin.Load())
+		if grown != 10*time.Millisecond && grown != 20*time.Millisecond {
+			t.Fatalf("the dry spell grew the lead by %v, want 10 ms or 20", grown)
+		}
+
+		// Back on the speaker.
+		f.startAfter.Store(0)
+		f.more.Store(0)
+		outs[len(outs)-1].sh.Err.Store(-899)
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		if l, want := s.Latency(), before+grown; l < want-2*time.Millisecond || l > want+2*time.Millisecond {
+			t.Errorf("back on the speaker the speaker works %v ahead, want %v: %v as before, and %v grown", l, want, before, grown)
 		}
 	})
 }

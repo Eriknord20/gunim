@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -728,4 +729,65 @@ func TestSetReopensForWhatTheDriverUses(t *testing.T) {
 	if called != 1 || opens != 1 {
 		t.Fatalf("Buffer and Direct opened the system's sound again: %d, %d", called, opens)
 	}
+}
+
+// TestCoreAudioGrowsNoLeadFromAnOpening plays on a Mac's speakers, then
+// on AirPods, whose latency is 8000 frames more. The AirPods find
+// buffers short as they start: those count as dropouts, and leave the
+// lead as it was. Then they find buffers short while they play
+// steadily: the lead grows by 10 ms, not by the AirPods' delay. Back on
+// the speakers, the speaker works as far ahead as before, and the
+// 10 ms more.
+func TestCoreAudioGrowsNoLeadFromAnOpening(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := useAU(t, macInfo())
+		s, err := Open(audio.NewMixer(), Options{Driver: driver.CoreAudio})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Close() }()
+		reopen := func(info audiounit.Info) {
+			t.Helper()
+			f.mu.Lock()
+			f.next = &info
+			f.mu.Unlock()
+			f.tell(func(e *audiounit.Events) { e.Reopen = "the default output device changed" })
+			select {
+			case <-s.Changed():
+			case <-time.After(3 * time.Second):
+				t.Fatal("the speaker never opened again")
+			}
+			waitFor(t, "the ring to fill", auOf(t, s).primed.Load)
+		}
+		waitFor(t, "the ring to fill", auOf(t, s).primed.Load)
+		before := s.Latency()
+
+		airPods := macInfo()
+		airPods.Device, airPods.Rate, airPods.Latency = "AirPods", 48000, 8300
+		reopen(airPods)
+		drops := s.State().Dropouts
+		f.take()
+		f.tell(func(e *audiounit.Events) { e.Short = 3 })
+		time.Sleep(time.Second)
+		if d := s.State().Dropouts - drops; d != 3 {
+			t.Errorf("the AirPods starting ran dry %d times, want 3", d)
+		}
+		if g := s.margin.Load(); g != 0 || s.ahead.Load() != int64(30*time.Millisecond) {
+			t.Fatalf("the AirPods starting grew the lead by %v, and set it to %v",
+				time.Duration(g), time.Duration(s.ahead.Load()))
+		}
+
+		// Short while playing steadily: 10 ms more.
+		f.take()
+		f.tell(func(e *audiounit.Events) { e.Short = 3 })
+		time.Sleep(time.Second)
+		if g := time.Duration(s.margin.Load()); g != 10*time.Millisecond {
+			t.Fatalf("the dry spell grew the lead by %v, want 10 ms", g)
+		}
+
+		reopen(macInfo())
+		if l, want := s.Latency(), before+10*time.Millisecond; l < want-time.Millisecond || l > want+time.Millisecond {
+			t.Errorf("back on the speakers the speaker works %v ahead, want %v: %v as before, and 10 ms grown", l, want, before)
+		}
+	})
 }

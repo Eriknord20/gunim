@@ -83,6 +83,9 @@ type jackOutput struct {
 	cycles   int64
 	cycledAt time.Time
 	stalled  bool
+	// settle tells the short buffers of the client starting or resuming
+	// from those of the sound running dry.
+	settle settling
 }
 
 // openJackOutput opens a client of the JACK server, its ports connected
@@ -126,11 +129,17 @@ func (j *jackOutput) device() int64 {
 
 // target returns how many frames the ring is kept at: what Latency
 // leaves after the device's own, and a buffer and two of the pump's
-// ticks at least.
+// ticks at least; and past that, the margin dry spells grew.
 func (j *jackOutput) target() int64 {
 	least := int64(j.dev.Buffer()) + audio.FramesAt(2*pumpTick, j.hz)
-	return max(audio.FramesAt(time.Duration(j.ahead.Load()), j.hz)-j.device(), least)
+	return max(audio.FramesAt(time.Duration(j.ahead.Load()), j.hz)-j.device(), least) +
+		audio.FramesAt(time.Duration(j.s.margin.Load()), j.hz)
 }
+
+// remargin takes the margin the speaker grew: target reads it as it
+// goes. The ports' latency and the buffer come from the graph, and
+// change as it does, as a sink of PipeWire's moves to Bluetooth.
+func (j *jackOutput) remargin() {}
 
 // pump keeps the ring filled to its target, hands the inputs on, and
 // hears what the server tells, until the output closes. The server waits
@@ -232,10 +241,8 @@ func (j *jackOutput) record(in []float32) {
 func (j *jackOutput) hear() {
 	e := j.dev.Poll()
 	s := j.s
-	if e.Short > 0 && j.primed.Load() && !j.paused.Load() {
-		for range e.Short {
-			s.ranDry()
-		}
+	if j.primed.Load() && !j.paused.Load() {
+		j.settle.count(s, e.Short, e.Cycles, time.Now())
 	}
 	if e.Xruns > 0 {
 		// A buffer late anywhere in the graph breaks the sound, but a
@@ -315,6 +322,7 @@ func (j *jackOutput) suspend() error {
 }
 
 func (j *jackOutput) resume() error {
+	j.settle.restart()
 	j.dev.Pause(false)
 	j.paused.Store(false)
 	return nil
