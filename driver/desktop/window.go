@@ -101,10 +101,11 @@ type Window struct {
 	// fading says the window is last drawn partly there; see SetFade.
 	fading bool
 	// shadow says gunim draws the window's shadow, and shadowAt and shadowScale are the opacity and scale it was last
-	// given; see startShadow.
+	// given; see startShadow. shadowOwed says a task to show them is waiting on the main thread; see SetFade.
 	shadow      bool
 	shadowAt    float32
 	shadowScale float32
+	shadowOwed  bool
 	// border is the line round a chromeless window's edge the application asked for, and edge the width, in device
 	// pixels, a drawn one is drawn at now; see applyBorder.
 	border driver.Border
@@ -305,15 +306,30 @@ func (w *Window) SetFade(opacity, scale float32) {
 	w.mu.Lock()
 	changed := fading != w.fading
 	w.fading = fading
-	shadow := w.shadow && (opacity != w.shadowAt || scale != w.shadowScale)
+	// One task at a time shows the shadow at the newest fade. Drawing it takes the main thread a few milliseconds,
+	// and a task a frame would queue up behind each other: the shadow would trail the window by seconds, and the
+	// main thread would hear no input till they had run.
+	post := w.shadow && !w.shadowOwed && (opacity != w.shadowAt || scale != w.shadowScale)
 	w.shadowAt, w.shadowScale = opacity, scale
+	if post {
+		w.shadowOwed = true
+	}
 	w.mu.Unlock()
-	if shadow {
-		w.d.post(func() {
+	if post {
+		posted := w.d.post(func() {
+			w.mu.Lock()
+			o, sc := w.shadowAt, w.shadowScale
+			w.shadowOwed = false
+			w.mu.Unlock()
 			if !w.closed && !w.covered {
-				fadeShadow(w, opacity, scale)
+				fadeShadow(w, o, sc)
 			}
 		})
+		if !posted {
+			w.mu.Lock()
+			w.shadowOwed = false
+			w.mu.Unlock()
+		}
 	}
 	if !changed {
 		return
