@@ -230,9 +230,21 @@ func TestBrowser(t *testing.T) {
 				t.Fatal("the sharpen timer never fired")
 			}
 		}
+		// What the frame draws is the last frame again, so a change to that shows it drew.
+		was := w.last
+		defer func() { w.last = was }()
+		w.last = solid(blue, w.Size())
 		d.frame()
 		if sharpen() {
 			t.Fatal("the frame did not sharpen")
+		}
+		g := d.g
+		g.BindFramebuffer(gl.FRAMEBUFFER, w.r.WindowFBO)
+		var px [4]byte
+		g.ReadPixels(px[:], 2, 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE)
+		g.BindFramebuffer(gl.FRAMEBUFFER, 0)
+		if px[2] < 240 {
+			t.Fatalf("the sharpening drew nothing: %v", px)
 		}
 		if len(w.presented) != 0 {
 			t.Fatal("a sharpened frame said it presented one the engine never sent")
@@ -359,18 +371,95 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("the page's touch-action came back as %q", got)
 		}
 	})
-	t.Run("a canvas with no CSS size stays that size", func(t *testing.T) {
+	sized := func(style map[string]string) (*Driver, js.Value) {
 		doc := js.Global().Get("document")
 		c := doc.Call("createElement", "canvas")
+		for k, v := range style {
+			c.Get("style").Set(k, v)
+		}
 		doc.Get("body").Call("appendChild", c)
+		return &Driver{canvas: c}, c
+	}
+	t.Run("a canvas with no CSS size stays that size", func(t *testing.T) {
+		x, c := sized(nil)
 		defer c.Call("remove")
 		w0, h0 := c.Get("clientWidth").Int(), c.Get("clientHeight").Int()
-		pinAutoSize(c)
+		x.measure()
 		c.Set("width", 2400)
 		c.Set("height", 1600)
 		if gw, gh := c.Get("clientWidth").Int(), c.Get("clientHeight").Int(); gw != w0 || gh != h0 {
 			t.Fatalf("%dx%d grew to %dx%d", w0, h0, gw, gh)
 		}
+	})
+	t.Run("a canvas hidden at first stays its size once shown", func(t *testing.T) {
+		x, c := sized(map[string]string{"display": "none"})
+		defer c.Call("remove")
+		x.measure()
+		c.Get("style").Set("display", "block")
+		w0, h0 := c.Get("clientWidth").Int(), c.Get("clientHeight").Int()
+		if w0 == 0 || h0 == 0 {
+			t.Fatalf("shown, it measures %dx%d", w0, h0)
+		}
+		x.measure()
+		if c.Get("width").Int() != int(math.Round(float64(float32(w0)*x.scale))) {
+			t.Errorf("its buffer is %d wide for %d at scale %v", c.Get("width").Int(), w0, x.scale)
+		}
+		c.Set("width", 2400)
+		c.Set("height", 1600)
+		if gw, gh := c.Get("clientWidth").Int(), c.Get("clientHeight").Int(); gw != w0 || gh != h0 {
+			t.Fatalf("%dx%d grew to %dx%d", w0, h0, gw, gh)
+		}
+	})
+	t.Run("the browser's exact size sets the buffer", func(t *testing.T) {
+		x, c := sized(map[string]string{"display": "block", "width": "200px", "height": "100px"})
+		defer c.Call("remove")
+		x.measure()
+		x.exactW, x.exactH = x.surfW+1, x.surfH+1
+		want := x.surfW + 1
+		x.measure()
+		if got := c.Get("width").Int(); got != want || x.surfW != want {
+			t.Errorf("the buffer is %d wide, surfW %d, want %d", got, x.surfW, want)
+		}
+	})
+	t.Run("a new size draws at once, to fill the canvas", func(t *testing.T) {
+		st := d.canvas.Get("style")
+		oldW, oldH := st.Get("width").String(), st.Get("height").String()
+		defer func() {
+			st.Set("width", oldW)
+			st.Set("height", oldH)
+			d.observedSize()
+			drain(w)
+		}()
+		// A small square at the top left, on a background of another colour.
+		var pt paint.Painter
+		pt.RRect(geom.Rect{Min: geom.Pt(2, 2), Max: geom.Pt(20, 20)}, 0, paint.Solid(blue))
+		ops := pt.Ops()
+		w.SetBackground(color.NRGBA{R: 255, A: 255})
+		_ = w.Present(ops, []geom.Rect{paint.Everything})
+		d.frame()
+		st.Set("width", "400px")
+		st.Set("height", "300px")
+		// As the ResizeObserver does: the browser shows the canvas straight after.
+		d.observedSize()
+		if d.surfW != d.canvas.Get("width").Int() {
+			t.Fatalf("surfW %d, buffer %d", d.surfW, d.canvas.Get("width").Int())
+		}
+		// The square stays at the top, and what the new size added shows the background.
+		if p := pixel(4, 4); p[2] < 240 {
+			t.Errorf("the square at the top left shows %v", p)
+		}
+		if p := pixel(d.surfW-4, d.surfH-4); p[0] < 240 {
+			t.Errorf("the far corner shows %v", p)
+		}
+		// A window that fills the canvas draws at the browser's count of its pixels.
+		d.exactW, d.exactH = d.surfW+1, d.surfH+1
+		d.observedSize()
+		_ = w.Present(ops, []geom.Rect{paint.Everything})
+		d.frame()
+		if w.lastW != d.surfW || w.lastH != d.surfH || w.onTex {
+			t.Errorf("it drew at %dx%d on a canvas of %dx%d, on a texture %v", w.lastW, w.lastH, d.surfW, d.surfH, w.onTex)
+		}
+		d.exactW, d.exactH = 0, 0
 	})
 	t.Run("the browser's exact size counts only within rounding", func(t *testing.T) {
 		for _, c := range []struct {
@@ -390,7 +479,7 @@ func TestBrowser(t *testing.T) {
 		c.Get("style").Set("height", "90px")
 		doc.Get("body").Call("appendChild", c)
 		defer c.Call("remove")
-		pinAutoSize(c)
+		(&Driver{canvas: c}).measure()
 		if got := c.Get("style").Get("width").String(); got != "50%" {
 			t.Errorf("width became %q", got)
 		}
@@ -402,34 +491,72 @@ func TestBrowser(t *testing.T) {
 		}
 		return !target.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keydown", init)).Bool()
 	}
-	t.Run("the browser keeps its shortcuts", func(t *testing.T) {
+	heard := func() (presses []input.KeyPress) {
+		for _, e := range drain(w) {
+			if e, ok := e.(input.KeyPress); ok {
+				presses = append(presses, e)
+			}
+		}
+		return presses
+	}
+	t.Run("each key has one owner", func(t *testing.T) {
 		d.canvas.Call("focus")
+		ctrl, cmd, shift, alt := "ctrlKey", "metaKey", "shiftKey", "altKey"
 		for _, c := range []struct {
 			name, code string
 			mods       []string
-			want       bool
+			gunim      bool
 		}{
+			// The browser's alone.
 			{"F5", "F5", nil, false},
+			{"F6", "F6", nil, false},
+			{"F11", "F11", nil, false},
 			{"F12", "F12", nil, false},
-			{"r", "KeyR", []string{"ctrlKey"}, false},
-			{"-", "Minus", []string{"ctrlKey"}, false},
-			{"I", "KeyI", []string{"ctrlKey", "shiftKey"}, false},
-			{"ArrowLeft", "ArrowLeft", []string{"altKey"}, false},
+			{"r", "KeyR", []string{ctrl}, false},
+			{"R", "KeyR", []string{ctrl, shift}, false},
+			{"r", "KeyR", []string{cmd}, false},
+			{"-", "Minus", []string{ctrl}, false},
+			{"+", "Equal", []string{ctrl, shift}, false},
+			{"=", "Equal", []string{cmd}, false},
+			{"0", "Digit0", []string{ctrl}, false},
+			{"I", "KeyI", []string{ctrl, shift}, false},
+			{"J", "KeyJ", []string{ctrl, shift}, false},
+			{"i", "KeyI", []string{cmd, alt}, false},
+			{"ArrowLeft", "ArrowLeft", []string{alt}, false},
+			{"[", "BracketLeft", []string{cmd}, false},
+			{"t", "KeyT", []string{ctrl}, false},
+			{"w", "KeyW", []string{ctrl}, false},
+			{"Tab", "Tab", []string{ctrl}, false},
+			{"PageDown", "PageDown", []string{ctrl}, false},
+			{"1", "Digit1", []string{ctrl}, false},
+			{"l", "KeyL", []string{ctrl}, false},
+			{"A", "KeyA", []string{ctrl, shift}, false},
+			{"f", "KeyF", []string{ctrl, cmd}, false},
+			// Gunim's alone.
+			{"s", "KeyS", []string{ctrl}, true},
+			{"f", "KeyF", []string{ctrl}, true},
+			{"p", "KeyP", []string{ctrl}, true},
+			{"k", "KeyK", []string{cmd}, true},
+			{"a", "KeyA", []string{ctrl}, true},
+			{"z", "KeyZ", []string{ctrl}, true},
+			{"ArrowLeft", "ArrowLeft", []string{ctrl}, true},
+			{"ArrowLeft", "ArrowLeft", []string{cmd}, true},
+			{"F1", "F1", nil, true},
+			{"F3", "F3", nil, true},
 			{"Tab", "Tab", nil, true},
 			{"ArrowDown", "ArrowDown", nil, true},
 			{" ", "Space", nil, true},
-			{"a", "KeyA", []string{"ctrlKey"}, true},
-			{"z", "KeyZ", []string{"ctrlKey"}, true},
-			{"ArrowLeft", "ArrowLeft", []string{"ctrlKey"}, true},
 		} {
 			if !d.canvas.Equal(js.Global().Get("document").Get("activeElement")) {
 				t.Skip("this browser would not focus the canvas")
 			}
-			if got := key(d.canvas, c.name, c.code, c.mods...); got != c.want {
-				t.Errorf("%q with %v: cancelled %v, want %v", c.name, c.mods, got, c.want)
+			if got := key(d.canvas, c.name, c.code, c.mods...); got != c.gunim {
+				t.Errorf("%q with %v: cancelled %v, want %v", c.name, c.mods, got, c.gunim)
+			}
+			if got := len(heard()) > 0; got != c.gunim {
+				t.Errorf("%q with %v: gunim heard it %v, want %v", c.name, c.mods, got, c.gunim)
 			}
 		}
-		drain(w)
 	})
 	t.Run("dead keys and AltGr stay the browser's", func(t *testing.T) {
 		w.SetTextInput(true)
@@ -440,21 +567,80 @@ func TestBrowser(t *testing.T) {
 			if key(target, "Dead", "Equal") {
 				t.Errorf("a dead key on %v was cancelled", target.Get("tagName"))
 			}
+			if got := heard(); len(got) != 0 {
+				t.Errorf("a dead key on %v reached gunim: %v", target.Get("tagName"), got)
+			}
 		}
+		// A character AltGr types, in a field: no shortcut, and the mods go.
 		for _, mods := range [][]string{{"ctrlKey", "altKey"}, {"modifierAltGraph"}} {
 			if key(d.text, "@", "Digit2", mods...) {
 				t.Errorf("@ with %v was cancelled", mods)
 			}
+			got := heard()
+			if len(got) != 1 || got[0].Mods&(input.ModControl|input.ModAlt) != 0 {
+				t.Errorf("@ with %v reached gunim as %v", mods, got)
+			}
+		}
+		// With AltGr on, what looks like a cut is a letter, and stays gunim's to hear.
+		key(d.text, "x", "KeyX", "ctrlKey", "altKey", "modifierAltGraph")
+		if got := heard(); len(got) != 1 || got[0].Mods&input.ModControl != 0 {
+			t.Errorf("x with AltGr reached gunim as %v", got)
 		}
 		if key(d.text, " ", "Space") {
 			t.Error("a space in the mirror was cancelled, which is what types it")
 		}
 		drain(w)
 	})
+	t.Run("a field reached by keys takes the keyboard, and a finger's waits", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		d.canvas.Call("focus")
+		if !d.canvas.Equal(doc.Get("activeElement")) {
+			t.Skip("this browser would not focus the canvas")
+		}
+		w.SetTextInput(true)
+		if !d.text.Equal(doc.Get("activeElement")) {
+			t.Errorf("with no press first, %v has the keyboard", doc.Get("activeElement").Get("tagName"))
+		}
+		w.SetTextInput(false)
+		pointer(d, "pointerdown", 7, 5, 5)
+		pointer(d, "pointerup", 7, 5, 5)
+		drain(w)
+		w.SetTextInput(true)
+		if d.text.Equal(doc.Get("activeElement")) {
+			t.Error("a finger's field brought up the keyboard with no tap to ask")
+		}
+		w.SetTextInput(false)
+		// The page's own field keeps the keyboard.
+		mine := doc.Call("createElement", "input")
+		doc.Get("body").Call("appendChild", mine)
+		defer mine.Call("remove")
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		mine.Call("focus")
+		w.SetTextInput(true)
+		if !mine.Equal(doc.Get("activeElement")) {
+			t.Error("the page's own field lost the keyboard")
+		}
+		w.SetTextInput(false)
+	})
 	t.Run("a secret lives in a password field, only while focused", func(t *testing.T) {
+		if !js.Global().Get("document").Call("hasFocus").Bool() {
+			t.Skip("the page has no window focus, so focus and blur don't fire")
+		}
 		w.SetTextInput(true)
 		defer w.SetTextInput(false)
+		w.SetTextState(&input.TextState{Text: "abc"}, w.editSeq)
+		if got := d.plain.Get("value").String(); got != "abc" {
+			t.Fatalf("the textarea holds %q, want abc", got)
+		}
 		w.SetTextState(&input.TextState{Text: "hunter2", Secret: true}, w.editSeq)
+		if got := d.plain.Get("value").String(); got != "" {
+			t.Errorf("the textarea kept %q past a secret", got)
+		}
 		defer w.SetTextState(&input.TextState{}, w.editSeq)
 		if !d.text.Equal(d.secret) || d.secret.Get("type").String() != "password" {
 			t.Fatalf("typing in a %v", d.text.Get("tagName"))
@@ -505,6 +691,33 @@ func TestBrowser(t *testing.T) {
 		}
 		if !found || d.text.Get("value").String() != "" {
 			t.Errorf("found %v, mirror holds %q", found, d.text.Get("value"))
+		}
+	})
+	t.Run("typing with no text state starts clean after a field", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		for _, was := range []input.TextState{{Text: "abc"}, {Text: "hunter2", Secret: true}} {
+			w.SetTextState(&was, w.editSeq)
+			w.SetTextState(nil, w.editSeq)
+			if !d.text.Equal(d.plain) {
+				t.Errorf("after %+v, typing goes to a %v", was, d.text.Get("tagName"))
+			}
+			if got := d.text.Get("value").String(); got != "" {
+				t.Errorf("after %+v, the mirror holds %q", was, got)
+			}
+			drain(w)
+			d.text.Set("value", "h")
+			d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+			var got []string
+			for _, e := range drain(w) {
+				if e, ok := e.(input.TextInput); ok {
+					got = append(got, e.Text)
+				}
+			}
+			if len(got) != 1 || got[0] != "h" {
+				t.Errorf("after %+v, typing h arrives as %q", was, got)
+			}
 		}
 	})
 	t.Run("a second finger leaves the first one's press alone", func(t *testing.T) {
@@ -617,7 +830,7 @@ func TestBrowser(t *testing.T) {
 	_ = w.Close()
 }
 
-// pointer sends a touch's event to the canvas's parent, as the browser would.
+// pointer sends a touch's event to the canvas, as the browser would.
 func pointer(d *Driver, kind string, id int, x, y float64) {
 	r := d.canvas.Call("getBoundingClientRect")
 	buttons := 1

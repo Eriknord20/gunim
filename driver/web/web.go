@@ -16,8 +16,13 @@
 // and only while a window has a frame to show.
 //
 // The browser's own pointer, keyboard and focus events become gunim's
-// input. Text comes through a hidden textarea, focused while a window
-// takes text, so a phone's soft keyboard and input methods work.
+// input. Text comes through a hidden textarea, or a password field for a
+// secret, focused while a window takes text, so a phone's soft keyboard and
+// input methods work.
+//
+// Each key has one owner. The browser keeps a short list, as reloading and
+// zooming, and gunim never hears those. Every other key with Control or Command
+// is gunim's alone, so the browser's own find and print don't run in a program.
 //
 // Gunim takes every touch on the canvas, and scrolls and pans for itself. A page
 // that wants the browser to have some of them, as to scroll the page with
@@ -57,6 +62,8 @@ type Driver struct {
 	// scale is the page's devicePixelRatio, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
 	// surfH are its drawing buffer's size in device pixels.
+	// lastTouch says the last press was a finger or a pen, not a mouse.
+	lastTouch    bool
 	scale        float32
 	cssW, cssH   float32
 	surfW, surfH int
@@ -132,7 +139,6 @@ func openDriver() (*Driver, error) {
 		s.Set("height", "100vh")
 		doc.Get("body").Call("appendChild", canvas)
 	}
-	pinAutoSize(canvas)
 	opts := js.ValueOf(map[string]any{
 		"alpha": false, "antialias": false, "depth": false, "stencil": false,
 		"premultipliedAlpha": true, "preserveDrawingBuffer": false, "powerPreference": "high-performance",
@@ -190,6 +196,21 @@ func (d *Driver) measure() bool {
 	if s <= 0 || math.IsNaN(float64(s)) {
 		s = 1
 	}
+	if w == 0 || h == 0 {
+		// Hidden, or given no room. Its drawing buffer stays as it is, as a canvas
+		// with no CSS size takes its size from that once it shows.
+		d.mu.Lock()
+		changed := w != d.cssW || h != d.cssH || s != d.scale
+		d.cssW, d.cssH, d.scale, d.surfW, d.surfH = w, h, s, 0, 0
+		d.mu.Unlock()
+		return changed
+	}
+	d.mu.Lock()
+	unsized := d.cssW == 0 || d.cssH == 0
+	d.mu.Unlock()
+	if unsized {
+		pinAutoSize(d.canvas)
+	}
 	pw, ph := int(math.Round(float64(w*s))), int(math.Round(float64(h*s)))
 	d.mu.Lock()
 	// clientWidth rounds, so at a fractional scale the browser's own count of
@@ -216,10 +237,10 @@ func near(exact, worked int, scale float32) bool {
 	return exact > 0 && math.Abs(float64(exact-worked)) <= float64(scale)+1
 }
 
-// resized follows the canvas to its new size.
-func (d *Driver) resized() {
+// resized follows the canvas to its new size, and reports whether it changed.
+func (d *Driver) resized() bool {
 	if !d.measure() {
-		return
+		return false
 	}
 	d.mu.Lock()
 	var fill []*Window
@@ -233,6 +254,16 @@ func (d *Driver) resized() {
 		w.in.Push(driver.Redraw{})
 	}
 	d.kick()
+	return true
+}
+
+// observedSize follows a size the ResizeObserver reports. It runs after the
+// animation frame and before the browser shows the canvas, so a size set here
+// would show an empty canvas unless it is drawn on again now.
+func (d *Driver) observedSize() {
+	if d.resized() {
+		d.frame()
+	}
 }
 
 // Run implements [driver.Driver]. The browser pumps the events, so Run
@@ -481,6 +512,7 @@ func (d *Driver) listen(doc js.Value) {
 		p, now := d.at(e), time.Now()
 		touch, id := d.touchOf(e), e.Get("pointerId").Int()
 		d.mu.Lock()
+		d.lastTouch = e.Get("pointerType").String() != "mouse"
 		if d.pressed != nil && id != d.pointer {
 			// A second finger: its own in a window that takes fingers, and
 			// otherwise it leaves the press the first one holds alone.
@@ -668,6 +700,9 @@ func (d *Driver) listen(doc js.Value) {
 		if altGr(e) {
 			m &^= input.ModControl | input.ModAlt
 		}
+		if browserKey(e.Get("key").String(), m) {
+			return
+		}
 		if !down {
 			w.in.Push(input.KeyRelease{Key: k, Mods: m, Time: now})
 			return
@@ -728,8 +763,9 @@ func (d *Driver) listen(doc js.Value) {
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
 		f := js.FuncOf(func(_ js.Value, args []js.Value) any {
+			defer survive("resize")
 			d.readExactSize(args[0])
-			d.resized()
+			d.observedSize()
 			return nil
 		})
 		d.funcs = append(d.funcs, f)
@@ -776,8 +812,6 @@ func capture(el, id js.Value) {
 	el.Call("setPointerCapture", id)
 }
 
-// keyWindow returns the window keys go to: the one taking text, or the
-// topmost that fills the canvas.
 // altGr says a key was pressed with AltGr. Windows reports that as Control and
 // Alt together, which with a letter would be a shortcut, and with anything else
 // is the character the layout puts there, as @ on a Swedish keyboard.
@@ -792,29 +826,56 @@ func altGr(e js.Value) bool {
 	return !unicode.IsLetter(r[0]) || r[0] > unicode.MaxASCII
 }
 
-// gunimKey says a key is one gunim acts on and the browser should not: text
-// editing and moving about, so the page neither scrolls on the arrows nor moves
-// focus on Tab. Everything else stays the browser's, as reloading, zooming,
-// going back and the developer tools. inText says the text mirror has focus,
-// which types a space itself.
+// browserKey says a key stays the browser's alone, and gunim never hears it:
+// reloading, zooming, the developer tools, going back and forward, tabs, the
+// address bar and full screen.
+func browserKey(name string, m input.Mods) bool {
+	command := m&(input.ModControl|input.ModSuper) != 0
+	alt := m&input.ModAlt != 0
+	switch {
+	case !command && !alt:
+		switch name {
+		case "F5", "F6", "F11", "F12":
+			return true
+		}
+		return false
+	case !command:
+		return name == "ArrowLeft" || name == "ArrowRight" || name == "Home"
+	}
+	lower := strings.ToLower(name)
+	if alt {
+		// The developer tools on a Mac.
+		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c")
+	}
+	if m&input.ModControl != 0 && m&input.ModSuper != 0 {
+		// Full screen on a Mac.
+		return lower == "f"
+	}
+	switch lower {
+	case "r", "t", "n", "w", "l", "f5", "tab", "pageup", "pagedown",
+		"+", "=", "-", "_", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		return true
+	case "i", "j", "c", "a":
+		// The developer tools, and the search of the tabs.
+		return m&input.ModShift != 0
+	case "[", "]":
+		// Going back and forward on a Mac.
+		return m&input.ModSuper != 0
+	}
+	return false
+}
+
+// gunimKey says a key the browser would otherwise act on is gunim's, so the page
+// neither scrolls on the arrows nor moves focus on Tab: every key with Control or
+// Command that the browser doesn't keep, moving about and editing, and the
+// function keys. inText says the text mirror has focus, which types a space
+// itself.
 func gunimKey(name string, m input.Mods, inText bool) bool {
 	if m&input.ModAlt != 0 {
 		return false
 	}
-	lower := strings.ToLower(name)
 	if m&(input.ModControl|input.ModSuper) != 0 {
-		switch lower {
-		case "a", "y", "z":
-			return true
-		}
-		if m&input.ModSuper != 0 {
-			return false
-		}
-		switch name {
-		case "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Backspace", "Delete":
-			return true
-		}
-		return false
+		return true
 	}
 	switch name {
 	case " ":
@@ -822,9 +883,11 @@ func gunimKey(name string, m input.Mods, inText bool) bool {
 	case "Tab", "Enter", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown":
 		return true
 	}
-	return false
+	return len(name) >= 2 && name[0] == 'F' && name[1] >= '0' && name[1] <= '9'
 }
 
+// keyWindow returns the window keys go to: the one taking text, or the
+// topmost that fills the canvas.
 func (d *Driver) keyWindow() *Window {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -62,6 +62,10 @@ func (d *Driver) frame() {
 		w.sharpen = false
 		r := w.rectLocked()
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
+		if w.fills {
+			// The browser's count of device pixels can differ from this by one.
+			fbW, fbH = surfW, surfH
+		}
 		if w.next != nil {
 			jobs = append(jobs, job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under, again: again})
 			w.next = nil
@@ -134,7 +138,9 @@ func (d *Driver) frame() {
 	}
 	if solo != nil {
 		if !soloDrew {
-			// The browser cleared the canvas after showing it.
+			// The browser cleared the canvas after showing it, and it may have a
+			// new size, so the last frame is drawn to fill it.
+			solo.lastW, solo.lastH = surfW, surfH
 			solo.redraw(g, 0, scale)
 		}
 		d.comp.last = append(d.comp.last[:0], stack...)

@@ -207,9 +207,11 @@ func (w *Window) Show() error {
 	return nil
 }
 
-// SetTextInput implements [driver.TextInputter]: the hidden textarea
-// takes the keyboard while the window takes text, which brings up a
-// phone's keyboard.
+// SetTextInput implements [driver.TextInputter]: the text mirror takes the
+// keyboard while the window takes text, so dead keys and input methods reach it
+// in a field reached by Tab or from code. A finger's field waits for
+// [Window.ShowKeyboard] instead, as focus here would bring up a phone's keyboard
+// with no tap to ask for it.
 func (w *Window) SetTextInput(active bool) {
 	d := w.d
 	d.mu.Lock()
@@ -229,10 +231,26 @@ func (w *Window) SetTextInput(active bool) {
 	d.mu.Unlock()
 	if active {
 		d.syncText(w)
-		// ShowKeyboard focuses the mirror only on an explicit user action.
+		d.focusMirror()
 	} else {
 		d.text.Call("blur")
 		d.canvas.Call("focus", map[string]any{"preventScroll": true})
+	}
+}
+
+// focusMirror gives the text mirror the keyboard, unless a finger was last at the
+// input or the page's own element has it.
+func (d *Driver) focusMirror() {
+	d.mu.Lock()
+	touch := d.lastTouch
+	d.mu.Unlock()
+	if touch {
+		return
+	}
+	doc := js.Global().Get("document")
+	active := doc.Get("activeElement")
+	if active.IsNull() || active.Equal(d.canvas) || active.Equal(d.text) || active.Equal(doc.Get("body")) {
+		d.text.Call("focus", map[string]any{"preventScroll": true})
 	}
 }
 

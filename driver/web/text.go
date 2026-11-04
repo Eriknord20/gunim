@@ -33,12 +33,19 @@ func byteOffset(s string, at int) int {
 
 func (d *Driver) syncText(w *Window) {
 	d.mu.Lock()
-	if d.typing != w || w.state == nil || w.stateSeq < w.editSeq {
+	if d.typing != w || (w.state != nil && w.stateSeq < w.editSeq) {
 		d.mu.Unlock()
 		return
 	}
-	state := *w.state
 	composing := d.composing
+	if w.state == nil {
+		d.mu.Unlock()
+		if !composing {
+			d.clearMirror()
+		}
+		return
+	}
+	state := *w.state
 	d.mu.Unlock()
 	if composing {
 		return
@@ -63,6 +70,15 @@ func (d *Driver) syncText(w *Window) {
 	if t.Get("selectionStart").Int() != a || t.Get("selectionEnd").Int() != b || t.Get("selectionDirection").String() != direction {
 		t.Call("setSelectionRange", a, b, direction)
 	}
+}
+
+// clearMirror readies the mirror for a window with no text state, which takes
+// typing as it comes: the plain field, holding nothing of the field before.
+func (d *Driver) clearMirror() {
+	d.useMirror(false)
+	d.syncingText = true
+	d.text.Set("value", "")
+	d.syncingText = false
 }
 
 // useMirror moves typing to the password field or back, taking focus along, and
