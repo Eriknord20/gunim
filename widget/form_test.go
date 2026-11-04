@@ -282,7 +282,7 @@ func TestADialogsProblemGlidesIn(t *testing.T) {
 	before := d.height
 
 	w.Input(input.KeyPress{Key: input.KeyEnter})
-	var heights []float32
+	heights := make([]float32, 0, 90)
 	sawFade := false
 	for i := range 90 {
 		w.Frame(time.Second / 60)
