@@ -45,6 +45,18 @@ type Vibrator interface {
 // gunim can run.
 var ErrNoVibrator = errors.New("driver: no vibration motor on this device")
 
+// An Awaker is a [Window] that keeps the screen on past the system's
+// timeout. KeepAwake(true) holds it on while the window shows, and
+// KeepAwake(false) lets it sleep again. The window's closing lets it go
+// too.
+type Awaker interface {
+	KeepAwake(on bool) error
+}
+
+// ErrNoAwaker is returned where gunim cannot keep the platform's screen
+// on.
+var ErrNoAwaker = errors.New("driver: no way to keep the screen on here")
+
 // A FingerTaker is a [Window] on a touch screen that can take more than
 // one finger at once. TakeFingers on sends every finger of a touch that
 // starts in the window as [input.Finger], a second one in place of a

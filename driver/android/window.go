@@ -68,6 +68,8 @@ type Window struct {
 	// touch that starts in the window is a finger of its own, and a
 	// second one starts no pinch.
 	takesFingers bool
+	// keepsAwake is what KeepAwake last said.
+	keepsAwake bool
 	// excluded is the bands KeepEdgeSwipes last kept from the system's
 	// edge gestures, in the window's logical pixels.
 	excluded []geom.Rect
@@ -258,6 +260,7 @@ func (w *Window) Hide() error {
 	w.d.mu.Lock()
 	w.hidden = true
 	w.d.excludeGesturesLocked()
+	w.d.keepAwakeLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -268,6 +271,7 @@ func (w *Window) Show() error {
 	w.d.mu.Lock()
 	w.hidden = false
 	w.d.excludeGesturesLocked()
+	w.d.keepAwakeLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -405,6 +409,33 @@ func (w *Window) OpenLink(url string) error { return openLink(url) }
 // Vibrate implements [driver.Vibrator] with the phone's vibration motor.
 func (w *Window) Vibrate(pattern ...time.Duration) error { return vibrate(pattern) }
 
+// KeepAwake implements [driver.Awaker] with the activity's flag to keep
+// the screen on, which Android honours only while the activity shows.
+// The screen stays on while any open window that shows asks.
+func (w *Window) KeepAwake(on bool) error {
+	w.d.mu.Lock()
+	defer w.d.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.keepsAwake = on
+	w.d.keepAwakeLocked()
+	return nil
+}
+
+// keepAwakeLocked hands Java whether any open window that shows asks for
+// the screen to stay on, where that differs from the last it handed. It
+// runs with mu held, so the calls reach Java in order; Java queues the
+// change for its UI thread and returns at once.
+func (d *Driver) keepAwakeLocked() {
+	on := slices.ContainsFunc(d.windows, func(w *Window) bool { return !w.closed && !w.hidden && w.keepsAwake })
+	if on == d.awakeSent {
+		return
+	}
+	d.awakeSent = on
+	keepAwake(on)
+}
+
 // TakeFingers implements [driver.FingerTaker]: each finger of a touch
 // that starts in w is a finger of its own, and a second one starts no
 // pinch. The view holds one setting for the whole app, so the driver
@@ -491,6 +522,7 @@ var (
 	_ driver.Sharer          = (*Window)(nil)
 	_ driver.LinkOpener      = (*Window)(nil)
 	_ driver.Vibrator        = (*Window)(nil)
+	_ driver.Awaker          = (*Window)(nil)
 	_ driver.FingerTaker     = (*Window)(nil)
 	_ driver.EdgeSwipeKeeper = (*Window)(nil)
 	_ driver.Compass         = (*Window)(nil)
