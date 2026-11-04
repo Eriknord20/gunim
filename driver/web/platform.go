@@ -37,7 +37,7 @@ func await(p js.Value) (value js.Value, err error) {
 	defer reject.Release()
 	p.Call("then", resolve, reject)
 	<-done
-	return
+	return value, err
 }
 func clipboardCall(method string, args ...any) (value js.Value, err error) {
 	defer func() {
@@ -51,6 +51,8 @@ func clipboardCall(method string, args ...any) (value js.Value, err error) {
 	}
 	return await(c.Call(method, args...))
 }
+
+// Clipboard reads the system's clipboard, if the browser allows it.
 func (w *Window) Clipboard() (string, error) {
 	v, err := clipboardCall("readText")
 	if err != nil {
@@ -58,18 +60,30 @@ func (w *Window) Clipboard() (string, error) {
 	}
 	return v.String(), nil
 }
+
+// SetClipboard writes the system's clipboard, if the browser allows it.
 func (w *Window) SetClipboard(s string) error { _, err := clipboardCall("writeText", s); return err }
-func (w *Window) Shoot(fn func(*image.RGBA))  { w.d.mu.Lock(); w.shot = fn; w.d.mu.Unlock(); w.d.kick() }
+
+// Shoot has fn called with the next frame drawn.
+func (w *Window) Shoot(fn func(*image.RGBA)) { w.d.mu.Lock(); w.shot = fn; w.d.mu.Unlock(); w.d.kick() }
+
+// SetTitle sets the page's title, for a window that fills the canvas.
 func (w *Window) SetTitle(title string) {
 	if w.fills {
 		js.Global().Get("document").Set("title", title)
 	}
 }
+
+// ShowKeyboard focuses what takes text, which brings up a phone's keyboard.
 func (w *Window) ShowKeyboard() {
 	w.d.syncText(w)
 	w.d.text.Call("focus", map[string]any{"preventScroll": true})
 }
+
+// SetTextBox says where the text being edited is.
 func (w *Window) SetTextBox(r geom.Rect) { w.d.mu.Lock(); w.textBox = r; w.d.mu.Unlock() }
+
+// SafeArea returns what a phone's notch and corners take from the canvas.
 func (w *Window) SafeArea() geom.Insets {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
@@ -78,6 +92,8 @@ func (w *Window) SafeArea() geom.Insets {
 	}
 	return w.d.safe
 }
+
+// KeyboardCover returns how much of the canvas a phone's keyboard covers.
 func (w *Window) KeyboardCover() float32 {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
@@ -86,6 +102,8 @@ func (w *Window) KeyboardCover() float32 {
 	}
 	return w.d.keyboard
 }
+
+// ContentOrigin returns where the window is on the canvas.
 func (w *Window) ContentOrigin() (image.Point, error) {
 	w.d.mu.Lock()
 	at, scale := w.rectLocked().Min, w.d.scale
@@ -93,6 +111,8 @@ func (w *Window) ContentOrigin() (image.Point, error) {
 	r := w.d.canvas.Call("getBoundingClientRect")
 	return image.Pt(int(math.Round((float64(at.X)+r.Get("left").Float())*float64(scale))), int(math.Round((float64(at.Y)+r.Get("top").Float())*float64(scale)))), nil
 }
+
+// SetTextCaret puts what takes text at the caret, so input methods open beside it.
 func (w *Window) SetTextCaret(r geom.Rect) {
 	w.d.mu.Lock()
 	at := w.rectLocked().Min

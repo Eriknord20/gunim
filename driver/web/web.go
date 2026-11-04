@@ -50,9 +50,9 @@ type Driver struct {
 
 	// text is whichever of plain and secret takes text just now.
 	canvas, text, plain, secret js.Value
-	g            gl.Context
-	shared       render.Shared
-	comp         *compositor
+	g                           gl.Context
+	shared                      render.Shared
+	comp                        *compositor
 
 	// scale is the page's devicePixelRatio, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
@@ -76,7 +76,7 @@ type Driver struct {
 	// touchAction is what the page asked of the browser for touches.
 	touchAction string
 	pointer     int
-	fingers map[int]*Window
+	fingers     map[int]*Window
 	// compass says the browser has sent a heading, and headingTo holds the
 	// windows that watch it.
 	compass   bool
@@ -89,7 +89,6 @@ type Driver struct {
 	composing, syncingText bool
 	compStart              int
 	compSuffix, clipboard  string
-	mods                   input.Mods
 
 	safeProbe      js.Value
 	safe           geom.Insets
@@ -114,11 +113,11 @@ var (
 
 // Open returns the driver, built on the page's canvas the first time.
 func Open() (*Driver, error) {
-	openOnce.Do(func() { theDriver, openErr = open() })
+	openOnce.Do(func() { theDriver, openErr = openDriver() })
 	return theDriver, openErr
 }
 
-func open() (*Driver, error) {
+func openDriver() (*Driver, error) {
 	doc := js.Global().Get("document")
 	if doc.IsUndefined() {
 		return nil, errors.New("web: no document")
@@ -193,9 +192,10 @@ func (d *Driver) measure() bool {
 	}
 	pw, ph := int(math.Round(float64(w*s))), int(math.Round(float64(h*s)))
 	d.mu.Lock()
-	if d.exactW > 0 && d.exactH > 0 {
-		// clientWidth rounds, so at a fractional scale the browser's own count
-		// of device pixels is the one that fills the canvas exactly.
+	// clientWidth rounds, so at a fractional scale the browser's own count of
+	// device pixels is the one that fills the canvas exactly. Further off than
+	// rounding explains, it is out of date, or the scale is emulated.
+	if near(d.exactW, pw, s) && near(d.exactH, ph, s) {
 		pw, ph = d.exactW, d.exactH
 	}
 	changed := w != d.cssW || h != d.cssH || s != d.scale
@@ -208,6 +208,12 @@ func (d *Driver) measure() bool {
 	}
 	d.mu.Unlock()
 	return changed
+}
+
+// near says a count of device pixels is within rounding of what was worked out
+// from logical pixels at a scale.
+func near(exact, worked int, scale float32) bool {
+	return exact > 0 && math.Abs(float64(exact-worked)) <= float64(scale)+1
 }
 
 // resized follows the canvas to its new size.
@@ -766,7 +772,7 @@ func survive(what string) {
 // browser refuses a pointer it no longer counts as active, as one a
 // touch cancelled already; the press goes on without capture then.
 func capture(el, id js.Value) {
-	defer func() { recover() }()
+	defer func() { _ = recover() }()
 	el.Call("setPointerCapture", id)
 }
 
@@ -779,9 +785,11 @@ func altGr(e js.Value) bool {
 	if e.Call("getModifierState", "AltGraph").Bool() {
 		return true
 	}
-	name := e.Get("key").String()
-	r := []rune(name)
-	return e.Get("ctrlKey").Bool() && e.Get("altKey").Bool() && len(r) == 1 && !unicode.IsLetter(r[0]) || e.Get("ctrlKey").Bool() && e.Get("altKey").Bool() && len(r) == 1 && r[0] > unicode.MaxASCII
+	r := []rune(e.Get("key").String())
+	if !e.Get("ctrlKey").Bool() || !e.Get("altKey").Bool() || len(r) != 1 {
+		return false
+	}
+	return !unicode.IsLetter(r[0]) || r[0] > unicode.MaxASCII
 }
 
 // gunimKey says a key is one gunim acts on and the browser should not: text

@@ -59,13 +59,13 @@ func (w *Window) TakeFingers(on bool) error {
 		return nil
 	}
 	w.takesFingers = on
-	any := false
+	taking := false
 	for _, x := range d.windows {
-		any = any || x.takesFingers
+		taking = taking || x.takesFingers
 	}
 	d.mu.Unlock()
 	action := d.touchAction
-	if any {
+	if taking {
 		action = "none"
 	}
 	d.canvas.Get("style").Set("touchAction", action)

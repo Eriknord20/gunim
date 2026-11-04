@@ -5,6 +5,7 @@ package text
 import (
 	"bytes"
 	_ "embed"
+
 	"github.com/go-text/typesetting/font"
 )
 

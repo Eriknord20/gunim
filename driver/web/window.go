@@ -280,8 +280,8 @@ func (w *Window) SetTextState(state *input.TextState, seq uint64) {
 	if state == nil {
 		w.state = nil
 	} else {
-		copy := *state
-		w.state = &copy
+		kept := *state
+		w.state = &kept
 	}
 	w.stateSeq = seq
 	w.d.mu.Unlock()
