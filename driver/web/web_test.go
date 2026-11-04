@@ -250,6 +250,26 @@ func TestBrowser(t *testing.T) {
 			t.Fatal("no Redraw from a new window")
 		}
 	})
+	t.Run("a mouse let go reaches the document", func(t *testing.T) {
+		// Web Audio waits for a gesture, and oto listens for it on the document.
+		heard := 0
+		listen := js.FuncOf(func(js.Value, []js.Value) any { heard++; return nil })
+		defer listen.Release()
+		doc := js.Global().Get("document")
+		doc.Call("addEventListener", "mouseup", listen)
+		defer doc.Call("removeEventListener", "mouseup", listen)
+		r := d.canvas.Call("getBoundingClientRect")
+		for _, kind := range []string{"pointerdown", "pointerup"} {
+			d.canvas.Call("dispatchEvent", js.Global().Get("PointerEvent").New(kind, map[string]any{
+				"bubbles": true, "cancelable": true, "pointerId": 1, "pointerType": "mouse", "button": 0,
+				"clientX": r.Get("left").Float() + 40, "clientY": r.Get("top").Float() + 40,
+			}))
+		}
+		drain(w)
+		if heard != 1 {
+			t.Fatalf("the document heard %d mouseups from one click", heard)
+		}
+	})
 	t.Run("a second finger leaves the first one's press alone", func(t *testing.T) {
 		seen := drain(w)
 		pointer(d, "pointerdown", 1, 40, 40)

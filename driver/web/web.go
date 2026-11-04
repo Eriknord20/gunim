@@ -512,6 +512,12 @@ func (d *Driver) listen(doc js.Value) {
 		}
 	})
 	up := func(e js.Value, cancel bool) {
+		if !cancel && e.Get("pointerType").String() == "mouse" {
+			// Cancelling pointerdown, above, stops the browser's own mouseup,
+			// and a page's audio may be waiting for one to start: Web Audio
+			// needs a user's gesture, and oto listens on the document for it.
+			doc.Call("dispatchEvent", js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true}))
+		}
 		p, now := d.at(e), time.Now()
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerUp)
