@@ -318,6 +318,24 @@ type MediaSeek struct {
 	Time time.Time
 }
 
+// FilesOpened arrives when another application hands this one files to
+// open: on Android, "Open with" and files shared to it, for the
+// extensions gunimapk's -opens names. Paths hold copies in the
+// application's cache. The system may clear that cache when storage runs
+// low, and gunim clears it as the application next starts, so read them
+// soon and copy what should last.
+//
+// It goes to the focused node and bubbles, as a key does, then to each
+// view mounted at the root that it did not pass, until a node returns
+// true for it. With every node passing, the window holds the event and
+// offers it again each frame. So files that start the application wait
+// for the view that takes them, past an intro or a splash, and reach
+// one node once.
+type FilesOpened struct {
+	Paths []string
+	Time  time.Time
+}
+
 // DragOver arrives while something is dragged over a node: another
 // node's Data, dragged inside the application, from this window or
 // another, or [Files] from another program. It bubbles like a pointer
@@ -415,6 +433,7 @@ func (WindowFocusGained) isEvent() {}
 func (WindowHidden) isEvent()      {}
 func (WindowShown) isEvent()       {}
 func (MediaSeek) isEvent()         {}
+func (FilesOpened) isEvent()       {}
 
 // Button identifies a pointer button.
 type Button uint8

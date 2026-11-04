@@ -203,3 +203,89 @@ func TestAGameSaysSoInItsManifest(t *testing.T) {
 		t.Errorf("the manifest is not XML: %v\n%s", err, game)
 	}
 }
+
+func TestOpensReadsExtensions(t *testing.T) {
+	got, err := parseOpens(".hej, .HEJPROP,.hej,.tar.gz")
+	if err != nil || !slices.Equal(got, []string{".hej", ".hejprop", ".tar.gz"}) {
+		t.Fatalf("%q, %v", got, err)
+	}
+	if got, err := parseOpens(""); err != nil || got != nil {
+		t.Fatalf("empty gives %q, %v", got, err)
+	}
+	for _, bad := range []string{"hej", ".", ".he j", `."/><x`, ".hej,,.x"} {
+		if _, err := parseOpens(bad); err == nil {
+			t.Errorf("%q passed", bad)
+		}
+	}
+}
+
+func TestOpensAddsFiltersAndRunsTheActivityOnce(t *testing.T) {
+	plain := manifestFor(options{id: "org.gunim.calc", name: "Calculator"})
+	for _, s := range []string{"launchMode", "android.intent.action.VIEW", "android.intent.action.SEND", "gunim.opens"} {
+		if strings.Contains(plain, s) {
+			t.Errorf("a program that opens nothing has %s", s)
+		}
+	}
+	m := manifestFor(options{id: "org.gunim.sketch", name: "Sketch", opens: []string{".hej", ".hejprop"}})
+	var doc struct {
+		App struct {
+			Activity struct {
+				LaunchMode string `xml:"launchMode,attr"`
+				Filters    []struct {
+					Actions []struct {
+						Name string `xml:"name,attr"`
+					} `xml:"action"`
+					Data []struct {
+						Scheme  string `xml:"scheme,attr"`
+						Host    string `xml:"host,attr"`
+						Mime    string `xml:"mimeType,attr"`
+						Suffix  string `xml:"pathSuffix,attr"`
+						Pattern string `xml:"pathPattern,attr"`
+					} `xml:"data"`
+				} `xml:"intent-filter"`
+				Meta []struct {
+					Name  string `xml:"name,attr"`
+					Value string `xml:"value,attr"`
+				} `xml:"meta-data"`
+			} `xml:"activity"`
+		} `xml:"application"`
+	}
+	if err := xml.Unmarshal([]byte(m), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, m)
+	}
+	a := doc.App.Activity
+	if a.LaunchMode != "singleTask" {
+		t.Errorf("launch mode %q", a.LaunchMode)
+	}
+	if len(a.Filters) != 4 {
+		t.Fatalf("%d filters, want the launcher's and three", len(a.Filters))
+	}
+	if len(a.Meta) != 1 || a.Meta[0].Name != "gunim.opens" || a.Meta[0].Value != ".hej,.hejprop" {
+		t.Errorf("meta-data %+v", a.Meta)
+	}
+	var host bool
+	var suffixes, patterns []string
+	for _, d := range a.Filters[1].Data {
+		host = host || d.Host == "*"
+		if d.Suffix != "" {
+			suffixes = append(suffixes, d.Suffix)
+		}
+		if d.Pattern != "" {
+			patterns = append(patterns, d.Pattern)
+		}
+	}
+	if !host {
+		t.Error("the path filter has no host, and Android would ignore its paths")
+	}
+	if !slices.Equal(suffixes, []string{".hej", ".hejprop"}) {
+		t.Errorf("suffixes %q", suffixes)
+	}
+	for _, want := range []string{`.*\\.hej`, `.*\\..*\\.hej`, `.*\\..*\\..*\\..*\\.hejprop`} {
+		if !slices.Contains(patterns, want) {
+			t.Errorf("patterns %q lack %q", patterns, want)
+		}
+	}
+	if got := a.Filters[3].Actions; len(got) != 2 || got[0].Name != "android.intent.action.SEND" || got[1].Name != "android.intent.action.SEND_MULTIPLE" {
+		t.Errorf("share filter's actions %+v", got)
+	}
+}

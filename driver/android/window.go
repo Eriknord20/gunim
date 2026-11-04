@@ -460,14 +460,27 @@ func (d *Driver) excludeGesturesLocked() {
 	excludeGestures(xy)
 }
 
-// ChooseFiles implements [driver.FileChooser] for folders: the system's
-// chooser of folders, for a folder on the phone's storage or a card,
-// which a program reads once it has the permission for what it reads,
-// as [driver.PermissionMusic]. For files it returns
-// [driver.ErrNoChooser], for now.
+// ChooseFiles implements [driver.FileChooser].
+//
+// Files go through the system's document picker. It hands over content
+// addresses, so each file chosen is copied into the application's cache
+// and the paths are those copies, which need no permission to read. The
+// system may clear that cache when storage runs low, and gunim clears it
+// as the application next starts, so read them soon and copy what should
+// last. A file that fails to copy gives an error, along with the paths
+// of those that copied.
+//
+// The picker narrows files by MIME type, and takes no title or starting
+// folder. o.Filters' patterns of the form *.ext narrow it where Android
+// knows a type for every extension. It shows every file otherwise, so
+// a program with an extension of its own checks what comes back.
+//
+// Folders go through the system's chooser of folders, for a folder on
+// the phone's storage or a card, which a program reads once it has the
+// permission for what it reads, as [driver.PermissionMusic].
 func (w *Window) ChooseFiles(o driver.ChooseOptions) ([]string, error) {
 	if !o.Folders {
-		return nil, driver.ErrNoChooser
+		return chooseFiles(o)
 	}
 	if p := chooseFolder(); p != "" {
 		return []string{p}, nil

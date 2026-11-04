@@ -28,6 +28,19 @@
 // developer why an app plays in the background, so leave playback out
 // of a program that only makes sound while it is in front, as a game.
 //
+// -opens names file extensions the program opens, comma separated, as
+// .hej,.hejprop. Android then offers the program under "Open with" and in
+// the share sheet for files of those extensions, and gunim's
+// input.FilesOpened brings them, at start and while it runs. The activity
+// runs once, so a file opened while the program runs reaches the same
+// program. Android matches on an extension only where the file's address
+// holds one. For an address without one, and for a share, it matches on
+// the MIME type, so -opens takes application/octet-stream, which Android
+// gives an extension it does not know. The program shows up for every
+// such file, and gunim passes on the ones of the named extensions. An
+// extension with a MIME type of its own, as .mp3, shows up only where
+// the address holds the extension.
+//
 // # Debug and release builds
 //
 // By default the APK is a debug build, signed with the debug key in
@@ -145,6 +158,7 @@ func main() {
 	iconBG := flag.String("icon-background", "", "the colour under the launcher's icon, as #rrggbb; the colour of the icon's edge by default")
 	permList := flag.String("permissions", "", "what the program may do beyond drawing and sound, comma separated: music, to read the phone's music, microphone, to record, and playback, to play on in the background with the system's media controls")
 	category := flag.String("category", "", "what kind of app the program is, by Android's name, as game; a game keeps -orientation on a tablet")
+	opensList := flag.String("opens", "", "file extensions the program opens through \"Open with\" and the share sheet, comma separated, as .hej,.hejprop")
 	orientation := flag.String("orientation", "", "hold the screen one way, by Android's name, as portrait or landscape; it turns with the phone by default")
 	abiList := flag.String("abi", "arm64-v8a,x86_64", "the ABIs to build for, comma separated")
 	install := flag.Bool("install", false, "install the APK with adb")
@@ -186,6 +200,10 @@ func main() {
 			}
 		}
 	}
+	opens, perr := parseOpens(*opensList)
+	if perr != nil {
+		log.Fatalf("gunimapk: %v", perr)
+	}
 	if *category != "" && !slices.Contains(categories, *category) {
 		log.Fatalf("no category %q; there are %s", *category, strings.Join(categories, ", "))
 	}
@@ -196,7 +214,7 @@ func main() {
 		log.Fatal("-genkey needs -keystore, the file to make")
 	}
 	o := options{pkg: pkg, out: *out, id: *id, name: *name, version: *version, iconPNG: *iconPNG, iconBG: *iconBG, perms: perms,
-		orientation: *orientation, category: *category, abis: strings.Split(*abiList, ","), keystore: *keystore, keyAlias: *keyAlias, genKey: *genKey,
+		opens: opens, orientation: *orientation, category: *category, abis: strings.Split(*abiList, ","), keystore: *keystore, keyAlias: *keyAlias, genKey: *genKey,
 		install: *install || *run, start: *run}
 	err := buildAPK(ctx, o)
 	stop()
@@ -213,6 +231,8 @@ type options struct {
 	// iconPNG is the launcher's icon, and iconBG the colour under it.
 	iconPNG, iconBG string
 	perms, abis     []string
+	// opens are the file extensions the program opens, as .hej.
+	opens []string
 	// orientation is Android's name for the one way the screen is held,
 	// or "" to turn with the phone.
 	orientation string
@@ -905,6 +925,12 @@ var orientations = []string{
 // the application they go to, and the vibration permission, which the
 // system grants as the program installs, lets it run Client.Vibrate.
 func manifestFor(o options) string {
+	launchMode, opensFilters := "", ""
+	if len(o.opens) > 0 {
+		launchMode = `
+			android:launchMode="singleTask"`
+		opensFilters = opensXML(o.opens)
+	}
 	id, name, perms, orientation := o.id, o.name, o.perms, o.orientation
 	iconAttr := ""
 	if o.iconPNG != "" {
@@ -936,18 +962,81 @@ func manifestFor(o options) string {
 		android:enableOnBackInvokedCallback="true">
 		<activity android:name="gunim.android.GunimActivity" android:exported="true"
 			android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
-			android:windowSoftInputMode="adjustPan|stateAlwaysHidden"` + orientationAttr + `
+			android:windowSoftInputMode="adjustPan|stateAlwaysHidden"` + orientationAttr + launchMode + `
 			android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 			<intent-filter>
 				<action android:name="android.intent.action.MAIN"/>
 				<category android:name="android.intent.category.LAUNCHER"/>
 			</intent-filter>
-		</activity>
+` + opensFilters + `		</activity>
 ` + service + `		<provider android:name="gunim.android.GunimFiles" android:authorities="` + id + `.gunim.files"
 			android:exported="false" android:grantUriPermissions="true"/>
 	</application>
 </manifest>
 `
+}
+
+// extension is what -opens takes: a dot, then letters, digits and more
+// dots, in lower case once parseOpens has lowered it.
+var extension = regexp.MustCompile(`^(\.[a-z0-9_+-]+)+$`)
+
+// parseOpens reads -opens' list of extensions, in lower case.
+func parseOpens(list string) ([]string, error) {
+	if list == "" {
+		return nil, nil
+	}
+	var exts []string
+	for _, e := range strings.Split(list, ",") {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if !extension.MatchString(e) {
+			return nil, fmt.Errorf("-opens: %q is no extension; write it as .hej", e)
+		}
+		if !slices.Contains(exts, e) {
+			exts = append(exts, e)
+		}
+	}
+	return exts, nil
+}
+
+// opensXML returns the activity's lines for opening exts, and names them
+// for the driver, which holds back other files the MIME type lets by.
+//
+// The first filter matches an extension in a file's address, and needs a
+// host, as Android ignores a path without one. pathSuffix does it from
+// Android 12. Before that pathPattern does, whose ".*" stops at the first
+// dot it finds, so it takes a pattern for each further dot in the name.
+// The second takes the addresses that hold no name, as Files gives for
+// Downloads, and the third files shared to the program: both have only
+// the MIME type to go by.
+func opensXML(exts []string) string {
+	var b strings.Builder
+	b.WriteString(`			<intent-filter>
+				<action android:name="android.intent.action.VIEW"/>
+				<category android:name="android.intent.category.DEFAULT"/>
+				<data android:scheme="content" android:host="*" android:mimeType="*/*"/>
+`)
+	for _, e := range exts {
+		escaped := strings.ReplaceAll(e, ".", `\\.`)
+		fmt.Fprintf(&b, "\t\t\t\t<data android:pathSuffix=%q/>\n", e)
+		for dots := range 4 {
+			fmt.Fprintf(&b, "\t\t\t\t<data android:pathPattern=\"%s%s\"/>\n", strings.Repeat(`.*\\.`, dots), ".*"+escaped)
+		}
+	}
+	b.WriteString(`			</intent-filter>
+			<intent-filter>
+				<action android:name="android.intent.action.VIEW"/>
+				<category android:name="android.intent.category.DEFAULT"/>
+				<data android:scheme="content" android:mimeType="application/octet-stream"/>
+			</intent-filter>
+			<intent-filter>
+				<action android:name="android.intent.action.SEND"/>
+				<action android:name="android.intent.action.SEND_MULTIPLE"/>
+				<category android:name="android.intent.category.DEFAULT"/>
+				<data android:mimeType="application/octet-stream"/>
+			</intent-filter>
+			<meta-data android:name="gunim.opens" android:value="` + strings.Join(exts, ",") + `"/>
+`)
+	return b.String()
 }
 
 func xmlEscape(s string) string {

@@ -1846,7 +1846,9 @@ type UI struct {
 	// heard, by number, and dropSeq the last number given. dragOuts are
 	// the drops handed to other programs, oldest first, whose ends the
 	// platform says in that order.
-	drops    map[uint64]pendingDrop
+	drops map[uint64]pendingDrop
+	// opened holds the files handed over that no node has taken yet.
+	opened   []input.FilesOpened
 	dropSeq  uint64
 	dragOuts []uint64
 	// outDrags are the drags handed to other programs, by drop number, to carry on should the pointer come back.
@@ -2675,6 +2677,8 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 		u.invalid = true
 	}
 	u.flush()
+	// Files no node took yet: a view just mounted may take them.
+	u.offerOpened()
 	// Scroll what a held drag is near the edge of, while the nodes are
 	// still where the last frame drew them, to find what the pointer is
 	// over.

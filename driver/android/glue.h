@@ -26,6 +26,7 @@ int gunim_open_link(const uint16_t *url, int n);
 int gunim_permitted(int p);
 void gunim_ask(int p, int code);
 void gunim_choose_folder(int code);
+void gunim_choose_files(int code, int multiple, const uint16_t *patterns, int n);
 uint16_t *gunim_user_folder(int f, int *n);
 
 // For package audio/internal/aaudio, which calls them where the driver

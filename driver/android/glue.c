@@ -13,7 +13,7 @@
 
 static JavaVM *vm;
 static jclass nativeClass;
-static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder;
+static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder, midChooseFiles;
 static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
 static jclass audioClass;
@@ -53,6 +53,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 	midAsk = (*env)->GetStaticMethodID(env, c, "ask", "(II)V");
 	midUserFolder = (*env)->GetStaticMethodID(env, c, "userFolder", "(I)Ljava/lang/String;");
 	midChooseFolder = (*env)->GetStaticMethodID(env, c, "chooseFolder", "(I)V");
+	midChooseFiles = (*env)->GetStaticMethodID(env, c, "chooseFiles", "(IZLjava/lang/String;)V");
 	jclass ac = (*env)->FindClass(env, "gunim/android/GunimAudio");
 	if (ac != NULL) {
 		audioClass = (*env)->NewGlobalRef(env, ac);
@@ -191,6 +192,28 @@ void gunim_choose_folder(int code) {
 	JNIEnv *env = envGet(&a);
 	(*env)->CallStaticVoidMethod(env, nativeClass, midChooseFolder, code);
 	envPut(a);
+}
+
+void gunim_choose_files(int code, int multiple, const uint16_t *patterns, int n) {
+	int a;
+	JNIEnv *env = envGet(&a);
+	jstring p = (*env)->NewString(env, (const jchar *)patterns, n);
+	(*env)->CallStaticVoidMethod(env, nativeClass, midChooseFiles, code, multiple ? JNI_TRUE : JNI_FALSE, p);
+	(*env)->DeleteLocalRef(env, p);
+	envPut(a);
+}
+
+JNIEXPORT void JNICALL Java_gunim_android_Native_files(JNIEnv *env, jclass c, jint code, jintArray fds, jstring names, jstring opens) {
+	jsize n = (*env)->GetArrayLength(env, fds);
+	jint *f = (*env)->GetIntArrayElements(env, fds, NULL);
+	jsize nn = (*env)->GetStringLength(env, names);
+	const jchar *ns = (*env)->GetStringChars(env, names, NULL);
+	jsize no = (*env)->GetStringLength(env, opens);
+	const jchar *os = (*env)->GetStringChars(env, opens, NULL);
+	goFiles(code, (int *)f, n, (uint16_t *)ns, nn, (uint16_t *)os, no);
+	(*env)->ReleaseStringChars(env, opens, os);
+	(*env)->ReleaseStringChars(env, names, ns);
+	(*env)->ReleaseIntArrayElements(env, fds, f, JNI_ABORT);
 }
 
 JNIEXPORT void JNICALL Java_gunim_android_Native_chosen(JNIEnv *env, jclass c, jint code, jstring path) {
