@@ -492,6 +492,8 @@ last. `example/openfiles` shows both ways in.
 share sheet, and `Client.CanShare` says where there is one to show.
 `Client.Vibrate` runs the phone's vibration motor in a pattern of on
 and off times, as the web's `navigator.vibrate` does.
+`Client.KeepAwake(true)` keeps the screen on while the window shows, as
+during a recording, until `Client.KeepAwake(false)` or the window closes.
 `Client.TakeFingers(true)` lets a window take more than one finger at
 once, as a game steered with one thumb while the other taps: every
 finger reaches the node it came down on as `input.Finger`, a second one

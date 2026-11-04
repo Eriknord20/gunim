@@ -83,6 +83,10 @@ func run() error {
 		if err := c.Mount(gunim.Root, "sync", "sync", struct{}{}); err != nil {
 			return err
 		}
+		// Comparing a picture with a sound takes a while, with no touch.
+		if err := c.KeepAwake(true); err != nil && !errors.Is(err, driver.ErrNoAwaker) {
+			log.Print(err)
+		}
 		for range c.Intents() {
 		}
 		return c.Err()
@@ -202,8 +206,8 @@ func newView(mix *audio.Mixer, spk *speaker.Speaker, n *notes) *view {
 		if st.Info != nil && st.Rate > 0 {
 			device = audio.DurationAt(int64(st.Info.Latency), st.Rate)
 		}
-		log.Printf("SYNCCHECK driver=%q quick=%v bluetooth=%v shift=%v latency=%v device=%v", st.Driver, v.quick,
-			st.Bluetooth, v.shift, st.Latency.Round(100*time.Microsecond), device.Round(100*time.Microsecond))
+		log.Printf("SYNCCHECK driver=%q quick=%v route=%v shift=%v latency=%v device=%v", st.Driver, v.quick,
+			st.Route, v.shift, st.Latency.Round(100*time.Microsecond), device.Round(100*time.Microsecond))
 		v.saved, v.savedAt = fmt.Sprintf("Saved: %s, quick %v, picture %+v.", through(st), v.quick, v.shift), time.Now()
 		return nil
 	}
@@ -254,13 +258,9 @@ func (v *view) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) g
 	if v.shift < 0 {
 		later = "earlier"
 	}
-	on := ""
-	if st.Bluetooth {
-		on = " on Bluetooth"
-	}
-	v.info.Text = fmt.Sprintf("Playing through %s%s, quick %v.\nReported latency %v.\n\nPicture shifted %v %s.\n\n"+
+	v.info.Text = fmt.Sprintf("Playing through %s, route %v, quick %v.\nReported latency %v.\n\nPicture shifted %v %s.\n\n"+
 		"Shift the picture until each number shows exactly as its note sounds. Then press Done.",
-		through(st), on, v.quick, st.Latency.Round(100*time.Microsecond), v.shift.Abs(), later)
+		through(st), st.Route, v.quick, st.Latency.Round(100*time.Microsecond), v.shift.Abs(), later)
 	if time.Since(v.savedAt) < 4*time.Second {
 		v.info.Text += "\n\n" + v.saved
 	}

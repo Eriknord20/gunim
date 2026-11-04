@@ -297,6 +297,9 @@ func vibrate(pattern []time.Duration) error {
 	return nil
 }
 
+// keepAwake says whether the activity keeps the screen on.
+func keepAwake(on bool) { C.gunim_keep_awake(cBool(on)) }
+
 // hasCompass reports whether the phone has the sensors that tell which
 // way it faces.
 func hasCompass() bool { return C.gunim_has_compass() != 0 }

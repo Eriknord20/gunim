@@ -42,8 +42,10 @@ type aaConfig struct {
 	rate, chans int
 	exclusive   bool
 	quick       bool
-	data        *aaudio.Ring[float32]
-	blocks      *aaudio.Ring[int64]
+	// device is the device to ask for, by its ID; at 0 Android picks.
+	device int
+	data   *aaudio.Ring[float32]
+	blocks *aaudio.Ring[int64]
 }
 
 // aaClock is the clock an output reads; a test puts its own here.
@@ -96,6 +98,9 @@ type aaRun struct {
 	// it asks next, on the output's clock.
 	asked int
 	ask   atomic.Int64
+	// mic is the device an input was asked to record on, as wantMic
+	// said when it opened.
+	mic int32
 }
 
 // aaOutput plays through AAudio. AAudio's thread takes each buffer from
@@ -145,8 +150,16 @@ type aaOutput struct {
 	// delay is how far behind the frames carried the output's
 	// timestamps place the device, in frames, and unstamped what plays
 	// on past that where they leave out part of the route's delay.
-	delay      atomic.Int64
-	unstamped  atomic.Pointer[glide]
+	delay     atomic.Int64
+	unstamped atomic.Pointer[glide]
+	// on is where the output plays, a Route, as Android last told. It
+	// outlives a stream, so a route stays told while a stream reopens.
+	on atomic.Int32
+	// wantMic is the device the input should record on: the phone's own
+	// microphone while Bluetooth plays, and 0, for Android's pick,
+	// otherwise. On the earbuds' own microphone Android would move them
+	// to their call link, mono at 16 kHz, both ways.
+	wantMic    atomic.Int32
 	inDelay    atomic.Int64
 	org, iorg  atomic.Uint64
 	problem    atomic.Pointer[error]
@@ -319,23 +332,58 @@ func (a *aaOutput) openOut() error {
 // route asks Android of the device run plays on, as it opens, which
 // first says, and as run.ask says after, on the opener: the call goes
 // through Java. It logs what it finds where that changed. Where Android
-// tells nothing, or no latency, it keeps what it told before.
+// tells no latency, or a running stream tells nothing, it keeps what it
+// told before. A new stream that tells nothing, or a device Android no
+// longer lists, makes the route RouteUnknown, as an app lets the voice
+// back into the headphones only on a route it knows.
 func (a *aaOutput) route(run *aaRun, first bool) {
 	r := run.st.Route()
 	if !r.Known {
+		if first {
+			a.on.Store(int32(RouteUnknown))
+			a.wantMic.Store(0)
+		}
 		return
 	}
-	was, wasMixer := run.bluetooth.Load(), run.mixer.Load()
+	was, wasMixer := Route(a.on.Load()), run.mixer.Load()
 	mixer := wasMixer
 	if r.Latency >= 0 {
 		mixer = audio.FramesAt(r.Latency, a.hz)
 	}
-	run.bluetooth.Store(r.Bluetooth)
-	run.mixer.Store(mixer)
-	if first || r.Bluetooth != was || mixer != wasMixer {
-		a.s.logf("AAudio's device is of type %d, Bluetooth %v; Android's mixer reports %v for media's output",
-			r.Type, r.Bluetooth, r.Latency)
+	on := RouteUnknown
+	// A device Android no longer lists is one going away, and the stream
+	// reopens on the next: until then the delay and the microphone stay
+	// as they were told.
+	if first || r.Type != 0 {
+		on = routeOf(r.Type)
+		run.bluetooth.Store(on == RouteBluetooth)
+		a.wantMic.Store(0)
+		if on == RouteBluetooth {
+			a.wantMic.Store(int32(r.Mic))
+		}
 	}
+	a.on.Store(int32(on))
+	run.mixer.Store(mixer)
+	if first || on != was || mixer != wasMixer {
+		a.s.logf("AAudio's device is of type %d, route %v; Android's mixer reports %v for media's output",
+			r.Type, on, r.Latency)
+	}
+}
+
+// routeOf returns the route of an output device of a type, as
+// android.media.AudioDeviceInfo numbers them.
+func routeOf(deviceType int) Route {
+	switch deviceType {
+	case 1, 2, 24: // TYPE_BUILTIN_EARPIECE, TYPE_BUILTIN_SPEAKER, TYPE_BUILTIN_SPEAKER_SAFE
+		return RouteSpeaker
+	case 3, 4, 5, 6, 19: // TYPE_WIRED_HEADSET, TYPE_WIRED_HEADPHONES, TYPE_LINE_ANALOG, TYPE_LINE_DIGITAL, TYPE_AUX_LINE
+		return RouteWired
+	case 7, 8, 23, 26, 27, 30: // TYPE_BLUETOOTH_SCO, TYPE_BLUETOOTH_A2DP, TYPE_HEARING_AID, TYPE_BLE_HEADSET, TYPE_BLE_SPEAKER, TYPE_BLE_BROADCAST
+		return RouteBluetooth
+	case 11, 12, 22: // TYPE_USB_DEVICE, TYPE_USB_ACCESSORY, TYPE_USB_HEADSET
+		return RouteUSB
+	}
+	return RouteUnknown
 }
 
 // probe logs what a Java AudioTrack playing beside the stream reports,
@@ -441,7 +489,15 @@ func unstamped(delay, buffer, burst, mixer int64) int64 {
 
 // openIn opens the input stream, stopped. It runs with mu held.
 func (a *aaOutput) openIn() error {
-	st, err := a.openStream(aaConfig{input: true, rate: a.hz, chans: 1, data: a.in, blocks: a.blocks})
+	mic := a.wantMic.Load()
+	c := aaConfig{input: true, rate: a.hz, chans: 1, device: int(mic), data: a.in, blocks: a.blocks}
+	st, err := a.openStream(c)
+	if err != nil && c.device != 0 {
+		// A take on any microphone beats no take.
+		a.s.logf("the phone's own microphone, device %d, did not open: %v; letting Android pick", c.device, err)
+		c.device = 0
+		st, err = a.openStream(c)
+	}
 	if err == nil && st.Info().Rate != a.hz {
 		_ = st.Close()
 		err = errors.New("speaker: the microphone records at another rate than the output plays")
@@ -460,11 +516,14 @@ func (a *aaOutput) openIn() error {
 	info := st.Info()
 	a.iorg.Store(none)
 	a.inDelay.Store(int64(info.Burst))
-	run := &aaRun{st: st, sh: st.Shared(), info: info, opened: a.clock()}
+	run := &aaRun{st: st, sh: st.Shared(), info: info, opened: a.clock(), mic: mic}
 	run.moved.Store(run.opened)
 	a.irun.Store(run)
-	a.s.logf("AAudio records at %d Hz, %d frames a burst, device %d, exclusive %v, low latency %v",
-		info.Rate, info.Burst, info.Device, info.Exclusive, info.LowLatency)
+	if a.s.debug {
+		a.s.logf("AAudio records at %d Hz, %d frames a burst, device %d of type %d, asked for device %d, "+
+			"exclusive %v, low latency %v", info.Rate, info.Burst, info.Device, st.Route().Type, c.device,
+			info.Exclusive, info.LowLatency)
+	}
 	return nil
 }
 
@@ -751,6 +810,12 @@ func (a *aaOutput) keepOpen() (wait time.Duration, ok bool) {
 	if a.in != nil {
 		if run := a.irun.Load(); run != nil && run.dead.Load() {
 			a.inext = a.lived(run, &a.ifails, micRetry)
+			a.dropIn()
+		} else if run != nil && run.mic != a.wantMic.Load() {
+			// The sound moved to or from Bluetooth: the microphone moves
+			// as it would have opened there, its count of failures kept.
+			a.s.logf("the input should record on device %d now; opening it again", a.wantMic.Load())
+			a.inext = a.clock()
 			a.dropIn()
 		}
 		if a.irun.Load() == nil && a.clock() >= a.inext {
@@ -1108,8 +1173,8 @@ func (a *aaOutput) fill(st *State) {
 	}
 	info := driver.Info{Driver: driver.AAudio, Rate: a.hz, Bits: 32, Float: true, Outputs: 2, Played: []int{0, 1},
 		Latency: int(a.delay.Load() + a.extra())}
+	st.Route = Route(a.on.Load())
 	if run := a.run.Load(); run != nil {
-		st.Bluetooth = run.bluetooth.Load()
 		info.Buffer, info.MinBuffer, info.PreferredBuffer = run.info.Burst, run.info.Burst, run.info.Burst
 		info.MaxBuffer = run.info.Capacity
 	}

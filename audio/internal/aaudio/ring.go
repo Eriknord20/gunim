@@ -163,23 +163,23 @@ type Info struct {
 	Exclusive, LowLatency bool
 }
 
-// Route is what Android's Java side tells of the device an output
-// plays on. Package aaudio asks it through gunim's Android driver,
+// Route is what Android's Java side tells of the device a stream plays
+// or records on. Package aaudio asks it through gunim's Android driver,
 // where the program has it.
 type Route struct {
 	// Known says the driver answered; the rest is zero where not.
 	Known bool
 	// Type is the device's type, as android.media.AudioDeviceInfo
-	// numbers them, or 0 where no output device has the stream's ID.
+	// numbers them, or 0 where no device has the stream's ID.
 	Type int
-	// Bluetooth says the device is a Bluetooth headset, speaker or
-	// hearing aid.
-	Bluetooth bool
 	// Latency is the latency Android's mixer reports for the output
 	// media plays through, as AudioManager's hidden getOutputLatency
 	// tells it, or -1 where it tells none. On Bluetooth it holds the
 	// headset's own delay.
 	Latency time.Duration
+	// Mic is the ID of the phone's own microphone, or 0 where it has
+	// none.
+	Mic int
 }
 
 // Probe is what a Java AudioTrack playing silence beside the stream

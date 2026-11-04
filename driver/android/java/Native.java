@@ -273,6 +273,20 @@ public final class Native {
 		fingers = on;
 	}
 
+	// awake says the activity keeps the screen on. It lives here, as a
+	// flag on the activity's window goes with the activity, and a new one
+	// reads it through applyAwake as it starts.
+	static volatile boolean awake;
+
+	static void keepAwake(boolean on) {
+		awake = on;
+		ui.post(() -> {
+			if (activity != null) {
+				activity.applyAwake();
+			}
+		});
+	}
+
 	static void buzz() {
 		ui.post(() -> {
 			if (view != null) {

@@ -62,10 +62,11 @@ type OffscreenWindow struct {
 	open, reveal func(string) error
 	// link answers OpenLink; see SetLinkOpener.
 	link func(string) error
-	// share and vibrate answer Share and Vibrate; see SetSharer and
-	// SetVibrator.
+	// share, vibrate and awake answer Share, Vibrate and KeepAwake; see
+	// SetSharer, SetVibrator and SetAwaker.
 	share   func(Share) error
 	vibrate func([]time.Duration) error
+	awake   func(bool) error
 	// fingers is what TakeFingers last said.
 	fingers bool
 	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
@@ -976,6 +977,26 @@ func (w *OffscreenWindow) Vibrate(pattern ...time.Duration) error {
 		return ErrNoVibrator
 	}
 	return fn(pattern)
+}
+
+// SetAwaker sets what KeepAwake does, for a test standing in for the
+// device.
+func (w *OffscreenWindow) SetAwaker(fn func(on bool) error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.awake = fn
+}
+
+// KeepAwake implements [Awaker] with the function SetAwaker set, and
+// returns [ErrNoAwaker] without one.
+func (w *OffscreenWindow) KeepAwake(on bool) error {
+	w.mu.Lock()
+	fn := w.awake
+	w.mu.Unlock()
+	if fn == nil {
+		return ErrNoAwaker
+	}
+	return fn(on)
 }
 
 // TakeFingers implements [FingerTaker] by keeping on, for a test to read
