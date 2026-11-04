@@ -234,6 +234,15 @@ func clampByte(v float32) uint8 {
 // each frame, so the colours can change underneath without the
 // animation noticing.
 func Mix[T any](c Codec[T], a, b T, t float32) T {
+	// At either end the mix is an end: a widget at rest mixes its
+	// colours at 0 or 1 every frame, and a colour's trip through Oklab
+	// costs three cube roots.
+	if t == 0 {
+		return a
+	}
+	if t == 1 {
+		return b
+	}
 	x, y := c.Encode(a), c.Encode(b)
 	for i := range c.N {
 		x[i] += (y[i] - x[i]) * t

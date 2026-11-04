@@ -1380,7 +1380,7 @@ func (w *Window) wait() bool {
 	}
 	select {
 	case <-alarm:
-		w.ui.invalid = true
+		w.ui.due = true
 	case <-w.done:
 		return false
 	case <-w.wake:
@@ -1787,6 +1787,9 @@ type UI struct {
 	painter   paint.Painter
 	animating bool
 	invalid   bool
+	// due runs a deadline's frame. runTimers invalidates ordinary timers;
+	// only Waker deadlines leave unrelated Steady subtrees calm.
+	due bool
 	// stirred says input, a command or a change of focus came since the
 	// last frame, and calm that none did before this one, nor did the
 	// theme, a scroll or a drag move: only then are Steady nodes' subtrees
@@ -1903,6 +1906,8 @@ type timer struct {
 	fn func(u *UI)
 	// redraw marks a timer from redrawAt.
 	redraw bool
+	// wake marks only a Waker deadline; ordinary After timers still invalidate.
+	wake bool
 }
 
 // redrawAt sets a timer that draws a frame at t, unless one due by then is already set.
@@ -1937,10 +1942,11 @@ func (u *UI) wakeAfter(d time.Duration) {
 		u.wakeStop()
 	}
 	u.wakeAt = at
-	u.wakeStop = u.After(d, func(u *UI) {
-		u.wakeStop = nil
-		u.Invalidate()
-	})
+	// The timer's own frame is the one the node asked for, and the node
+	// draws anew in it as it moves; the rest may stay carried.
+	t := &timer{at: at, wake: true, fn: func(u *UI) { u.wakeStop = nil }}
+	u.timers = append(u.timers, t)
+	u.wakeStop = func() { u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t }) }
 }
 
 // timerClock returns the later of the last frame's time and the wall
@@ -1985,6 +1991,9 @@ func (u *UI) runTimers() {
 		u.paintOwed()
 	}
 	for _, t := range due {
+		if !t.wake {
+			u.invalid = true
+		}
 		t.fn(u)
 	}
 }
@@ -2649,7 +2658,7 @@ func (u *UI) placeCaret() {
 }
 
 // needsFrame reports whether there is anything to draw.
-func (u *UI) needsFrame() bool { return u.animating || u.invalid }
+func (u *UI) needsFrame() bool { return u.animating || u.invalid || u.due }
 
 // frame runs one complete cycle: advance time, settle the tree, lay
 // out, paint, present.
@@ -2660,6 +2669,7 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	u.calm = !u.invalid && !u.stirred && !u.dragOver
 	u.stirred = false
 	u.invalid = false
+	u.due = false
 	if u.shotsOwed.Load() > 0 {
 		// A shot waits on the windows' next frames: keep drawing them.
 		u.invalid = true
