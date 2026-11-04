@@ -160,6 +160,9 @@ func editKeyOwnedByDOM(e js.Value) bool {
 	if (!is.IsUndefined() && is.Bool()) || e.Get("key").String() == "Process" || e.Get("key").String() == "Unidentified" {
 		return true
 	}
+	if altGr(e) {
+		return false
+	}
 	k := strings.ToLower(e.Get("key").String())
 	return (e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool()) && (k == "v" || k == "x" || k == "c")
 }

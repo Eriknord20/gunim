@@ -35,6 +35,7 @@ import (
 	"sync"
 	"syscall/js"
 	"time"
+	"unicode"
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/driver/internal/render"
@@ -616,6 +617,10 @@ func (d *Driver) listen(doc js.Value) {
 	})
 
 	key := func(e js.Value, down bool) {
+		// A dead key is half a character, which the browser finishes.
+		if e.Get("key").String() == "Dead" {
+			return
+		}
 		if d.text.Equal(doc.Get("activeElement")) && editKeyOwnedByDOM(e) {
 			return
 		}
@@ -625,6 +630,9 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		k := keyOf(e.Get("code").String(), e.Get("key").String())
 		m, now := modsOf(e), time.Now()
+		if altGr(e) {
+			m &^= input.ModControl | input.ModAlt
+		}
 		if !down {
 			w.in.Push(input.KeyRelease{Key: k, Mods: m, Time: now})
 			return
@@ -640,9 +648,8 @@ func (d *Driver) listen(doc js.Value) {
 			// No textarea to type into: the key's text goes along.
 			w.in.Push(input.TextInput{Text: name, Time: now})
 		}
-		if !typed && k != input.KeyUnknown && (d.text.Equal(doc.Get("activeElement")) || c.Equal(doc.Get("activeElement"))) {
-			// gunim edits the text, and the page should neither scroll
-			// on space or the arrows nor move focus on Tab.
+		active := doc.Get("activeElement")
+		if inText := d.text.Equal(active); (inText || c.Equal(active)) && gunimKey(name, m, inText) {
 			e.Call("preventDefault")
 		}
 	}
@@ -734,6 +741,51 @@ func capture(el, id js.Value) {
 
 // keyWindow returns the window keys go to: the one taking text, or the
 // topmost that fills the canvas.
+// altGr says a key was pressed with AltGr. Windows reports that as Control and
+// Alt together, which with a letter would be a shortcut, and with anything else
+// is the character the layout puts there, as @ on a Swedish keyboard.
+func altGr(e js.Value) bool {
+	if e.Call("getModifierState", "AltGraph").Bool() {
+		return true
+	}
+	name := e.Get("key").String()
+	r := []rune(name)
+	return e.Get("ctrlKey").Bool() && e.Get("altKey").Bool() && len(r) == 1 && !unicode.IsLetter(r[0]) || e.Get("ctrlKey").Bool() && e.Get("altKey").Bool() && len(r) == 1 && r[0] > unicode.MaxASCII
+}
+
+// gunimKey says a key is one gunim acts on and the browser should not: text
+// editing and moving about, so the page neither scrolls on the arrows nor moves
+// focus on Tab. Everything else stays the browser's, as reloading, zooming,
+// going back and the developer tools. inText says the text mirror has focus,
+// which types a space itself.
+func gunimKey(name string, m input.Mods, inText bool) bool {
+	if m&input.ModAlt != 0 {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if m&(input.ModControl|input.ModSuper) != 0 {
+		switch lower {
+		case "a", "y", "z":
+			return true
+		}
+		if m&input.ModSuper != 0 {
+			return false
+		}
+		switch name {
+		case "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Backspace", "Delete":
+			return true
+		}
+		return false
+	}
+	switch name {
+	case " ":
+		return !inText
+	case "Tab", "Enter", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown":
+		return true
+	}
+	return false
+}
+
 func (d *Driver) keyWindow() *Window {
 	d.mu.Lock()
 	defer d.mu.Unlock()
