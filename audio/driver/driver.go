@@ -163,6 +163,11 @@ type Config struct {
 	// or latency changes, as in its control panel. Close the device and
 	// open it again to play on.
 	Reset func()
+	// Overrun, where set, is called each time the driver says it lost
+	// sound while playing: by asking to resynchronize, or by telling of
+	// an overload, as ASIO 2.3 lets it. It runs on the driver's thread,
+	// and must be quick. Not every driver tells: most only play on.
+	Overrun func()
 	// Log, where set, hears what the driver tells and what is done with
 	// it: its messages, its asks to be opened again, and a driver let go
 	// as it stopped answering. It is called on any goroutine, but never

@@ -740,7 +740,7 @@ type State struct {
 	Fixed   bool
 	// Dropouts counts the times the sound ran dry since the speakers
 	// opened: where Direct is set, the buffers that took longer to mix
-	// than they play.
+	// than they play. An ASIO driver that says it lost sound adds to it.
 	Dropouts int64
 	// Info is what the driver says of itself, while one plays; its
 	// Played tells the output each channel plays on. Through JACK its
