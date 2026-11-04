@@ -133,6 +133,7 @@ var structs = []any{
 	(*widget.Spacer)(nil),
 	(*widget.Split)(nil),
 	(*widget.StatusSwitch)(nil),
+	(*widget.Steady)(nil),
 	(*widget.Submenu)(nil),
 	(*widget.Surface)(nil),
 	(*widget.Switch)(nil),

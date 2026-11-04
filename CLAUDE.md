@@ -16,13 +16,16 @@ screen. A frame steps, lays out and paints the tree, and then the renderer draws
   that holds everything the subtree draws: a version of its data, its scroll, and a counter of the frames its
   springs moved in. While the key, the constraints and the place stay the same, the engine carries the subtree's
   ops from the frame before, with no `Layout` or `Paint`. A view without a key is laid out and painted on every
-  frame anything in the window moves.
+  frame anything in the window moves. `widget.NewSteady(child, key)` and `widget.NewSteadyPaint(paint, key)` make one
+  without a node type of its own.
 - **Keep what moves apart from what stands.** A subtree is carried only while no node in it moves (`Step` true,
   or `WakeIn`), enters or leaves. A meter, a cursor or a lit step goes in a small node of its own, next to the still
   body, not inside it. One live meter inside a panel has the whole panel painted again on every frame.
 - **Keep a view's springs in its own group.** A spring counter that goes into other views' keys must count only
   springs that change what those views draw. One that moves on every frame (a meter falling, or anything stepped
-  "while playing") voids every key that holds the counter.
+  "while playing") voids every key that holds the counter. `anim.Moves` is that counter: end `Step` in
+  `return v.moves.Note(v.Group.Step(dt))`, and put `v.moves.Count()` in the key. It counts the frame the springs land
+  in too.
 - **`Step` is true only while something moves.** Don't keep it true for a state such as "playing". Keep it true
   for the parts that change pixels.
 - **Check the key.** `GUNIM_DEBUG_STEADY=1` paints every carried subtree again and logs each key that said "same"
