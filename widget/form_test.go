@@ -255,3 +255,83 @@ func TestAFormLabelStandsLevelWithItsFieldsFirstLine(t *testing.T) {
 		t.Errorf("the label beside a tall field stands %v off its first line", d)
 	}
 }
+
+// Check's words fade in as the panel grows to hold them, frame by frame.
+// Other words fade the last ones out first, and the panel holds its height
+// as they change.
+func TestADialogsProblemGlidesIn(t *testing.T) {
+	host := NewTextField()
+	d := NewDialog("Connect to a server")
+	d.Body = NewForm().Add("Host", host)
+	say := "Say which server."
+	d.Check = func() string { return say }
+	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
+	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Client().Focus("d"); err != nil {
+		t.Fatal(err)
+	}
+	run := func(n int) {
+		for range n {
+			w.Frame(time.Second / 60)
+		}
+	}
+	run(120)
+	before := d.height
+
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	heights := make([]float32, 0, 90)
+	sawFade := false
+	for i := range 90 {
+		w.Frame(time.Second / 60)
+		heights = append(heights, d.height)
+		if i == 0 && d.problemClear != 0 {
+			t.Fatalf("the words show over the buttons, cleared %v, before the panel has grown", d.problemClear)
+		}
+		if v := d.problemIn.Value(); v > 0.1 && v < 0.9 {
+			sawFade = true
+		}
+	}
+	after := d.height
+	if after <= before {
+		t.Fatalf("the panel stayed %v tall with words to hold, was %v", after, before)
+	}
+	if d.problemClear != 1 {
+		t.Fatalf("the words stopped short of clearing the buttons: %v", d.problemClear)
+	}
+	if !sawFade {
+		t.Fatal("the words never showed part way faded in")
+	}
+	between, last := false, before
+	for _, h := range heights {
+		if h > before+1 && h < after-1 {
+			between = true
+		}
+		if h-last > (after-before)*0.6 {
+			t.Fatalf("the panel jumped from %v to %v on the way to %v", last, h, after)
+		}
+		last = h
+	}
+	if !between {
+		t.Fatalf("the panel never stood between %v and %v: %v", before, after, heights)
+	}
+
+	// Other words, of the same height: the last fade out, then the new in.
+	say = "That server is not known."
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(1)
+	if d.problem.Text != "Say which server." {
+		t.Fatalf("the words changed at once, to %q", d.problem.Text)
+	}
+	for range 90 {
+		w.Frame(time.Second / 60)
+		if d.height < after-1 || d.height > after+1 {
+			t.Fatalf("the panel moved to %v, from %v, as the words changed", d.height, after)
+		}
+	}
+	if d.problem.Text != say || d.problemIn.Value() != 1 {
+		t.Fatalf("the dialog says %q, faded in to %v", d.problem.Text, d.problemIn.Value())
+	}
+}
