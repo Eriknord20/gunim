@@ -46,3 +46,48 @@ func over(pos geom.Point, size geom.Size) int {
 	}
 	return -1
 }
+
+// Click follows one click on the parts of a control drawn by hand, the rule [Clicker] keeps, for parts of any comparable
+// type, such as a struct that names a track and a button. Every press starts a click, and Clicks counts them, so a
+// control can tell a double click apart. The zero Click is ready.
+type Click[T comparable] struct {
+	at     T
+	held   bool
+	clicks int
+}
+
+// Press starts a click on part at.
+func (c *Click[T]) Press(e input.PointerDown, at T) {
+	c.at, c.held, c.clicks = at, e.Button == input.ButtonPrimary, e.Clicks
+}
+
+// Release ends the click and reports whether it lands: the primary button let go over at, the part pressed.
+func (c *Click[T]) Release(e input.PointerUp, at T) bool {
+	if e.Button != input.ButtonPrimary {
+		return false
+	}
+	held := c.held
+	c.held = false
+	return held && at == c.at
+}
+
+// Held reports whether a click is under way.
+func (c *Click[T]) Held() bool { return c.held }
+
+// At is the part pressed.
+func (c *Click[T]) At() T { return c.at }
+
+// Clicks counts the press in a run of quick clicks: 2 for the second of a double click.
+func (c *Click[T]) Clicks() int { return c.clicks }
+
+// Cancel drops the click under way, so its release does nothing.
+func (c *Click[T]) Cancel() { c.held = false }
+
+// Hear drops the click under way on a press of any button, or as the keyboard or the window's focus goes; call it
+// first in the control's Handle, before Press, and from its Overhear.
+func (c *Click[T]) Hear(e input.Event) {
+	switch e.(type) {
+	case input.PointerDown, input.FocusLost, input.WindowFocusLost:
+		c.held = false
+	}
+}
