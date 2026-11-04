@@ -45,9 +45,6 @@ jobs:
         env:
           CGO_ENABLED: 0
 
-      # A type that is 64 bits here can be 32 elsewhere, and a linter run
-      # on one machine cannot see that. Linux on 32-bit ARM is a real
-      # place gunim runs.
       # The browser is a platform of its own, and the tests for its driver need
       # a browser to run. Until they have one, it builds and vets here.
       - name: Vet and build for the browser
@@ -56,6 +53,9 @@ jobs:
           GOOS=js GOARCH=wasm go vet -unsafeptr=false ./...
           GOOS=js GOARCH=wasm go build ./...
 
+      # A type that is 64 bits here can be 32 elsewhere, and a linter run
+      # on one machine cannot see that. Linux on 32-bit ARM is a real
+      # place gunim runs.
       - name: Build for 32-bit Linux
         if: runner.os == 'Linux'
         run: |
