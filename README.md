@@ -443,7 +443,7 @@ The canvas's CSS size is the window's size. One with no CSS size stays the size 
 
 gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` in the canvas's `style` attribute. Elements laid over the canvas keep their own events.
 
-Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar and full screen, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it.
+Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar and full screen, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it. Cut, copy and paste in a text field stay the browser's.
 
 A browser holds sound back until the user's first click, key or touch, and `speaker.Open` waits for it. Mount the interface before opening the speaker, or the page stays blank until then.
 

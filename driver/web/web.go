@@ -23,6 +23,7 @@
 // Each key has one owner. The browser keeps a short list, as reloading and
 // zooming, and gunim never hears those. Every other key with Control or Command
 // is gunim's alone, so the browser's own find and print don't run in a program.
+// Cut, copy and paste in a text field stay the browser's, which edits the mirror.
 //
 // Gunim takes every touch on the canvas, and scrolls and pans for itself. A page
 // that wants the browser to have some of them, as to scroll the page with
@@ -63,7 +64,9 @@ type Driver struct {
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
 	// surfH are its drawing buffer's size in device pixels.
 	// lastTouch says the last press was a finger or a pen, not a mouse.
-	lastTouch    bool
+	lastTouch bool
+	// kept holds the keys down that stay the browser\'s, by their place.
+	kept         map[string]bool
 	scale        float32
 	cssW, cssH   float32
 	surfW, surfH int
@@ -152,7 +155,7 @@ func openDriver() (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{canvas: canvas, g: g, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}}
+	d := &Driver{canvas: canvas, g: g, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}, kept: map[string]bool{}}
 	d.measure()
 	d.raf = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		defer survive("animation frame")
@@ -688,7 +691,7 @@ func (d *Driver) listen(doc js.Value) {
 		if e.Get("key").String() == "Dead" {
 			return
 		}
-		if d.text.Equal(doc.Get("activeElement")) && editKeyOwnedByDOM(e) {
+		if d.text.Equal(doc.Get("activeElement")) && d.editKeyOwnedByDOM(e) {
 			return
 		}
 		w := d.keyWindow()
@@ -700,14 +703,28 @@ func (d *Driver) listen(doc js.Value) {
 		if altGr(e) {
 			m &^= input.ModControl | input.ModAlt
 		}
-		if browserKey(e.Get("key").String(), m) {
-			return
-		}
+		// A key's owner is settled as it goes down, whatever is held as it comes up.
+		name, code := e.Get("key").String(), e.Get("code").String()
+		d.mu.Lock()
 		if !down {
-			w.in.Push(input.KeyRelease{Key: k, Mods: m, Time: now})
+			kept := d.kept[code]
+			delete(d.kept, code)
+			d.mu.Unlock()
+			if !kept {
+				w.in.Push(input.KeyRelease{Key: k, Mods: m, Time: now})
+			}
 			return
 		}
-		name := e.Get("key").String()
+		kept := browserKey(name, code, m)
+		if kept {
+			d.kept[code] = true
+		} else {
+			delete(d.kept, code)
+		}
+		d.mu.Unlock()
+		if kept {
+			return
+		}
 		typed := len([]rune(name)) == 1 && m&(input.ModControl|input.ModSuper) == 0
 		var char rune
 		if r := []rune(strings.ToLower(name)); len(r) == 1 {
@@ -715,8 +732,11 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		w.in.Push(input.KeyPress{Key: k, Mods: m, Repeat: e.Get("repeat").Bool(), Typed: typed, Char: char, Time: now})
 		if typed && !d.text.Equal(doc.Get("activeElement")) {
-			// No textarea to type into: the key's text goes along.
+			// No textarea to type into: the key's text goes along. The key is
+			// cancelled, as the handler may move focus to the mirror before the
+			// browser ends the key, and the browser would type it there too.
 			w.in.Push(input.TextInput{Text: name, Time: now})
+			e.Call("preventDefault")
 		}
 		active := doc.Get("activeElement")
 		if inText := d.text.Equal(active); (inText || c.Equal(active)) && gunimKey(name, m, inText) {
@@ -828,10 +848,12 @@ func altGr(e js.Value) bool {
 
 // browserKey says a key stays the browser's alone, and gunim never hears it:
 // reloading, zooming, the developer tools, going back and forward, tabs, the
-// address bar and full screen.
-func browserKey(name string, m input.Mods) bool {
+// address bar and full screen. name is the key's value and code its place.
+func browserKey(name, code string, m input.Mods) bool {
 	command := m&(input.ModControl|input.ModSuper) != 0
 	alt := m&input.ModAlt != 0
+	lower := shortcutName(name, code)
+	arrow := name == "ArrowLeft" || name == "ArrowRight"
 	switch {
 	case !command && !alt:
 		switch name {
@@ -840,12 +862,10 @@ func browserKey(name string, m input.Mods) bool {
 		}
 		return false
 	case !command:
-		return name == "ArrowLeft" || name == "ArrowRight" || name == "Home"
-	}
-	lower := strings.ToLower(name)
-	if alt {
-		// The developer tools on a Mac.
-		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c")
+		return arrow || name == "Home" || lower == "d"
+	case alt:
+		// On a Mac: the developer tools, and moving along the tabs.
+		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c" || arrow)
 	}
 	if m&input.ModControl != 0 && m&input.ModSuper != 0 {
 		// Full screen on a Mac.
@@ -858,11 +878,35 @@ func browserKey(name string, m input.Mods) bool {
 	case "i", "j", "c", "a":
 		// The developer tools, and the search of the tabs.
 		return m&input.ModShift != 0
-	case "[", "]":
-		// Going back and forward on a Mac.
+	case "[", "]", "{", "}":
+		// Going back and forward, and along the tabs, on a Mac.
 		return m&input.ModSuper != 0
 	}
-	return false
+	// The row of digits picks a tab by place, whatever a layout has on it.
+	return m&input.ModShift == 0 && strings.HasPrefix(code, "Digit")
+}
+
+// shortcutName is a key's name for matching a shortcut: its value in lower case,
+// or for a character past ASCII, as on a Russian layout, the one its place has on
+// an American keyboard, which is how browsers read shortcuts there.
+func shortcutName(name, code string) string {
+	r := []rune(name)
+	if len(r) != 1 || r[0] <= unicode.MaxASCII {
+		return strings.ToLower(name)
+	}
+	switch {
+	case len(code) == 4 && strings.HasPrefix(code, "Key"):
+		return strings.ToLower(code[3:])
+	case code == "Minus":
+		return "-"
+	case code == "Equal":
+		return "="
+	case code == "BracketLeft":
+		return "["
+	case code == "BracketRight":
+		return "]"
+	}
+	return strings.ToLower(name)
 }
 
 // gunimKey says a key the browser would otherwise act on is gunim's, so the page

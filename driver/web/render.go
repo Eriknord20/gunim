@@ -146,7 +146,12 @@ func (d *Driver) frame() {
 		d.comp.last = append(d.comp.last[:0], stack...)
 	} else {
 		for _, l := range stack {
-			if !l.w.onTex {
+			// A window with a new size and no frame for it yet draws its last one
+			// to fill it, or the canvas shows black around it.
+			if sized := l.w.lastW != l.fbW || l.w.lastH != l.fbH; sized || !l.w.onTex {
+				if l.w.last != nil {
+					l.w.lastW, l.w.lastH = l.fbW, l.fbH
+				}
 				l.w.redraw(g, l.w.fbo, scale)
 			}
 		}

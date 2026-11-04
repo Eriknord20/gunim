@@ -213,7 +213,10 @@ func (d *Driver) listenText(doc js.Value) {
 	}
 }
 
-func editKeyOwnedByDOM(e js.Value) bool {
+// editKeyOwnedByDOM says the browser handles a key in the mirror itself: composing,
+// and cut, copy and paste. With no text state there is nothing in the mirror to cut
+// or copy, so a window taking typing as it comes, as a terminal does, hears those.
+func (d *Driver) editKeyOwnedByDOM(e js.Value) bool {
 	is := e.Get("isComposing")
 	if (!is.IsUndefined() && is.Bool()) || e.Get("key").String() == "Process" || e.Get("key").String() == "Unidentified" {
 		return true
@@ -221,6 +224,16 @@ func editKeyOwnedByDOM(e js.Value) bool {
 	if altGr(e) {
 		return false
 	}
-	k := strings.ToLower(e.Get("key").String())
-	return (e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool()) && (k == "v" || k == "x" || k == "c")
+	if !e.Get("ctrlKey").Bool() && !e.Get("metaKey").Bool() {
+		return false
+	}
+	switch strings.ToLower(e.Get("key").String()) {
+	case "v":
+		return true
+	case "x", "c":
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.typing != nil && d.typing.state != nil
+	}
+	return false
 }

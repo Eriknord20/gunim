@@ -460,6 +460,71 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("it drew at %dx%d on a canvas of %dx%d, on a texture %v", w.lastW, w.lastH, d.surfW, d.surfH, w.onTex)
 		}
 		d.exactW, d.exactH = 0, 0
+		d.observedSize()
+		// With a popup open, the window goes on a texture, which keeps up the same way.
+		pw, err := d.NewWindow(driver.Options{Kind: driver.KindPopup, Parent: w, Size: geom.Sz(30, 30), Anchor: geom.Rect{Min: geom.Pt(100, 100), Max: geom.Pt(100, 100)}, Over: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pw.Close(); d.frame() }()
+		_ = pw.Present(solid(blue, pw.Size()), []geom.Rect{paint.Everything})
+		d.frame()
+		st.Set("width", "440px")
+		st.Set("height", "330px")
+		d.observedSize()
+		if p := pixel(4, 4); p[2] < 240 {
+			t.Errorf("under a popup, the square at the top left shows %v", p)
+		}
+		if p := pixel(d.surfW-4, d.surfH-4); p[0] < 240 {
+			t.Errorf("under a popup, the far corner shows %v", p)
+		}
+	})
+	t.Run("what the ResizeObserver sets is drawn before the browser shows it", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		if doc.Get("visibilityState").String() != "visible" {
+			t.Skip("a hidden page gets no resize steps")
+		}
+		st := d.canvas.Get("style")
+		oldW, oldH := st.Get("width").String(), st.Get("height").String()
+		defer func() {
+			st.Set("width", oldW)
+			st.Set("height", oldH)
+		}()
+		var pt paint.Painter
+		pt.RRect(geom.Rect{Min: geom.Pt(2, 2), Max: geom.Pt(20, 20)}, 0, paint.Solid(blue))
+		w.SetBackground(color.NRGBA{R: 255, A: 255})
+		_ = w.Present(pt.Ops(), []geom.Rect{paint.Everything})
+		d.frame()
+		// An observer made after the driver's runs just after it, before the browser
+		// shows the canvas, so it reads what is about to show.
+		seen := make(chan []byte, 4)
+		f := js.FuncOf(func(js.Value, []js.Value) any {
+			select {
+			case seen <- pixel(d.surfW-4, d.surfH-4):
+			default:
+			}
+			return nil
+		})
+		defer f.Release()
+		ro := js.Global().Get("ResizeObserver").New(f)
+		defer ro.Call("disconnect")
+		ro.Call("observe", d.canvas)
+		next := func() []byte {
+			select {
+			case p := <-seen:
+				return p
+			case <-time.After(10 * time.Second):
+				t.Fatal("no resize step came")
+				return nil
+			}
+		}
+		next() // Every observer hears once as it starts.
+		st.Set("width", "380px")
+		st.Set("height", "280px")
+		if p := next(); p[0] < 240 {
+			t.Errorf("the browser would show %v", p)
+		}
+		drain(w)
 	})
 	t.Run("the browser's exact size counts only within rounding", func(t *testing.T) {
 		for _, c := range []struct {
@@ -532,6 +597,15 @@ func TestBrowser(t *testing.T) {
 			{"l", "KeyL", []string{ctrl}, false},
 			{"A", "KeyA", []string{ctrl, shift}, false},
 			{"f", "KeyF", []string{ctrl, cmd}, false},
+			{"d", "KeyD", []string{alt}, false},
+			{"ArrowRight", "ArrowRight", []string{cmd, alt}, false},
+			{"{", "BracketLeft", []string{cmd, shift}, false},
+			// The same places on other layouts.
+			{"к", "KeyR", []string{ctrl}, false},
+			{"д", "KeyL", []string{ctrl}, false},
+			{"Ш", "KeyI", []string{ctrl, shift}, false},
+			{"&", "Digit1", []string{ctrl}, false},
+			{"à", "Digit0", []string{ctrl}, false},
 			// Gunim's alone.
 			{"s", "KeyS", []string{ctrl}, true},
 			{"f", "KeyF", []string{ctrl}, true},
@@ -541,6 +615,11 @@ func TestBrowser(t *testing.T) {
 			{"z", "KeyZ", []string{ctrl}, true},
 			{"ArrowLeft", "ArrowLeft", []string{ctrl}, true},
 			{"ArrowLeft", "ArrowLeft", []string{cmd}, true},
+			{"ы", "KeyS", []string{ctrl}, true},
+			{"!", "Digit1", []string{ctrl, shift}, true},
+			// Typed on the canvas: the handler may move focus to the mirror before
+			// the browser ends the key, which must not type it there too.
+			{"g", "KeyG", nil, true},
 			{"F1", "F1", nil, true},
 			{"F3", "F3", nil, true},
 			{"Tab", "Tab", nil, true},
@@ -555,6 +634,67 @@ func TestBrowser(t *testing.T) {
 			}
 			if got := len(heard()) > 0; got != c.gunim {
 				t.Errorf("%q with %v: gunim heard it %v, want %v", c.name, c.mods, got, c.gunim)
+			}
+		}
+	})
+	t.Run("a key's owner is settled as it goes down", func(t *testing.T) {
+		d.canvas.Call("focus")
+		up := func(name, code string, mods ...string) (released bool) {
+			init := map[string]any{"bubbles": true, "cancelable": true, "key": name, "code": code}
+			for _, m := range mods {
+				init[m] = true
+			}
+			d.canvas.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keyup", init))
+			for _, e := range drain(w) {
+				if _, ok := e.(input.KeyRelease); ok {
+					released = true
+				}
+			}
+			return released
+		}
+		// Gunim's as it went down, and Control held as it comes up.
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		if !up("w", "KeyW", "ctrlKey") {
+			t.Error("a key gunim heard go down never came up")
+		}
+		// The browser's as it went down, and Control let go first.
+		key(d.canvas, "0", "Digit0", "ctrlKey")
+		drain(w)
+		if up("0", "Digit0") {
+			t.Error("gunim heard a key come up that the browser kept")
+		}
+		// A key the browser kept whose release it swallowed, as for a new tab, starts afresh.
+		key(d.canvas, "t", "KeyT", "ctrlKey")
+		drain(w)
+		key(d.canvas, "t", "KeyT")
+		if len(heard()) != 1 {
+			t.Error("a key the browser last kept was not heard going down again")
+		}
+		if !up("t", "KeyT") {
+			t.Error("a key the browser last kept was not heard coming up")
+		}
+	})
+	t.Run("cut and copy with no text state are heard", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		w.SetTextState(nil, w.editSeq)
+		d.text.Call("focus")
+		drain(w)
+		for _, c := range [][2]string{{"c", "KeyC"}, {"x", "KeyX"}} {
+			if !key(d.text, c[0], c[1], "ctrlKey") || len(heard()) != 1 {
+				t.Errorf("%s with no text state stayed the browser's", c[0])
+			}
+		}
+		if key(d.text, "v", "KeyV", "ctrlKey") || len(heard()) != 0 {
+			t.Error("paste with no text state left the browser, which brings the text")
+		}
+		w.SetTextState(&input.TextState{Text: "abc"}, w.editSeq)
+		drain(w)
+		for _, c := range [][2]string{{"c", "KeyC"}, {"x", "KeyX"}, {"v", "KeyV"}} {
+			if key(d.text, c[0], c[1], "ctrlKey") || len(heard()) != 0 {
+				t.Errorf("%s in a field left the browser", c[0])
 			}
 		}
 	})
