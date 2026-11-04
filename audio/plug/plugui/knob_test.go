@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim/audioui"
 
@@ -272,5 +273,30 @@ func TestArrowsWithCtrlAltOrSuperPassTheKnobBy(t *testing.T) {
 	// Shift alone still steps ten times as far.
 	if !k.Handle(input.KeyPress{Key: input.KeyLeft, Mods: input.ModShift}, nil) || h.values[3] >= 100 {
 		t.Errorf("Shift+Left left the knob at %v", h.values[3])
+	}
+}
+
+func TestAKnobGlidesToGreyAndStartsThereWithoutAGlide(t *testing.T) {
+	k := NewKnobFunc(plug.Param{Max: 1}, 0, func(*gunim.UI) {}, func(float64, *gunim.UI) {}, func(*gunim.UI) {})
+	k.Disabled = true
+	k.Layout(gunim.Tight(geom.Sz(KnobW, KnobH)), gunim.Frame{}, gunim.Children{})
+	if got := k.grey.Value(); got != 1 {
+		t.Errorf("laid out disabled, the knob starts %v grey", got)
+	}
+	k.Disabled = false
+	if !k.Step(time.Second / 120) {
+		t.Fatal("enabled, the knob does not move")
+	}
+	if got := k.grey.Value(); got <= 0 || got >= 1 {
+		t.Errorf("a frame after it is enabled, the knob is %v grey, want part way", got)
+	}
+	for range 240 {
+		k.Step(time.Second / 120)
+	}
+	if got := k.grey.Value(); got != 0 {
+		t.Errorf("settled, the knob is %v grey", got)
+	}
+	if k.Step(time.Second / 120) {
+		t.Error("settled, the knob still asks for frames")
 	}
 }
