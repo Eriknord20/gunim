@@ -968,6 +968,32 @@ func handleSelectionRequest(event *_XEvent) {
 	xSendEvent(_glfw.platformWindow.display, request.Requestor, false, 0, &reply)
 }
 
+// selectionWait is how long a selection's other side gets to answer: an owner that a read waits for, or the clipboard
+// manager that takes the clipboard as the program quits. Both hold the main thread, and the other side may never
+// answer: a clipboard forwarded over remote desktop, or a program that has hung.
+const selectionWait = time.Second
+
+// errSelectionSilent says a selection's owner did not answer within selectionWait.
+var errSelectionSilent = fmt.Errorf("glfw: x11: the owner of the selection did not answer: %w", PlatformError)
+
+// awaitSelection calls check until it reports true, and reports false once selectionWait has passed without that.
+func awaitSelection(check func() bool) bool {
+	deadline := time.Now().Add(selectionWait)
+	for !check() {
+		left := time.Until(deadline).Seconds()
+		if left <= 0 {
+			return false
+		}
+		if xPending(_glfw.platformWindow.display) > 0 {
+			// Other events wait in the queue for the main loop, so the socket can't say when the answer comes.
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		waitForX11Event(&left)
+	}
+	return true
+}
+
 // getSelectionString returns the string held by the specified selection.
 func getSelectionString(selection _Atom) (string, error) {
 	selectionString := &_glfw.platformWindow.clipboardString
@@ -992,6 +1018,13 @@ func getSelectionString(selection _Atom) (string, error) {
 	for _, target := range []_Atom{_glfw.platformWindow.UTF8_STRING, _XA_STRING} {
 		var notification, dummy _XEvent
 
+		// gunim change: an answer that came after an earlier read gave up is not the answer to this one.
+		for xCheckTypedWindowEvent(_glfw.platformWindow.display,
+			_glfw.platformWindow.helperWindowHandle,
+			_SelectionNotify,
+			&dummy) {
+		}
+
 		xConvertSelection(_glfw.platformWindow.display,
 			selection,
 			target,
@@ -999,11 +1032,14 @@ func getSelectionString(selection _Atom) (string, error) {
 			_glfw.platformWindow.helperWindowHandle,
 			_CurrentTime)
 
-		for !xCheckTypedWindowEvent(_glfw.platformWindow.display,
-			_glfw.platformWindow.helperWindowHandle,
-			_SelectionNotify,
-			&notification) {
-			waitForX11Event(nil)
+		// gunim change: an owner that never answers must not hold the window up for good.
+		if !awaitSelection(func() bool {
+			return xCheckTypedWindowEvent(_glfw.platformWindow.display,
+				_glfw.platformWindow.helperWindowHandle,
+				_SelectionNotify,
+				&notification)
+		}) {
+			return "", errSelectionSilent
 		}
 
 		if notification.xselection().Property == _None {
@@ -1039,11 +1075,18 @@ func getSelectionString(selection _Atom) (string, error) {
 			var received bool
 
 			for {
-				for !xCheckIfEvent(_glfw.platformWindow.display,
-					&dummy,
-					isSelPropNewValueNotifyCallback,
-					0) {
-					waitForX11Event(nil)
+				// gunim change: so must one that stops halfway. The wait starts anew for each piece, as a
+				// large transfer may take long and still be moving.
+				if !awaitSelection(func() bool {
+					return xCheckIfEvent(_glfw.platformWindow.display,
+						&dummy,
+						isSelPropNewValueNotifyCallback,
+						0)
+				}) {
+					if data != 0 {
+						xFree(data)
+					}
+					return "", errSelectionSilent
 				}
 
 				if data != 0 {
@@ -1949,31 +1992,40 @@ func pushSelectionToManagerX11() {
 		isSelectionEventCallback = purego.NewCallback(isSelectionEvent)
 	}
 
+	// gunim change: a manager that never answers must not hold the quit up for good. The wait starts anew with each
+	// thing it asks for, as a large picture may take long to go and still be moving. A manager that stops only loses
+	// what the clipboard held.
 	for {
-		var event _XEvent
+		saved, asked := false, false
+		answered := awaitSelection(func() bool {
+			var event _XEvent
+			for xCheckIfEvent(_glfw.platformWindow.display, &event, isSelectionEventCallback, 0) {
+				switch event.EventType() {
+				case _SelectionRequest:
+					handleSelectionRequest(&event)
+					asked = true
 
-		for xCheckIfEvent(_glfw.platformWindow.display, &event, isSelectionEventCallback, 0) {
-			switch event.EventType() {
-			case _SelectionRequest:
-				handleSelectionRequest(&event)
-
-			case _SelectionNotify:
-				if event.xselection().Target == _glfw.platformWindow.SAVE_TARGETS {
-					// This means one of two things; either the selection
-					// was not owned, which means there is no clipboard
-					// manager, or the transfer to the clipboard manager has
-					// completed
-					// In either case, it means the work here is done
-					return
+				case _SelectionNotify:
+					if event.xselection().Target == _glfw.platformWindow.SAVE_TARGETS {
+						// This means one of two things; either the selection
+						// was not owned, which means there is no clipboard
+						// manager, or the transfer to the clipboard manager has
+						// completed
+						// In either case, it means the work here is done
+						saved = true
+					}
 				}
 			}
+			// gunim change: the manager may take a large picture in pieces.
+			for xCheckIfEvent(_glfw.platformWindow.display, &event, isIncrEventCallback(), 0) {
+				continueIncr(event.xproperty())
+				asked = true
+			}
+			return saved || asked
+		})
+		if saved || !answered {
+			return
 		}
-		// gunim change: the manager may take a large picture in pieces.
-		for xCheckIfEvent(_glfw.platformWindow.display, &event, isIncrEventCallback(), 0) {
-			continueIncr(event.xproperty())
-		}
-
-		waitForX11Event(nil)
 	}
 }
 
