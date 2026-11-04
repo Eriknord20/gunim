@@ -10,9 +10,10 @@ import android.media.AudioTrack;
 import java.lang.reflect.Method;
 
 /**
- * GunimAudio tells package audio/speaker of the output device AAudio
- * plays on: its type, and the delay Android's mixer reports for the
- * output it plays through, which on Bluetooth holds the headset's own.
+ * GunimAudio tells package audio/speaker of the device AAudio plays or
+ * records on: its type, the delay Android's mixer reports for the output
+ * it plays through, which on Bluetooth holds the headset's own, and which
+ * device is the phone's own microphone.
  * Go calls it from a thread of its own, never AAudio's.
  */
 final class GunimAudio {
@@ -24,39 +25,31 @@ final class GunimAudio {
 	private static boolean looked;
 
 	/**
-	 * route returns, for the output device whose ID is device: its
-	 * AudioDeviceInfo type, or 0 where none has that ID; 1 where it is
-	 * Bluetooth, else 0; and the latency in milliseconds Android reports
-	 * for its output of media, or -1 where it reports none.
+	 * route returns, for the device whose ID is device: its
+	 * AudioDeviceInfo type, or 0 where none has that ID; the latency in
+	 * milliseconds Android reports for its output of media, or -1 where
+	 * it reports none; and the ID of the phone's own microphone, or 0.
+	 * A phone may list a microphone for each place it has one. The one
+	 * at the bottom, for the mouth, is the one to sing into.
 	 */
 	static int[] route(int device) {
-		int[] r = {0, 0, -1};
+		int[] r = {0, -1, 0};
 		Context app = Native.app;
 		if (app == null) {
 			return r;
 		}
 		AudioManager am = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
-		for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+		for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_ALL)) {
 			if (d.getId() == device) {
 				r[0] = d.getType();
-				r[1] = bluetooth(d.getType()) ? 1 : 0;
+			}
+			if (d.isSource() && d.getType() == AudioDeviceInfo.TYPE_BUILTIN_MIC
+				&& (r[2] == 0 || "bottom".equals(d.getAddress()))) {
+				r[2] = d.getId();
 			}
 		}
-		r[2] = latency(am);
+		r[1] = latency(am);
 		return r;
-	}
-
-	static boolean bluetooth(int type) {
-		switch (type) {
-		case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
-		case AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
-		case AudioDeviceInfo.TYPE_HEARING_AID:
-		case 26: // TYPE_BLE_HEADSET, Android 12
-		case 27: // TYPE_BLE_SPEAKER, Android 12
-		case 30: // TYPE_BLE_BROADCAST, Android 13
-			return true;
-		}
-		return false;
 	}
 
 	// latency calls AudioManager.getOutputLatency(STREAM_MUSIC), hidden

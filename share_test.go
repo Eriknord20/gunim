@@ -47,6 +47,23 @@ func TestShareAndVibrateSayWhenThereIsNone(t *testing.T) {
 	if err := w.Client().Vibrate(time.Second); !errors.Is(err, driver.ErrNoVibrator) {
 		t.Fatalf("Vibrate returned %v, want ErrNoVibrator", err)
 	}
+	if err := w.Client().KeepAwake(true); !errors.Is(err, driver.ErrNoAwaker) {
+		t.Fatalf("KeepAwake returned %v, want ErrNoAwaker", err)
+	}
+}
+
+func TestKeepAwakeReachesTheDriver(t *testing.T) {
+	w := NewOffscreen(geom.Sz(400, 300), nil)
+	var got []bool
+	w.Offscreen().SetAwaker(func(on bool) error { got = append(got, on); return nil })
+	for _, on := range []bool{true, false} {
+		if err := w.Client().KeepAwake(on); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(got, []bool{true, false}) {
+		t.Fatalf("the driver heard %v, want [true false]", got)
+	}
 }
 
 func TestVibrateHandsOverItsPattern(t *testing.T) {

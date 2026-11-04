@@ -478,10 +478,22 @@ what the APK may ask for. `App.UserFolder` finds the user's Music
 folder, on a phone or a desktop, and a folder chooser picks a folder on
 the phone's storage or a card as a path.
 
+`Client.ChooseFiles` shows Android's document picker and returns paths
+to copies of the files chosen, in the app's cache. `gunimapk -opens
+.hej,.hejprop` puts the program under "Open with" and in the share sheet
+for those extensions, and a node hears the files as `input.FilesOpened`,
+copied the same way, whether they start the program or reach it while
+it runs. The window holds them until a node takes them, so they wait
+for a view that mounts late. gunim clears these copies as the program
+next starts, and Android may clear them sooner, so copy what should
+last. `example/openfiles` shows both ways in.
+
 `Client.Share` hands text and files to other apps through Android's
 share sheet, and `Client.CanShare` says where there is one to show.
 `Client.Vibrate` runs the phone's vibration motor in a pattern of on
 and off times, as the web's `navigator.vibrate` does.
+`Client.KeepAwake(true)` keeps the screen on while the window shows, as
+during a recording, until `Client.KeepAwake(false)` or the window closes.
 `Client.TakeFingers(true)` lets a window take more than one finger at
 once, as a game steered with one thumb while the other taps: every
 finger reaches the node it came down on as `input.Finger`, a second one

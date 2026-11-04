@@ -17,6 +17,7 @@ void gunim_set_clipboard(const uint16_t *s, int n);
 void gunim_finish(void);
 void gunim_buzz(void);
 void gunim_take_fingers(int on);
+void gunim_keep_awake(int on);
 int gunim_share(const uint16_t *text, int nt, const uint16_t *subject, int ns, const uint16_t *paths, int np);
 int gunim_vibrate(const long long *ms, int n);
 void gunim_exclude_gestures(const int *xy, int n);
@@ -26,6 +27,7 @@ int gunim_open_link(const uint16_t *url, int n);
 int gunim_permitted(int p);
 void gunim_ask(int p, int code);
 void gunim_choose_folder(int code);
+void gunim_choose_files(int code, int multiple, const uint16_t *patterns, int n);
 uint16_t *gunim_user_folder(int f, int *n);
 
 // For package audio/internal/aaudio, which calls them where the driver

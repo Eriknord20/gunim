@@ -221,6 +221,13 @@ type WindowFocus struct{ Focused bool }
 // application sent to the background and brought back on a phone.
 type WindowShown struct{ Shown bool }
 
+// FilesOpened is sent on [Window.Input] when another application hands
+// this one files to open. The engine turns it into
+// [github.com/marrasen/gunim/input.FilesOpened]. A driver keeps the
+// files that start the application for the first window that opens, so
+// they arrive at start as well as while it runs.
+type FilesOpened struct{ Paths []string }
+
 // WindowCovered is sent on [Window.Input] as the window goes out of
 // sight while it stays open, or comes back: covered whole by other
 // windows, on another virtual desktop or workspace, or on a screen that

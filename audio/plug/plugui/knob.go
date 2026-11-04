@@ -72,8 +72,13 @@ type Knob struct {
 	tip   widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
-	// has none of.
+	// has none of. Each glides there.
 	Disabled, Locked bool
+	// grey is how far the knob's arc has gone grey, faint how far a lock
+	// has faded it, and laid says it has been laid out, before which they
+	// jump to where they are set.
+	grey, faint *anim.Float
+	laid        bool
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -141,6 +146,13 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 // to show it move, and rests while they stand still, as with the song
 // stopped.
 func (k *Knob) Step(dt time.Duration) bool {
+	if k.laid {
+		k.aim(func(a *anim.Float, v float32) {
+			if a.Target() != v {
+				a.Animate(v, anim.Snappy)
+			}
+		})
+	}
 	moving := k.Group.Step(dt)
 	m, modded := k.modulation()
 	changed := modded != k.modded || modded && m != k.shown
@@ -148,12 +160,18 @@ func (k *Knob) Step(dt time.Duration) bool {
 	return moving || changed
 }
 
+// aim moves its greys by to where Disabled and Locked have them.
+func (k *Knob) aim(to func(a *anim.Float, v float32)) {
+	to(k.grey, anim.OnOff(k.Disabled || k.Locked))
+	to(k.faint, anim.OnOff(k.Locked))
+}
+
 // NewKnobFunc returns a knob of what p describes, at v, turning it by
 // a gesture of begin, a set for each move, and end: a value of a
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
-	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0)}
-	k.Add(k.hover)
+	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
+	k.Add(k.hover, k.grey, k.faint)
 	return k
 }
 
@@ -207,6 +225,10 @@ func (k *Knob) Follow(v float64, u *gunim.UI) {
 
 // Layout implements [gunim.Node].
 func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	if !k.laid {
+		k.laid = true
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	}
 	if k.Compact {
 		return c.Constrain(geom.Sz(CompactW, CompactH))
 	}
@@ -217,15 +239,13 @@ func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
-	if k.Disabled || k.Locked {
-		accent = paint.Faded(ink, 0.35)
-	}
+	accent = anim.MixColor(accent, paint.Faded(ink, 0.35), k.grey.Value())
 	hover := k.hover.Value()
 	r, text := float32(17), float32(10.5)
 	if k.Compact {
 		r, text = 14, 9.5
 	}
-	end := widget.Faint(p, box, anim.OnOff(k.Locked)*0.6)
+	end := widget.Faint(p, box, k.faint.Value()*0.6)
 	defer end()
 	c := geom.Pt(box.W/2, 4+r)
 	if hover > 0.01 {

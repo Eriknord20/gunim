@@ -752,14 +752,57 @@ type State struct {
 	// [Options].Aux fills: as many as Options.Outputs names past two,
 	// while an ASIO driver plays; none through the system's own sound.
 	Aux int
-	// Bluetooth says the sound plays on a Bluetooth headset, speaker
-	// or hearing aid, whose delay is long enough to feel in an
-	// instrument or a game. Through [driver.AAudio] Android tells it;
-	// elsewhere it stays false.
-	Bluetooth bool
+	// Route is where the sound plays. Through [driver.AAudio] Android
+	// tells it, and it follows as the sound moves, within a few seconds
+	// at most. Elsewhere it stays RouteUnknown.
+	Route Route
+	// Headphones says the sound plays into wired or USB headphones, so a
+	// microphone nearby can't hear it. A line out, an aux jack or a USB
+	// dock may drive loudspeakers, so it is false for those, whose Route
+	// is still RouteWired or RouteUSB, as it is for all the rest. An
+	// application playing a microphone back live should ask this.
+	Headphones bool
 	// Problem is why the output asked for plays otherwise, or not at
 	// all.
 	Problem error
+}
+
+// Route is where the sound plays.
+type Route int
+
+const (
+	// RouteUnknown is a route nothing tells, or one of no other kind
+	// here, as an HDMI screen.
+	RouteUnknown Route = iota
+	// RouteSpeaker is the device's own speaker. A microphone beside it
+	// hears the sound.
+	RouteSpeaker
+	// RouteWired is headphones or a line on a jack.
+	RouteWired
+	// RouteBluetooth is a Bluetooth headset, speaker or hearing aid,
+	// whose delay is long enough to feel in an instrument or a game.
+	RouteBluetooth
+	// RouteUSB is a device on USB, as a USB-C headset is, and an analog
+	// one through a USB-C adapter. A phone with no jack has its wired
+	// headphones here. Its delay is about that of RouteWired.
+	RouteUSB
+)
+
+// String names the route: "unknown", "speaker", "wired", "Bluetooth" or
+// "USB".
+func (r Route) String() string {
+	switch r {
+	case RouteSpeaker:
+		return "speaker"
+	case RouteWired:
+		return "wired"
+	case RouteBluetooth:
+		return "Bluetooth"
+	case RouteUSB:
+		return "USB"
+	case RouteUnknown:
+	}
+	return "unknown"
 }
 
 // State returns how the speakers play now.

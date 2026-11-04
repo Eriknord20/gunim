@@ -905,6 +905,20 @@ func (c Client) Vibrate(pattern ...time.Duration) error {
 	return v.Vibrate(pattern...)
 }
 
+// KeepAwake says whether the screen stays on while the window shows, as
+// a recording's or a video's must with no finger on the glass. It lasts
+// until a call with false or the window's closing, and the application
+// going to the background lets the screen sleep meanwhile. It returns at
+// once, and [driver.ErrNoAwaker] where gunim cannot keep the screen on,
+// as on a desktop now. It is safe from any goroutine.
+func (c Client) KeepAwake(on bool) error {
+	a, ok := c.w.dw.(driver.Awaker)
+	if !ok {
+		return driver.ErrNoAwaker
+	}
+	return a.KeepAwake(on)
+}
+
 // TakeFingers says whether the window takes more than one finger at
 // once on a touch screen, as a game steered with one thumb while the
 // other taps does. On, every finger of a touch that starts in the window
@@ -1846,7 +1860,9 @@ type UI struct {
 	// heard, by number, and dropSeq the last number given. dragOuts are
 	// the drops handed to other programs, oldest first, whose ends the
 	// platform says in that order.
-	drops    map[uint64]pendingDrop
+	drops map[uint64]pendingDrop
+	// opened holds the files handed over that no node has taken yet.
+	opened   []input.FilesOpened
 	dropSeq  uint64
 	dragOuts []uint64
 	// outDrags are the drags handed to other programs, by drop number, to carry on should the pointer come back.
@@ -2675,6 +2691,8 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 		u.invalid = true
 	}
 	u.flush()
+	// Files no node took yet: a view just mounted may take them.
+	u.offerOpened()
 	// Scroll what a held drag is near the edge of, while the nodes are
 	// still where the last frame drew them, to find what the pointer is
 	// over.
