@@ -1,4 +1,4 @@
-//go:build linux || windows || darwin
+//go:build linux || windows || darwin || (js && wasm)
 
 // Package render draws a [paint] op list with OpenGL 3.2 or OpenGL ES
 // 3.0. Every driver that draws with GL shares it: the desktop one, and
