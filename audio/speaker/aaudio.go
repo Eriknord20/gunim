@@ -332,10 +332,17 @@ func (a *aaOutput) openOut() error {
 // route asks Android of the device run plays on, as it opens, which
 // first says, and as run.ask says after, on the opener: the call goes
 // through Java. It logs what it finds where that changed. Where Android
-// tells nothing, or no latency, it keeps what it told before.
+// tells no latency, or a running stream tells nothing, it keeps what it
+// told before. A new stream that tells nothing, or a device Android no
+// longer lists, makes the route RouteUnknown, as an app lets the voice
+// back into the headphones only on a route it knows.
 func (a *aaOutput) route(run *aaRun, first bool) {
 	r := run.st.Route()
 	if !r.Known {
+		if first {
+			a.on.Store(int32(RouteUnknown))
+			a.wantMic.Store(0)
+		}
 		return
 	}
 	was, wasMixer := Route(a.on.Load()), run.mixer.Load()
@@ -343,18 +350,19 @@ func (a *aaOutput) route(run *aaRun, first bool) {
 	if r.Latency >= 0 {
 		mixer = audio.FramesAt(r.Latency, a.hz)
 	}
-	on := was
+	on := RouteUnknown
 	// A device Android no longer lists is one going away, and the stream
-	// reopens on the next: until then it plays where it was told.
+	// reopens on the next: until then the delay and the microphone stay
+	// as they were told.
 	if first || r.Type != 0 {
 		on = routeOf(r.Type)
 		run.bluetooth.Store(on == RouteBluetooth)
-		a.on.Store(int32(on))
 		a.wantMic.Store(0)
 		if on == RouteBluetooth {
 			a.wantMic.Store(int32(r.Mic))
 		}
 	}
+	a.on.Store(int32(on))
 	run.mixer.Store(mixer)
 	if first || on != was || mixer != wasMixer {
 		a.s.logf("AAudio's device is of type %d, route %v; Android's mixer reports %v for media's output",

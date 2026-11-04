@@ -1118,17 +1118,35 @@ func TestAAudioRouteFollowsTheDevice(t *testing.T) {
 				t.Fatalf("on a device of type %d the route is %v, want %v", step.typ, got, step.want)
 			}
 		}
-		// A device that left the list is one going away: the route stays
-		// as told until the stream reopens on the next.
+		// A device that left the list is one going away: where the sound
+		// plays is no longer known.
 		f.route.Store(&aaudio.Route{Known: true, Latency: 20 * time.Millisecond})
 		time.Sleep(aaRouteEvery + 100*time.Millisecond)
-		if got := s.State().Route; got != RouteSpeaker {
+		if got := s.State().Route; got != RouteUnknown {
 			t.Errorf("with the device gone the route is %v", got)
 		}
 		f.route.Store(&aaudio.Route{Known: true, Type: 22, Latency: 20 * time.Millisecond})
 		time.Sleep(aaRouteEvery + 100*time.Millisecond)
 		if got := s.State().Route; got != RouteUSB {
 			t.Errorf("after the opener asked the route is %v", got)
+		}
+		// A stream that reopens where Android tells nothing plays nowhere
+		// known, whatever it played on before.
+		f.route.Store(&aaudio.Route{})
+		outs, _ := f.streams()
+		outs[len(outs)-1].sh.Err.Store(-899)
+		for range 40 {
+			time.Sleep(5 * time.Millisecond)
+			synctest.Wait()
+			if now, _ := f.streams(); len(now) > len(outs) {
+				break
+			}
+		}
+		if now, _ := f.streams(); len(now) <= len(outs) {
+			t.Fatal("the stream never reopened")
+		}
+		if got := s.State().Route; got != RouteUnknown {
+			t.Errorf("after reopening with nothing told the route is %v", got)
 		}
 	})
 }
