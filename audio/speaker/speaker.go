@@ -756,6 +756,12 @@ type State struct {
 	// tells it, and it follows as the sound moves, within a few seconds
 	// at most. Elsewhere it stays RouteUnknown.
 	Route Route
+	// Headphones says the sound plays into wired or USB headphones, so a
+	// microphone nearby can't hear it. A line out, an aux jack or a USB
+	// dock may drive loudspeakers, so it is false for those, whose Route
+	// is still RouteWired or RouteUSB, as it is for all the rest. An
+	// application playing a microphone back live should ask this.
+	Headphones bool
 	// Problem is why the output asked for plays otherwise, or not at
 	// all.
 	Problem error
