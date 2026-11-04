@@ -406,6 +406,18 @@ func (d *Driver) at(e js.Value) geom.Point {
 	return geom.Pt(float32(e.Get("clientX").Float()-r.Get("left").Float()), float32(e.Get("clientY").Float()-r.Get("top").Float()))
 }
 
+// buttonBit is where a button is in a PointerEvent's buttons, which numbers them
+// differently from its button.
+func buttonBit(button int) int {
+	switch button {
+	case 1:
+		return 4
+	case 2:
+		return 2
+	}
+	return 1 << button
+}
+
 func buttonOf(e js.Value) input.Button {
 	switch e.Get("button").Int() {
 	case 1:
@@ -496,11 +508,12 @@ func (d *Driver) listen(doc js.Value) {
 		d.pressed = w
 		clicks, local := d.clicks, p.Sub(w.rectLocked().Min)
 		d.mu.Unlock()
-		// The browser's own focus change on the mouse events that follow
-		// would undo a textarea focused for a text field: the driver
-		// moves focus itself. A touch still scrolls the page, which
-		// touch-action decides.
-		e.Call("preventDefault")
+		// The driver moves focus itself. A mouse's press is cancelled at its
+		// mousedown, below, so the page still gets its mouseup, which Web Audio's
+		// wait for a gesture may hang on.
+		if e.Get("pointerType").String() != "mouse" {
+			e.Call("preventDefault")
+		}
 		capture(c, e.Get("pointerId"))
 		d.fingerEvent(id, e, input.FingerDown)
 		// The canvas keeps the keyboard unless a window takes text;
@@ -512,6 +525,9 @@ func (d *Driver) listen(doc js.Value) {
 		w.in.Push(input.PointerMove{Pos: local, Mods: m, Touch: touch, Time: now})
 		w.in.Push(input.PointerDown{Pos: local, Button: buttonOf(e), Mods: m, Clicks: clicks, Touch: touch, Time: now})
 	})
+	// The browser's own focus change on a mouse press would undo a text field's
+	// focus.
+	d.on(c, "mousedown", false, func(e js.Value) { e.Call("preventDefault") })
 	d.on(c, "pointermove", true, func(e js.Value) {
 		p, now := d.at(e), time.Now()
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
@@ -522,6 +538,7 @@ func (d *Driver) listen(doc js.Value) {
 			return
 		}
 		w := d.pressed
+		held := w != nil
 		var left *Window
 		if w == nil {
 			if finger {
@@ -543,15 +560,17 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		if w != nil {
 			w.in.Push(input.PointerMove{Pos: local, Mods: modsOf(e), Touch: touch, Time: now})
+			// One button going down or up while another is held comes as a move.
+			if held && !finger && e.Get("button").Int() >= 0 {
+				if b := buttonOf(e); e.Get("buttons").Int()&buttonBit(e.Get("button").Int()) != 0 {
+					w.in.Push(input.PointerDown{Pos: local, Button: b, Mods: modsOf(e), Clicks: 1, Time: now})
+				} else {
+					w.in.Push(input.PointerUp{Pos: local, Button: b, Mods: modsOf(e), Time: now})
+				}
+			}
 		}
 	})
 	up := func(e js.Value, cancel bool) {
-		if !cancel && e.Get("pointerType").String() == "mouse" {
-			// Cancelling pointerdown, above, stops the browser's own mouseup,
-			// and a page's audio may be waiting for one to start: Web Audio
-			// needs a user's gesture, and oto listens on the document for it.
-			doc.Call("dispatchEvent", js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true}))
-		}
 		p, now := d.at(e), time.Now()
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerUp)
