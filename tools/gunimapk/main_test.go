@@ -289,3 +289,15 @@ func TestOpensAddsFiltersAndRunsTheActivityOnce(t *testing.T) {
 		t.Errorf("share filter's actions %+v", got)
 	}
 }
+
+// One extension stays a string in the manifest, as a number the driver
+// would read as nothing.
+func TestOneExtensionStaysAString(t *testing.T) {
+	t.Parallel()
+	if got := opensValue([]string{".001"}); got != ".001," {
+		t.Errorf("one extension gives %q", got)
+	}
+	if got := opensValue([]string{".hej", ".hejprop"}); got != ".hej,.hejprop" {
+		t.Errorf("two extensions give %q", got)
+	}
+}

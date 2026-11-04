@@ -998,6 +998,17 @@ func parseOpens(list string) ([]string, error) {
 	return exts, nil
 }
 
+// opensValue is exts as the driver reads them. A comma keeps one
+// extension a string, as aapt2 would store .001 as a number, which the
+// driver reads as nothing.
+func opensValue(exts []string) string {
+	v := strings.Join(exts, ",")
+	if len(exts) == 1 {
+		v += ","
+	}
+	return v
+}
+
 // opensXML returns the activity's lines for opening exts, and names them
 // for the driver, which holds back other files the MIME type lets by.
 //
@@ -1034,7 +1045,7 @@ func opensXML(exts []string) string {
 				<category android:name="android.intent.category.DEFAULT"/>
 				<data android:mimeType="application/octet-stream"/>
 			</intent-filter>
-			<meta-data android:name="gunim.opens" android:value="` + strings.Join(exts, ",") + `"/>
+			<meta-data android:name="gunim.opens" android:value="` + opensValue(exts) + `"/>
 `)
 	return b.String()
 }

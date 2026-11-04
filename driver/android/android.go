@@ -183,6 +183,8 @@ func (d *Driver) start(zone string) {
 	d.started = true
 	d.mu.Unlock()
 	takeEnv()
+	// The last run's copies go as this one starts, apart from the UI thread.
+	go copies()
 	toLogcat()
 	setZone(zone)
 	go d.render()

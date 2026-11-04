@@ -134,3 +134,27 @@ func TestANewCacheClearsTheLastRun(t *testing.T) {
 		t.Fatalf("left %v", entries)
 	}
 }
+
+// An application sending without end fills no disk.
+func TestACopyLeavesRoomOnTheDisk(t *testing.T) {
+	t.Parallel()
+	c := New(filepath.Join(t.TempDir(), "cache"))
+	c.free = func(string) (int64, bool) { return reserve + 100, true }
+	if _, err := c.copy(strings.NewReader(strings.Repeat("x", 100)), "fits.hej"); err != nil {
+		t.Errorf("a file that fits: %v", err)
+	}
+	if p, err := c.copy(strings.NewReader(strings.Repeat("x", 101)), "big.hej"); err == nil {
+		t.Errorf("a file past the room was copied to %s", p)
+	}
+	c.free = func(string) (int64, bool) { return reserve - 1, true }
+	if p, err := c.copy(strings.NewReader("x"), "none.hej"); err == nil {
+		t.Errorf("with no room a file was copied to %s", p)
+	}
+	ents, err := os.ReadDir(c.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 {
+		t.Errorf("the failed copies left %v", ents)
+	}
+}

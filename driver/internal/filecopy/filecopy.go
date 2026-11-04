@@ -21,6 +21,14 @@ import (
 // allow.
 const maxName = 200
 
+// A copy may take no more than MaxCopy, and must leave reserve free on
+// the disk, as what it reads comes from another application, which could
+// send without end.
+const (
+	MaxCopy = 16 << 30
+	reserve = 256 << 20
+)
+
 // A File is one file to copy: an open file descriptor, which Take
 // closes, or -1 for one the system failed to open, and the name it came
 // with.
@@ -34,12 +42,15 @@ type File struct {
 type Cache struct {
 	dir string
 	n   atomic.Int64
+	// free is the bytes free on the disk holding a folder, and whether it
+	// can tell.
+	free func(dir string) (int64, bool)
 }
 
 // New returns a Cache in dir, and clears what an earlier run left there.
 func New(dir string) *Cache {
 	_ = os.RemoveAll(dir)
-	return &Cache{dir: dir}
+	return &Cache{dir: dir, free: freeSpace}
 }
 
 // Take copies files and returns the paths of the copies in their order.
@@ -82,7 +93,15 @@ func (c *Cache) copy(r io.Reader, name string) (string, error) {
 	p := filepath.Join(dir, name)
 	w, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
-		_, err = io.Copy(w, r)
+		limit := int64(MaxCopy)
+		if free, ok := c.free(dir); ok {
+			limit = min(limit, free-reserve)
+		}
+		var n int64
+		n, err = io.Copy(w, io.LimitReader(r, max(limit, 0)+1))
+		if err == nil && n > limit {
+			err = fmt.Errorf("it is too big: there is room for %d bytes", max(limit, 0))
+		}
 		if cerr := w.Close(); err == nil {
 			err = cerr
 		}

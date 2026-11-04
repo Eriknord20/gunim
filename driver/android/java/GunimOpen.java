@@ -24,7 +24,9 @@ import java.util.concurrent.Executors;
  * file in the cloud can take a while, and Go copies them from there.
  */
 final class GunimOpen {
-	private static final ExecutorService worker = Executors.newSingleThreadExecutor();
+	// Each batch has a thread of its own, so a provider that never answers
+	// holds up no later file.
+	private static final ExecutorService worker = Executors.newCachedThreadPool();
 
 	private GunimOpen() {
 	}
@@ -38,10 +40,21 @@ final class GunimOpen {
 		if (i == null || (i.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) {
 			return;
 		}
-		List<Uri> uris = sentIn(i);
+		// Any application can send this activity an intent, so a program
+		// that opens no files reads nothing of it, and a malformed one is
+		// dropped: its extras can hold anything, or classes this program
+		// lacks.
 		String opens = opensOf(a);
-		if (!uris.isEmpty() && !opens.isEmpty()) {
-			hand(a, 0, uris, opens);
+		if (opens.isEmpty()) {
+			return;
+		}
+		try {
+			List<Uri> uris = sentIn(i);
+			if (!uris.isEmpty()) {
+				hand(a, 0, uris, opens);
+			}
+		} catch (RuntimeException e) {
+			android.util.Log.w("gunim", "reading a file sent to this program: " + e);
 		}
 	}
 
@@ -65,7 +78,11 @@ final class GunimOpen {
 		} else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
 			ArrayList<Uri> many = i.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
 			if (many != null) {
-				uris.addAll(many);
+				for (Uri u : many) {
+					if (u != null) {
+						uris.add(u);
+					}
+				}
 			}
 		}
 		return uris;
@@ -77,7 +94,10 @@ final class GunimOpen {
 		ClipData clip = data.getClipData();
 		if (clip != null) {
 			for (int n = 0; n < clip.getItemCount(); n++) {
-				uris.add(clip.getItemAt(n).getUri());
+				Uri u = clip.getItemAt(n).getUri();
+				if (u != null) {
+					uris.add(u);
+				}
 			}
 		} else if (data.getData() != null) {
 			uris.add(data.getData());
@@ -122,7 +142,7 @@ final class GunimOpen {
 	}
 
 	private static int open(Context app, Uri u) {
-		if (!"content".equals(u.getScheme()) || GunimFiles.authority(app).equals(u.getAuthority())) {
+		if (!"content".equals(u.getScheme()) || GunimFiles.authority(app).equals(withoutUser(u.getAuthority()))) {
 			return -1;
 		}
 		try {
@@ -134,6 +154,11 @@ final class GunimOpen {
 			android.util.Log.w("gunim", "opening " + u + ": " + e);
 			return -1;
 		}
+	}
+
+	/** withoutUser returns an authority without the user, as 0@, Android also reads. */
+	private static String withoutUser(String authority) {
+		return authority == null ? null : authority.substring(authority.lastIndexOf('@') + 1);
 	}
 
 	/** nameOf asks the provider for a file's name, or takes the address's last part. */

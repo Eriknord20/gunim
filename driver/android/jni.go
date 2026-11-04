@@ -32,8 +32,6 @@ import (
 
 //export goStart
 func goStart(zone *C.uint16_t, n C.int) {
-	// The last run's copies go as this one starts, apart from the UI thread.
-	go copies()
 	theDriver.start(goString(zone, n))
 }
 
@@ -401,6 +399,8 @@ func chose(code int, path string) {
 // copies is the cache of files handed over. Its first use in a run
 // clears what the last run left.
 var copies = sync.OnceValue(func() *filecopy.Cache {
+	// The cache's folder comes from the environment the activity sets.
+	takeEnv()
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		dir = os.TempDir()
