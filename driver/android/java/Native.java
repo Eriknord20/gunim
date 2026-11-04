@@ -42,6 +42,7 @@ public final class Native {
 	static native void composing(String s, int selStart, int selEnd);
 	static native void answered(int code, boolean granted);
 	static native void chosen(int code, String path);
+	static native void files(int code, int[] fds, String names, String opens);
 	static native void heading(float[] rotation, int screen, int accuracy, float error);
 
 	// Called from Go.
@@ -201,12 +202,45 @@ public final class Native {
 		});
 	}
 
+	// choosingFiles holds the codes of the document pickers showing, on
+	// the UI thread, to tell their answers from the folder chooser's.
+	static final java.util.Set<Integer> choosingFiles = new java.util.HashSet<>();
+
+	// chooseFiles shows the system's document picker; the files chosen
+	// go to Go through GunimOpen. patterns are the kinds of file to show,
+	// each ended by a NUL.
+	static void chooseFiles(int code, boolean multiple, String patterns) {
+		ui.post(() -> {
+			GunimActivity a = activity;
+			if (a == null) {
+				files(code, new int[0], "", "");
+				return;
+			}
+			android.content.Intent pick = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+			pick.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+			pick.setType("*/*");
+			String[] types = GunimOpen.typesOf(patterns);
+			if (types != null) {
+				pick.putExtra(android.content.Intent.EXTRA_MIME_TYPES, types);
+			}
+			pick.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+			try {
+				choosingFiles.add(code);
+				a.startActivityForResult(pick, code);
+			} catch (android.content.ActivityNotFoundException e) {
+				choosingFiles.remove(code);
+				files(code, new int[0], "", "");
+			}
+		});
+	}
+
 	// pathOf returns the path of a folder the chooser gave, where it
 	// lies on the phone's storage or a card: the chooser names those
 	// as their volume and the path within it, as primary:Download.
 	// Other providers' folders have no path, and give null.
 	static String pathOf(android.net.Uri tree) {
-		if (tree == null || !"com.android.externalstorage.documents".equals(tree.getAuthority())) {
+		if (tree == null || !"com.android.externalstorage.documents".equals(tree.getAuthority())
+			|| !android.provider.DocumentsContract.isTreeUri(tree)) {
 			return null;
 		}
 		String id = android.provider.DocumentsContract.getTreeDocumentId(tree);

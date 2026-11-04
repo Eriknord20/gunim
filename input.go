@@ -44,7 +44,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 	if u.fadeOut {
 		// Nor does one fading out, or out, save word of the keyboard.
 		switch ev.(type) {
-		case driver.WindowFocus, driver.WindowShown, driver.WindowCovered:
+		case driver.WindowFocus, driver.WindowShown, driver.WindowCovered, driver.FilesOpened:
 		default:
 			return
 		}
@@ -90,6 +90,13 @@ func (u *UI) handleRaw(root *state, ev any) {
 			target = u.appRoot()
 		}
 		u.bubble(target, e)
+		return
+	case driver.FilesOpened:
+		if root != u.root {
+			return
+		}
+		u.opened = append(u.opened, input.FilesOpened{Paths: e.Paths, Time: u.Clock()})
+		u.offerOpened()
 		return
 	case driver.WindowCovered:
 		if root != u.root {
@@ -968,15 +975,53 @@ func (u *UI) bubbleTo(s *state, e input.Event, top *state) bool {
 // up from start did not pass, so every view in the window hears it
 // once. A view on its way out hears nothing.
 func (u *UI) tellViews(start *state, e input.Event) {
+	for _, k := range u.viewsPast(start) {
+		u.deliver(k, e)
+	}
+}
+
+// viewsPast returns the views mounted at the root that bubbling up from
+// start does not pass, leaving out those on their way out.
+func (u *UI) viewsPast(start *state) []*state {
 	passed := map[*state]bool{}
 	for s := start; s != nil; s = s.parent {
 		passed[s] = true
 	}
-	for _, k := range slices.Clone(u.appRoot().kids) {
+	var views []*state
+	for _, k := range u.appRoot().kids {
 		if !passed[k] && k.presence != Exiting {
-			u.deliver(k, e)
+			views = append(views, k)
 		}
 	}
+	return views
+}
+
+// offerOpened offers the files waiting for a node, oldest first. The
+// first that no node takes stays, with those behind it, for the next
+// frame.
+func (u *UI) offerOpened() {
+	for len(u.opened) > 0 && u.offerFiles(u.opened[0]) {
+		u.opened = u.opened[1:]
+		u.invalid, u.calm = true, false
+	}
+}
+
+// offerFiles offers e to the focused node and up from it, then to each
+// view mounted at the root it did not pass, until one takes it.
+func (u *UI) offerFiles(e input.FilesOpened) bool {
+	target := u.focus
+	if target == nil {
+		target = u.appRoot()
+	}
+	if u.bubble(target, e) {
+		return true
+	}
+	for _, k := range u.viewsPast(target) {
+		if u.bubbleTo(k, e, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // deliver hands e to exactly one node and stops there. Enter, leave and

@@ -10,6 +10,9 @@ package android
 import "C"
 
 import (
+	"log"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/driver/internal/compass"
+	"github.com/marrasen/gunim/driver/internal/filecopy"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -27,7 +31,9 @@ import (
 // has a frame of its own to keep.
 
 //export goStart
-func goStart(zone *C.uint16_t, n C.int) { theDriver.start(goString(zone, n)) }
+func goStart(zone *C.uint16_t, n C.int) {
+	theDriver.start(goString(zone, n))
+}
 
 //export goSurfaceChanged
 func goSurfaceChanged(w *C.ANativeWindow, width, height C.int) {
@@ -390,5 +396,102 @@ func chose(code int, path string) {
 	asking.Unlock()
 	if ch != nil {
 		ch <- path
+	}
+}
+
+// copies is the cache of files handed over. Its first use in a run
+// clears what the last run left.
+var copies = sync.OnceValue(func() *filecopy.Cache {
+	// The cache's folder comes from the environment the activity sets.
+	takeEnv()
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	return filecopy.New(filepath.Join(dir, "gunim-files"))
+})
+
+// fileChooser is a chooser of files waiting on the user.
+type fileChooser chan fileAnswer
+
+// fileAnswer is what a chooser of files gives: the copies made, and an
+// error for those that failed.
+type fileAnswer struct {
+	paths []string
+	err   error
+}
+
+// The choosers of files waiting on the user, by their request code,
+// from the same count as the rest.
+var choosingFiles = map[int]fileChooser{}
+
+// chooseFiles shows the system's document picker, and waits for the
+// copies of the files chosen.
+func chooseFiles(o driver.ChooseOptions) ([]string, error) {
+	var patterns []string
+	for _, f := range o.Filters {
+		patterns = append(patterns, f.Patterns...)
+	}
+	asking.Lock()
+	askCode++
+	code := askCode
+	ch := make(fileChooser, 1)
+	choosingFiles[code] = ch
+	asking.Unlock()
+	u, up := utf16Of(strings.Join(patterns, "\x00"))
+	multiple := C.int(0)
+	if o.Multiple {
+		multiple = 1
+	}
+	C.gunim_choose_files(C.int(code), multiple, up, C.int(len(u)))
+	runtime.KeepAlive(u)
+	a := <-ch
+	return a.paths, a.err
+}
+
+// goFiles hands over files Java opened, each an open file descriptor
+// and a name, -1 for one that failed to open. A code of 0 is another
+// application opening them, for the extensions in opens; any other is
+// the chooser waiting on that code. The copy runs apart from the
+// caller, as a file can take a while to arrive.
+//
+//export goFiles
+func goFiles(code C.int, fds *C.int, n C.int, names *C.uint16_t, nn C.int, opens *C.uint16_t, no C.int) {
+	var files []filecopy.File
+	nameList := strings.Split(goString(names, nn), "\x00")
+	if n > 0 {
+		for i, fd := range unsafe.Slice(fds, int(n)) {
+			f := filecopy.File{FD: int(fd)}
+			if i < len(nameList) {
+				f.Name = nameList[i]
+			}
+			files = append(files, f)
+		}
+	}
+	exts := strings.Split(goString(opens, no), ",")
+	go func() {
+		if code != 0 {
+			paths, err := copies().Take(files, nil)
+			choseFiles(int(code), paths, err)
+			return
+		}
+		paths, err := copies().Take(files, exts)
+		if err != nil {
+			log.Printf("gunim: files opened: %v", err)
+		}
+		if len(paths) > 0 {
+			theDriver.filesOpened(paths)
+		}
+	}()
+}
+
+// choseFiles hands the copies made to the chooser of code.
+func choseFiles(code int, paths []string, err error) {
+	asking.Lock()
+	ch := choosingFiles[code]
+	delete(choosingFiles, code)
+	asking.Unlock()
+	if ch != nil {
+		ch <- fileAnswer{paths, err}
 	}
 }

@@ -89,6 +89,9 @@ type Driver struct {
 	surfW, surfH int
 	// windows is the stack of open windows, bottom first.
 	windows []*Window
+	// opened holds the files handed over before a window opened to take
+	// them, one batch to an entry.
+	opened [][]string
 	// touched is the window the touch in progress started in, which
 	// keeps the touch until it lifts. lastTap and lastAt are the last
 	// press, for a double tap.
@@ -182,6 +185,8 @@ func (d *Driver) start(zone string) {
 	d.started = true
 	d.mu.Unlock()
 	takeEnv()
+	// The last run's copies go as this one starts, apart from the UI thread.
+	go copies()
 	toLogcat()
 	setZone(zone)
 	go d.render()
@@ -250,6 +255,10 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 		w.pos = o.Anchor.Min.Add(w.parent.pos)
 	default:
 		w.fills = true
+		for _, paths := range d.opened {
+			w.in.Push(driver.FilesOpened{Paths: paths})
+		}
+		d.opened = nil
 	}
 	w.hidden = o.Hidden
 	d.windows = append(d.windows, w)
@@ -561,6 +570,24 @@ func (d *Driver) shown(on bool) {
 	for _, w := range fill {
 		w.in.Push(driver.WindowShown{Shown: on})
 	}
+}
+
+// filesOpened hands files another application opened to the top window
+// that fills the screen, or keeps them for the first to open.
+func (d *Driver) filesOpened(paths []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var top *Window
+	for _, w := range d.windows {
+		if w.fills {
+			top = w
+		}
+	}
+	if top == nil {
+		d.opened = append(d.opened, paths)
+		return
+	}
+	top.in.Push(driver.FilesOpened{Paths: paths})
 }
 
 func (d *Driver) windowFocus(focused bool) {
