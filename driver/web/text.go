@@ -1,0 +1,165 @@
+//go:build js && wasm
+
+package web
+
+import (
+	"strings"
+	"syscall/js"
+	"time"
+	"unicode/utf16"
+
+	"github.com/marrasen/gunim/input"
+)
+
+// DOM selections count UTF-16 code units; Gunim text state counts UTF-8 bytes.
+func utf16Offset(s string, at int) int {
+	at = max(0, min(at, len(s)))
+	return len(utf16.Encode([]rune(s[:at])))
+}
+func byteOffset(s string, at int) int {
+	n := 0
+	for i, r := range s {
+		if n >= at {
+			return i
+		}
+		if r > 0xffff {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return len(s)
+}
+
+func (d *Driver) syncText(w *Window) {
+	d.mu.Lock()
+	if d.typing != w || w.state == nil || w.stateSeq < w.editSeq {
+		d.mu.Unlock()
+		return
+	}
+	state := *w.state
+	composing := d.composing
+	d.mu.Unlock()
+	if composing {
+		return
+	}
+	t := d.text
+	d.syncingText = true
+	defer func() { d.syncingText = false }()
+	if t.Get("value").String() != state.Text {
+		t.Set("value", state.Text)
+	}
+	a, b := utf16Offset(state.Text, state.Selection[0]-state.Start), utf16Offset(state.Text, state.Selection[1]-state.Start)
+	direction := "forward"
+	if a > b {
+		a, b = b, a
+		direction = "backward"
+	}
+	if t.Get("selectionStart").Int() != a || t.Get("selectionEnd").Int() != b || t.Get("selectionDirection").String() != direction {
+		t.Call("setSelectionRange", a, b, direction)
+	}
+	if state.Secret {
+		t.Call("setAttribute", "autocomplete", "new-password")
+		t.Call("setAttribute", "autocorrect", "off")
+	} else {
+		t.Call("setAttribute", "autocomplete", "off")
+		t.Call("setAttribute", "autocorrect", "on")
+	}
+}
+func (d *Driver) domEdited(composing bool) {
+	if d.syncingText {
+		return
+	}
+	w := d.typingWindow()
+	if w == nil {
+		return
+	}
+	d.mu.Lock()
+	if w.state == nil {
+		d.mu.Unlock()
+		return
+	}
+	old := *w.state
+	d.mu.Unlock()
+	text := d.text.Get("value").String()
+	a := old.Start + byteOffset(text, d.text.Get("selectionStart").Int())
+	b := old.Start + byteOffset(text, d.text.Get("selectionEnd").Int())
+	if d.text.Get("selectionDirection").String() == "backward" {
+		a, b = b, a
+	}
+	comp := [2]int{b, b}
+	if composing {
+		end := len(text) - len(d.compSuffix)
+		comp = [2]int{old.Start + min(d.compStart, len(text)), old.Start + max(d.compStart, end)}
+	}
+	// Equal ends are no composition, wherever they stand.
+	sameComposing := old.Composing == comp || (old.Composing[0] == old.Composing[1] && comp[0] == comp[1])
+	if old.Text == text && old.Selection == [2]int{a, b} && sameComposing {
+		return
+	}
+	edit := input.TextEdit{Replace: [2]int{old.Start, old.End()}, With: text, Selection: [2]int{a, b}, Composing: comp, Time: time.Now()}
+	d.mu.Lock()
+	w.editSeq++
+	edit.Seq = w.editSeq
+	next, ok := old.Apply(edit)
+	if ok {
+		w.state = &next
+	}
+	d.mu.Unlock()
+	if ok {
+		w.in.Push(edit)
+	}
+}
+func (d *Driver) listenText(doc js.Value) {
+	t := d.text
+	d.on(t, "compositionstart", false, func(js.Value) {
+		w := d.typingWindow()
+		if w == nil {
+			return
+		}
+		text := t.Get("value").String()
+		d.compStart = byteOffset(text, t.Get("selectionStart").Int())
+		end := byteOffset(text, t.Get("selectionEnd").Int())
+		d.compSuffix = text[end:]
+		d.composing = true
+	})
+	d.on(t, "compositionend", false, func(js.Value) { d.composing = false; d.domEdited(false) })
+	d.on(t, "beforeinput", false, func(e js.Value) {
+		if kind := e.Get("inputType").String(); kind == "insertLineBreak" || kind == "insertParagraph" {
+			w := d.typingWindow()
+			if w != nil {
+				d.mu.Lock()
+				single := w.state != nil && !w.state.Multiline
+				d.mu.Unlock()
+				if single {
+					e.Call("preventDefault")
+					w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+				}
+			}
+		}
+	})
+	d.on(t, "input", false, func(e js.Value) {
+		is := e.Get("isComposing")
+		d.domEdited(d.composing || (!is.IsUndefined() && is.Bool()))
+	})
+	d.on(doc, "selectionchange", true, func(js.Value) {
+		if !d.syncingText && !d.composing && doc.Get("activeElement").Equal(t) {
+			d.domEdited(false)
+		}
+	})
+	d.on(t, "paste", false, func(e js.Value) {
+		c := e.Get("clipboardData")
+		if !c.IsNull() && !c.IsUndefined() {
+			d.clipboard = c.Call("getData", "text/plain").String()
+		}
+	})
+}
+
+func editKeyOwnedByDOM(e js.Value) bool {
+	is := e.Get("isComposing")
+	if (!is.IsUndefined() && is.Bool()) || e.Get("key").String() == "Process" || e.Get("key").String() == "Unidentified" {
+		return true
+	}
+	k := strings.ToLower(e.Get("key").String())
+	return (e.Get("ctrlKey").Bool() || e.Get("metaKey").Bool()) && (k == "v" || k == "x" || k == "c")
+}
