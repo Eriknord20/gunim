@@ -245,6 +245,9 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 	}
 	w.hidden = o.Hidden
 	d.windows = append(d.windows, w)
+	// Other platforms show a new window and hear back that it needs drawing.
+	// Here nothing would ask, and a Root with no commands queued stays blank.
+	w.in.Push(driver.Redraw{})
 	d.kickLocked()
 	return w, nil
 }

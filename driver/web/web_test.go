@@ -239,6 +239,17 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("restored pixels=%v", p)
 		}
 	})
+	t.Run("a new window asks for its first frame", func(t *testing.T) {
+		// A Root with no commands queued draws only if the driver asks.
+		raw, err := d.NewWindow(driver.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer raw.Close()
+		if !slices.Contains(drain(raw.(*Window)), any(driver.Redraw{})) {
+			t.Fatal("no Redraw from a new window")
+		}
+	})
 	t.Run("a second finger leaves the first one's press alone", func(t *testing.T) {
 		seen := drain(w)
 		pointer(d, "pointerdown", 1, 40, 40)
