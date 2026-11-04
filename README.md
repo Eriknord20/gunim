@@ -5,7 +5,7 @@ the display's refresh rate.
 
 ## Status
 
-gunim runs on Windows 11, on Linux under X11, and on Android. On Windows
+gunim runs on Windows 11, on Linux under X11, on Android, and in a browser. On Windows
 each window draws at its own monitor's rate, with 60 Hz and 120 Hz
 monitors side by side. macOS builds and is still untested. The API
 still changes as the examples ask more of it.
@@ -417,6 +417,34 @@ while another runs hands its command line to that one, which opens a
 window for it, and ends. An update's window says when other copies are
 running, which would go on as the release before, and lets the user
 close them first.
+
+## In a browser
+
+The same programs build for a browser, drawing with WebGL2 into a canvas:
+
+```sh
+GOOS=js GOARCH=wasm go build -o app.wasm ./example/widgets
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
+```
+
+Serve those with a page that has a canvas and starts Go:
+
+```html
+<canvas id="gunim" style="width:100%;height:100vh"></canvas>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("app.wasm"), go.importObject).then(r => go.run(r.instance));
+</script>
+```
+
+The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. If the page has no element with the id `gunim`, the driver makes a canvas that fills it.
+
+gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` in the canvas's `style` attribute. Elements laid over the canvas keep their own events. The browser keeps its shortcuts, as reloading and zooming.
+
+A browser holds sound back until the user's first click, key or touch, and `speaker.Open` waits for it. Mount the interface before opening the speaker, or the page stays blank until then.
+
+Host files, plugins, native audio drivers and other windows of the system aren't there. The driver's tests need a real browser, so they are built with `GOOS=js GOARCH=wasm go test -c ./driver/web` and run in a page, and CI builds, vets and lints for the browser without running them.
 
 ## Android
 
