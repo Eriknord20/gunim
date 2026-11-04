@@ -155,6 +155,8 @@ type aaOutput struct {
 	// on is where the output plays, a Route, as Android last told. It
 	// outlives a stream, so a route stays told while a stream reopens.
 	on atomic.Int32
+	// phones says on is headphones, as State.Headphones tells.
+	phones atomic.Bool
 	// wantMic is the device the input should record on: the phone's own
 	// microphone while Bluetooth plays, and 0, for Android's pick,
 	// otherwise. On the earbuds' own microphone Android would move them
@@ -341,6 +343,7 @@ func (a *aaOutput) route(run *aaRun, first bool) {
 	if !r.Known {
 		if first {
 			a.on.Store(int32(RouteUnknown))
+			a.phones.Store(false)
 			a.wantMic.Store(0)
 		}
 		return
@@ -363,11 +366,22 @@ func (a *aaOutput) route(run *aaRun, first bool) {
 		}
 	}
 	a.on.Store(int32(on))
+	a.phones.Store((first || r.Type != 0) && headphonesOf(r.Type))
 	run.mixer.Store(mixer)
 	if first || on != was || mixer != wasMixer {
 		a.s.logf("AAudio's device is of type %d, route %v; Android's mixer reports %v for media's output",
 			r.Type, on, r.Latency)
 	}
+}
+
+// headphonesOf says whether an output device of a type, as
+// android.media.AudioDeviceInfo numbers them, plays into ears alone.
+func headphonesOf(deviceType int) bool {
+	switch deviceType {
+	case 3, 4, 22: // TYPE_WIRED_HEADSET, TYPE_WIRED_HEADPHONES, TYPE_USB_HEADSET
+		return true
+	}
+	return false
 }
 
 // routeOf returns the route of an output device of a type, as
@@ -1174,6 +1188,7 @@ func (a *aaOutput) fill(st *State) {
 	info := driver.Info{Driver: driver.AAudio, Rate: a.hz, Bits: 32, Float: true, Outputs: 2, Played: []int{0, 1},
 		Latency: int(a.delay.Load() + a.extra())}
 	st.Route = Route(a.on.Load())
+	st.Headphones = a.phones.Load()
 	if run := a.run.Load(); run != nil {
 		info.Buffer, info.MinBuffer, info.PreferredBuffer = run.info.Burst, run.info.Burst, run.info.Burst
 		info.MaxBuffer = run.info.Capacity

@@ -1151,6 +1151,31 @@ func TestAAudioRouteFollowsTheDevice(t *testing.T) {
 	})
 }
 
+// Headphones are told apart from what may drive loudspeakers, and a
+// device that left Android's list is neither.
+func TestAAudioToldHeadphones(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+		f.route.Store(&aaudio.Route{Known: true, Type: 4, Latency: 20 * time.Millisecond})
+		useFakeAA(t, f)
+		s := openAA(t, audio.NewMixer(), Options{})
+		time.Sleep(100 * time.Millisecond)
+		if !s.State().Headphones {
+			t.Error("wired headphones read as none")
+		}
+		for _, c := range []struct {
+			typ  int
+			want bool
+		}{{5, false}, {22, true}, {11, false}, {12, false}, {19, false}, {2, false}, {8, false}, {3, true}, {0, false}} {
+			f.route.Store(&aaudio.Route{Known: true, Type: c.typ, Latency: 20 * time.Millisecond})
+			time.Sleep(aaRouteEvery + 100*time.Millisecond)
+			if got := s.State().Headphones; got != c.want {
+				t.Errorf("a device of type %d reads headphones %v", c.typ, got)
+			}
+		}
+	})
+}
+
 // TestAAudioRecordsTheBuiltInMicOnBluetooth opens the input on each
 // route and moves between them: it asks for the phone's own microphone
 // while Bluetooth plays, so earbuds stay on their music link, and leaves
