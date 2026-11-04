@@ -35,7 +35,7 @@ func ClaimGLFWForDesktop() error {
 }
 
 // claimGLFWForOffscreen has the hidden window own GLFW for the run, and fails where a window on a display uses it.
-func claimGLFWForOffscreen() error {
+func claimGLFWForOffscreen() error { //nolint:unused // Only platforms with GLFW claim it.
 	if glfwOwner.CompareAndSwap(glfwFree, glfwOffscreen) || glfwOwner.Load() == glfwOffscreen {
 		return nil
 	}

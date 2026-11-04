@@ -297,7 +297,7 @@ func (a *App) found(exe string) string {
 // or where an older version put it. What the system holds that leads to
 // another path, as a link or a shortcut of the same name, is another
 // program's, and stays.
-func (a *App) ours(in Installation, p string) bool {
+func (a *App) ours(in Installation, p string) bool { //nolint:unused // Only systems with an installer ask.
 	return samePath(p, in.Exe) || a.former(p)
 }
 

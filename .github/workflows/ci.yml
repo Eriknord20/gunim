@@ -48,6 +48,14 @@ jobs:
       # A type that is 64 bits here can be 32 elsewhere, and a linter run
       # on one machine cannot see that. Linux on 32-bit ARM is a real
       # place gunim runs.
+      # The browser is a platform of its own, and the tests for its driver need
+      # a browser to run. Until they have one, it builds and vets here.
+      - name: Vet and build for the browser
+        if: runner.os == 'Linux'
+        run: |
+          GOOS=js GOARCH=wasm go vet -unsafeptr=false ./...
+          GOOS=js GOARCH=wasm go build ./...
+
       - name: Build for 32-bit Linux
         if: runner.os == 'Linux'
         run: |
@@ -138,3 +146,7 @@ jobs:
       # Windows, so they are linted again with the same binary.
       - name: Lint for Windows
         run: GOOS=windows "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+      # Likewise the browser.
+      - name: Lint for the browser
+        run: GOOS=js GOARCH=wasm "$(go env GOPATH)/bin/golangci-lint" run ./...

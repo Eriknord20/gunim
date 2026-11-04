@@ -172,7 +172,7 @@ func Changed() <-chan struct{} {
 }
 
 // announce closes the channel Changed returned.
-func announce() {
+func announce() { //nolint:unused // Only systems with MIDI drivers announce.
 	changes.mu.Lock()
 	defer changes.mu.Unlock()
 	if changes.ch != nil {
@@ -190,7 +190,7 @@ var open struct {
 
 // goneWhere calls f with each open port's address, and whether it is
 // an output, and marks the port gone where f says so.
-func goneWhere(f func(a portAddr, out bool) bool) {
+func goneWhere(f func(a portAddr, out bool) bool) { //nolint:unused // Likewise.
 	open.mu.Lock()
 	var outs []*Out
 	var ins []*In
@@ -329,7 +329,7 @@ func (o *Out) Close() error {
 	return errors.Join(err, o.sys.close(o))
 }
 
-func (o *Out) gone() {
+func (o *Out) gone() { //nolint:unused // Likewise.
 	if o.state.CompareAndSwap(nil, &ErrGone) {
 		o.sys.gone(o)
 	}
@@ -403,14 +403,14 @@ func (i *In) Close() error {
 	return err
 }
 
-func (i *In) gone() {
+func (i *In) gone() { //nolint:unused // Likewise.
 	if i.state.CompareAndSwap(nil, &ErrGone) {
 		i.sys.gone(i)
 	}
 }
 
 // deliver hands e to f, while i is open.
-func (i *In) deliver(e Event) {
+func (i *In) deliver(e Event) { //nolint:unused // Likewise.
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state.Load() != nil {
