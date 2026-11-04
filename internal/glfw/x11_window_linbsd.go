@@ -968,28 +968,54 @@ func handleSelectionRequest(event *_XEvent) {
 	xSendEvent(_glfw.platformWindow.display, request.Requestor, false, 0, &reply)
 }
 
-// selectionWait is how long a selection's other side gets to answer: an owner that a read waits for, or the clipboard
-// manager that takes the clipboard as the program quits. Both hold the main thread, and the other side may never
-// answer: a clipboard forwarded over remote desktop, or a program that has hung.
-const selectionWait = time.Second
+// How long the other side of a selection gets: an owner that a read waits for, or the clipboard manager that takes the
+// clipboard as the program quits. Both hold the main thread, and the other side may never answer: a clipboard forwarded
+// over remote desktop, or a program that has hung.
+const (
+	// selectionWait is how long it gets to say anything.
+	selectionWait = time.Second
+	// selectionMost is the most a whole transfer gets, however steadily it moves.
+	selectionMost = 5 * time.Second
+	// selectionSilent is how long a read leaves an owner alone that didn't answer, so the window doesn't stop again on
+	// every read, as long as the owner stays the same.
+	selectionSilent = 10 * time.Second
+	// selectionProperties is how many properties reads take turns with after one gives up.
+	selectionProperties = 8
+)
 
-// errSelectionSilent says a selection's owner did not answer within selectionWait.
+// errSelectionSilent says a selection's owner did not answer in time.
 var errSelectionSilent = fmt.Errorf("glfw: x11: the owner of the selection did not answer: %w", PlatformError)
+
+// x11Sel is what reads of selections remember of an owner that didn't answer.
+var x11Sel struct {
+	// property is the property answers land in, None for GLFW_SELECTION, and turn the last one taken.
+	property _Atom
+	turn     int
+	// silent is the owner that last gave no answer, and until when reads leave it alone.
+	silent      _XID
+	silentUntil time.Time
+}
+
+// selectionGaveUp remembers that owner didn't answer. The next read takes another property, as owner may yet answer in
+// this one, and go on sending a transfer begun.
+func selectionGaveUp(owner _XID) {
+	x11Sel.silent, x11Sel.silentUntil = owner, time.Now().Add(selectionSilent)
+	x11Sel.turn = (x11Sel.turn + 1) % selectionProperties
+	x11Sel.property = xInternAtom(_glfw.platformWindow.display, fmt.Sprintf("GLFW_SELECTION_%d", x11Sel.turn), false)
+}
 
 // awaitSelection calls check until it reports true, and reports false once selectionWait has passed without that.
 func awaitSelection(check func() bool) bool {
 	deadline := time.Now().Add(selectionWait)
+	fds := []unix.PollFd{{Fd: int32(xConnectionNumber(_glfw.platformWindow.display)), Events: unix.POLLIN}}
 	for !check() {
 		left := time.Until(deadline).Seconds()
 		if left <= 0 {
 			return false
 		}
-		if xPending(_glfw.platformWindow.display) > 0 {
-			// Other events wait in the queue for the main loop, so the socket can't say when the answer comes.
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		waitForX11Event(&left)
+		// check has read the socket and looked through the queue, so only new bytes can bring what it wants. Other
+		// events stay in the queue for the main loop.
+		waitForData(fds, &left)
 	}
 	return true
 }
@@ -1010,6 +1036,17 @@ func getSelectionString(selection _Atom) (string, error) {
 
 	*selectionString = ""
 
+	// gunim change: a limit on the wait for the owner, below, and on all of a transfer.
+	owner := xGetSelectionOwner(_glfw.platformWindow.display, selection)
+	if owner == x11Sel.silent && time.Now().Before(x11Sel.silentUntil) {
+		return "", errSelectionSilent
+	}
+	property := x11Sel.property
+	if property == _None {
+		property = _glfw.platformWindow.GLFW_SELECTION
+	}
+	began := time.Now()
+
 	if isSelPropNewValueNotifyCallback == 0 {
 		isSelPropNewValueNotifyCallback = purego.NewCallback(isSelPropNewValueNotify)
 	}
@@ -1018,27 +1055,28 @@ func getSelectionString(selection _Atom) (string, error) {
 	for _, target := range []_Atom{_glfw.platformWindow.UTF8_STRING, _XA_STRING} {
 		var notification, dummy _XEvent
 
-		// gunim change: an answer that came after an earlier read gave up is not the answer to this one.
-		for xCheckTypedWindowEvent(_glfw.platformWindow.display,
-			_glfw.platformWindow.helperWindowHandle,
-			_SelectionNotify,
-			&dummy) {
-		}
-
 		xConvertSelection(_glfw.platformWindow.display,
 			selection,
 			target,
-			_glfw.platformWindow.GLFW_SELECTION,
+			property,
 			_glfw.platformWindow.helperWindowHandle,
 			_CurrentTime)
 
-		// gunim change: an owner that never answers must not hold the window up for good.
+		// Only the answer to this request will do: one to a read that gave up may still come.
 		if !awaitSelection(func() bool {
-			return xCheckTypedWindowEvent(_glfw.platformWindow.display,
+			for xCheckTypedWindowEvent(_glfw.platformWindow.display,
 				_glfw.platformWindow.helperWindowHandle,
 				_SelectionNotify,
-				&notification)
+				&notification) {
+				answer := notification.xselection()
+				if answer.Selection == selection && answer.Target == target &&
+					(answer.Property == property || answer.Property == _None) {
+					return true
+				}
+			}
+			return false
 		}) {
+			selectionGaveUp(owner)
 			return "", errSelectionSilent
 		}
 
@@ -1075,9 +1113,9 @@ func getSelectionString(selection _Atom) (string, error) {
 			var received bool
 
 			for {
-				// gunim change: so must one that stops halfway. The wait starts anew for each piece, as a
-				// large transfer may take long and still be moving.
-				if !awaitSelection(func() bool {
+				// gunim change: the same limit for one that stops halfway, a piece at a time, as a large transfer may
+				// take a while and still be moving, and a limit on the whole of it.
+				if time.Since(began) > selectionMost || !awaitSelection(func() bool {
 					return xCheckIfEvent(_glfw.platformWindow.display,
 						&dummy,
 						isSelPropNewValueNotifyCallback,
@@ -1086,6 +1124,7 @@ func getSelectionString(selection _Atom) (string, error) {
 					if data != 0 {
 						xFree(data)
 					}
+					selectionGaveUp(owner)
 					return "", errSelectionSilent
 				}
 
@@ -1993,8 +2032,9 @@ func pushSelectionToManagerX11() {
 	}
 
 	// gunim change: a manager that never answers must not hold the quit up for good. The wait starts anew with each
-	// thing it asks for, as a large picture may take long to go and still be moving. A manager that stops only loses
-	// what the clipboard held.
+	// thing asked for, as a large picture may take a while and still be moving, up to a limit on the whole, as another
+	// program may keep asking while the manager says nothing. Giving up loses what the clipboard held.
+	began := time.Now()
 	for {
 		saved, asked := false, false
 		answered := awaitSelection(func() bool {
@@ -2023,7 +2063,7 @@ func pushSelectionToManagerX11() {
 			}
 			return saved || asked
 		})
-		if saved || !answered {
+		if saved || !answered || time.Since(began) > selectionMost {
 			return
 		}
 	}
