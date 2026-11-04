@@ -122,3 +122,25 @@ func TestAListTallerThanItsScrollShows(t *testing.T) {
 		t.Fatalf("a row to act on, its middle out of sight, finds %v", got)
 	}
 }
+
+// A loose query takes names that hold its name only where no name matches whole, so an nth past the whole names finds
+// nothing, and an empty query finds nothing.
+func TestALooseQueryLeavesPartsOutOfTheCountOfWholeNames(t *testing.T) {
+	node := func(name string, x float32) *access.Node {
+		return &access.Node{Info: access.Info{Name: name}, Bounds: geom.Rc(x, 0, 10, 10)}
+	}
+	solo, solo2, soloed := node("Solo", 0), node("Solo", 20), node("Soloed", 40)
+	tree := access.NewTree(&access.Node{Bounds: geom.Rc(0, 0, 100, 100), Children: []*access.Node{solo, solo2, soloed}})
+	trees := []*access.Tree{tree}
+	if n, i := Find(trees, Parse("solo#3")); n != nil || i != -1 {
+		t.Fatalf("the third Solo of two finds %v in tree %d", n, i)
+	}
+	if n, _ := Find(trees, Parse("solo#2")); n != solo2 {
+		t.Fatalf("the second Solo finds %v", n)
+	}
+	for name, q := range map[string]Query{"Parse of nothing": Parse(""), "the zero Query": {}, "Exact of nothing": Exact("")} {
+		if n, i := Find(trees, q); n != nil || i != -1 {
+			t.Fatalf("%s finds %v in tree %d", name, n, i)
+		}
+	}
+}

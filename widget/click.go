@@ -47,9 +47,12 @@ func over(pos geom.Point, size geom.Size) int {
 	return -1
 }
 
-// Click follows one click on the parts of a control drawn by hand, the rule [Clicker] keeps, for parts of any comparable
-// type, such as a struct that names a track and a button. Every press starts a click, and Clicks counts them, so a
-// control can tell a double click apart. The zero Click is ready.
+// Click follows one click on the parts of a control drawn by hand: a press of the primary button, then its release over
+// the part pressed. Its parts are of any comparable type, such as a struct that names a track and a button.
+//
+// It leaves two things to the control that [Clicker] does itself. Every press starts a click, a double click's second
+// too, so a control that acts once checks Clicks. And every value is a part, so a control whose press landed on nothing
+// skips Press, or a release on the same nothing lands. The zero Click is ready.
 type Click[T comparable] struct {
 	at     T
 	held   bool
@@ -84,7 +87,8 @@ func (c *Click[T]) Clicks() int { return c.clicks }
 func (c *Click[T]) Cancel() { c.held = false }
 
 // Hear drops the click under way on a press of any button, or as the keyboard or the window's focus goes; call it
-// first in the control's Handle, before Press, and from its Overhear.
+// first in the control's Handle, before Press, and from its Overhear. The window's focus going reaches only the node
+// with the focus and those round it, so a control elsewhere holds its click until the next press replaces it.
 func (c *Click[T]) Hear(e input.Event) {
 	switch e.(type) {
 	case input.PointerDown, input.FocusLost, input.WindowFocusLost:

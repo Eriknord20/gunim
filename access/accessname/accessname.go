@@ -73,6 +73,11 @@ func Find(trees []*access.Tree, q Query) (n *access.Node, tree int) {
 				}
 			}
 		}
+		if k > 0 {
+			// Names match whole, too few of them: names that hold the
+			// query's name don't make up the count.
+			return nil, -1
+		}
 	}
 	return nil, -1
 }
@@ -87,6 +92,9 @@ func Find(trees []*access.Tree, q Query) (n *access.Node, tree int) {
 // part of it does, as a list taller than its scroll; one with actions
 // keeps the middle rule, so a click on it lands on it.
 func Matches(root *access.Node, path []string, whole bool) []*access.Node {
+	if len(path) == 0 {
+		return nil
+	}
 	var out []*access.Node
 	var above []string
 	var walk func(n *access.Node, room geom.Rect)
@@ -144,9 +152,10 @@ func hasPath(names, path []string, whole bool) bool {
 }
 
 // nameIs reports whether name, in lower case, is want: whole, or by its
-// start where want ends in "*", or, not whole, in part.
+// start where want ends in "*", or, not whole, in part. An empty name, or
+// an empty want, matches nothing.
 func nameIs(name, want string, whole bool) bool {
-	if name == "" {
+	if name == "" || want == "" {
 		return false
 	}
 	if start, ok := strings.CutSuffix(want, "*"); ok {

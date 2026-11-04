@@ -42,9 +42,8 @@ type Run struct {
 }
 
 // Start makes a file for this run in dir, says at its head that app runs,
-// at version,
-// and has the runtime write there as the program crashes, every
-// goroutine's stack with it.
+// at version, and has the runtime write there as the program crashes,
+// every goroutine's stack with it.
 func Start(dir, app, version string, now time.Time) (*Run, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("making the crash folder: %w", err)
@@ -117,7 +116,7 @@ func Left(dir, self string) ([]Report, error) {
 		err = errors.New("it is a file, not a folder")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("looking for crash reports in %s: %w. Make it a folder to stop this note", dir, err)
+		return nil, fmt.Errorf("looking for crash reports in %s: %w", dir, err)
 	}
 	var out []Report
 	var errs []error
@@ -145,7 +144,7 @@ func Left(dir, self string) ([]Report, error) {
 				// On Windows, the file of a copy running stays as it
 				// is open: running says no to every process there.
 				if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) && !heldOpen(err) {
-					errs = append(errs, fmt.Errorf("removing the empty crash file %s: %w. Delete it or move it aside to stop this note", path, err))
+					errs = append(errs, fmt.Errorf("removing the empty crash file %s: %w", path, err))
 				}
 			}
 			continue
@@ -180,7 +179,7 @@ var (
 // unreadReport is the error of the crash report at path, which failed to
 // read with err.
 func unreadReport(path string, err error) error {
-	return fmt.Errorf("reading the crash report %s: %w. Delete it or move it aside to stop this note", path, err)
+	return fmt.Errorf("reading the crash report %s: %w", path, err)
 }
 
 // Seen moves the reports to the folder seen, beside them, so the next
@@ -194,7 +193,7 @@ func Seen(reports []Report) (err, tidy error) {
 	for _, r := range reports {
 		seen := filepath.Join(filepath.Dir(r.Path), "seen")
 		if err := os.MkdirAll(seen, 0o755); err != nil {
-			errs = append(errs, fmt.Errorf("%w. Make %s a folder to stop this note", err, seen))
+			errs = append(errs, fmt.Errorf("making the folder %s: %w", seen, err))
 			continue
 		}
 		// Another copy started at once may have moved it already.
@@ -217,7 +216,7 @@ func Seen(reports []Report) (err, tidy error) {
 func trim(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("an old one in %s couldn't be deleted: %w", dir, err)
+		return fmt.Errorf("deleting an old crash report in %s: %w", dir, err)
 	}
 	var names []string
 	for _, e := range entries {
@@ -233,7 +232,7 @@ func trim(dir string) error {
 	var errs []error
 	for _, n := range names[:len(names)-keepSeen] {
 		if err := removeFile(filepath.Join(dir, n)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("an old one in %s couldn't be deleted: %w", dir, err))
+			errs = append(errs, fmt.Errorf("deleting an old crash report in %s: %w", dir, err))
 		}
 	}
 	return errors.Join(errs...)

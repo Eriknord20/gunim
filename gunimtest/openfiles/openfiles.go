@@ -1,7 +1,7 @@
 // Package openfiles lists the files a process holds open, for tests:
 // Windows refuses to take away a file held open, or the folder holding
 // it, so a test that leaves one open fails there. Under lists them on
-// Linux, so the same test fails here too.
+// Linux, so the same test fails on Linux too.
 package openfiles
 
 import (

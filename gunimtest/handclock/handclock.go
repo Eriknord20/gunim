@@ -15,8 +15,9 @@ import (
 // clock, and Advance returns once they are done. A round woken runs at
 // the next Advance, Advance(0) too.
 //
-// Sleep is Advance, for code that sleeps on the test's goroutine. A goroutine of its own waits on After instead, until the
-// test moves the clock.
+// Sleep is Advance, for code that sleeps on the test's goroutine. A goroutine of its own waits on After instead, until
+// the test moves the clock. A timer or a round that calls Sleep or Advance hangs for good, as Advance is already under
+// way, so one that has to wait waits on After too.
 type Clock struct {
 	// adv keeps Advance to one goroutine at a time.
 	adv    sync.Mutex

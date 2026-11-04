@@ -135,7 +135,7 @@ func TestAReportThatCantBeReadIsToldOf(t *testing.T) {
 	}
 	defer func() { readFile = os.ReadFile }()
 	left, err := Left(dir, "")
-	if err == nil || !strings.Contains(err.Error(), bad) || !strings.Contains(err.Error(), "Delete it or move it aside") {
+	if err == nil || !strings.Contains(err.Error(), bad) {
 		t.Fatalf("a report that can't be read: %v", err)
 	}
 	if strings.Contains(err.Error(), gone) {
@@ -158,7 +158,7 @@ func TestReportsSeenThatCantBeMovedSaySo(t *testing.T) {
 		t.Fatal(err)
 	}
 	err, tidy := Seen([]Report{{Path: report}})
-	if err == nil || !strings.Contains(err.Error(), "Make "+seen+" a folder") || tidy != nil {
+	if err == nil || !strings.Contains(err.Error(), "making the folder "+seen) || tidy != nil {
 		t.Fatalf("reports that can't be moved aside: %v, tidying %v", err, tidy)
 	}
 }
@@ -180,7 +180,7 @@ func TestOldReportsSeenThatCantGoSaySoApart(t *testing.T) {
 	removeFile = func(string) error { removes++; return errors.New("the disk failed") }
 	defer func() { removeFile = os.Remove }()
 	err, tidy := Seen(reports)
-	if err != nil || tidy == nil || !strings.Contains(tidy.Error(), "an old one in "+seen+" couldn't be deleted") {
+	if err != nil || tidy == nil || !strings.Contains(tidy.Error(), "deleting an old crash report in "+seen) {
 		t.Fatalf("old reports that can't go: %v, tidying %v", err, tidy)
 	}
 	if removes != 2 {
