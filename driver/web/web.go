@@ -30,6 +30,7 @@ import (
 	"errors"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall/js"
@@ -57,6 +58,9 @@ type Driver struct {
 	scale        float32
 	cssW, cssH   float32
 	surfW, surfH int
+	// exactW and exactH are the canvas's size in device pixels, from a browser
+	// that says.
+	exactW, exactH int
 
 	// windows is the stack of open windows, bottom first.
 	windows []*Window
@@ -127,6 +131,7 @@ func open() (*Driver, error) {
 		s.Set("height", "100vh")
 		doc.Get("body").Call("appendChild", canvas)
 	}
+	pinAutoSize(canvas)
 	opts := js.ValueOf(map[string]any{
 		"alpha": false, "antialias": false, "depth": false, "stencil": false,
 		"premultipliedAlpha": true, "preserveDrawingBuffer": false, "powerPreference": "high-performance",
@@ -160,6 +165,21 @@ func open() (*Driver, error) {
 	return d, nil
 }
 
+// pinAutoSize fixes a side of the canvas that takes its size from its drawing
+// buffer, as one with no CSS size does. Otherwise sizing the buffer to match
+// the canvas would grow the canvas, without end at a scale above 1.
+func pinAutoSize(c js.Value) {
+	w, h := c.Get("clientWidth").Int(), c.Get("clientHeight").Int()
+	c.Set("width", w*2+7)
+	c.Set("height", h*2+7)
+	if c.Get("clientWidth").Int() != w {
+		c.Get("style").Set("width", strconv.Itoa(w)+"px")
+	}
+	if c.Get("clientHeight").Int() != h {
+		c.Get("style").Set("height", strconv.Itoa(h)+"px")
+	}
+}
+
 // measure reads the canvas's size and the page's scale, and sizes the
 // drawing buffer to match. It reports whether anything changed.
 func (d *Driver) measure() bool {
@@ -171,6 +191,11 @@ func (d *Driver) measure() bool {
 	}
 	pw, ph := int(math.Round(float64(w*s))), int(math.Round(float64(h*s)))
 	d.mu.Lock()
+	if d.exactW > 0 && d.exactH > 0 {
+		// clientWidth rounds, so at a fractional scale the browser's own count
+		// of device pixels is the one that fills the canvas exactly.
+		pw, ph = d.exactW, d.exactH
+	}
 	changed := w != d.cssW || h != d.cssH || s != d.scale
 	d.cssW, d.cssH, d.scale = w, h, s
 	if pw != d.surfW || ph != d.surfH {
@@ -658,13 +683,36 @@ func (d *Driver) listen(doc js.Value) {
 	d.on(win, "deviceorientationabsolute", true, d.heading)
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
-		f := js.FuncOf(func(js.Value, []js.Value) any {
+		f := js.FuncOf(func(_ js.Value, args []js.Value) any {
+			d.readExactSize(args[0])
 			d.resized()
 			return nil
 		})
 		d.funcs = append(d.funcs, f)
-		ro.New(f).Call("observe", c)
+		observer := ro.New(f)
+		// A browser without the box refuses to observe it.
+		entry := win.Get("ResizeObserverEntry")
+		if !entry.IsUndefined() && js.Global().Get("Reflect").Call("has", entry.Get("prototype"), "devicePixelContentBoxSize").Bool() {
+			observer.Call("observe", c, map[string]any{"box": "device-pixel-content-box"})
+		} else {
+			observer.Call("observe", c)
+		}
 	}
+}
+
+// readExactSize takes the canvas's size in device pixels from a ResizeObserver's
+// entries, if the browser gives it.
+func (d *Driver) readExactSize(entries js.Value) {
+	if entries.Length() == 0 {
+		return
+	}
+	box := entries.Index(0).Get("devicePixelContentBoxSize")
+	if box.IsUndefined() || box.Length() == 0 {
+		return
+	}
+	d.mu.Lock()
+	d.exactW, d.exactH = box.Index(0).Get("inlineSize").Int(), box.Index(0).Get("blockSize").Int()
+	d.mu.Unlock()
 }
 
 // survive keeps a JavaScript exception thrown into a callback, which
