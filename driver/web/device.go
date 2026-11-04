@@ -50,7 +50,7 @@ func (w *Window) Share(s driver.Share) error {
 
 // TakeFingers implements [driver.FingerTaker]: each finger of a touch that
 // starts in w is a finger of its own. The browser's own gestures stop over the
-// canvas while any window takes fingers.
+// canvas while any window takes fingers, whatever touch-action the page set.
 func (w *Window) TakeFingers(on bool) error {
 	d := w.d
 	d.mu.Lock()
@@ -64,7 +64,7 @@ func (w *Window) TakeFingers(on bool) error {
 		any = any || x.takesFingers
 	}
 	d.mu.Unlock()
-	action := "pan-y"
+	action := d.touchAction
 	if any {
 		action = "none"
 	}

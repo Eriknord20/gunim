@@ -19,10 +19,10 @@
 // input. Text comes through a hidden textarea, focused while a window
 // takes text, so a phone's soft keyboard and input methods work.
 //
-// A canvas with data-touch="press" has touches reach gunim as presses
-// of a mouse's: for a page that leaves scrolling to the browser, whose
-// controls should not take a finger held for a long press, or moved a
-// little for a scroll.
+// Gunim takes every touch on the canvas, and scrolls and pans for itself. A page
+// that wants the browser to have some of them, as to scroll the page with
+// vertical swipes, sets touch-action in the canvas's own style attribute, and
+// that is kept. Elements a page lays over the canvas keep their own events.
 package web
 
 import (
@@ -67,7 +67,9 @@ type Driver struct {
 	// pointer is the id of the pointer pressing: one drives the pointer at
 	// a time, as gunim has one, and another finger is its own or nothing.
 	// fingers is the window each finger of its own came down in, by id.
-	pointer int
+	// touchAction is what the page asked of the browser for touches.
+	touchAction string
+	pointer     int
 	fingers map[int]*Window
 	// compass says the browser has sent a heading, and headingTo holds the
 	// windows that watch it.
@@ -368,7 +370,7 @@ func modsOf(e js.Value) input.Mods {
 
 // touchOf reports whether a pointer event reaches gunim as a touch.
 func (d *Driver) touchOf(e js.Value) bool {
-	return e.Get("pointerType").String() != "mouse" && d.canvas.Get("dataset").Get("touch").String() != "press"
+	return e.Get("pointerType").String() != "mouse"
 }
 
 // at returns where a pointer event is on the canvas, in logical pixels.
@@ -394,7 +396,11 @@ const (
 
 func (d *Driver) listen(doc js.Value) {
 	c := d.canvas
-	c.Get("style").Set("touchAction", "pan-y")
+	d.touchAction = c.Get("style").Get("touchAction").String()
+	if d.touchAction == "" {
+		d.touchAction = "none"
+	}
+	c.Get("style").Set("touchAction", d.touchAction)
 	c.Get("style").Set("userSelect", "none")
 	c.Get("style").Set("webkitUserSelect", "none")
 	c.Get("style").Set("webkitTapHighlightColor", "transparent")
@@ -416,16 +422,8 @@ func (d *Driver) listen(doc js.Value) {
 	doc.Get("body").Call("appendChild", t)
 	d.text = t
 
-	// Pointer events come from the canvas's parent, so a page may lay
-	// elements over the canvas, as zones with touch-action: none over
-	// the controls that drag, and still have their touches reach gunim.
-	// Positions are always the canvas's.
-	in := c.Get("parentElement")
-	if in.IsNull() || in.Equal(doc.Get("body")) {
-		in = c
-	}
-	d.on(in, "contextmenu", false, func(e js.Value) { e.Call("preventDefault") })
-	d.on(in, "pointerdown", false, func(e js.Value) {
+	d.on(c, "contextmenu", false, func(e js.Value) { e.Call("preventDefault") })
+	d.on(c, "pointerdown", false, func(e js.Value) {
 		p, now := d.at(e), time.Now()
 		touch, id := d.touchOf(e), e.Get("pointerId").Int()
 		d.mu.Lock()
@@ -439,7 +437,7 @@ func (d *Driver) listen(doc js.Value) {
 			d.mu.Unlock()
 			e.Call("preventDefault")
 			if w.takesFingers {
-				capture(in, e.Get("pointerId"))
+				capture(c, e.Get("pointerId"))
 				d.fingerEvent(id, e, input.FingerDown)
 			}
 			return
@@ -467,7 +465,7 @@ func (d *Driver) listen(doc js.Value) {
 		// moves focus itself. A touch still scrolls the page, which
 		// touch-action decides.
 		e.Call("preventDefault")
-		capture(in, e.Get("pointerId"))
+		capture(c, e.Get("pointerId"))
 		d.fingerEvent(id, e, input.FingerDown)
 		// The canvas keeps the keyboard unless a window takes text;
 		// a press that turns text on focuses the textarea after.
@@ -478,7 +476,7 @@ func (d *Driver) listen(doc js.Value) {
 		w.in.Push(input.PointerMove{Pos: local, Mods: m, Touch: touch, Time: now})
 		w.in.Push(input.PointerDown{Pos: local, Button: buttonOf(e), Mods: m, Clicks: clicks, Touch: touch, Time: now})
 	})
-	d.on(in, "pointermove", true, func(e js.Value) {
+	d.on(c, "pointermove", true, func(e js.Value) {
 		p, now := d.at(e), time.Now()
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerMove)
@@ -548,9 +546,9 @@ func (d *Driver) listen(doc js.Value) {
 			w.in.Push(input.PointerLeave{Time: now})
 		}
 	}
-	d.on(in, "pointerup", true, func(e js.Value) { up(e, false) })
-	d.on(in, "pointercancel", true, func(e js.Value) { up(e, true) })
-	d.on(in, "pointerleave", true, func(e js.Value) {
+	d.on(c, "pointerup", true, func(e js.Value) { up(e, false) })
+	d.on(c, "pointercancel", true, func(e js.Value) { up(e, true) })
+	d.on(c, "pointerleave", true, func(e js.Value) {
 		if e.Get("pointerType").String() != "mouse" {
 			return
 		}
@@ -566,7 +564,7 @@ func (d *Driver) listen(doc js.Value) {
 			w.in.Push(input.PointerLeave{Time: time.Now()})
 		}
 	})
-	d.on(in, "wheel", false, func(e js.Value) {
+	d.on(c, "wheel", false, func(e js.Value) {
 		p := d.at(e)
 		d.mu.Lock()
 		w := d.hitLocked(p)
