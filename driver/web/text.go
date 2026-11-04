@@ -95,6 +95,15 @@ func (d *Driver) domEdited(composing bool) {
 	d.mu.Lock()
 	if w.state == nil {
 		d.mu.Unlock()
+		// A window that gives no text state takes what is typed as it comes.
+		if !composing {
+			if text := d.text.Get("value").String(); text != "" {
+				d.syncingText = true
+				d.text.Set("value", "")
+				d.syncingText = false
+				w.in.Push(input.TextInput{Text: text, Time: time.Now()})
+			}
+		}
 		return
 	}
 	old := *w.state

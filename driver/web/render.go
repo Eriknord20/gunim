@@ -47,19 +47,23 @@ func (d *Driver) frame() {
 		f        *frame
 		fbW, fbH int
 		under    color.NRGBA
+		// again says it is the last frame drawn over, which the engine never sent.
+		again bool
 	}
 	var jobs []job
 	var stack []layer
 	scale, surfW, surfH := d.scale, d.surfW, d.surfH
 	for _, w := range d.windows {
+		again := false
 		if (w.sharpen || w.shot != nil) && w.next == nil && w.last != nil {
 			w.next = &frame{ops: w.last, damage: []geom.Rect{paint.Everything}}
+			again = true
 		}
 		w.sharpen = false
 		r := w.rectLocked()
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.next != nil {
-			jobs = append(jobs, job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under})
+			jobs = append(jobs, job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under, again: again})
 			w.next = nil
 		}
 		if !w.hidden {
@@ -150,6 +154,9 @@ func (d *Driver) frame() {
 	}
 	now := time.Now()
 	for _, j := range jobs {
+		if j.again {
+			continue
+		}
 		select {
 		case j.w.presented <- driver.Frame{Shown: now, Lag: time.Duration(float64(time.Second) / d.rate)}:
 		default:
