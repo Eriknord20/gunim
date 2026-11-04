@@ -48,7 +48,8 @@ import (
 type Driver struct {
 	mu sync.Mutex
 
-	canvas, text js.Value
+	// text is whichever of plain and secret takes text just now.
+	canvas, text, plain, secret js.Value
 	g            gl.Context
 	shared       render.Shared
 	comp         *compositor
@@ -432,21 +433,30 @@ func (d *Driver) listen(doc js.Value) {
 	c.Get("style").Set("webkitTapHighlightColor", "transparent")
 	c.Set("tabIndex", 0)
 
-	// The textarea that takes text, out of sight, but focusable, so a
-	// phone shows its keyboard for it.
-	t := doc.Call("createElement", "textarea")
-	for k, v := range map[string]string{
-		"position": "fixed", "left": "0", "top": "0", "width": "1px", "height": "1px",
-		"opacity": "0", "border": "0", "padding": "0", "resize": "none", "pointerEvents": "none",
-	} {
-		t.Get("style").Set(k, v)
+	// What takes text, out of sight, but focusable, so a phone shows its
+	// keyboard for it: a textarea, and for a secret a password field, which
+	// tells a phone's keyboard not to learn it.
+	mirror := func(tag string) js.Value {
+		el := doc.Call("createElement", tag)
+		for k, v := range map[string]string{
+			"position": "fixed", "left": "0", "top": "0", "width": "1px", "height": "1px",
+			"opacity": "0", "border": "0", "padding": "0", "resize": "none", "pointerEvents": "none",
+		} {
+			el.Get("style").Set(k, v)
+		}
+		el.Call("setAttribute", "autocapitalize", "none")
+		el.Call("setAttribute", "spellcheck", "false")
+		el.Call("setAttribute", "aria-hidden", "true")
+		doc.Get("body").Call("appendChild", el)
+		return el
 	}
-	t.Call("setAttribute", "autocomplete", "off")
-	t.Call("setAttribute", "autocapitalize", "none")
-	t.Call("setAttribute", "spellcheck", "false")
-	t.Call("setAttribute", "aria-hidden", "true")
-	doc.Get("body").Call("appendChild", t)
-	d.text = t
+	d.plain, d.secret = mirror("textarea"), mirror("input")
+	d.plain.Call("setAttribute", "autocomplete", "off")
+	d.plain.Call("setAttribute", "autocorrect", "on")
+	d.secret.Set("type", "password")
+	d.secret.Call("setAttribute", "autocomplete", "new-password")
+	d.secret.Call("setAttribute", "autocorrect", "off")
+	d.text = d.plain
 
 	d.on(c, "contextmenu", false, func(e js.Value) { e.Call("preventDefault") })
 	d.on(c, "pointerdown", false, func(e js.Value) {
@@ -655,8 +665,10 @@ func (d *Driver) listen(doc js.Value) {
 	}
 	d.on(c, "keydown", false, func(e js.Value) { key(e, true) })
 	d.on(c, "keyup", false, func(e js.Value) { key(e, false) })
-	d.on(t, "keydown", false, func(e js.Value) { key(e, true) })
-	d.on(t, "keyup", false, func(e js.Value) { key(e, false) })
+	for _, t := range []js.Value{d.plain, d.secret} {
+		d.on(t, "keydown", false, func(e js.Value) { key(e, true) })
+		d.on(t, "keyup", false, func(e js.Value) { key(e, false) })
+	}
 	d.listenText(doc)
 
 	focus := func(on bool) {

@@ -43,7 +43,12 @@ func (d *Driver) syncText(w *Window) {
 	if composing {
 		return
 	}
+	d.useMirror(state.Secret)
 	t := d.text
+	// A secret is only there while it has focus: see listenText.
+	if state.Secret && !t.Equal(js.Global().Get("document").Get("activeElement")) {
+		return
+	}
 	d.syncingText = true
 	defer func() { d.syncingText = false }()
 	if t.Get("value").String() != state.Text {
@@ -58,12 +63,25 @@ func (d *Driver) syncText(w *Window) {
 	if t.Get("selectionStart").Int() != a || t.Get("selectionEnd").Int() != b || t.Get("selectionDirection").String() != direction {
 		t.Call("setSelectionRange", a, b, direction)
 	}
-	if state.Secret {
-		t.Call("setAttribute", "autocomplete", "new-password")
-		t.Call("setAttribute", "autocorrect", "off")
-	} else {
-		t.Call("setAttribute", "autocomplete", "off")
-		t.Call("setAttribute", "autocorrect", "on")
+}
+
+// useMirror moves typing to the password field or back, taking focus along, and
+// leaves nothing behind in the one it left.
+func (d *Driver) useMirror(secret bool) {
+	to := d.plain
+	if secret {
+		to = d.secret
+	}
+	if to.Equal(d.text) {
+		return
+	}
+	focused := d.text.Equal(js.Global().Get("document").Get("activeElement"))
+	d.syncingText = true
+	d.text.Set("value", "")
+	d.syncingText = false
+	d.text = to
+	if focused {
+		to.Call("focus", map[string]any{"preventScroll": true})
 	}
 }
 func (d *Driver) domEdited(composing bool) {
@@ -111,48 +129,63 @@ func (d *Driver) domEdited(composing bool) {
 	}
 }
 func (d *Driver) listenText(doc js.Value) {
-	t := d.text
-	d.on(t, "compositionstart", false, func(js.Value) {
-		w := d.typingWindow()
-		if w == nil {
-			return
-		}
-		text := t.Get("value").String()
-		d.compStart = byteOffset(text, t.Get("selectionStart").Int())
-		end := byteOffset(text, t.Get("selectionEnd").Int())
-		d.compSuffix = text[end:]
-		d.composing = true
-	})
-	d.on(t, "compositionend", false, func(js.Value) { d.composing = false; d.domEdited(false) })
-	d.on(t, "beforeinput", false, func(e js.Value) {
-		if kind := e.Get("inputType").String(); kind == "insertLineBreak" || kind == "insertParagraph" {
+	for _, t := range []js.Value{d.plain, d.secret} {
+		d.on(t, "compositionstart", false, func(js.Value) {
 			w := d.typingWindow()
-			if w != nil {
-				d.mu.Lock()
-				single := w.state != nil && !w.state.Multiline
-				d.mu.Unlock()
-				if single {
-					e.Call("preventDefault")
-					w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+			if w == nil {
+				return
+			}
+			text := t.Get("value").String()
+			d.compStart = byteOffset(text, t.Get("selectionStart").Int())
+			end := byteOffset(text, t.Get("selectionEnd").Int())
+			d.compSuffix = text[end:]
+			d.composing = true
+		})
+		d.on(t, "compositionend", false, func(js.Value) { d.composing = false; d.domEdited(false) })
+		d.on(t, "beforeinput", false, func(e js.Value) {
+			if kind := e.Get("inputType").String(); kind == "insertLineBreak" || kind == "insertParagraph" {
+				w := d.typingWindow()
+				if w != nil {
+					d.mu.Lock()
+					single := w.state != nil && !w.state.Multiline
+					d.mu.Unlock()
+					if single {
+						e.Call("preventDefault")
+						w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+					}
 				}
 			}
-		}
-	})
-	d.on(t, "input", false, func(e js.Value) {
-		is := e.Get("isComposing")
-		d.domEdited(d.composing || (!is.IsUndefined() && is.Bool()))
-	})
+		})
+		d.on(t, "input", false, func(e js.Value) {
+			is := e.Get("isComposing")
+			d.domEdited(d.composing || (!is.IsUndefined() && is.Bool()))
+		})
+		d.on(t, "paste", false, func(e js.Value) {
+			c := e.Get("clipboardData")
+			if !c.IsNull() && !c.IsUndefined() {
+				d.clipboard = c.Call("getData", "text/plain").String()
+			}
+		})
+	}
 	d.on(doc, "selectionchange", true, func(js.Value) {
-		if !d.syncingText && !d.composing && doc.Get("activeElement").Equal(t) {
+		if !d.syncingText && !d.composing && doc.Get("activeElement").Equal(d.text) {
 			d.domEdited(false)
 		}
 	})
-	d.on(t, "paste", false, func(e js.Value) {
-		c := e.Get("clipboardData")
-		if !c.IsNull() && !c.IsUndefined() {
-			d.clipboard = c.Call("getData", "text/plain").String()
+	// A secret stays only while it has focus, and cannot be copied out.
+	d.on(d.secret, "blur", true, func(js.Value) {
+		d.syncingText = true
+		d.secret.Set("value", "")
+		d.syncingText = false
+	})
+	d.on(d.secret, "focus", true, func(js.Value) {
+		if w := d.typingWindow(); w != nil {
+			d.syncText(w)
 		}
 	})
+	for _, name := range []string{"copy", "cut"} {
+		d.on(d.secret, name, false, func(e js.Value) { e.Call("preventDefault") })
+	}
 }
 
 func editKeyOwnedByDOM(e js.Value) bool {
