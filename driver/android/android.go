@@ -148,6 +148,8 @@ type Driver struct {
 	compass     bool
 	compassOnce sync.Once
 
+	// awakeSent is what keepAwakeLocked last handed Java.
+	awakeSent bool
 	// excludedSent is the rects, four device pixel coordinates each,
 	// last handed to Java to keep from the system's edge gestures.
 	excludedSent []int32
@@ -705,6 +707,7 @@ func (d *Driver) closed(w *Window) {
 	delete(d.headingTo, w)
 	d.runCompassLocked()
 	d.excludeGesturesLocked()
+	d.keepAwakeLocked()
 	last := true
 	for _, x := range d.windows {
 		if x.fills {

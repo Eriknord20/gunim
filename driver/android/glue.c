@@ -14,7 +14,7 @@
 static JavaVM *vm;
 static jclass nativeClass;
 static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder;
-static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
+static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midAwake, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
 static jclass audioClass;
 static jmethodID midAudioRoute, midAudioProbe;
@@ -38,6 +38,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 	midCaret = (*env)->GetStaticMethodID(env, c, "caret", "(IIII)V");
 	midBuzz = (*env)->GetStaticMethodID(env, c, "buzz", "()V");
 	midFingers = (*env)->GetStaticMethodID(env, c, "takeFingers", "(Z)V");
+	midAwake = (*env)->GetStaticMethodID(env, c, "keepAwake", "(Z)V");
 	midShare = (*env)->GetStaticMethodID(env, c, "share", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
 	midVibrate = (*env)->GetStaticMethodID(env, c, "vibrate", "([J)Z");
 	midExclude = (*env)->GetStaticMethodID(env, c, "excludeGestures", "([I)V");
@@ -231,6 +232,13 @@ void gunim_take_fingers(int on) {
 	int a;
 	JNIEnv *env = envGet(&a);
 	(*env)->CallStaticVoidMethod(env, nativeClass, midFingers, on ? JNI_TRUE : JNI_FALSE);
+	envPut(a);
+}
+
+void gunim_keep_awake(int on) {
+	int a;
+	JNIEnv *env = envGet(&a);
+	(*env)->CallStaticVoidMethod(env, nativeClass, midAwake, on ? JNI_TRUE : JNI_FALSE);
 	envPut(a);
 }
 

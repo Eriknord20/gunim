@@ -31,6 +31,7 @@ public class GunimActivity extends Activity {
 		Native.keepGestures(v);
 		setContentView(v);
 		edgeToEdge(v);
+		applyAwake();
 		if (android.os.Build.VERSION.SDK_INT >= 30) {
 			// The view keeps its size as the keyboard opens; the driver
 			// slides the drawing up instead, following the keyboard.
@@ -44,6 +45,19 @@ public class GunimActivity extends Activity {
 		v.requestFocus();
 		Native.start(java.util.TimeZone.getDefault().getID());
 		showBuild();
+	}
+
+	/**
+	 * applyAwake sets the window's flag to keep the screen on to what the
+	 * program last asked, on the UI thread.
+	 */
+	void applyAwake() {
+		int flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+		if (Native.awake) {
+			getWindow().addFlags(flag);
+		} else {
+			getWindow().clearFlags(flag);
+		}
 	}
 
 	/**
