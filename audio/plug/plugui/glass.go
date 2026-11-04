@@ -54,10 +54,10 @@ func Lines(t float32) float32 { return 1 - t*float32(1-Look.Curve) }
 func PaintGlass(p *paint.Painter, th *theme.Live, r geom.Rect, radius float32) {
 	glass := p.Layer(paint.LayerOpts{Bounds: r, Opacity: 1, Backdrop: float32(Look.Blur), Clip: true, Radius: radius})
 	if Look.Card > 0.001 {
-		p.RRect(r, radius, paint.Solid(audioui.Faded(audioui.Ground.Get(th), float32(Look.Card))))
+		p.RRect(r, radius, paint.Solid(paint.Faded(audioui.Ground.Get(th), float32(Look.Card))))
 	}
 	glass()
-	p.RRectStroke(r, radius, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(widget.Ink.Get(th), 0.12)})
+	p.RRectStroke(r, radius, paint.Fill{}, paint.Stroke{Width: 1, Color: paint.Faded(widget.Ink.Get(th), 0.12)})
 }
 
 // Tuner turns the look: its Button opens its Card, a knob for each of the
@@ -136,7 +136,7 @@ func NewTuner(tip string) *Tuner {
 // SetOpen opens the card, or closes it.
 func (t *Tuner) SetOpen(open bool, u *gunim.UI) {
 	t.Button.Active = open
-	t.Card.in.Animate(onOff(open), widget.Settle.Get(u.Theme()))
+	t.Card.in.Animate(anim.OnOff(open), widget.Settle.Get(u.Theme()))
 	if open {
 		// Another view may have turned the look meanwhile.
 		t.Follow(u)
@@ -198,9 +198,9 @@ func (c *TunerCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	defer p.Push(paint.Translate(geom.Pt(0, -(1-in)*8)))()
 	end := p.Layer(paint.LayerOpts{Bounds: r.Inset(geom.Uniform(-20)), Opacity: in})
 	defer end()
-	p.ShadowRRect(r, 12, paint.Solid(audioui.Mix(audioui.Ground.Get(th), widget.Ink.Get(th), 0.08)),
-		paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: audioui.Faded(audioui.Ground.Get(th), 0.8)})
-	p.RRectStroke(r, 12, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(widget.Ink.Get(th), 0.12)})
+	p.ShadowRRect(r, 12, paint.Solid(anim.MixColor(audioui.Ground.Get(th), widget.Ink.Get(th), 0.08)),
+		paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: paint.Faded(audioui.Ground.Get(th), 0.8)})
+	p.RRectStroke(r, 12, paint.Fill{}, paint.Stroke{Width: 1, Color: paint.Faded(widget.Ink.Get(th), 0.12)})
 	for k := range kids.All {
 		k.Paint(p)
 	}

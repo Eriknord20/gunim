@@ -84,7 +84,7 @@ func (m *vu) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Child
 	th := f.Theme
 	ink, red := VUInk.Get(th), VURed.Get(th)
 	outer := geom.Rect{Max: box.Point()}
-	p.ShadowRRect(outer, 10, paint.Solid(VUBezel.Get(th)), paint.Shadow{Blur: 12, Color: audioui.Faded(color.NRGBA{A: 0xff}, 0.35)})
+	p.ShadowRRect(outer, 10, paint.Solid(VUBezel.Get(th)), paint.Shadow{Blur: 12, Color: paint.Faded(color.NRGBA{A: 0xff}, 0.35)})
 	face := outer.Inset(geom.Uniform(7))
 	p.RRect(face, 5, paint.Fill{Gradient: &paint.Gradient{From: face.Min, To: geom.Pt(face.Min.X, face.Max.Y),
 		Start: VUFace.Get(th), End: VUFaceLow.Get(th)}})
@@ -130,11 +130,11 @@ func (m *vu) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Child
 	vuText := audioui.Shaped("VU", max(12, h*0.16), true, false)
 	vuText.Paint(p, geom.Pt(pivot.X-vuText.Advance/2, face.Min.Y+h*0.52), ink)
 	name := audioui.Shaped(m.name, max(8, h*0.075), true, false)
-	name.Paint(p, geom.Pt(pivot.X-name.Advance/2, face.Max.Y-h*0.13), audioui.Faded(ink, 0.7))
+	name.Paint(p, geom.Pt(pivot.X-name.Advance/2, face.Max.Y-h*0.13), paint.Faded(ink, 0.7))
 	// The needle, and the shadow it throws on the face.
 	// The pins stop the needle where its spring would swing it past.
 	tip := along(max(vuAt(vuRest), min(m.needle.Value(), vuAt(vuPin))), radius+3)
-	audioui.Segment(p, geom.Pt(pivot.X+2, pivot.Y+2), geom.Pt(tip.X+2, tip.Y+3), 2, audioui.Faded(ink, 0.18))
+	audioui.Segment(p, geom.Pt(pivot.X+2, pivot.Y+2), geom.Pt(tip.X+2, tip.Y+3), 2, paint.Faded(ink, 0.18))
 	audioui.Segment(p, pivot, tip, 1.6, VUNeedle.Get(th))
 	// Glass: a sheen over the top half.
 	p.RRect(face, 5, paint.Fill{Gradient: &paint.Gradient{From: face.Min, To: geom.Pt(face.Min.X, face.Min.Y+h*0.55),

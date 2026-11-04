@@ -196,7 +196,7 @@ func (r *bandRow) show(b *audio.Band, place int, u *gunim.UI) {
 	}
 	r.id, r.place = b.ID, place
 	r.in.Animate(1, sp)
-	r.dynIn.Animate(onOff(dynamic(b)), sp)
+	r.dynIn.Animate(anim.OnOff(dynamic(b)), sp)
 	r.kind.SetSelected(int(b.Kind), u)
 	q := r.knobs[2]
 	switch {
@@ -354,13 +354,13 @@ func (r *bandRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 		plugui.PaintGlass(p, th, card, 12)
 		if r.g.lit == r.id && r.id != 0 {
 			c := bandColor(th, r.place)
-			p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1.5, Color: audioui.Faded(c, 0.6)})
+			p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1.5, Color: paint.Faded(c, 0.6)})
 		}
 	}
 	if r.numbered {
 		c := bandColor(th, r.place)
 		at := geom.Pt(rowNumber/2-4, box.H/2)
-		p.RRect(geom.Rc(at.X-11, at.Y-11, 22, 22), 11, paint.Solid(audioui.Faded(c, 0.85)))
+		p.RRect(geom.Rc(at.X-11, at.Y-11, 22, 22), 11, paint.Solid(paint.Faded(c, 0.85)))
 		run := audioui.Shaped(strconv.Itoa(r.place+1), 11, true, false)
 		run.Paint(p, geom.Pt(at.X-run.Advance/2, at.Y-7), audioui.Ground.Get(th))
 	}
@@ -375,17 +375,10 @@ func (r *bandRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	defer p.Push(paint.Translate(geom.Pt(-(1-dyn)*24, 0)))()
 	endDyn := p.Layer(paint.LayerOpts{Bounds: whole.Inset(geom.Uniform(-12)), Opacity: dyn})
 	defer endDyn()
-	p.RRect(geom.Rc(r.dynX-rowSection/2, 8, 1, box.H-16), 0, paint.Solid(audioui.Faded(widget.Ink.Get(th), 0.12)))
+	p.RRect(geom.Rc(r.dynX-rowSection/2, 8, 1, box.H-16), 0, paint.Solid(paint.Faded(widget.Ink.Get(th), 0.12)))
 	for i := 7; i < kids.Len(); i++ {
 		kids.At(i).Paint(p)
 	}
-}
-
-func onOff(b bool) float32 {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // dynamic says band b's dynamics show: it is a bell or a shelf, made

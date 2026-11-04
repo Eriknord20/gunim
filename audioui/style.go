@@ -5,7 +5,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
@@ -15,49 +14,38 @@ import (
 // The colours the pieces draw in. Text and guides, drawn faint, are in [widget.Ink].
 var (
 	// Ground is the colour behind a meter, a scope or a spectrum.
-	Ground = theme.Color("audio.ground", rgb(0x0c, 0x0e, 0x13))
+	Ground = theme.Color("audio.ground", paint.RGB(0x0c, 0x0e, 0x13))
 	// Raised is the colour of a control's cap, such as a fader's.
-	Raised = theme.Color("audio.raised", rgb(0x1d, 0x21, 0x2b))
+	Raised = theme.Color("audio.raised", paint.RGB(0x1d, 0x21, 0x2b))
 	// Sound is the colour of what plays: a waveform, a spectrum, a
 	// reading on its mark.
-	Sound = theme.Color("audio.sound", rgb(0x4f, 0xd6, 0xc0))
+	Sound = theme.Color("audio.sound", paint.RGB(0x4f, 0xd6, 0xc0))
 	// Near is the colour of a reading near its mark, and Over of one
 	// past it.
-	Near = theme.Color("audio.near", rgb(0xff, 0xc8, 0x57))
-	Over = theme.Color("audio.over", rgb(0xff, 0x6b, 0x5f))
+	Near = theme.Color("audio.near", paint.RGB(0xff, 0xc8, 0x57))
+	Over = theme.Color("audio.over", paint.RGB(0xff, 0x6b, 0x5f))
 	// Spread is the colour of a range, such as the loudness range.
-	Spread = theme.Color("audio.spread", rgb(0x5c, 0xb8, 0xff))
+	Spread = theme.Color("audio.spread", paint.RGB(0x5c, 0xb8, 0xff))
 	// Short is the colour of the short-term loudness's curve.
-	Short = theme.Color("audio.short", rgb(0xff, 0x6a, 0xd5))
+	Short = theme.Color("audio.short", paint.RGB(0xff, 0x6a, 0xd5))
 	// Safe is the colour of a meter's lights well below full scale,
 	// before they turn Near, then Over.
-	Safe = theme.Color("audio.safe", rgb(0xa8, 0xe0, 0x6b))
+	Safe = theme.Color("audio.safe", paint.RGB(0xa8, 0xe0, 0x6b))
 )
 
 // Light sets the audio pieces' tokens for a light theme, to add to one, as
 // widget.Light().With(audioui.Light...): a pale ground for the dark ink of a light theme, and the colours of what
 // plays deep enough to read on it.
 var Light = []theme.Entry{
-	theme.Set(Ground, rgb(0xec, 0xef, 0xf4)),
-	theme.Set(Raised, rgb(0xd4, 0xda, 0xe4)),
-	theme.Set(Sound, rgb(0x0e, 0x8c, 0x7a)),
-	theme.Set(Near, rgb(0xb8, 0x6e, 0x00)),
-	theme.Set(Over, rgb(0xc8, 0x2c, 0x22)),
-	theme.Set(Spread, rgb(0x1f, 0x66, 0xc8)),
-	theme.Set(Short, rgb(0xb0, 0x24, 0x8c)),
-	theme.Set(Safe, rgb(0x3f, 0x8f, 0x1c)),
+	theme.Set(Ground, paint.RGB(0xec, 0xef, 0xf4)),
+	theme.Set(Raised, paint.RGB(0xd4, 0xda, 0xe4)),
+	theme.Set(Sound, paint.RGB(0x0e, 0x8c, 0x7a)),
+	theme.Set(Near, paint.RGB(0xb8, 0x6e, 0x00)),
+	theme.Set(Over, paint.RGB(0xc8, 0x2c, 0x22)),
+	theme.Set(Spread, paint.RGB(0x1f, 0x66, 0xc8)),
+	theme.Set(Short, paint.RGB(0xb0, 0x24, 0x8c)),
+	theme.Set(Safe, paint.RGB(0x3f, 0x8f, 0x1c)),
 }
-
-func rgb(r, g, b uint8) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: 0xff} }
-
-// Faded is c at alpha a, from 0 to 1, of its own.
-func Faded(c color.NRGBA, a float32) color.NRGBA {
-	c.A = uint8(float32(c.A) * min(max(a, 0), 1))
-	return c
-}
-
-// Mix blends a toward b by t.
-func Mix(a, b color.NRGBA, t float32) color.NRGBA { return anim.Mix(anim.ColorCodec, a, b, t) }
 
 // Segment draws a straight line from a to b, width wide, with round
 // ends.

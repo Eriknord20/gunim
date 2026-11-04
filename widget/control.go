@@ -54,7 +54,7 @@ func (c *Control) FocusOnPress() bool { return !c.KeepFocus }
 // follow keeps the faint on Disabled, from Layout. The first layout puts it there at once; after that it fades. As the
 // control turns disabled it lets go of a press, and its hover fades; enabled again under the pointer, it lights.
 func (c *Control) follow(th *theme.Live) {
-	off := value(c.Disabled)
+	off := anim.OnOff(c.Disabled)
 	if !c.laid {
 		c.laid = true
 		c.dim.Jump(off)
@@ -66,7 +66,7 @@ func (c *Control) follow(th *theme.Live) {
 	c.dim.Animate(off, Quick.Get(th))
 	c.held = false
 	c.squash.Animate(0, Settle.Get(th))
-	c.hover.Animate(value(c.over && !c.Disabled), Quick.Get(th))
+	c.hover.Animate(anim.OnOff(c.over && !c.Disabled), Quick.Get(th))
 }
 
 // track follows the pointer coming over the control and leaving it, whether or not the control is enabled.

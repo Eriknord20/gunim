@@ -284,10 +284,10 @@ func (f *Fader) Paint(p *paint.Painter, fr gunim.Frame, box geom.Size, _ gunim.C
 	// track for a gain past Range.
 	edge := min(12, box.H/2)
 	top, bottom := edge, box.H-edge
-	p.RRect(geom.Rc(mid-2, top, 4, bottom-top), 2, paint.Solid(Faded(ground, 0.9)))
+	p.RRect(geom.Rc(mid-2, top, 4, bottom-top), 2, paint.Solid(paint.Faded(ground, 0.9)))
 	if lo, hi := f.ends(); lo < 0 && hi > 0 {
 		zero := bottom - (bottom-top)*f.travel(0)
-		p.RRect(geom.Rc(mid-7, zero, 14, 1), 0, paint.Solid(Faded(ink, 0.3)))
+		p.RRect(geom.Rc(mid-7, zero, 14, 1), 0, paint.Solid(paint.Faded(ink, 0.3)))
 	}
 	y := bottom - (bottom-top)*f.travel(f.Value()+f.nudge.Value())
 	lit := f.hover.Value()
@@ -297,7 +297,7 @@ func (f *Fader) Paint(p *paint.Painter, fr gunim.Frame, box geom.Size, _ gunim.C
 	capH := min(18, box.H)
 	knob := geom.Rc(2, y-capH/2, max(0, box.W-4), capH)
 	widget.FocusRing(p, knob, 5, f.ring.Value(), fr.Theme)
-	p.ShadowRRect(knob, 5, paint.Solid(Mix(raised, Mix(raised, ink, 0.25), lit)),
-		paint.Shadow{Blur: 6, Color: Faded(ground, 0.6)})
-	p.RRect(geom.Rc(knob.Min.X+5, y-0.75, max(0, knob.Size().W-10), 1.5), 0.75, paint.Solid(Faded(ink, 0.8)))
+	p.ShadowRRect(knob, 5, paint.Solid(anim.MixColor(raised, anim.MixColor(raised, ink, 0.25), lit)),
+		paint.Shadow{Blur: 6, Color: paint.Faded(ground, 0.6)})
+	p.RRect(geom.Rc(knob.Min.X+5, y-0.75, max(0, knob.Size().W-10), 1.5), 0.75, paint.Solid(paint.Faded(ink, 0.8)))
 }

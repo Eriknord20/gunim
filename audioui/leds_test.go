@@ -91,7 +91,7 @@ func TestEachLightTakesTheColourOfItsLevel(t *testing.T) {
 		if len(ops) != 2*n {
 			t.Fatalf("a meter of %d lights a channel drew %d ops", n, len(ops))
 		}
-		dark := Faded(widget.Ink.Get(th), 0.07)
+		dark := paint.Faded(widget.Ink.Get(th), 0.07)
 		for k, op := range ops {
 			ch, i := k/n, k%n
 			mid := (float32(i) + 0.5) / float32(n)
@@ -101,7 +101,7 @@ func TestEachLightTakesTheColourOfItsLevel(t *testing.T) {
 			case mid <= MeterAt(lv.RMS[ch]), i == held:
 				want = LEDColour(th, LEDAt(mid))
 			case mid <= MeterAt(lv.Peak[ch]):
-				want = Faded(LEDColour(th, LEDAt(mid)), 0.4)
+				want = paint.Faded(LEDColour(th, LEDAt(mid)), 0.4)
 			}
 			if got := op.(*paint.RRectOp).Fill.Solid; got != want {
 				t.Fatalf("in a meter of %d lights, light %d of channel %d is %v, want %v", n, i, ch, got, want)

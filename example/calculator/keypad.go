@@ -108,14 +108,14 @@ func (k *key) colours(th gunim.Frame) (fill, ink color.NRGBA) {
 		return widget.Accent.Get(t), color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 	case kindSign:
 		a := widget.Accent.Get(t)
-		return faded(a, 0.22), a
+		return paint.Faded(a, 0.22), a
 	case kindClear:
 		return color.NRGBA{R: 0xff, G: 0x6b, B: 0x5e, A: 0x30}, color.NRGBA{R: 0xff, G: 0x9a, B: 0x8e, A: 0xff}
 	case kindFunc:
-		return faded(ink, 0.07), faded(ink, 0.85)
+		return paint.Faded(ink, 0.07), paint.Faded(ink, 0.85)
 	case kindDigit:
 	}
-	return faded(ink, 0.12), ink
+	return paint.Faded(ink, 0.12), ink
 }
 
 // Paint implements [gunim.Node].
@@ -130,7 +130,7 @@ func (k *key) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chil
 		Offset: geom.Pt(0, 3*(1-s)), Blur: 10 * (1 - s), Color: color.NRGBA{A: uint8(0x50 * (1 - s))},
 	})
 	if h > 0.01 {
-		p.RRect(r, radius, paint.Solid(faded(color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, 0.08*h)))
+		p.RRect(r, radius, paint.Solid(paint.Faded(color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, 0.08*h)))
 	}
 	// The ripples, clipped to the key.
 	if len(k.ripples) > 0 {
@@ -143,7 +143,7 @@ func (k *key) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chil
 				// Fast out, slow to finish.
 				e := 1 - (1-t)*(1-t)*(1-t)
 				rad := 6 + most*e
-				p.RRect(geom.Rc(rp.at.X-rad, rp.at.Y-rad, 2*rad, 2*rad), rad, paint.Solid(faded(ink, 0.22*(1-t))))
+				p.RRect(geom.Rc(rp.at.X-rad, rp.at.Y-rad, 2*rad, 2*rad), rad, paint.Solid(paint.Faded(ink, 0.22*(1-t))))
 			}
 		}()
 	}

@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"math"
 
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
@@ -51,11 +52,11 @@ func (c ledColours) at(db float32) color.NRGBA {
 	case db < -18:
 		return c.safe
 	case db < -9:
-		return Mix(c.safe, c.near, (db+18)/9)
+		return anim.MixColor(c.safe, c.near, (db+18)/9)
 	case db < -3:
 		return c.near
 	case db < -1:
-		return Mix(c.near, c.over, (db+3)/2)
+		return anim.MixColor(c.near, c.over, (db+3)/2)
 	}
 	return c.over
 }
@@ -77,7 +78,7 @@ func (s LEDs) Paint(p *paint.Painter, th *theme.Live, r geom.Rect, lv *Levels) {
 	// Pitch where it does not come out even.
 	pitch := (long + s.Gap) / float32(n)
 	thick := (across - s.Sep) / 2
-	dark := Faded(widget.Ink.Get(th), 0.07)
+	dark := paint.Faded(widget.Ink.Get(th), 0.07)
 	// Each light's colour is worked out the first time a channel lights
 	// it, and kept for the other.
 	cs := ledColoursOf(th)
@@ -106,7 +107,7 @@ func (s LEDs) Paint(p *paint.Painter, th *theme.Live, r geom.Rect, lv *Levels) {
 			case lv.RMS[ch] > -59 && mid <= lit, i == held:
 				c = colour(i)
 			case lv.Peak[ch] > -59 && mid <= peak:
-				c = Faded(colour(i), 0.4)
+				c = paint.Faded(colour(i), 0.4)
 			}
 			var at geom.Rect
 			if s.Upright {

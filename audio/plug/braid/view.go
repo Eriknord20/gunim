@@ -27,7 +27,7 @@ var (
 
 // back returns the back of a ribbon of colour c: darker.
 func back(c color.NRGBA) color.NRGBA {
-	return audioui.Mix(c, color.NRGBA{A: 0xff}, 0.35)
+	return anim.MixColor(c, color.NRGBA{A: 0xff}, 0.35)
 }
 
 // meter is a pair of levels, left and right, of a sound as it is
@@ -389,15 +389,15 @@ func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	for i, m := range []*meter{p.in, p.out} {
 		x := []float32{l.inX, l.outX}[i]
 		name := audioui.Shaped([]string{"IN", "OUT"}[i], 9, true, false)
-		name.Paint(pt, geom.Pt(x+(audioui.MeterW-name.Advance)/2, l.bottom+4), audioui.Faded(ink, 0.6))
+		name.Paint(pt, geom.Pt(x+(audioui.MeterW-name.Advance)/2, l.bottom+4), paint.Faded(ink, 0.6))
 		audioui.PaintMeter(pt, th, geom.Rect{Min: geom.Pt(x, l.top), Max: geom.Pt(x+audioui.MeterW, l.bottom)}, m.levels)
 	}
 	// The gate the gain squeezes the ribbons through.
-	pt.RRect(geom.Rc(l.gain-7, l.top-6, 14, l.bottom-l.top+12), 7, paint.Solid(audioui.Faded(ink, 0.06)))
+	pt.RRect(geom.Rc(l.gain-7, l.top-6, 14, l.bottom-l.top+12), 7, paint.Solid(paint.Faded(ink, 0.06)))
 	p.paintRibbons(pt, th)
 	for ch := range 2 {
 		name := audioui.Shaped("Ø "+sideNames[ch], 9, true, false)
-		name.Paint(pt, geom.Pt(l.invert-name.Advance/2, l.lane[ch]-plugui.PowerSize/2-4-name.Height()), audioui.Faded(ink, 0.6))
+		name.Paint(pt, geom.Pt(l.invert-name.Advance/2, l.lane[ch]-plugui.PowerSize/2-4-name.Height()), paint.Faded(ink, 0.6))
 	}
 	for k := range kids.All {
 		k.Paint(pt)
@@ -485,11 +485,11 @@ func (p *panel) paintRibbons(pt *paint.Painter, th *theme.Live) {
 	light := func(col color.NRGBA, c int, x float32) color.NRGBA {
 		wave := 0.5 + 0.5*math.Sin(2*math.Pi*(float64(x)/48-p.flow*1.2))
 		b := 0.72 + 0.28*level[c]*float32(wave)
-		return audioui.Mix(color.NRGBA{A: 0xff}, col, b)
+		return anim.MixColor(color.NRGBA{A: 0xff}, col, b)
 	}
 	// side is channel c's colour past its invert: its back as far as it
 	// is turned over.
-	side := func(c int) color.NRGBA { return audioui.Mix(front[c], back(front[c]), lk.flip[c].Value()) }
+	side := func(c int) color.NRGBA { return anim.MixColor(front[c], back(front[c]), lk.flip[c].Value()) }
 
 	for _, c := range [2]int{1, 0} {
 		// The ribbon in, the twist at the lamp, and, as far as it is
@@ -504,7 +504,7 @@ func (p *panel) paintRibbons(pt *paint.Painter, th *theme.Live) {
 			if u > 0 && u < 1 {
 				w *= 1 - flip*(1-abs32(float32(math.Cos(float64(u)*math.Pi))))
 			}
-			col = audioui.Mix(col, side(c), smooth((u-0.45)/0.1))
+			col = anim.MixColor(col, side(c), smooth((u-0.45)/0.1))
 			w *= smooth((end - x) / 24)
 			p.pts = append(p.pts, paint.RibbonPoint{At: geom.Pt(x, l.lane[c]), Width: w, Color: light(col, c, x)})
 		}

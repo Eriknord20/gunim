@@ -218,20 +218,20 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	if k.Disabled || k.Locked {
-		accent = audioui.Faded(ink, 0.35)
+		accent = paint.Faded(ink, 0.35)
 	}
 	hover := k.hover.Value()
 	r, text := float32(17), float32(10.5)
 	if k.Compact {
 		r, text = 14, 9.5
 	}
-	end := widget.Faint(p, box, onOff(k.Locked)*0.6)
+	end := widget.Faint(p, box, anim.OnOff(k.Locked)*0.6)
 	defer end()
 	c := geom.Pt(box.W/2, 4+r)
 	if hover > 0.01 {
 		// Under the pointer, a glow about the knob.
-		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(audioui.Faded(accent, 0)),
-			paint.Shadow{Blur: 12 * hover, Color: audioui.Faded(accent, 0.35*hover)})
+		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
+			paint.Shadow{Blur: 12 * hover, Color: paint.Faded(accent, 0.35*hover)})
 	}
 	// The turn runs three quarters round, clockwise from bottom left.
 	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
@@ -247,18 +247,18 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
 		}
 	}
-	arc(0, 1, 3.5, audioui.Mix(KnobGroove.Get(th), audioui.Faded(ink, 0.25), 0.5*hover))
+	arc(0, 1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	t := k.turnOf(k.v)
 	zero := 0.0
 	if k.p.Min < 0 && k.p.Max > 0 {
 		zero = k.turnOf(0)
 	}
 	if k.held {
-		arc(zero, t, 5, audioui.Faded(accent, 0.25))
+		arc(zero, t, 5, paint.Faded(accent, 0.25))
 	}
 	arc(zero, t, 3.5, accent)
 	if m, ok := k.modulation(); ok {
-		k.paintModulation(p, m, c, r, audioui.Mix(accent, KnobRing.Get(th), 0.7))
+		k.paintModulation(p, m, c, r, anim.MixColor(accent, KnobRing.Get(th), 0.7))
 	}
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
@@ -267,9 +267,9 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	audioui.Segment(p, geom.Pt(c.X+(r-13)*float32(math.Cos(a)), c.Y+(r-13)*float32(math.Sin(a))),
 		geom.Pt(c.X+(r-7)*float32(math.Cos(a)), c.Y+(r-7)*float32(math.Sin(a))), 2, ink)
 	name := audioui.Shaped(k.p.Name, text, false, false)
-	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), audioui.Faded(ink, 0.6+0.3*hover))
+	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), paint.Faded(ink, 0.6+0.3*hover))
 	val := audioui.Shaped(k.p.Text(k.v), text, false, true)
-	col := audioui.Faded(ink, 0.9)
+	col := paint.Faded(ink, 0.9)
 	if k.held {
 		col = accent
 	}
@@ -297,18 +297,11 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 	}
 	if n := int((t1 - t0) * 40); n > 0 {
 		for i := range n {
-			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, audioui.Faded(ring, a))
+			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, paint.Faded(ring, a))
 		}
 	}
 	dot := at(k.turnOf(m.Now), r)
-	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: audioui.Faded(ring, 0.6)})
-}
-
-func onOff(b bool) float32 {
-	if b {
-		return 1
-	}
-	return 0
+	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: paint.Faded(ring, 0.6)})
 }
 
 // turn sets the knob to v as one move of the gesture held.

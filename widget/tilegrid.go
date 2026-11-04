@@ -1021,15 +1021,10 @@ func (g *TileGrid) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 		if t := g.bandIn.Value(); t > 0.01 {
 			b := g.band.Value().Add(geom.Pt(0, -offset))
 			fill, edge := BandFill.Get(th), BandEdge.Get(th)
-			p.RRectStroke(b, 3, paint.Solid(scaleAlpha(fill, t)), paint.Stroke{Width: 1, Color: scaleAlpha(edge, t)})
+			p.RRectStroke(b, 3, paint.Solid(paint.Faded(fill, t)), paint.Stroke{Width: 1, Color: paint.Faded(edge, t)})
 		}
 	}()
 	g.paintBar(p, f)
-}
-
-func scaleAlpha(c color.NRGBA, t float32) color.NRGBA {
-	c.A = uint8(float32(c.A) * min(max(t, 0), 1))
-	return c
 }
 
 // tileCell holds one tile in a grid, springing to its place and size, with its selection drawn behind it.
@@ -1122,10 +1117,10 @@ func (c *tileCell) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	r := geom.Rect{Max: box.Point()}
 	radius := TileRadius.Get(th)
 	if hot := c.hot.Value() * (1 - c.sel.Value()); hot > 0.01 {
-		p.RRect(r, radius, paint.Solid(scaleAlpha(TileHover.Get(th), hot)))
+		p.RRect(r, radius, paint.Solid(paint.Faded(TileHover.Get(th), hot)))
 	}
 	if sel := c.sel.Value(); sel > 0.01 {
-		p.RRect(r, radius, paint.Solid(scaleAlpha(TileSelected.Get(th), sel)))
+		p.RRect(r, radius, paint.Solid(paint.Faded(TileSelected.Get(th), sel)))
 	}
 	if c.cursor {
 		p.RRectStroke(r.Inset(geom.Uniform(0.75)), radius, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: TileCursor.Get(th)})

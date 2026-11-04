@@ -7,7 +7,6 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
 	"github.com/marrasen/gunim/anim"
-	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -22,13 +21,13 @@ const PowerSize = 18
 // lights its ring a little.
 func PaintPower(p *paint.Painter, c geom.Point, on, hover float32, accent, ink color.NRGBA) {
 	if on > 0.01 {
-		p.ShadowRRect(geom.Rc(c.X-5, c.Y-5, 10, 10), 5, paint.Solid(audioui.Faded(accent, 0)),
-			paint.Shadow{Blur: 9 * on, Color: audioui.Faded(accent, 0.55*on)})
+		p.ShadowRRect(geom.Rc(c.X-5, c.Y-5, 10, 10), 5, paint.Solid(paint.Faded(accent, 0)),
+			paint.Shadow{Blur: 9 * on, Color: paint.Faded(accent, 0.55*on)})
 	}
-	ring := audioui.Mix(audioui.Faded(ink, 0.28+0.2*hover), audioui.Faded(accent, 0.6+0.2*hover), on)
+	ring := anim.MixColor(paint.Faded(ink, 0.28+0.2*hover), paint.Faded(accent, 0.6+0.2*hover), on)
 	p.RRect(geom.Rc(c.X-7, c.Y-7, 14, 14), 7, paint.Solid(ring))
-	p.RRect(geom.Rc(c.X-5.5, c.Y-5.5, 11, 11), 5.5, paint.Solid(audioui.Mix(audioui.Faded(ink, 0.08), audioui.Faded(accent, 0.25), on)))
-	core := audioui.Mix(audioui.Faded(ink, 0.3), audioui.Mix(accent, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, 0.3), on)
+	p.RRect(geom.Rc(c.X-5.5, c.Y-5.5, 11, 11), 5.5, paint.Solid(anim.MixColor(paint.Faded(ink, 0.08), paint.Faded(accent, 0.25), on)))
+	core := anim.MixColor(paint.Faded(ink, 0.3), anim.MixColor(accent, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, 0.3), on)
 	r := 2.5 + 1.5*on
 	p.RRect(geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, paint.Solid(core))
 }
@@ -68,10 +67,10 @@ func (p *Power) Checked() bool { return p.checked }
 func (p *Power) SetChecked(on bool, u *gunim.UI) {
 	p.checked = on
 	if u == nil {
-		p.on.Jump(onOff(on))
+		p.on.Jump(anim.OnOff(on))
 		return
 	}
-	p.on.Animate(onOff(on), widget.Quick.Get(u.Theme()))
+	p.on.Animate(anim.OnOff(on), widget.Quick.Get(u.Theme()))
 	u.Invalidate()
 }
 

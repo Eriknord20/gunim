@@ -111,13 +111,13 @@ func NewCurveView(area geom.Rect, x func(t float64) float32) *CurveView {
 func CurveColor(th *theme.Live, bit uint8, a float32) color.NRGBA {
 	switch bit {
 	case CurveM:
-		return Faded(widget.Ink.Get(th), 0.7*a)
+		return paint.Faded(widget.Ink.Get(th), 0.7*a)
 	case CurveS:
-		return Faded(Short.Get(th), a)
+		return paint.Faded(Short.Get(th), a)
 	case CurveI:
-		return Faded(Near.Get(th), a)
+		return paint.Faded(Near.Get(th), a)
 	}
-	return Faded(Spread.Get(th), a)
+	return paint.Faded(Spread.Get(th), a)
 }
 
 // Paint draws the curves as v says: the momentary and short-term
@@ -199,7 +199,7 @@ func (c *Curves) Paint(p *paint.Painter, th *theme.Live, v CurveView) {
 			}
 			end()
 		}
-		whole(Faded(ground, 0.55*alpha), width+2)
+		whole(paint.Faded(ground, 0.55*alpha), width+2)
 		whole(CurveColor(th, bit, alpha), width)
 	}
 	if on&CurveM != 0 {
@@ -227,13 +227,13 @@ func (c *Curves) Paint(p *paint.Painter, th *theme.Live, v CurveView) {
 	if on&(CurveS|CurveM|CurveI) != 0 {
 		alpha = v.Alpha * max(v.Fade[0], v.Fade[1], v.Fade[2])
 		y := yOf(float64(v.Target))
-		p.RRect(geom.Rc(area.Min.X, y, w, 1), 0, paint.Solid(Faded(ink, 0.18*alpha)))
+		p.RRect(geom.Rc(area.Min.X, y, w, 1), 0, paint.Solid(paint.Faded(ink, 0.18*alpha)))
 		for l := -5; l >= -25; l -= 5 {
 			y := yOf(float64(l))
 			run := Shaped(strconv.Itoa(l), 9, false, true)
 			x := v.Right - run.Advance - 6
-			p.RRect(geom.Rc(x-4, y, run.Advance+8, 1), 0, paint.Solid(Faded(ink, 0.25)))
-			run.Paint(p, geom.Pt(x, y-11), Faded(ink, 0.45))
+			p.RRect(geom.Rc(x-4, y, run.Advance+8, 1), 0, paint.Solid(paint.Faded(ink, 0.25)))
+			run.Paint(p, geom.Pt(x, y-11), paint.Faded(ink, 0.45))
 		}
 	}
 }
@@ -299,14 +299,14 @@ func PaintLegend(p *paint.Painter, th *theme.Live, rects []geom.Rect, on uint8) 
 	for i, r := range rects {
 		c := CurveNames[i]
 		lit := on&c.Bit != 0
-		p.RRect(r, 10, paint.Solid(Faded(ground, 0.75)))
+		p.RRect(r, 10, paint.Solid(paint.Faded(ground, 0.75)))
 		dot := CurveColor(th, c.Bit, 0.35)
 		if lit {
 			dot = CurveColor(th, c.Bit, 1)
 			p.RRectStroke(r, 10, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: CurveColor(th, c.Bit, 0.6)})
 		}
 		p.RRect(geom.Rc(r.Min.X+8, r.Min.Y+7, 6, 6), 3, paint.Solid(dot))
-		words := Faded(ink, 0.45)
+		words := paint.Faded(ink, 0.45)
 		if lit {
 			words = ink
 		}
