@@ -1093,6 +1093,7 @@ func platformTerminate() error {
 		if xGetSelectionOwner(_glfw.platformWindow.display, _glfw.platformWindow.CLIPBOARD) == _glfw.platformWindow.helperWindowHandle {
 			pushSelectionToManagerX11()
 		}
+		x11Sel.property, x11Sel.turn, x11Sel.silent = _None, 0, _None // gunim change: they belong to this connection
 
 		xDestroyWindow(_glfw.platformWindow.display, _glfw.platformWindow.helperWindowHandle)
 		_glfw.platformWindow.helperWindowHandle = _None
