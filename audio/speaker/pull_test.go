@@ -425,3 +425,21 @@ func TestADriverPlaysAloneUnlessToldToRecord(t *testing.T) {
 		t.Fatalf("after Record was set the driver opened %d times, recording %v", f.opens, f.cfg.Record != nil)
 	}
 }
+
+// TestADriverThatLostSoundCountsADropout has the driver say it lost sound: a dropout, but no sign the ring is too small.
+func TestADriverThatLostSoundCountsADropout(t *testing.T) {
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
+	s, err := Open(audio.NewMixer(), Options{Driver: "Fake", Buffer: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	was := s.State().Dropouts
+	f.cfg.Overrun()
+	if got := s.State().Dropouts - was; got != 1 {
+		t.Fatalf("the driver lost sound once, and %d dropouts counted", got)
+	}
+	if s.dry.Load() != 0 {
+		t.Fatalf("it counts as %d dry reads, which would grow the buffer", s.dry.Load())
+	}
+}

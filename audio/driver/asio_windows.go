@@ -49,6 +49,7 @@ const (
 	msgResyncRequest     = 5
 	msgLatenciesChanged  = 6
 	msgSupportsTimeInfo  = 7
+	msgOverload          = 15
 )
 
 // messageNames names the messages a driver sends of a change, for the
@@ -58,6 +59,7 @@ var messageNames = map[int32]string{
 	msgBufferSizeChange: "my buffer size changed",
 	msgResyncRequest:    "resync",
 	msgLatenciesChanged: "my latencies changed",
+	msgOverload:         "overload",
 }
 
 // bufferInfo asks the driver for one channel's two buffers, and holds
@@ -160,6 +162,7 @@ type Device struct {
 	inTypes   []sampleType
 	inBuf     []float32
 	reset     func()
+	overrun   func()
 	log       func(string, ...any)
 	// outs are the outputs played, the first of infos, and chans how
 	// many channels a frame of buf holds, as Fill or FillN fills it.
@@ -199,7 +202,7 @@ func Open(c Config) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Device{t: t, fill: c.Fill, fillN: c.FillN, record: c.Record, recording: c.Recording, reset: c.Reset, log: c.Log}
+	d := &Device{t: t, fill: c.Fill, fillN: c.FillN, record: c.Record, recording: c.Recording, reset: c.Reset, overrun: c.Overrun, log: c.Log}
 	cbOnce.Do(makeCallbacks)
 	done := t.start(func() { err = d.open(clsid, c) })
 	if !waitFor(done, openWait) {
@@ -765,7 +768,7 @@ func makeCallbacks() {
 			case msgSelectorSupported:
 				switch int32(uint32(value)) {
 				case msgEngineVersion, msgResetRequest, msgBufferSizeChange, msgResyncRequest,
-					msgLatenciesChanged, msgSupportsTimeInfo:
+					msgLatenciesChanged, msgSupportsTimeInfo, msgOverload:
 					return 1
 				}
 				return 0
@@ -781,7 +784,13 @@ func makeCallbacks() {
 					go d.resetIfMoved()
 				}
 				return 1
-			case msgResyncRequest, msgSupportsTimeInfo:
+			case msgResyncRequest, msgOverload:
+				// Messages as the driver starts, before it plays, are let be.
+				if d := playing.Load(); d != nil && d.overrun != nil && d.live.Load() {
+					d.overrun()
+				}
+				return 1
+			case msgSupportsTimeInfo:
 				return 1
 			}
 			return 0
