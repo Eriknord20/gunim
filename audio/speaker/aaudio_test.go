@@ -420,7 +420,7 @@ func TestAAudioStampsWhatItRecords(t *testing.T) {
 	// On a Bluetooth headset whose timestamps, the mixer's, leave out
 	// what Android's mixer reports, the stamps count it too.
 	t.Run("Bluetooth", func(t *testing.T) {
-		testAAudioStamps(t, 600, &aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 220 * time.Millisecond})
+		testAAudioStamps(t, 600, &aaudio.Route{Known: true, Type: 8, Latency: 220 * time.Millisecond})
 	})
 }
 
@@ -869,7 +869,7 @@ func TestAAudioCountsWhatBluetoothStampsLeaveOut(t *testing.T) {
 		// a little, as the mixer stamps them.
 		f := &fakeAA{rate: 48000, burst: 960, delay: 2400}
 		mixer := 220 * time.Millisecond
-		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: mixer})
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Latency: mixer})
 		useFakeAA(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
@@ -903,24 +903,24 @@ func TestAAudioCountsWhatBluetoothStampsLeaveOut(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 		check("on the headset", f.delay+extra)
-		if !s.State().Bluetooth {
-			t.Error("on the headset the state says it is not Bluetooth")
+		if got := s.State().Route; got != RouteBluetooth {
+			t.Errorf("on the headset the route is %v", got)
 		}
 		// Android tells nothing a while, as where its audio service
 		// failed: the output keeps what it told before.
 		f.route.Store(&aaudio.Route{})
 		time.Sleep(aaRouteEvery + 200*time.Millisecond)
 		check("with the route untold", f.delay+extra)
-		if !s.State().Bluetooth {
-			t.Error("with the route untold the state says it is not Bluetooth")
+		if got := s.State().Route; got != RouteBluetooth {
+			t.Errorf("with the route untold the route is %v", got)
 		}
 		f.route.Store(&aaudio.Route{Known: true, Type: 2, Latency: 40 * time.Millisecond})
 		// The opener asks within aaRouteEvery, and the delay moves to the
 		// speaker's over twice its own length.
 		time.Sleep(aaRouteEvery + aaSlew*mixer + 200*time.Millisecond)
 		check("on the speaker", f.delay)
-		if s.State().Bluetooth {
-			t.Error("on the speaker the state says it is Bluetooth")
+		if got := s.State().Route; got != RouteSpeaker {
+			t.Errorf("on the speaker the route is %v", got)
 		}
 	})
 }
@@ -954,14 +954,14 @@ func TestAAudioQuickMarksTheStream(t *testing.T) {
 func TestAAudioMovesTheBluetoothDelaySmoothly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeAA{rate: 48000, burst: 960, delay: 2400}
-		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 20 * time.Millisecond})
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Latency: 20 * time.Millisecond})
 		useFakeAA(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
 		openAA(t, m, Options{Latency: 20 * time.Millisecond}, v)
 		outs, _ := f.streams()
 		time.Sleep(100 * time.Millisecond)
-		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 200 * time.Millisecond})
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Latency: 200 * time.Millisecond})
 		step := audio.FramesAt(10*time.Millisecond, 48000)
 		h := m.Heard()
 		for i := range 100 {
@@ -987,7 +987,7 @@ func TestAAudioMovesTheBluetoothDelaySmoothly(t *testing.T) {
 func TestAAudioWorksAheadOfTheBluetoothDelay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := &fakeAA{rate: 48000, burst: 960, delay: 2400}
-		f.route.Store(&aaudio.Route{Known: true, Type: 8, Bluetooth: true, Latency: 220 * time.Millisecond})
+		f.route.Store(&aaudio.Route{Known: true, Type: 8, Latency: 220 * time.Millisecond})
 		useFakeAA(t, f)
 		m := audio.NewMixer()
 		v := m.Play(&ramp{}, audio.Options{})
@@ -1059,5 +1059,161 @@ func TestAAudioGrowsNoLeadFromAnOpening(t *testing.T) {
 		if l, want := s.Latency(), before+grown; l < want-2*time.Millisecond || l > want+2*time.Millisecond {
 			t.Errorf("back on the speaker the speaker works %v ahead, want %v: %v as before, and %v grown", l, want, before, grown)
 		}
+	})
+}
+
+// TestRouteOf checks each kind of device Android tells of, and above all
+// that USB headphones, what a wired headset is on a Pixel 8 Pro, read as
+// USB, apart from the speaker.
+func TestRouteOf(t *testing.T) {
+	for want, types := range map[Route][]int{
+		RouteUnknown:   {0, 9, 10, 13, 15, 18, 20, 21, 25, 29, 999},
+		RouteSpeaker:   {1, 2, 24},
+		RouteWired:     {3, 4, 5, 6, 19},
+		RouteBluetooth: {7, 8, 23, 26, 27, 30},
+		RouteUSB:       {11, 12, 22},
+	} {
+		for _, typ := range types {
+			if got := routeOf(typ); got != want {
+				t.Errorf("a device of type %d is on route %v, want %v", typ, got, want)
+			}
+		}
+	}
+}
+
+// TestAAudioRouteFollowsTheDevice moves the sound from the speaker to USB
+// headphones, to earbuds and back, as Android does: the device goes away,
+// and the stream opens again on the next. The route reads each at once,
+// and stays told while a stream reopens. Another moves while one plays,
+// which the opener hears when it asks.
+func TestAAudioRouteFollowsTheDevice(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+		f.route.Store(&aaudio.Route{Known: true, Type: 2, Latency: 20 * time.Millisecond})
+		useFakeAA(t, f)
+		s := openAA(t, audio.NewMixer(), Options{})
+		time.Sleep(100 * time.Millisecond)
+		if got := s.State().Route; got != RouteSpeaker {
+			t.Fatalf("on the speaker the route is %v", got)
+		}
+		for _, step := range []struct {
+			typ  int
+			want Route
+		}{{22, RouteUSB}, {8, RouteBluetooth}, {4, RouteWired}, {2, RouteSpeaker}} {
+			f.route.Store(&aaudio.Route{Known: true, Type: step.typ, Latency: 20 * time.Millisecond})
+			outs, _ := f.streams()
+			was := s.State().Route
+			outs[len(outs)-1].sh.Err.Store(-899)
+			for range 40 {
+				time.Sleep(5 * time.Millisecond)
+				synctest.Wait()
+				if now, _ := f.streams(); len(now) > len(outs) {
+					break
+				}
+				if got := s.State().Route; got != was {
+					t.Fatalf("before the stream reopened on type %d the route read %v", step.typ, got)
+				}
+			}
+			if got := s.State().Route; got != step.want {
+				t.Fatalf("on a device of type %d the route is %v, want %v", step.typ, got, step.want)
+			}
+		}
+		// A device that left the list is one going away: the route stays
+		// as told until the stream reopens on the next.
+		f.route.Store(&aaudio.Route{Known: true, Latency: 20 * time.Millisecond})
+		time.Sleep(aaRouteEvery + 100*time.Millisecond)
+		if got := s.State().Route; got != RouteSpeaker {
+			t.Errorf("with the device gone the route is %v", got)
+		}
+		f.route.Store(&aaudio.Route{Known: true, Type: 22, Latency: 20 * time.Millisecond})
+		time.Sleep(aaRouteEvery + 100*time.Millisecond)
+		if got := s.State().Route; got != RouteUSB {
+			t.Errorf("after the opener asked the route is %v", got)
+		}
+	})
+}
+
+// TestAAudioRecordsTheBuiltInMicOnBluetooth opens the input on each
+// route and moves between them: it asks for the phone's own microphone
+// while Bluetooth plays, so earbuds stay on their music link, and leaves
+// the pick to Android otherwise, so a USB headset's microphone records.
+func TestAAudioRecordsTheBuiltInMicOnBluetooth(t *testing.T) {
+	const mic = 15
+	on := func(typ int) *aaudio.Route {
+		return &aaudio.Route{Known: true, Type: typ, Latency: 20 * time.Millisecond, Mic: mic}
+	}
+	for _, c := range []struct {
+		name string
+		typ  int
+		want int
+	}{{"speaker", 2, 0}, {"USB", 22, 0}, {"wired", 4, 0}, {"A2DP", 8, mic}, {"LE Audio", 26, mic}} {
+		t.Run("opening on "+c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+				f.route.Store(on(c.typ))
+				useFakeAA(t, f)
+				openAA(t, audio.NewMixer(), Options{Record: true})
+				time.Sleep(10 * time.Millisecond)
+				_, ins := f.streams()
+				if len(ins) != 1 || ins[0].c.device != c.want {
+					t.Fatalf("%d inputs opened, the first on device %d, want one on %d", len(ins), ins[0].c.device, c.want)
+				}
+			})
+		})
+	}
+	t.Run("moving", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+			f.route.Store(on(2))
+			useFakeAA(t, f)
+			openAA(t, audio.NewMixer(), Options{Record: true})
+			// expect moves the route as the opener hears it, and reads
+			// which input records after.
+			expect := func(typ, inputs, want int) {
+				t.Helper()
+				f.route.Store(on(typ))
+				time.Sleep(aaRouteEvery + 100*time.Millisecond)
+				synctest.Wait()
+				_, ins := f.streams()
+				if len(ins) != inputs || ins[inputs-1].c.device != want {
+					t.Fatalf("on type %d: %d inputs opened, the last on device %d, want %d on %d", typ, len(ins),
+						ins[len(ins)-1].c.device, inputs, want)
+				}
+			}
+			expect(22, 1, 0) // No reason to reopen: Android picks on both.
+			expect(8, 2, mic)
+			expect(8, 2, mic)
+			expect(22, 3, 0)
+			// The device gone, with the route kept, reopens nothing.
+			expect(0, 3, 0)
+		})
+	})
+	t.Run("the microphone refuses", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+			f.route.Store(on(8))
+			f.failIn.Store(2) // Exclusive, then shared.
+			useFakeAA(t, f)
+			openAA(t, audio.NewMixer(), Options{Record: true})
+			// It records on Android's pick, and does not keep trying.
+			time.Sleep(3 * aaRouteEvery)
+			synctest.Wait()
+			_, ins := f.streams()
+			if len(ins) != 1 || ins[0].c.device != 0 {
+				t.Fatalf("%d inputs opened, the first on device %d, want one on 0", len(ins), ins[0].c.device)
+			}
+		})
+	})
+	t.Run("a phone with no microphone listed", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			f := &fakeAA{rate: 48000, burst: 192, delay: 960}
+			f.route.Store(&aaudio.Route{Known: true, Type: 8, Latency: 20 * time.Millisecond})
+			useFakeAA(t, f)
+			openAA(t, audio.NewMixer(), Options{Record: true})
+			time.Sleep(10 * time.Millisecond)
+			if _, ins := f.streams(); len(ins) != 1 || ins[0].c.device != 0 {
+				t.Fatalf("%d inputs opened, the first on device %d, want one on 0", len(ins), ins[0].c.device)
+			}
+		})
 	})
 }

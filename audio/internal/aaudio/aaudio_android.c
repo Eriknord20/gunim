@@ -101,7 +101,8 @@ typedef void (*set_preset)(AAudioStreamBuilder *, aaudio_input_preset_t);
 typedef void (*set_usage)(AAudioStreamBuilder *, aaudio_usage_t);
 typedef void (*set_content)(AAudioStreamBuilder *, aaudio_content_type_t);
 
-const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate, int chans, int exclusive, int quick) {
+const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate, int chans, int exclusive, int quick,
+	int device) {
 	AAudioStreamBuilder *b;
 	aaudio_result_t r = AAudio_createStreamBuilder(&b);
 	if (r != AAUDIO_OK) {
@@ -113,6 +114,9 @@ const char *gunim_aa_open(AAudioStream **out, gunim_shared *sh, int in, int rate
 	AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
 	AAudioStreamBuilder_setChannelCount(b, chans);
 	AAudioStreamBuilder_setSampleRate(b, rate);
+	if (device > 0) {
+		AAudioStreamBuilder_setDeviceId(b, device);
+	}
 	if (!in) {
 		// What the sound is for: on Bluetooth, Android asks the headset
 		// for its quicker link for a game, where it has one. Both are

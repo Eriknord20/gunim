@@ -45,7 +45,9 @@ type Config struct {
 	Exclusive bool
 	// Quick marks an output's sound as a game's, for the shortest delay
 	// Android offers on Bluetooth; else it is media's.
-	Quick  bool
+	Quick bool
+	// Device is the device to ask for, by its ID; at 0 Android picks.
+	Device int
 	Data   *Ring[float32]
 	Blocks *Ring[int64]
 }
@@ -70,7 +72,7 @@ func Open(c Config) (*Stream, error) {
 	sh := NewShared(c.Data, c.Blocks)
 	st := &Stream{sh: sh, input: c.Input, quick: c.Quick}
 	if msg := C.gunim_aa_open(&st.s, (*C.gunim_shared)(unsafe.Pointer(sh)), cbool(c.Input), C.int(c.Rate),
-		C.int(c.Channels), cbool(c.Exclusive), cbool(c.Quick)); msg != nil {
+		C.int(c.Channels), cbool(c.Exclusive), cbool(c.Quick), C.int(c.Device)); msg != nil {
 		FreeShared(sh)
 		return nil, fmt.Errorf("aaudio: opening a stream: %s", C.GoString(msg))
 	}
@@ -146,7 +148,8 @@ func (s *Stream) Info() Info {
 // counts them, which a callback too late makes.
 func (s *Stream) XRuns() int64 { return int64(C.AAudioStream_getXRunCount(s.s)) }
 
-// Route asks Android's Java side of the device the stream plays on. It
+// Route asks Android's Java side of the device the stream plays or
+// records on. It
 // calls into Java, and may take a few milliseconds: call it from
 // neither AAudio's thread nor one that must keep time.
 func (s *Stream) Route() Route {
@@ -155,10 +158,10 @@ func (s *Stream) Route() Route {
 		return Route{}
 	}
 	lat := time.Duration(-1)
-	if r[2] >= 0 {
-		lat = time.Duration(r[2]) * time.Millisecond
+	if r[1] >= 0 {
+		lat = time.Duration(r[1]) * time.Millisecond
 	}
-	return Route{Known: true, Type: int(r[0]), Bluetooth: r[1] != 0, Latency: lat}
+	return Route{Known: true, Type: int(r[0]), Latency: lat, Mic: int(r[2])}
 }
 
 // Probe plays a second of silence through a Java AudioTrack, for as
