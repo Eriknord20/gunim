@@ -295,7 +295,7 @@ func (b *PresetBrowser) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, ki
 	top := float32(fieldH + colGap)
 	gw := float32(int(box.W * groupsW))
 	for _, r := range []geom.Rect{geom.Rc(0, top, gw, box.H-top), geom.Rc(gw+colGap, top, box.W-gw-colGap, box.H-top)} {
-		p.RRect(r, 10, paint.Solid(audioui.Faded(ink, 0.035)))
+		p.RRect(r, 10, paint.Solid(paint.Faded(ink, 0.035)))
 	}
 	for i := range kids.Len() {
 		kids.At(i).Paint(p)
@@ -426,11 +426,11 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := g.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
 	if g.index(g.b.bank, g.b.group) >= 0 {
 		y := rowY(g.rows, g.pill.Value())
-		p.RRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(accent, 0.2)))
+		p.RRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.2)))
 		p.RRect(geom.Rc(inset, y+6, 3, rowH-12), 1.5, paint.Solid(accent))
 	}
 	cur, playing := g.b.current()
@@ -439,14 +439,14 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			continue
 		}
 		if r.header {
-			g.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), audioui.Faded(ink, 0.45))
-			audioui.Shaped(r.label, 9, true, false).Paint(p, geom.Pt(32, r.y+12), audioui.Faded(ink, 0.45))
+			g.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), paint.Faded(ink, 0.45))
+			audioui.Shaped(r.label, 9, true, false).Paint(p, geom.Pt(32, r.y+12), paint.Faded(ink, 0.45))
 			continue
 		}
-		c := audioui.Faded(ink, 0.82)
-		count := audioui.Faded(ink, 0.35)
+		c := paint.Faded(ink, 0.82)
+		count := paint.Faded(ink, 0.35)
 		if g.b.query != "" && r.count == 0 {
-			c, count = audioui.Faded(ink, 0.3), audioui.Faded(ink, 0.18)
+			c, count = paint.Faded(ink, 0.3), paint.Faded(ink, 0.18)
 		}
 		if i == g.index(g.b.bank, g.b.group) && g.b.query == "" {
 			c = ink
@@ -618,33 +618,33 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := l.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
 	if a := l.shown.Value(); a > 0.01 {
 		y := rowY(l.rows, l.pill.Value())
-		p.ShadowRRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(accent, 0.28*a)),
-			paint.Shadow{Blur: 10, Color: audioui.Faded(accent, 0.25*a)})
+		p.ShadowRRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.28*a)),
+			paint.Shadow{Blur: 10, Color: paint.Faded(accent, 0.25*a)})
 	}
 	cur := l.current()
 	switch {
 	case len(l.b.list) == 0:
 		run := audioui.Shaped("No presets", 12, false, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), audioui.Faded(ink, 0.45))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), paint.Faded(ink, 0.45))
 	case len(l.rows) <= 1 && l.b.query != "":
 		run := audioui.Shaped("No preset matches", 12, false, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), audioui.Faded(ink, 0.45))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), paint.Faded(ink, 0.45))
 	}
 	for i, r := range l.rows {
 		if culled && (r.y+r.h < vis.Min.Y || r.y > vis.Max.Y) {
 			continue
 		}
 		if r.header {
-			l.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), audioui.Faded(ink, 0.45))
+			l.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), paint.Faded(ink, 0.45))
 			run := audioui.Shaped(strings.ToUpper(r.label), 9, true, false)
-			run.PaintFaded(p, geom.Pt(32, r.y+12), audioui.Faded(ink, 0.5), box.W-44, 18)
+			run.PaintFaded(p, geom.Pt(32, r.y+12), paint.Faded(ink, 0.5), box.W-44, 18)
 			continue
 		}
-		c := audioui.Faded(ink, 0.85)
+		c := paint.Faded(ink, 0.85)
 		if i == cur {
 			c = ink
 			widget.PaintIcon(p, f.Theme, icon.AudioLines, geom.Rc(box.W-30, r.y+(rowH-14)/2, 14, 14), accent)
@@ -652,7 +652,7 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		run := audioui.Shaped(r.label, 12, i == cur, false)
 		run.PaintFaded(p, geom.Pt(20, r.y+(rowH-run.Height())/2), c, box.W-58, 18)
 		if r.p.Drums {
-			widget.PaintIcon(p, f.Theme, icon.Drum, geom.Rc(box.W-48, r.y+(rowH-12)/2, 12, 12), audioui.Faded(ink, 0.3))
+			widget.PaintIcon(p, f.Theme, icon.Drum, geom.Rc(box.W-48, r.y+(rowH-12)/2, 12, 12), paint.Faded(ink, 0.3))
 		}
 	}
 }

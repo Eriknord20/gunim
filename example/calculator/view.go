@@ -59,12 +59,6 @@ var hues = []color.NRGBA{
 
 func hue(i int) color.NRGBA { return hues[i%len(hues)] }
 
-// faded is c at alpha a, from 0 to 1.
-func faded(c color.NRGBA, a float32) color.NRGBA {
-	c.A = uint8(float32(c.A) * min(max(a, 0), 1))
-	return c
-}
-
 // titleHeight is the height of the window's own title bar.
 const titleHeight = 40
 

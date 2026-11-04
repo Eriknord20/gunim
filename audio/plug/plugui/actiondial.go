@@ -110,13 +110,13 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	hover, glow := d.hover.Value(), d.glow.Value()
-	end := widget.Faint(p, box, onOff(d.Disabled)*0.6)
+	end := widget.Faint(p, box, anim.OnOff(d.Disabled)*0.6)
 	defer end()
 	const r, text = float32(17), float32(10.5)
 	c := geom.Pt(box.W/2, 4+r)
 	if lit := max(hover, glow); lit > 0.01 {
-		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(audioui.Faded(accent, 0)),
-			paint.Shadow{Blur: 12 + 8*glow, Color: audioui.Faded(accent, 0.35*hover+0.6*glow)})
+		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
+			paint.Shadow{Blur: 12 + 8*glow, Color: paint.Faded(accent, 0.35*hover+0.6*glow)})
 	}
 	// The arc, as a knob's, three quarters round from bottom left: its
 	// groove, and how far the task has got.
@@ -130,7 +130,7 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
 		}
 	}
-	arc(1, 3.5, audioui.Mix(KnobGroove.Get(th), audioui.Faded(ink, 0.25), 0.5*hover))
+	arc(1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	if t := float64(min(max(d.progress.Value(), 0), 1)); t > 0.005 {
 		arc(t, 3.5, accent)
 	}
@@ -141,7 +141,7 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		paint.Shadow{Offset: geom.Pt(0, 2), Blur: 4, Color: color.NRGBA{A: 0x90}})
 	// On the cap, its icon at rest; while the task runs, a square, to
 	// stop it.
-	mark := audioui.Mix(audioui.Faded(ink, 0.75), accent, max(hover, glow))
+	mark := anim.MixColor(paint.Faded(ink, 0.75), accent, max(hover, glow))
 	if d.running {
 		p.RRect(geom.Rc(c.X-4, c.Y-4, 8, 8), 1.5, paint.Solid(accent))
 	} else if d.Icon != nil {
@@ -149,14 +149,14 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	popCap()
 	name := audioui.Shaped(d.Title, text, false, false)
-	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), audioui.Faded(ink, 0.6+0.3*hover))
+	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), paint.Faded(ink, 0.6+0.3*hover))
 	val := audioui.Shaped(d.Value, text, false, true)
-	col := audioui.Faded(ink, 0.9)
+	col := paint.Faded(ink, 0.9)
 	switch {
 	case d.running:
 		col = accent
 	case d.Stale:
-		col = audioui.Faded(ink, 0.4)
+		col = paint.Faded(ink, 0.4)
 	}
 	// Cut short where the value is wider than the dial.
 	vx := max((box.W-val.Advance)/2, 0)

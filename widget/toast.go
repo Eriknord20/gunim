@@ -270,7 +270,7 @@ func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	for i := len(t.cards) - 1; i >= 0; i-- {
 		card := t.cards[i]
 		shown := i >= from && i < to
-		card.shown.Animate(value(shown), motion)
+		card.shown.Animate(anim.OnOff(shown), motion)
 		if !shown {
 			continue
 		}
@@ -284,7 +284,7 @@ func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	}
 	if t.more != nil {
 		t.more.count = hidden
-		t.more.in.Animate(value(hidden > 0), motion)
+		t.more.in.Animate(anim.OnOff(hidden > 0), motion)
 	}
 	height := total
 	for k := range kids.All {

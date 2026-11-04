@@ -313,10 +313,10 @@ func (t *Tree) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 				if !t.focused {
 					fill.A = uint8(float32(fill.A) * 0.7)
 				}
-				p.RRect(pill, 6, paint.Solid(scaleAlpha(fill, v)))
+				p.RRect(pill, 6, paint.Solid(paint.Faded(fill, v)))
 				// An accent edge that grows from the middle of the pill's left side
 				edge := (t.rowH - 10) * v
-				p.RRect(geom.Rc(4, top+t.rowH/2-edge/2, 3, edge), 1.5, paint.Solid(scaleAlpha(Accent.Get(th), v)))
+				p.RRect(geom.Rc(4, top+t.rowH/2-edge/2, 3, edge), 1.5, paint.Solid(paint.Faded(Accent.Get(th), v)))
 			}()
 		}
 	}
@@ -368,7 +368,7 @@ func (r *treeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	th := f.Theme
 	it := r.t.item(r.key)
 	if v := min(max(r.hot.Value(), 0), 1); v > 0.01 {
-		p.RRect(geom.Rc(4, 1, box.W-8, box.H-2), 6, paint.Solid(scaleAlpha(TreeHover.Get(th), v)))
+		p.RRect(geom.Rc(4, 1, box.W-8, box.H-2), 6, paint.Solid(paint.Faded(TreeHover.Get(th), v)))
 	}
 	indent := TreeIndent.Get(th)
 	const pad, chev, side = 10, 14, 16

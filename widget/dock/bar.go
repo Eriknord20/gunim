@@ -328,9 +328,9 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 // and reports whether the tabs or the tab in front moved.
 func (b *Bar) setStill(tabs []tab, front string, mark, still bool, u *gunim.UI) bool {
 	if !b.laid || u == nil {
-		b.mark.Jump(onOff(mark))
+		b.mark.Jump(anim.OnOff(mark))
 	} else {
-		b.mark.Animate(onOff(mark), widget.Quick.Get(u.Theme()))
+		b.mark.Animate(anim.OnOff(mark), widget.Quick.Get(u.Theme()))
 	}
 	sameTabs := slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a == c })
 	if sameTabs && front == b.front {
@@ -1121,11 +1121,4 @@ func (t *tabPicture) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		x += tabIcon + 6
 	}
 	t.title.PaintFaded(p, geom.Pt(x, mid-t.title.Height()/2), ink, box.W-x-pad, widget.TextFade.Get(th))
-}
-
-func onOff(on bool) float32 {
-	if on {
-		return 1
-	}
-	return 0
 }

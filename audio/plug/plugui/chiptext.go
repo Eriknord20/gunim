@@ -39,7 +39,7 @@ func (t *ChipText) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	run := audioui.Shaped(t.Text, ChipTextSize, false, true)
 	end := p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: 1, Clip: true})
 	defer end()
-	run.Paint(p, geom.Pt(0, (box.H-run.Height())/2), audioui.Faded(widget.Ink.Get(f.Theme), ChipTextInk))
+	run.Paint(p, geom.Pt(0, (box.H-run.Height())/2), paint.Faded(widget.Ink.Get(f.Theme), ChipTextInk))
 }
 
 // Access implements [gunim.Accessible]: the words, as a label.

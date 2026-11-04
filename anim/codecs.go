@@ -250,6 +250,17 @@ func Mix[T any](c Codec[T], a, b T, t float32) T {
 	return c.Decode(x)
 }
 
+// MixColor is t of the way from colour a to b, blended as [ColorCodec] blends.
+func MixColor(a, b color.NRGBA, t float32) color.NRGBA { return Mix(ColorCodec, a, b, t) }
+
+// OnOff is 1 for true and 0 for false, a state as a spring's target.
+func OnOff(on bool) float32 {
+	if on {
+		return 1
+	}
+	return 0
+}
+
 // InsetsCodec animates the four sides of a padding or margin.
 var InsetsCodec = Codec[geom.Insets]{
 	N: 4,

@@ -103,6 +103,9 @@ type Waker interface {
 // frame, as a container that measures it first, is laid out and drawn
 // as usual.
 //
+// [widget.NewSteady] and [widget.NewSteadyPaint] make one from a child or
+// a paint function and a key, and [anim.Moves] counts a view's springs for it.
+//
 // GUNIM_DEBUG_STEADY=1 paints every Steady node's subtree anew, laid out
 // as carried, and logs each one whose key said it would draw the same,
 // and did not.

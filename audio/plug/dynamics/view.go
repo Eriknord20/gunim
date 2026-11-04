@@ -133,7 +133,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	th := f.Theme
 	x, h := box.W-chipBar, float32(5)
 	y := (box.H - h) / 2
-	p.RRect(geom.Rc(x, y, chipBar, h), h/2, paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.85)))
+	p.RRect(geom.Rc(x, y, chipBar, h), h/2, paint.Solid(paint.Faded(audioui.Ground.Get(th), 0.85)))
 	if w := chipBar * -plugui.ChipScale(float64(c.shown.Value()), chipBarDB); w > 0.5 {
 		p.RRect(geom.Rc(x+chipBar-w, y, w, h), h/2, paint.Solid(HistoryCut.Get(th)))
 	}

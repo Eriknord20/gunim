@@ -102,15 +102,6 @@ func along(pts []geom.Point, lens []float32, d float32) geom.Point {
 	return pts[len(pts)-1]
 }
 
-// faded is c at a share a of its alpha.
-func faded(c color.NRGBA, a float32) color.NRGBA {
-	c.A = uint8(float32(c.A)*min(max(a, 0), 1) + 0.5)
-	return c
-}
-
-// mix is a share t of the way from a to b.
-func mix(a, b color.NRGBA, t float32) color.NRGBA { return anim.Mix(anim.ColorCodec, a, b, t) }
-
 // runCache keeps text shaped, by its words, size and weight, so the
 // boxes' names are shaped once.
 type runCache struct {
@@ -189,7 +180,7 @@ func (v *View) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	if v.pr.kind == pressBand && v.pr.moved {
 		band := geom.Rect{Min: v.ToPlane(v.pr.from), Max: v.ToPlane(v.pointer)}.Normalized()
 		p.RRect(band, 4*ls, paint.Solid(BandFill.Get(th)))
-		p.RRectStroke(band, 4*ls, paint.Fill{}, paint.Stroke{Width: 1.2 * ls, Color: faded(widget.Accent.Get(th), 0.8)})
+		p.RRectStroke(band, 4*ls, paint.Fill{}, paint.Stroke{Width: 1.2 * ls, Color: paint.Faded(widget.Accent.Get(th), 0.8)})
 	}
 }
 
@@ -266,8 +257,8 @@ func (v *View) paintWire(p *paint.Painter, th *theme.Live, w Wire, pts []geom.Po
 		core, glow = core*k, glow*k
 	}
 	core += 1.2 * lit * ls
-	ribbon(p, pts, glow, faded(c, (0.07+0.22*w.Flow+0.18*lit)*on))
-	coreC := faded(mix(c, TitleInk.Get(th), 0.15+0.4*lit), (0.6+0.3*w.Flow+0.1*lit)*on)
+	ribbon(p, pts, glow, paint.Faded(c, (0.07+0.22*w.Flow+0.18*lit)*on))
+	coreC := paint.Faded(anim.MixColor(c, TitleInk.Get(th), 0.15+0.4*lit), (0.6+0.3*w.Flow+0.1*lit)*on)
 	if w.Dashed {
 		for i := 0; i+2 < len(pts); i += 4 {
 			ribbon(p, pts[i:i+3], core, coreC)
@@ -279,13 +270,13 @@ func (v *View) paintWire(p *paint.Painter, th *theme.Live, w Wire, pts []geom.Po
 	total := lens[len(lens)-1]
 	if w.Flow > 0.02 && total > 1 && !w.Dim {
 		gap := dotGap * ls
-		dot := mix(c, TitleInk.Get(th), 0.55)
+		dot := anim.MixColor(c, TitleInk.Get(th), 0.55)
 		for d := float32(math.Mod(float64(v.phase[w.ID]*ls), float64(gap))); d < total; d += gap {
 			at := along(pts, lens, d)
 			// The dots fade in and out at the ends.
 			a := min(min(d, total-d)/(12*ls), 1) * (0.2 + 0.8*w.Flow)
 			r := (1.6 + 1.4*w.Flow) * ls
-			p.RRect(geom.Rc(at.X-r, at.Y-r, 2*r, 2*r), r, paint.Solid(faded(dot, a)))
+			p.RRect(geom.Rc(at.X-r, at.Y-r, 2*r, 2*r), r, paint.Solid(paint.Faded(dot, a)))
 		}
 	}
 }
@@ -312,18 +303,18 @@ func (v *View) paintNode(p *paint.Painter, th *theme.Live, n *Node, content *gun
 		c = PortInk.Get(th)
 	}
 	if n.Glow > 0.01 {
-		p.ShadowRRect(r, radius, paint.Fill{}, paint.Shadow{Blur: 18 + 18*n.Glow, Color: faded(c, 0.55*n.Glow)})
+		p.ShadowRRect(r, radius, paint.Fill{}, paint.Shadow{Blur: 18 + 18*n.Glow, Color: paint.Faded(c, 0.55*n.Glow)})
 	}
 	p.ShadowRRect(r, radius, paint.Solid(NodeFill.Get(th)), paint.Shadow{Blur: 14, Offset: geom.Pt(0, 4), Color: NodeShadow.Get(th)})
 	// The head: a bar of the box's colour across its top.
 	headH := v.m.head
-	p.RRect(geom.Rc(r.Min.X+radius, r.Min.Y+1, r.Size().W-2*radius, 3), 1.5, paint.Solid(faded(c, 0.9)))
+	p.RRect(geom.Rc(r.Min.X+radius, r.Min.Y+1, r.Size().W-2*radius, 3), 1.5, paint.Solid(paint.Faded(c, 0.9)))
 	edge := NodeEdge.Get(th)
 	switch {
 	case v.picked[n.ID]:
 		edge = widget.Accent.Get(th)
 	case v.hover.node == n.ID:
-		edge = mix(edge, TitleInk.Get(th), 0.18)
+		edge = anim.MixColor(edge, TitleInk.Get(th), 0.18)
 	}
 	width := float32(1)
 	if v.picked[n.ID] {
@@ -389,14 +380,14 @@ func (v *View) paintPorts(p *paint.Painter, th *theme.Live, n *Node, labels bool
 				}
 			}
 			if lit > 0 {
-				p.ShadowRRect(geom.Rc(at.X-6, at.Y-6, 12, 12), 6, paint.Solid(faded(c, 0.25*lit)), paint.Shadow{Blur: 12 * lit, Color: faded(c, 0.8*lit)})
+				p.ShadowRRect(geom.Rc(at.X-6, at.Y-6, 12, 12), 6, paint.Solid(paint.Faded(c, 0.25*lit)), paint.Shadow{Blur: 12 * lit, Color: paint.Faded(c, 0.8*lit)})
 			}
-			paintGlyph(p, th, at, port.Shape, faded(c, dim), v.joined[k], lit)
+			paintGlyph(p, th, at, port.Shape, paint.Faded(c, dim), v.joined[k], lit)
 			if !labels || port.Name == "" {
 				continue
 			}
 			name := v.runs.shape(th, port.Name, LabelSize.Get(th), false)
-			ink := faded(mix(LabelInk.Get(th), TitleInk.Get(th), lit), dim)
+			ink := paint.Faded(anim.MixColor(LabelInk.Get(th), TitleInk.Get(th), lit), dim)
 			room := half
 			if len(n.Outs) == 0 || len(n.Ins) == 0 {
 				room = 2 * half
@@ -431,7 +422,7 @@ func paintGlyph(p *paint.Painter, th *theme.Live, at geom.Point, s Shape, c colo
 	r := 4.5 + 1.5*lit
 	fill := PortHole.Get(th)
 	if joined {
-		fill = mix(c, TitleInk.Get(th), 0.15)
+		fill = anim.MixColor(c, TitleInk.Get(th), 0.15)
 	}
 	fill.A = c.A
 	switch s {
@@ -485,14 +476,14 @@ func (v *View) paintHeld(p *paint.Painter, th *theme.Live, ls float32) {
 		sh = curve(b, a)
 	}
 	pts := sh.points()
-	ribbon(p, pts, 7*ls, faded(c, 0.15))
+	ribbon(p, pts, 7*ls, paint.Faded(c, 0.15))
 	if v.pr.snapped {
-		ribbon(p, pts, 2.2*ls, faded(c, 0.9))
+		ribbon(p, pts, 2.2*ls, paint.Faded(c, 0.9))
 	} else {
 		for i := 0; i+2 < len(pts); i += 4 {
-			ribbon(p, pts[i:i+3], 2.2*ls, faded(c, 0.9))
+			ribbon(p, pts[i:i+3], 2.2*ls, paint.Faded(c, 0.9))
 		}
 	}
 	r := 5 * ls
-	p.ShadowRRect(geom.Rc(b.X-r, b.Y-r, 2*r, 2*r), r, paint.Solid(c), paint.Shadow{Blur: 12, Color: faded(c, 0.7)})
+	p.ShadowRRect(geom.Rc(b.X-r, b.Y-r, 2*r, 2*r), r, paint.Solid(c), paint.Shadow{Blur: 12, Color: paint.Faded(c, 0.7)})
 }

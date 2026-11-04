@@ -106,7 +106,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	th := f.Theme
 	x, h := box.W-chipBar, float32(5)
 	y := (box.H - h) / 2
-	p.RRect(geom.Rc(x, y, chipBar, h), h/2, paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.85)))
+	p.RRect(geom.Rc(x, y, chipBar, h), h/2, paint.Solid(paint.Faded(audioui.Ground.Get(th), 0.85)))
 	if w := chipBar * -plugui.ChipScale(float64(c.shown.Value()), chipBarDB); w > 0.5 {
 		p.RRect(geom.Rc(x+chipBar-w, y, w, h), h/2, paint.Solid(MaxCut.Get(th)))
 	}
@@ -420,8 +420,8 @@ func (r *readouts) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	for i, name := range readoutNames {
 		x := float32(i) * w
 		label := audioui.Shaped(name, 9.5, true, false)
-		label.Paint(p, geom.Pt(x+(w-label.Advance)/2, 12), audioui.Faded(ink, 0.55))
-		c := audioui.Faded(ink, 0.92)
+		label.Paint(p, geom.Pt(x+(w-label.Advance)/2, 12), paint.Faded(ink, 0.55))
+		c := paint.Faded(ink, 0.92)
 		switch {
 		case i == 1 && known && onTarget:
 			c = MaxOnTarg.Get(th)
@@ -433,7 +433,7 @@ func (r *readouts) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		run := audioui.Shaped(words[i], 18, true, true)
 		run.Paint(p, geom.Pt(x+(w-run.Advance)/2, 30), c)
 		if i > 0 {
-			p.RRect(geom.Rc(x, 12, 1, box.H-24), 0, paint.Solid(audioui.Faded(ink, 0.1)))
+			p.RRect(geom.Rc(x, 12, 1, box.H-24), 0, paint.Solid(paint.Faded(ink, 0.1)))
 		}
 	}
 }
