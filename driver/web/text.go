@@ -210,6 +210,26 @@ func (d *Driver) domEdited(composing bool) {
 		w.in.Push(edit)
 	}
 }
+
+// compositionEnded sends the end of a composition. An edit sent brings a new state
+// back. With none to send, the engine's latest state goes to the mirror now.
+func (d *Driver) compositionEnded() {
+	d.composing = false
+	d.domEdited(false)
+	w := d.typingWindow()
+	if w == nil {
+		return
+	}
+	d.mu.Lock()
+	latest := w.composedState
+	w.composedState = nil
+	if latest != nil && w.stateSeq == w.editSeq {
+		w.state = latest
+	}
+	d.mu.Unlock()
+	d.syncText(w)
+}
+
 func (d *Driver) listenText(doc js.Value) {
 	for _, t := range []js.Value{d.plain, d.secret} {
 		d.on(t, "compositionstart", false, func(js.Value) {
@@ -223,7 +243,7 @@ func (d *Driver) listenText(doc js.Value) {
 			d.compSuffix = text[end:]
 			d.composing = true
 		})
-		d.on(t, "compositionend", false, func(js.Value) { d.composing = false; d.domEdited(false) })
+		d.on(t, "compositionend", false, func(js.Value) { d.compositionEnded() })
 		d.on(t, "beforeinput", false, func(e js.Value) {
 			w := d.typingWindow()
 			if w == nil {

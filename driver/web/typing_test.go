@@ -4,10 +4,12 @@ package web_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"syscall/js"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/driver/web"
@@ -328,4 +330,166 @@ func TestLongTextEditsTheStretchTheMirrorHolds(t *testing.T) {
 	if got := field.Text(); got != long+"b" {
 		t.Fatalf("the text ends %q, %d runes, want %d", got[len(got)-20:], len(got), len(long)+1)
 	}
+}
+
+// composer is a browser's input method, working on the mirror as a dead key or a
+// language's input method does: each step replaces what it composed so far.
+type composer struct {
+	m          js.Value
+	start, len int
+}
+
+func compose(m js.Value) *composer {
+	c := &composer{m: m, start: m.Get("selectionStart").Int()}
+	m.Call("dispatchEvent", eventOf("CompositionEvent", "compositionstart", map[string]any{"data": ""}))
+	return c
+}
+
+func (c *composer) step(s string) {
+	c.m.Call("setRangeText", s, c.start, c.start+c.len, "end")
+	c.len = len(utf16.Encode([]rune(s)))
+	c.m.Call("dispatchEvent", eventOf("InputEvent", "input", map[string]any{"inputType": "insertCompositionText", "data": s, "isComposing": true}))
+}
+
+func (c *composer) end(s string) {
+	c.m.Call("dispatchEvent", eventOf("CompositionEvent", "compositionend", map[string]any{"data": s}))
+}
+
+// TestComposingDeepInALongText: the engine shows the keyboard the stretch of a long
+// text around the caret, and that moves with the caret, while a composition holds the
+// mirror where it was.
+func TestComposingDeepInALongText(t *testing.T) {
+	var b strings.Builder
+	for i := range 3000 {
+		fmt.Fprintf(&b, "line %d\r\n", i)
+	}
+	long := b.String()
+	field := widget.NewTextArea()
+	field.SetText(long, nil)
+	d := show(t, field)
+	focusField(t, d, field)
+	k := &typist{t: t, d: d, field: field}
+	// from is where the caret stands, in bytes, which is the same as runes here.
+	for _, c := range []struct {
+		name  string
+		ups   int
+		steps []string
+	}{
+		{"a dead key at the end", 0, []string{"´", "é"}},
+		{"a dead key above the end", 8, []string{"´", "é"}},
+		{"an input method's steps at the end", 0, []string{"k", "kl", "klm", "klmn"}},
+		{"an input method's steps above the end", 30, []string{"k", "kl", "klm", "klmn"}},
+		{"wide characters and pairs", 3, []string{"日", "日本", "日本😀", "日本😀語"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			k.t = t
+			field.SetText(long, nil)
+			time.Sleep(50 * time.Millisecond) // a frame takes the program's text to the mirror
+			k.key("End", "End", "ctrlKey")
+			for range c.ups {
+				k.key("ArrowUp", "ArrowUp")
+			}
+			m := d.Mirror()
+			start, _ := field.Selection()
+			if start <= 2048 {
+				t.Fatalf("the caret is at %d, not deep in the text", start)
+			}
+			runes := []rune(long)
+			before, after := string(runes[:start]), string(runes[start:])
+			state := func(step string, composed string) {
+				t.Helper()
+				if got := field.Text(); got != long {
+					t.Fatalf("%s: the text changed under the composition: %s", step, firstDifference(got, long))
+				}
+				shown := field.TextState()
+				if s := shown.Text[shown.Composing[0]-shown.Start : shown.Composing[1]-shown.Start]; s != composed {
+					t.Fatalf("%s: the composition shows %q, want %q", step, s, composed)
+				}
+			}
+			comp := compose(m)
+			for _, s := range c.steps {
+				comp.step(s)
+				state("composing "+s, s)
+			}
+			last := c.steps[len(c.steps)-1]
+			comp.end(last)
+			want := before + last + after
+			if got := field.Text(); got != want {
+				t.Fatalf("after the composition: %s", firstDifference(got, want))
+			}
+			if a, b := field.Selection(); a != start+len([]rune(last)) || b != a {
+				t.Errorf("the caret is at %d-%d, want %d", a, b, start+len([]rune(last)))
+			}
+			shown := field.TextState()
+			if got, want := m.Get("value").String(), strings.ReplaceAll(shown.Text, "\r\n", "\n"); got != want {
+				t.Errorf("the mirror holds other text than the field's stretch: %s", firstDifference(got, want))
+			}
+			// The next keys carry on from there, composing again included.
+			k.key("x", "KeyX")
+			comp = compose(m)
+			comp.step("y")
+			comp.end("y")
+			want = before + last + "xy" + after
+			if got := field.Text(); got != want {
+				t.Fatalf("after more keys: %s", firstDifference(got, want))
+			}
+		})
+	}
+}
+
+func firstDifference(got, want string) string {
+	i := 0
+	for i < len(got) && i < len(want) && got[i] == want[i] {
+		i++
+	}
+	cut := func(s string) string { return s[max(0, i-20):min(len(s), i+40)] }
+	return fmt.Sprintf("at byte %d of %d, %q where it should be %q", i, len(want), cut(got), cut(want))
+}
+
+// TestTextSetDuringACompositionReachesTheMirror: a composition holds the mirror back,
+// and one that ends with nothing to send has no edit to bring a new state.
+func TestTextSetDuringACompositionReachesTheMirror(t *testing.T) {
+	field := widget.NewTextField()
+	k := typistFor(t, field)
+	k.typed("abc")
+	comp := compose(k.d.Mirror())
+	comp.step("k")
+	comp.step("")
+	field.SetText("other", nil)
+	// Anything that wakes the engine draws a frame, which tells the driver.
+	r := k.d.Canvas().Call("getBoundingClientRect")
+	for range 10 {
+		k.d.Canvas().Call("dispatchEvent", eventOf("PointerEvent", "pointermove", map[string]any{
+			"pointerId": 1, "pointerType": "mouse", "clientX": r.Get("left").Float() + 50, "clientY": r.Get("top").Float() + 50,
+		}))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := k.d.Mirror().Get("value").String(); got != "abc" {
+		t.Fatalf("the composition let the mirror change, to %q", got)
+	}
+	comp.end("")
+	for give := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if got := k.d.Mirror().Get("value").String(); got == "other" {
+			break
+		} else if time.Now().After(give) {
+			t.Fatalf("the mirror holds %q, and the field %q", got, field.Text())
+		}
+	}
+	k.check("after the composition")
+	k.typed("x")
+	k.wants("otherx", 6)
+}
+
+// TestAComposedWordInAShortField is the same with no stretch to move.
+func TestAComposedWordInAShortField(t *testing.T) {
+	field := widget.NewTextField()
+	k := typistFor(t, field)
+	k.typed("caf")
+	comp := compose(k.d.Mirror())
+	comp.step("´")
+	comp.step("é")
+	comp.end("é")
+	k.check("after the composition")
+	k.typed("x")
+	k.wants("caféx", 5)
 }

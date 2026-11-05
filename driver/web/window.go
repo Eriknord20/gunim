@@ -48,8 +48,11 @@ type Window struct {
 
 	// The fields below belong to the frame loop.
 
-	pane              compose.Pane
-	state             *input.TextState
+	pane  compose.Pane
+	state *input.TextState
+	// composedState is the engine's latest state while a composition keeps state on the
+	// stretch of text the mirror holds, for when the composition ends.
+	composedState     *input.TextState
 	stateSeq, editSeq uint64
 	textBox           geom.Rect
 	shot              func(*image.RGBA)
@@ -321,9 +324,17 @@ func (w *Window) SetTextState(state *input.TextState, seq uint64) {
 		w.d.mu.Unlock()
 		return
 	}
-	if state == nil {
+	w.composedState = nil
+	switch {
+	case state == nil:
 		w.state = nil
-	} else {
+	case w.d.composing && w.d.typing == w && w.state != nil:
+		// A composition holds the mirror as it is, and domEdited reads the mirror
+		// against w.state. In a long text a new state can be another stretch, as the
+		// stretch follows the caret, so w.state stays on the stretch the mirror holds.
+		kept := *state
+		w.composedState = &kept
+	default:
 		kept := *state
 		w.state = &kept
 	}
