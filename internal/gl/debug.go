@@ -109,14 +109,6 @@ func (d *DebugContext) BlendFuncSeparate(arg0 uint32, arg1 uint32, arg2 uint32, 
 	}
 }
 
-func (d *DebugContext) BufferInit(arg0 uint32, arg1 int, arg2 uint32) {
-	d.Context.BufferInit(arg0, arg1, arg2)
-	fmt.Fprintln(os.Stderr, "BufferInit")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at BufferInit", e))
-	}
-}
-
 // BufferData is a gunim change.
 func (d *DebugContext) BufferData(arg0 uint32, arg1 []uint8, arg2 uint32) {
 	d.Context.BufferData(arg0, arg1, arg2)

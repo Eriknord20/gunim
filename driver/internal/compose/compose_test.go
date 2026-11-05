@@ -45,8 +45,7 @@ func (g *fakeGL) CreateVertexArray() uint32                                   { 
 func (g *fakeGL) BindVertexArray(uint32)                                      {}
 func (g *fakeGL) CreateBuffer() uint32                                        { return g.name() }
 func (g *fakeGL) BindBuffer(uint32, uint32)                                   {}
-func (g *fakeGL) BufferInit(uint32, int, uint32)                              {}
-func (g *fakeGL) BufferSubData(uint32, int, []byte)                           {}
+func (g *fakeGL) BufferData(uint32, []byte, uint32)                           {}
 func (g *fakeGL) EnableVertexAttribArray(uint32)                              {}
 func (g *fakeGL) VertexAttribPointer(uint32, int32, uint32, bool, int32, int) {}
 func (g *fakeGL) CreateTexture() uint32                                       { return g.name() }
