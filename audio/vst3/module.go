@@ -141,6 +141,10 @@ func Open(path string) (*Module, error) {
 // loadModule loads the library bin of the plugin at path, on the
 // plugins' thread, as a module expects to be loaded.
 func loadModule(path, bin string) (*Module, error) {
+	// A plugin that catches its own faults is to go on doing so.
+	if err := installGuard(); err != nil {
+		return nil, fmt.Errorf("vst3: keeping a plugin's faults from ending the program: %w", err)
+	}
 	lib, err := openLibrary(bin)
 	if err != nil {
 		return nil, fmt.Errorf("vst3: %s: %w", path, err)
