@@ -30,12 +30,14 @@ import (
 
 // continueGuard is the handler, in guard_windows_amd64.s; continueGuardPC is its
 // address, as Go's own func value for it is a wrapper Windows can't call.
+//
+//nolint:unused // only the assembly names it
 func continueGuard()
 func continueGuardPC() uintptr
 
 var (
 	// imageLo and imageHi bound this program's image. continueGuard reads them.
-	imageLo, imageHi uintptr
+	imageLo, imageHi uintptr //nolint:unused // only the assembly reads them
 	// recoveredAt is where the last fault a plugin recovered from was, and
 	// recoveredN how many there have been. continueGuard writes them.
 	recoveredAt uintptr

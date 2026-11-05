@@ -88,8 +88,7 @@ func runGuardCase(t *testing.T, name string) {
 					t.Fatal("no panic from a nil dereference")
 				}
 			}()
-			var p *int
-			*p = 1 //nolint:staticcheck // the fault is the test
+			*noInt() = 1
 		}()
 		if n, _, _ := Recovered(); n != 0 {
 			t.Fatalf("%d faults of plugins, for Go's own", n)
@@ -99,6 +98,11 @@ func runGuardCase(t *testing.T, name string) {
 		t.Fatalf("no case %q", name)
 	}
 }
+
+// noInt is a nil pointer, out of the sight of what checks for one: the fault is the test.
+//
+//go:noinline
+func noInt() *int { return nil }
 
 const guardCaseEnv = "GUNIM_VST3_GUARD_CASE"
 
@@ -128,7 +132,7 @@ func TestTheGuard(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			cmd := exec.Command(os.Args[0], "-test.run=^TestGuardCase$", "-test.v", "-test.timeout=30s")
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestGuardCase$", "-test.v", "-test.timeout=30s")
 			cmd.Env = append(os.Environ(), guardCaseEnv+"="+c.name)
 			out, err := cmd.CombinedOutput()
 			if died := err != nil; died != c.dies {
