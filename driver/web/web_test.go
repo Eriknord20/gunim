@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -1254,6 +1256,23 @@ func TestBrowser(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		if got := errs.stop(); len(got) != 0 {
 			t.Errorf("the page logged %q", got)
+		}
+	})
+	t.Run("sound opens before the first gesture", func(t *testing.T) {
+		// A browser holds sound back until a click, a key or a touch. Open can't wait
+		// for that: what the first click plays is set up after it.
+		opened := make(chan error, 1)
+		go func() {
+			_, err := speaker.Open(audio.NewMixer(), speaker.Options{Name: "gunim test"})
+			opened <- err
+		}()
+		select {
+		case err := <-opened:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("speaker.Open waits for a gesture nothing here will make")
 		}
 	})
 	t.Run("the keyboard covers only what the canvas has down there", func(t *testing.T) {
