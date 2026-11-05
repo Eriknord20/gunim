@@ -149,6 +149,16 @@ func (w *Window) SetClipboard(s string) error { _, err := clipboardCall("writeTe
 // Shoot has fn called with the next frame drawn.
 func (w *Window) Shoot(fn func(*image.RGBA)) { w.d.mu.Lock(); w.shot = fn; w.d.mu.Unlock(); w.d.kick() }
 
+// keepShot puts back a shot whose frame could not draw, for a later frame, unless
+// a newer shot has taken its place.
+func (w *Window) keepShot(fn func(*image.RGBA)) {
+	w.d.mu.Lock()
+	if w.shot == nil {
+		w.shot = fn
+	}
+	w.d.mu.Unlock()
+}
+
 // SetTitle sets the page's title, for a window that fills the canvas.
 func (w *Window) SetTitle(title string) {
 	if w.fills {

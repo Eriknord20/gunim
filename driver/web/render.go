@@ -15,10 +15,10 @@ import (
 	"github.com/marrasen/gunim/driver/internal/render"
 )
 
-// frame runs in requestAnimationFrame. It draws the frames waiting
-// into their windows, lays the windows on the canvas, bottom first,
-// and tells each window its frame is shown. The browser shows the
-// canvas as the callback returns.
+// frame runs in requestAnimationFrame, and after a new size in the
+// ResizeObserver's step. It draws the frames waiting into their windows,
+// lays the windows on the canvas, bottom first, and tells each window its
+// frame is shown. The browser shows the canvas as the callback returns.
 func (d *Driver) frame() {
 	d.mu.Lock()
 	lost := d.lost
@@ -39,9 +39,11 @@ func (d *Driver) frame() {
 	}
 	var jobs []job
 	var stack []compose.Layer
+	gone := d.gone
+	d.gone = nil
 	scale, surfW, surfH := d.scale, d.surfW, d.surfH
 	for _, w := range d.windows {
-		r := w.rectLocked()
+		r := w.held.Rect(w.rectLocked(), w.next != nil)
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.fills {
 			// The browser's count of device pixels can differ from this by one.
@@ -59,12 +61,15 @@ func (d *Driver) frame() {
 			jobs = append(jobs, job{w: w, f: &frame{ops: w.pane.Last}, fbW: fbW, fbH: fbH, under: w.under, again: true})
 		}
 		w.sharpen = false
-		if !w.hidden {
+		if !w.hidden && !w.stale {
 			x, y := int(math.Round(float64(r.Min.X*scale))), int(math.Round(float64(r.Min.Y*scale)))
-			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH})
+			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH, Under: w.under})
 		}
 	}
 	d.mu.Unlock()
+	for _, p := range gone {
+		d.comp.Release(p)
+	}
 	if len(jobs) == 0 && !d.comp.Dirty(stack) {
 		return
 	}
@@ -72,6 +77,9 @@ func (d *Driver) frame() {
 	for _, j := range jobs {
 		start := time.Now()
 		if !d.comp.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) {
+			if j.shot != nil {
+				j.w.keepShot(j.shot)
+			}
 			continue
 		}
 		if j.shot != nil {

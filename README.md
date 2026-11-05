@@ -430,8 +430,9 @@ cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
 Serve those with a page that has a canvas and starts Go:
 
 ```html
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <body style="margin:0">
-<canvas id="gunim" style="display:block;width:100%;height:100vh"></canvas>
+<canvas id="gunim" style="display:block;width:100%;height:100vh;height:100dvh"></canvas>
 <script src="wasm_exec.js"></script>
 <script>
   const go = new Go();
@@ -439,9 +440,15 @@ Serve those with a page that has a canvas and starts Go:
 </script>
 ```
 
-The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. If the page has no element with the id `gunim`, the driver makes a canvas that fills it.
+The viewport tag has a phone lay the page out at its own width. Without it, the phone lays out about 980 px wide, and the canvas draws at less than the phone's full resolution where it passes what the GPU can draw. `100dvh` follows a phone's address bar as it comes and goes, and a browser without `dvh` uses the `100vh` before it.
 
-gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` in the canvas's `style` attribute. Elements laid over the canvas keep their own events.
+The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. With `height:auto` and a width, or the other way round, the free side follows at the ratio of the canvas's `width` and `height` attributes. If the page has no element with the id `gunim`, the driver makes a canvas that fills it, and sets the body's margin to 0.
+
+If the browser loses the GPU context, the canvas waits for it to come back. After 5 s with no context the page shows a short note with a Reload button, in English, in an element with the id `gunim-context-lost`, and the canvas's `data-gunim-context` attribute is `gone`. A page can style or hide the note and show its own.
+
+A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
+
+gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` on the canvas, in its `style` attribute or a stylesheet. Elements laid over the canvas keep their own events.
 
 Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar, full screen and its settings, the system keeps Command+H, Command+M and Command+\`, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it. Cut, copy and paste in a text field stay the browser's.
 

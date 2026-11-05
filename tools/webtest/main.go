@@ -33,7 +33,7 @@ import (
 
 // page runs the tests and keeps what they print in window.testResult.
 const page = `<!doctype html><meta charset="utf-8"><title>driver/web tests</title>
-<canvas id="gunim" style="width:320px;height:240px"></canvas><pre id="output"></pre>
+<canvas id="gunim" style="width:320px;height:240px"></canvas><pre id="output" style="white-space:pre-wrap"></pre>
 <script src="wasm_exec.js"></script><script>
 window.testResult = {done: false, code: null, output: "", read: 0};
 const decoder = new TextDecoder(), write = globalThis.fs.writeSync;
