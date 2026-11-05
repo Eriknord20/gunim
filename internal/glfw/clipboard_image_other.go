@@ -3,7 +3,7 @@
 
 // gunim change: this file is gunim's.
 
-//go:build !windows
+//go:build !windows && !js
 
 package glfw
 

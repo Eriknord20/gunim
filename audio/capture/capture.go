@@ -225,7 +225,7 @@ var ErrDenied = errors.New("capture: this application may not record: allow it i
 
 // lost is how long a device may hand on nothing before the stream
 // counts it gone.
-const lost = 2 * time.Second
+const lost = 2 * time.Second //nolint:unused // Not every system has a stream that can go.
 
 // ErrBusy was returned by [Open] for an ASIO driver's inputs that
 // another stream recorded. Streams share them now, and none returns it.

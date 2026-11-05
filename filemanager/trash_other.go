@@ -13,10 +13,13 @@ var errNoTrash = errors.New("moving to the trash is not supported on this system
 // noTrash is the trash of a system the app knows none for.
 type noTrash struct{}
 
+// Trash says the system has none.
 func (noTrash) Trash(string) (string, error) { return "", errNoTrash }
 
+// Restore says the system has none.
 func (noTrash) Restore(string, string, time.Time, string) error { return errNoTrash }
 
+// Describe has nothing to say.
 func (noTrash) Describe(string) string { return "" }
 
 // systemTrash returns a trash that says the system has none the app knows.

@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
