@@ -961,7 +961,8 @@ func plainCharacter(name, code string, shift bool) bool {
 
 // browserKey says a key stays the browser's alone, and gunim never hears it:
 // reloading, zooming, the developer tools, going back and forward, tabs, the
-// address bar and full screen. name is the key's value and code its place.
+// address bar, full screen and its settings, and the system's own keys for hiding
+// and moving between windows. name is the key's value and code its place.
 func browserKey(name, code string, m input.Mods) bool {
 	command := m&(input.ModControl|input.ModSuper) != 0
 	alt := m&input.ModAlt != 0
