@@ -922,11 +922,41 @@ func altGr(e js.Value) bool {
 	if e.Call("getModifierState", "AltGraph").Bool() {
 		return true
 	}
-	r := []rune(e.Get("key").String())
+	name := e.Get("key").String()
+	r := []rune(name)
 	if !e.Get("ctrlKey").Bool() || !e.Get("altKey").Bool() || len(r) != 1 {
 		return false
 	}
-	return !unicode.IsLetter(r[0]) || r[0] > unicode.MaxASCII
+	if unicode.IsLetter(r[0]) && r[0] <= unicode.MaxASCII {
+		return false
+	}
+	return !plainCharacter(name, e.Get("code").String(), e.Get("shiftKey").Bool())
+}
+
+// usKeys holds what each place types on an American keyboard, alone and with Shift.
+var usKeys = map[string]string{
+	"Digit1": "1!", "Digit2": "2@", "Digit3": "3#", "Digit4": "4$", "Digit5": "5%",
+	"Digit6": "6^", "Digit7": "7&", "Digit8": "8*", "Digit9": "9(", "Digit0": "0)",
+	"Minus": "-_", "Equal": "=+", "BracketLeft": "[{", "BracketRight": "]}", "Backslash": "\\|",
+	"Semicolon": ";:", "Quote": "'\"", "Backquote": "`~", "Comma": ",<", "Period": ".>", "Slash": "/?",
+	"Space": "  ",
+}
+
+// plainCharacter says Control and Alt with a key gave what the key gives anyway, so
+// no AltGr layer is at work: 1 on the 1 key of an American keyboard. A browser that
+// reports AltGr itself never gets this far.
+func plainCharacter(name, code string, shift bool) bool {
+	if strings.HasPrefix(code, "Numpad") {
+		return true
+	}
+	us, ok := usKeys[code]
+	if !ok {
+		return false
+	}
+	if shift {
+		return name == us[1:2]
+	}
+	return name == us[:1]
 }
 
 // browserKey says a key stays the browser's alone, and gunim never hears it:

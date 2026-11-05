@@ -771,6 +771,50 @@ func TestBrowser(t *testing.T) {
 		}
 		drain(w)
 	})
+	t.Run("Control and Alt with a key's own character type nothing", func(t *testing.T) {
+		d.canvas.Call("focus")
+		drain(w)
+		for _, c := range []struct {
+			name, code string
+			mods       []string
+			altGr      bool
+		}{
+			{"1", "Digit1", []string{"ctrlKey", "altKey"}, false},
+			{"!", "Digit1", []string{"ctrlKey", "altKey", "shiftKey"}, false},
+			{"-", "Minus", []string{"ctrlKey", "altKey"}, false},
+			{",", "Comma", []string{"ctrlKey", "altKey"}, false},
+			{"1", "Numpad1", []string{"ctrlKey", "altKey"}, false},
+			// What AltGr types on other layouts, from a browser that doesn't say it's AltGr.
+			{"@", "Digit2", []string{"ctrlKey", "altKey"}, true},
+			{"{", "Digit7", []string{"ctrlKey", "altKey"}, true},
+			{"€", "KeyE", []string{"ctrlKey", "altKey"}, true},
+			// The same character, from a browser that says.
+			{"1", "Digit1", []string{"ctrlKey", "altKey", "modifierAltGraph"}, true},
+		} {
+			key(d.canvas, c.name, c.code, c.mods...)
+			var press []input.KeyPress
+			var typed []string
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.KeyPress:
+					press = append(press, e)
+				case input.TextInput:
+					typed = append(typed, e.Text)
+				}
+			}
+			if len(press) != 1 {
+				t.Errorf("%q on %s reached gunim as %v", c.name, c.code, press)
+				continue
+			}
+			if c.altGr {
+				if !press[0].Typed || press[0].Mods&(input.ModControl|input.ModAlt) != 0 || !slices.Equal(typed, []string{c.name}) {
+					t.Errorf("AltGr %q on %s: %+v typed %q", c.name, c.code, press[0], typed)
+				}
+			} else if press[0].Typed || press[0].Mods&input.ModControl == 0 || press[0].Mods&input.ModAlt == 0 || len(typed) != 0 {
+				t.Errorf("%q on %s with Control and Alt: %+v typed %q", c.name, c.code, press[0], typed)
+			}
+		}
+	})
 	t.Run("a field reached by keys takes the keyboard, and a finger's waits", func(t *testing.T) {
 		doc := js.Global().Get("document")
 		d.mu.Lock()
