@@ -20,6 +20,13 @@
 // secret, focused while a window takes text, so a phone's soft keyboard and
 // input methods work.
 //
+// The mirror holds what the engine holds at every moment the browser can act on it.
+// The browser types into it straight after a key's listeners return, and Go runs every
+// goroutine until it goes idle before it hands back to the browser. So a key the
+// listener passes on has reached the engine, and the engine's new text state has
+// reached the mirror, before the browser does anything more. The engine sends that
+// state as soon as it has handled the key: see [driver.TextStater].
+//
 // Each key has one owner. The browser keeps a short list, as reloading and
 // zooming, and gunim never hears those. Every other key with Control or Command
 // is gunim's alone, so the browser's own find and print don't run in a program.
