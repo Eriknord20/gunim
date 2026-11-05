@@ -265,16 +265,18 @@ func (w *Window) SetCursor(c input.Cursor) {
 	w.d.canvas.Get("style").Set("cursor", name)
 }
 
-// OpenLink implements [driver.LinkOpener] with a new tab. It takes an http or https
-// address, and returns an error for anything else. It can't tell a popup blocker
-// stopped the tab, as a tab opened with noopener says nothing back.
+// OpenLink implements [driver.LinkOpener] with a new tab. It takes what a link on
+// the page can, such as an http, mailto or tel address or one relative to the page,
+// and returns an error for a javascript or data address, which runs what it holds.
+// It can't tell a popup blocker stopped the tab, as a tab opened with noopener says
+// nothing back.
 func (w *Window) OpenLink(address string) error {
 	u, err := url.Parse(address)
 	if err != nil {
 		return fmt.Errorf("web: opening a link: %w", err)
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("web: opening %q: only http and https addresses open", address)
+	if u.Scheme == "javascript" || u.Scheme == "data" {
+		return fmt.Errorf("web: opening %q: a %s address runs what it holds", address, u.Scheme)
 	}
 	_, err = call(js.Global(), "open", address, "_blank", "noopener")
 	return err

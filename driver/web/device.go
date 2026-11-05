@@ -97,13 +97,10 @@ func (d *Driver) fingerEvent(id int, e js.Value, phase input.FingerPhase) {
 	w.in.Push(input.Finger{ID: id, Pos: pos, Phase: phase, Time: now})
 }
 
-// compassProbe is how long the driver listens for a first reading to find out if
-// there is a compass, with no window watching.
-const compassProbe = 5 * time.Second
-
 // HasCompass implements [driver.Compass]. The browser says only by sending a
-// reading, so the first call listens for one for a short while, and this is false
-// until it comes.
+// reading, so the first call listens until one comes, and this is false until it
+// does. A page gets no readings while hidden, and a device with no sensors sends
+// none, or one with no alpha, so the listening costs nothing until a reading ends it.
 func (w *Window) HasCompass() bool {
 	d := w.d
 	d.mu.Lock()
@@ -111,12 +108,6 @@ func (w *Window) HasCompass() bool {
 	if !d.compassAsked {
 		d.compassAsked, d.probing = true, true
 		d.runCompassLocked()
-		time.AfterFunc(compassProbe, func() {
-			d.mu.Lock()
-			defer d.mu.Unlock()
-			d.probing = false
-			d.runCompassLocked()
-		})
 	}
 	return d.compass
 }
@@ -152,22 +143,28 @@ func (d *Driver) runCompassLocked() {
 }
 
 // heading takes a deviceorientationabsolute event. Its alpha turns
-// anticlockwise from north, and a heading clockwise. A desktop browser with no
-// sensors can send one with no alpha, which answers the probe too.
+// anticlockwise from north, and a heading clockwise. A browser can send one with
+// no alpha, with no sensors or before its first reading, and that answers nothing.
 func (d *Driver) heading(e js.Value) {
 	alpha := e.Get("alpha")
-	reads := alpha.Type() == js.TypeNumber
+	if alpha.Type() != js.TypeNumber {
+		return
+	}
 	d.mu.Lock()
-	d.probing = false
-	d.compass = d.compass || reads
+	first := !d.compass
+	d.probing, d.compass = false, true
 	to := make([]*Window, 0, len(d.headingTo))
 	for w := range d.headingTo {
 		to = append(to, w)
 	}
+	ws := append([]*Window(nil), d.windows...)
 	d.runCompassLocked()
 	d.mu.Unlock()
-	if !reads {
-		return
+	// The engine starts a window's watch after a frame, so a first reading asks for one.
+	if first {
+		for _, w := range ws {
+			w.in.Push(driver.Redraw{})
+		}
 	}
 	reading := input.Heading{Degrees: headingOf(alpha.Float()), Accuracy: input.HeadingMedium, Time: stamp(e)}
 	for _, w := range to {

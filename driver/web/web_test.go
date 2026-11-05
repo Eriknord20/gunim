@@ -1213,7 +1213,7 @@ func TestBrowser(t *testing.T) {
 		})
 		defer spy.Release()
 		define(js.Global(), "open", spy.Value)
-		for _, bad := range []string{"http://[bad", "javascript:alert(1)", "data:text/html,hi", "no scheme"} {
+		for _, bad := range []string{"http://[bad", "javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,hi"} {
 			if err := w.OpenLink(bad); err == nil {
 				t.Errorf("%q gave no error", bad)
 			}
@@ -1223,6 +1223,13 @@ func TestBrowser(t *testing.T) {
 		}
 		if err := w.OpenLink("https://example.com/a?b=c"); err != nil || !slices.Equal(opened, []string{"https://example.com/a?b=c"}) {
 			t.Errorf("a good link: %v, opened %q", err, opened)
+		}
+		// Whatever else a link on the page can hold opens too.
+		for _, good := range []string{"mailto:a@example.com", "tel:+4612345", "/docs/page"} {
+			opened = nil
+			if err := w.OpenLink(good); err != nil || !slices.Equal(opened, []string{good}) {
+				t.Errorf("%q: %v, opened %q", good, err, opened)
+			}
 		}
 		// What the browser itself throws comes back the same way.
 		define(js.Global(), "open", js.Global().Call("eval", `()=>{throw new DOMException("no","SyntaxError")}`))
@@ -1275,6 +1282,42 @@ func TestBrowser(t *testing.T) {
 			t.Fatal("speaker.Open waits for a gesture nothing here will make")
 		}
 	})
+	t.Run("the user's scroll stays with the keyboard up, and a covered field comes into view", func(t *testing.T) {
+		win := js.Global()
+		doc := win.Get("document")
+		spacer := doc.Call("createElement", "div")
+		spacer.Get("style").Set("height", "5000px")
+		doc.Get("body").Call("appendChild", spacer)
+		defer func() {
+			spacer.Call("remove")
+			win.Call("scrollTo", 0, 0)
+			d.mu.Lock()
+			d.typing = nil
+			w.textBox = geom.Rect{}
+			d.mu.Unlock()
+			d.viewportChanged()
+		}()
+		defer define(win, "visualViewport", js.Undefined())()
+		win.Call("scrollTo", 0, 0)
+		d.mu.Lock()
+		d.typing = w
+		w.textBox = geom.Rect{Min: geom.Pt(0, 200), Max: geom.Pt(100, 230)}
+		d.mu.Unlock()
+		// A keyboard over the canvas's last 40 px, and so over the field.
+		edge := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
+		define(win, "visualViewport", js.ValueOf(map[string]any{"scale": 1, "offsetTop": 0, "height": edge - 40}))
+		win.Call("dispatchEvent", win.Get("Event").New("scroll"))
+		if got := win.Get("scrollY").Float(); got != 0 {
+			t.Errorf("a scroll by the user moved the page on to %v", got)
+		}
+		if w.KeyboardCover() == 0 {
+			t.Error("a scroll doesn't take in the keyboard's cover")
+		}
+		d.viewportChanged()
+		if got := win.Get("scrollY").Float(); got == 0 {
+			t.Error("the keyboard opening left the field covered")
+		}
+	})
 	t.Run("the keyboard covers only what the canvas has down there", func(t *testing.T) {
 		win := js.Global()
 		height := win.Get("innerHeight").Float()
@@ -1322,7 +1365,7 @@ func TestBrowser(t *testing.T) {
 		if d.compass || d.compassOn {
 			t.Fatalf("with nothing watching, the page listens: %v, and heard: %v", d.compassOn, d.compass)
 		}
-		// Asking listens for a first reading, and a browser with no sensors ends that.
+		// Asking listens for a first reading, and one with no alpha isn't that.
 		if w.HasCompass() {
 			t.Fatal("a compass before any reading")
 		}
@@ -1330,20 +1373,26 @@ func TestBrowser(t *testing.T) {
 			t.Fatal("asking for a compass doesn't listen for one")
 		}
 		send(js.Null())
-		if d.compassOn || w.HasCompass() {
+		if !d.compassOn || w.HasCompass() {
 			t.Fatalf("a reading of nothing: listening %v, compass %v", d.compassOn, d.compass)
 		}
+		// A first reading comes however late it is. It ends the listening and asks for
+		// a frame, after which the engine starts a window's watch.
+		drain(w)
 		send(30)
-		if w.HasCompass() {
-			t.Fatal("a reading came in after the page stopped listening")
+		if !w.HasCompass() {
+			t.Fatal("no compass after a first reading")
+		}
+		if d.compassOn {
+			t.Fatal("still listening after a first reading, with nothing watching")
+		}
+		if !slices.ContainsFunc(drain(w), func(x any) bool { _, ok := x.(driver.Redraw); return ok }) {
+			t.Fatal("a first reading asks for no frame")
 		}
 		// Watching listens, and stops with the last window that watches.
 		w.WatchHeading(true)
 		drain(w)
 		send(30)
-		if !w.HasCompass() {
-			t.Fatal("no compass after a reading")
-		}
 		if got := headings(); len(got) != 1 || got[0].Degrees != 330 {
 			t.Fatalf("headings %v", got)
 		}

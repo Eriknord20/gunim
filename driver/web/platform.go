@@ -204,7 +204,12 @@ func (w *Window) SetTextCaret(r geom.Rect) {
 	style.Set("left", strconv.FormatFloat(cr.Get("left").Float()+float64(r.Min.X+at.X), 'f', -1, 64)+"px")
 	style.Set("top", strconv.FormatFloat(cr.Get("top").Float()+float64(r.Min.Y+at.Y), 'f', -1, 64)+"px")
 }
-func (d *Driver) viewportChanged() {
+func (d *Driver) viewportChanged() { d.readViewport(true) }
+
+// readViewport takes in where the keyboard and safe area are, and with keepField
+// brings a field the keyboard covers back into view. A scroll by the user leaves
+// keepField off, or the page would pull them back.
+func (d *Driver) readViewport(keepField bool) {
 	win := js.Global()
 	height := win.Get("innerHeight").Float()
 	vv := win.Get("visualViewport")
@@ -243,7 +248,7 @@ func (d *Driver) viewportChanged() {
 			w.in.Push(driver.Redraw{})
 		}
 	}
-	if cover > 0 && typing != nil {
+	if keepField && cover > 0 && typing != nil {
 		d.mu.Lock()
 		box := typing.textBox.Add(typing.rectLocked().Min)
 		d.mu.Unlock()
@@ -267,7 +272,7 @@ func (d *Driver) listenViewport(doc js.Value) {
 	d.on(js.Global(), "orientationchange", true, func(js.Value) { d.mu.Lock(); d.viewportHeight = 0; d.mu.Unlock(); d.viewportChanged() })
 	d.on(js.Global(), "resize", true, func(js.Value) { d.viewportChanged() })
 	// The page scrolling moves the canvas against the keyboard.
-	d.on(js.Global(), "scroll", true, func(js.Value) { d.viewportChanged() })
+	d.on(js.Global(), "scroll", true, func(js.Value) { d.readViewport(false) })
 	d.viewportChanged()
 }
 
