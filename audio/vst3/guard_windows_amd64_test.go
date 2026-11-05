@@ -88,7 +88,7 @@ func runGuardCase(t *testing.T, name string) {
 					t.Fatal("no panic from a nil dereference")
 				}
 			}()
-			*noInt() = 1
+			*noInt = 1
 		}()
 		if n, _, _ := Recovered(); n != 0 {
 			t.Fatalf("%d faults of plugins, for Go's own", n)
@@ -99,10 +99,8 @@ func runGuardCase(t *testing.T, name string) {
 	}
 }
 
-// noInt is a nil pointer, out of the sight of what checks for one: the fault is the test.
-//
-//go:noinline
-func noInt() *int { return nil }
+// noInt is a nil pointer, out of the sight of what checks for one, so writing through it is a real fault.
+var noInt *int
 
 const guardCaseEnv = "GUNIM_VST3_GUARD_CASE"
 
