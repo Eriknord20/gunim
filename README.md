@@ -453,7 +453,7 @@ go run ./tools/webtest
 
 A test that skips fails the run. Name a browser with `-chrome path`. On Windows, or for another browser or a phone, `go run ./tools/webtest -serve 127.0.0.1:8784` serves the test page to open there. The result is on the page and in `window.testResult`.
 
-A browser holds sound back until the user's first click, key or touch, and `speaker.Open` waits for it. Mount the interface before opening the speaker, or the page stays blank until then.
+A browser holds sound back until the user's first click, key or touch. `speaker.Open` returns at once all the same, and what plays meanwhile sounds from that first gesture on.
 
 Host files, plugins, native audio drivers and other windows of the system aren't there.
 

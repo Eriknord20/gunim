@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -37,10 +38,16 @@ func openOto(s *Speaker, o Options) (*otoOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	<-ready
-	if err := ctx.Err(); err != nil {
-		_ = ctx.Close()
-		return nil, err
+	// A browser holds its sound back until the first click, key or touch, and ready
+	// waits for that. So Open returns at once there, and what plays meanwhile
+	// sounds from that first gesture on: a cue set up after Open is in place for the
+	// click that lets sound start.
+	if runtime.GOOS != "js" {
+		<-ready
+		if err := ctx.Err(); err != nil {
+			_ = ctx.Close()
+			return nil, err
+		}
 	}
 	out := &otoOutput{s: s, ctx: ctx, hz: o.rate()}
 	out.player = ctx.NewPlayer(out)

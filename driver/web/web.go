@@ -80,19 +80,23 @@ type Driver struct {
 	// over.
 	pressed, hover *Window
 	// pointer is the id of the pointer pressing: one drives the pointer at
-	// a time, as gunim has one, and another finger is its own or nothing.
+	// a time, as gunim has one, and a second finger is its own or pinches.
 	// fingers is the window each finger of its own came down in, by id.
 	// touchAction is what the page asked of the browser for touches.
 	touchAction string
 	pointer     int
 	fingers     map[int]*Window
+	pinch       pinchState
 	// compass says the browser has sent a heading, and headingTo holds the
-	// windows that watch it.
-	compass   bool
-	headingTo map[*Window]bool
-	lastTap   geom.Point
-	lastAt    time.Time
-	clicks    int
+	// windows that watch it. compassAsked says HasCompass has started the look for
+	// a first reading, probing that it still goes on, and compassOn that the page
+	// listens for readings now, which runs a phone's sensors.
+	compass, compassAsked, probing, compassOn bool
+	compassEvent                              js.Func
+	headingTo                                 map[*Window]bool
+	lastTap                                   geom.Point
+	lastAt                                    time.Time
+	clicks                                    int
 	// typing is the window that takes text.
 	typing                 *Window
 	composing, syncingText bool
@@ -110,19 +114,38 @@ type Driver struct {
 	stats          frameStats
 	frameAsked     bool
 	raf            js.Func
-	funcs          []js.Func
-	quit           chan struct{}
+	// rafID is the animation frame asked for, while frameAsked says one is.
+	rafID js.Value
+	// listening holds what the driver listens to, and observer and observed the
+	// ResizeObserver, for stop to let go of.
+	listening []listener
+	observer  js.Value
+	observed  js.Func
+	stopped   bool
+	quit      chan struct{}
+}
+
+// listener is one DOM event the driver listens to.
+type listener struct {
+	target js.Value
+	name   string
+	fn     js.Func
 }
 
 var (
+	openMu    sync.Mutex
 	theDriver *Driver
 	openErr   error
-	openOnce  sync.Once
 )
 
-// Open returns the driver, built on the page's canvas the first time.
+// Open returns the driver, built on the page's canvas the first time, and again
+// after [Driver.Run] has ended.
 func Open() (*Driver, error) {
-	openOnce.Do(func() { theDriver, openErr = openDriver() })
+	openMu.Lock()
+	defer openMu.Unlock()
+	if theDriver == nil && openErr == nil {
+		theDriver, openErr = openDriver()
+	}
 	return theDriver, openErr
 }
 
@@ -269,14 +292,53 @@ func (d *Driver) observedSize() {
 }
 
 // Run implements [driver.Driver]. The browser pumps the events, so Run
-// waits for ctx to end or the last window to close.
+// waits for ctx to end or the last window to close. The driver lets go of the page
+// as it returns.
 func (d *Driver) Run(ctx context.Context, ready func()) error {
 	ready()
 	select {
 	case <-ctx.Done():
 	case <-d.quit:
 	}
+	d.stop()
 	return nil
+}
+
+// stop takes the driver off the page: its listeners, the functions behind them and
+// the elements it added. A listener left behind a program that has exited makes the
+// browser log an error at every event.
+func (d *Driver) stop() {
+	openMu.Lock()
+	if theDriver == d {
+		theDriver = nil
+	}
+	openMu.Unlock()
+	d.mu.Lock()
+	if d.stopped {
+		d.mu.Unlock()
+		return
+	}
+	d.stopped, d.probing = true, false
+	d.runCompassLocked()
+	if d.frameAsked {
+		js.Global().Call("cancelAnimationFrame", d.rafID)
+		d.frameAsked = false
+	}
+	d.mu.Unlock()
+	for _, l := range d.listening {
+		l.target.Call("removeEventListener", l.name, l.fn)
+		l.fn.Release()
+	}
+	d.listening = nil
+	if d.observer.Truthy() {
+		d.observer.Call("disconnect")
+		d.observed.Release()
+	}
+	d.raf.Release()
+	d.compassEvent.Release()
+	for _, el := range []js.Value{d.plain, d.secret, d.safeProbe} {
+		el.Call("remove")
+	}
 }
 
 // Monitors implements [driver.Driver]: the browser's viewport.
@@ -337,11 +399,11 @@ func (d *Driver) kick() {
 }
 
 func (d *Driver) kickLocked() {
-	if d.frameAsked {
+	if d.frameAsked || d.stopped {
 		return
 	}
 	d.frameAsked = true
-	js.Global().Call("requestAnimationFrame", d.raf)
+	d.rafID = js.Global().Call("requestAnimationFrame", d.raf)
 }
 
 // closed takes w out of the stack.
@@ -355,6 +417,7 @@ func (d *Driver) closed(w *Window) {
 	}
 	if d.pressed == w {
 		d.pressed = nil
+		d.pinch = pinchState{}
 	}
 	for id, x := range d.fingers {
 		if x == w {
@@ -362,6 +425,7 @@ func (d *Driver) closed(w *Window) {
 		}
 	}
 	delete(d.headingTo, w)
+	d.runCompassLocked()
 	if d.hover == w {
 		d.hover = nil
 	}
@@ -401,7 +465,7 @@ func (d *Driver) on(target js.Value, name string, passive bool, fn func(e js.Val
 		fn(args[0])
 		return nil
 	})
-	d.funcs = append(d.funcs, f)
+	d.listening = append(d.listening, listener{target, name, f})
 	target.Call("addEventListener", name, f, js.ValueOf(map[string]any{"passive": passive}))
 }
 
@@ -433,6 +497,78 @@ func (d *Driver) at(e js.Value) geom.Point {
 	return geom.Pt(float32(e.Get("clientX").Float()-r.Get("left").Float()), float32(e.Get("clientY").Float()-r.Get("top").Float()))
 }
 
+// pinchState is two fingers pressing. touch says what presses is a finger, which a
+// second can pinch with. first and at are where the first and second fingers are.
+// pinched says a second finger came down: from then on the first only lifts. going
+// says the two are down now, and second is the second's id while they are.
+// spread is how far apart they were last, and mid the point between them, in logical
+// pixels on the canvas.
+type pinchState struct {
+	touch, pinched, going bool
+	second                int
+	first, at, mid        geom.Point
+	spread                float32
+}
+
+// measure returns how far apart the fingers are, and the point between them.
+func (g *pinchState) measure() (spread float32, mid geom.Point) {
+	return float32(math.Hypot(float64(g.first.X-g.at.X), float64(g.first.Y-g.at.Y))), g.first.Add(g.at).Mul(0.5)
+}
+
+// pinchStartLocked starts a pinch in w with finger id at p. As on Android, the first
+// finger's press is let go at [input.Away], so it neither clicks nor scrolls nor opens
+// a menu, and the window hears [input.Pinch] from then on. The engine gives it to a
+// node that zooms with a pinch, and otherwise makes it Ctrl with the wheel.
+func (d *Driver) pinchStartLocked(w *Window, id int, p geom.Point, now time.Time) {
+	g := &d.pinch
+	if !g.pinched {
+		w.in.Push(input.PointerUp{Pos: input.Away, Button: input.ButtonPrimary, Touch: true, Time: now})
+	}
+	g.pinched, g.going, g.second, g.at = true, true, id, p
+	g.spread, g.mid = g.measure()
+	w.in.Push(input.Pinch{Pos: g.mid.Sub(w.rectLocked().Min), Scale: 1, Phase: input.PinchStart, Time: now})
+}
+
+// pinchMoveLocked takes finger id's move to p, and reports whether it belongs to a
+// pinch: the two fingers' moves, and those of the first once a pinch has ended.
+func (d *Driver) pinchMoveLocked(id int, p geom.Point, now time.Time) bool {
+	g, w := &d.pinch, d.pressed
+	if w == nil {
+		return false
+	}
+	switch {
+	case id == d.pointer:
+		g.first = p
+	case g.going && id == g.second:
+		g.at = p
+	default:
+		return false
+	}
+	if !g.going {
+		return g.pinched
+	}
+	spread, mid := g.measure()
+	scale := float32(1)
+	if g.spread > 0 && spread > 0 {
+		scale = spread / g.spread
+	}
+	delta := mid.Sub(g.mid)
+	g.spread, g.mid = spread, mid
+	w.in.Push(input.Pinch{Pos: mid.Sub(w.rectLocked().Min), Delta: delta, Scale: scale, Phase: input.PinchMove, Time: now})
+	return true
+}
+
+// pinchEndLocked ends the pinch going on in w, if there is one, where the fingers
+// last were.
+func (d *Driver) pinchEndLocked(w *Window, now time.Time) {
+	g := &d.pinch
+	if !g.going {
+		return
+	}
+	g.going, g.second = false, 0
+	w.in.Push(input.Pinch{Pos: g.mid.Sub(w.rectLocked().Min), Scale: 1, Phase: input.PinchEnd, Time: now})
+}
+
 // buttonBit is where a button is in a PointerEvent's buttons, which numbers them
 // differently from its button.
 func buttonBit(button int) int {
@@ -451,6 +587,10 @@ func buttonOf(e js.Value) input.Button {
 		return input.ButtonMiddle
 	case 2:
 		return input.ButtonSecondary
+	case 3:
+		return input.ButtonBack
+	case 4:
+		return input.ButtonForward
 	}
 	return input.ButtonPrimary
 }
@@ -499,21 +639,28 @@ func (d *Driver) listen(doc js.Value) {
 
 	d.on(c, "contextmenu", false, func(e js.Value) { e.Call("preventDefault") })
 	d.on(c, "pointerdown", false, func(e js.Value) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, id := d.touchOf(e), e.Get("pointerId").Int()
 		d.mu.Lock()
 		d.lastTouch = e.Get("pointerType").String() != "mouse"
 		if d.pressed != nil && id != d.pointer {
-			// A second finger: its own in a window that takes fingers, and
-			// otherwise it leaves the press the first one holds alone.
+			// Another finger: its own in a window that takes fingers. The second
+			// one pinches, if what presses is a finger too, and otherwise it leaves
+			// the press alone.
 			w := d.pressed
+			pinches := !w.takesFingers && d.pinch.touch && !d.pinch.going && e.Get("pointerType").String() == "touch"
 			if w.takesFingers {
 				d.fingers[id] = w
 			}
+			if pinches {
+				d.pinchStartLocked(w, id, p, now)
+			}
 			d.mu.Unlock()
 			e.Call("preventDefault")
-			if w.takesFingers {
+			if w.takesFingers || pinches {
 				capture(c, e.Get("pointerId"))
+			}
+			if w.takesFingers {
 				d.fingerEvent(id, e, input.FingerDown)
 			}
 			return
@@ -524,6 +671,7 @@ func (d *Driver) listen(doc js.Value) {
 			return
 		}
 		d.pointer = id
+		d.pinch = pinchState{touch: e.Get("pointerType").String() == "touch", first: p}
 		if w.takesFingers && e.Get("pointerType").String() != "mouse" {
 			d.fingers[id] = w
 		}
@@ -556,12 +704,19 @@ func (d *Driver) listen(doc js.Value) {
 	// The browser's own focus change on a mouse press would undo a text field's
 	// focus.
 	d.on(c, "mousedown", false, func(e js.Value) { e.Call("preventDefault") })
+	// A mouse's side buttons are gunim's, which hears them as a step through its
+	// own history. Left alone, the browser would go back a page, out of the program.
+	d.on(c, "mouseup", false, func(e js.Value) {
+		if b := e.Get("button").Int(); b == 3 || b == 4 {
+			e.Call("preventDefault")
+		}
+	})
 	d.on(c, "pointermove", true, func(e js.Value) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerMove)
 		d.mu.Lock()
-		if d.pressed != nil && id != d.pointer {
+		if d.pinchMoveLocked(id, p, now) || (d.pressed != nil && id != d.pointer) {
 			d.mu.Unlock()
 			return
 		}
@@ -599,22 +754,32 @@ func (d *Driver) listen(doc js.Value) {
 		}
 	})
 	up := func(e js.Value, cancel bool) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerUp)
 		d.mu.Lock()
 		if d.pressed != nil && id != d.pointer {
+			if id == d.pinch.second {
+				d.pinchEndLocked(d.pressed, now)
+			}
 			d.mu.Unlock()
 			return
 		}
 		w := d.pressed
 		d.pressed = nil
 		var local geom.Point
+		pinched := w != nil && d.pinch.pinched
 		if w != nil {
 			local = p.Sub(w.rectLocked().Min)
+			d.pinchEndLocked(w, now)
 		}
 		d.mu.Unlock()
 		if w == nil {
+			return
+		}
+		if pinched {
+			// Its press was let go as the pinch started, so the finger only lifts.
+			w.in.Push(input.PointerLeave{Time: now})
 			return
 		}
 		if cancel {
@@ -644,7 +809,7 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		d.mu.Unlock()
 		if w != nil {
-			w.in.Push(input.PointerLeave{Time: time.Now()})
+			w.in.Push(input.PointerLeave{Time: stamp(e)})
 		}
 	})
 	d.on(c, "wheel", false, func(e js.Value) {
@@ -669,7 +834,7 @@ func (d *Driver) listen(doc js.Value) {
 		e.Call("preventDefault")
 		w.in.Push(input.Scroll{
 			Pos: local, Delta: geom.Pt(float32(-dx), float32(-dy)),
-			Notches: geom.Pt(float32(-dx/100), float32(-dy/100)), Mods: modsOf(e), Time: time.Now(),
+			Notches: geom.Pt(float32(-dx/100), float32(-dy/100)), Mods: modsOf(e), Time: stamp(e),
 		})
 	})
 
@@ -686,7 +851,7 @@ func (d *Driver) listen(doc js.Value) {
 			return
 		}
 		k := keyOf(e.Get("code").String(), e.Get("key").String())
-		m, now := modsOf(e), time.Now()
+		m, now := modsOf(e), stamp(e)
 		if altGr(e) {
 			m &^= input.ModControl | input.ModAlt
 		}
@@ -766,23 +931,26 @@ func (d *Driver) listen(doc js.Value) {
 			d.kick()
 		}
 	})
-	d.on(win, "deviceorientationabsolute", true, d.heading)
+	d.compassEvent = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer survive("compass")
+		d.heading(args[0])
+		return nil
+	})
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
-		f := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		d.observed = js.FuncOf(func(_ js.Value, args []js.Value) any {
 			defer survive("resize")
 			d.readExactSize(args[0])
 			d.observedSize()
 			return nil
 		})
-		d.funcs = append(d.funcs, f)
-		observer := ro.New(f)
+		d.observer = ro.New(d.observed)
 		// A browser without the box refuses to observe it.
 		entry := win.Get("ResizeObserverEntry")
 		if !entry.IsUndefined() && js.Global().Get("Reflect").Call("has", entry.Get("prototype"), "devicePixelContentBoxSize").Bool() {
-			observer.Call("observe", c, map[string]any{"box": "device-pixel-content-box"})
+			d.observer.Call("observe", c, map[string]any{"box": "device-pixel-content-box"})
 		} else {
-			observer.Call("observe", c)
+			d.observer.Call("observe", c)
 		}
 	}
 }
@@ -801,6 +969,22 @@ func (d *Driver) readExactSize(entries js.Value) {
 	d.exactW, d.exactH = box.Index(0).Get("inlineSize").Int(), box.Index(0).Get("blockSize").Int()
 	d.mu.Unlock()
 }
+
+// stamp returns when the browser says e happened, on Go's clock. A busy page runs
+// its handlers late and all at once, so the time a handler runs says nothing of how
+// fast a finger went. A browser that rounds its stamps, or one ahead of the clock,
+// reads as now.
+func stamp(e js.Value) time.Time {
+	now := time.Now()
+	age := performance.Call("now").Float() - e.Get("timeStamp").Float()
+	if age <= 0 || math.IsNaN(age) {
+		return now
+	}
+	return now.Add(-time.Duration(age * float64(time.Millisecond)))
+}
+
+// performance is the clock events are stamped by.
+var performance = js.Global().Get("performance")
 
 // survive keeps a JavaScript exception thrown into a callback, which
 // syscall/js raises as a panic, from ending the program: the event is

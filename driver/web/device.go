@@ -40,9 +40,13 @@ func (w *Window) Share(s driver.Share) error {
 	if nav.Get("share").IsUndefined() || len(s.Paths) > 0 {
 		return driver.ErrNoSharer
 	}
-	_, err := await(nav.Call("share", map[string]any{"title": s.Subject, "text": s.Text}))
-	var jsErr js.Error
-	if errors.As(err, &jsErr) && jsErr.Value.Get("name").String() == "AbortError" {
+	p, err := call(nav, "share", map[string]any{"title": s.Subject, "text": s.Text})
+	if err == nil {
+		// The share sheet stays until the user closes it.
+		_, err = await(p, 0)
+	}
+	var closed *browserError
+	if errors.As(err, &closed) && closed.name == "AbortError" {
 		return nil
 	}
 	return err
@@ -75,7 +79,7 @@ func (w *Window) TakeFingers(on bool) error {
 // fingerEvent hands pointer id's event to the window its finger came down
 // in, if it is a finger of its own.
 func (d *Driver) fingerEvent(id int, e js.Value, phase input.FingerPhase) {
-	p, now := d.at(e), time.Now()
+	p, now := d.at(e), stamp(e)
 	d.mu.Lock()
 	w, ok := d.fingers[id]
 	if !ok {
@@ -94,42 +98,75 @@ func (d *Driver) fingerEvent(id int, e js.Value, phase input.FingerPhase) {
 }
 
 // HasCompass implements [driver.Compass]. The browser says only by sending a
-// reading, so this is false until the first one has come, a moment after the
-// page opens.
+// reading, so the first call listens until one comes, and this is false until it
+// does. A page gets no readings while hidden, and a device with no sensors sends
+// none, or one with no alpha, so the listening costs nothing until a reading ends it.
 func (w *Window) HasCompass() bool {
 	d := w.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if !d.compassAsked {
+		d.compassAsked, d.probing = true, true
+		d.runCompassLocked()
+	}
 	return d.compass
 }
 
-// WatchHeading implements [driver.Compass].
+// WatchHeading implements [driver.Compass]. The browser runs the phone's sensors
+// while the page listens for them, so it listens only while a window watches.
 func (w *Window) WatchHeading(on bool) {
 	d := w.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if on {
+	if on && !w.closed {
 		d.headingTo[w] = true
 	} else {
 		delete(d.headingTo, w)
 	}
+	d.runCompassLocked()
+}
+
+// runCompassLocked listens for readings while a window watches them, or while the
+// driver looks for a first one. It runs with mu held.
+func (d *Driver) runCompassLocked() {
+	want := (d.probing || len(d.headingTo) > 0) && !d.stopped
+	if want == d.compassOn {
+		return
+	}
+	d.compassOn = want
+	win := js.Global()
+	if want {
+		win.Call("addEventListener", "deviceorientationabsolute", d.compassEvent, map[string]any{"passive": true})
+	} else {
+		win.Call("removeEventListener", "deviceorientationabsolute", d.compassEvent)
+	}
 }
 
 // heading takes a deviceorientationabsolute event. Its alpha turns
-// anticlockwise from north, and a heading clockwise.
+// anticlockwise from north, and a heading clockwise. A browser can send one with
+// no alpha, with no sensors or before its first reading, and that answers nothing.
 func (d *Driver) heading(e js.Value) {
 	alpha := e.Get("alpha")
 	if alpha.Type() != js.TypeNumber {
 		return
 	}
-	reading := input.Heading{Degrees: headingOf(alpha.Float()), Accuracy: input.HeadingMedium, Time: time.Now()}
 	d.mu.Lock()
-	d.compass = true
+	first := !d.compass
+	d.probing, d.compass = false, true
 	to := make([]*Window, 0, len(d.headingTo))
 	for w := range d.headingTo {
 		to = append(to, w)
 	}
+	ws := append([]*Window(nil), d.windows...)
+	d.runCompassLocked()
 	d.mu.Unlock()
+	// The engine starts a window's watch after a frame, so a first reading asks for one.
+	if first {
+		for _, w := range ws {
+			w.in.Push(driver.Redraw{})
+		}
+	}
+	reading := input.Heading{Degrees: headingOf(alpha.Float()), Accuracy: input.HeadingMedium, Time: stamp(e)}
 	for _, w := range to {
 		w.in.Push(reading)
 	}

@@ -1744,6 +1744,9 @@ type UI struct {
 	// keyboardAway says the window has given the keyboard to another; see KeyboardAway.
 	keyboardAway bool
 	hover        *state
+	// fingerOn is the node a finger's move last reached with nothing holding it,
+	// until it hears the finger has gone. See fingerGone.
+	fingerOn *state
 	// capture is the node that took the last press and keeps the
 	// pointer until its release.
 	capture *state
@@ -2406,6 +2409,9 @@ func (u *UI) Remove(n Node) bool {
 		if s.parent != nil && s.parent.parent == nil {
 			u.hover = nil // a root is never hovered
 		}
+	}
+	if u.fingerOn != nil && u.fingerOn.within(s) {
+		u.fingerGone(u.now)
 	}
 	if u.capture != nil && u.capture.within(s) {
 		u.capture = nil
@@ -3092,6 +3098,9 @@ func (u *UI) forget(s *state) {
 	}
 	if u.hover == s {
 		u.hover = nil
+	}
+	if u.fingerOn == s {
+		u.fingerOn = nil
 	}
 	if u.movedOn == s {
 		u.movedOn = nil
