@@ -139,6 +139,8 @@ func (d *Driver) frame(c *compose.Compositor) {
 	}
 	var jobs []job
 	var stack []compose.Layer
+	gone := d.gone
+	d.gone = nil
 	scale, surfW, surfH, rate := d.density, d.surfW, d.surfH, d.rate
 	pan, panning := d.panLocked(time.Now())
 	for _, w := range d.windows {
@@ -162,6 +164,9 @@ func (d *Driver) frame(c *compose.Compositor) {
 		}
 	}
 	d.mu.Unlock()
+	for _, p := range gone {
+		c.Release(p)
+	}
 	if len(jobs) == 0 && !c.Dirty(stack) {
 		return
 	}

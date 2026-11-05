@@ -39,6 +39,8 @@ func (d *Driver) listenContext() {
 		d.g = g
 		d.comp = comp
 		d.lost = false
+		// What the closed windows held went with the old context.
+		d.gone = nil
 		for _, w := range d.windows {
 			w.pane.Forget()
 			if w.next != nil {

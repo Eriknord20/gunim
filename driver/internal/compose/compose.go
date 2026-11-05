@@ -7,7 +7,8 @@
 // A driver's frame collects the frames waiting and the windows showing,
 // and asks [Compositor.Dirty] whether there is anything to do. It then
 // calls [Compositor.Begin], [Compositor.Draw] for each frame waiting, and
-// [Compositor.Finish], and shows the surface in its own way.
+// [Compositor.Finish], and shows the surface in its own way. Each window
+// that closes goes to [Compositor.Release], on the thread that draws.
 package compose
 
 import (
@@ -69,6 +70,19 @@ func (p *Pane) Forget() {
 	p.R, p.drawer = nil, nil
 	p.tex, p.fbo, p.texW, p.texH = 0, 0, 0, 0
 	p.target, p.OnTex = 0, false
+}
+
+// Release frees what a closed window holds of the GPU: its renderer, its
+// texture and its framebuffer. It runs on the thread that draws, outside a
+// frame. The pane holds nothing after it, so a window that closes while its
+// frame waits is safe to release.
+func (c *Compositor) Release(p *Pane) {
+	if p.drawer != nil {
+		p.drawer.release()
+	}
+	p.dropTexture(c.g)
+	p.Forget()
+	p.Last, p.LastW, p.LastH = nil, 0, 0
 }
 
 // A Layer is a window as the compositor lays it: its texture at X, Y on
@@ -316,6 +330,16 @@ func (p *Pane) resize(g gl.Context, width, height int) {
 	p.texW, p.texH = width, height
 }
 
+// dropTexture frees the window's texture and framebuffer, if it has them.
+func (p *Pane) dropTexture(g gl.Context) {
+	if p.tex == 0 {
+		return
+	}
+	g.DeleteFramebuffer(p.fbo)
+	g.DeleteTexture(p.tex)
+	p.tex, p.fbo, p.texW, p.texH = 0, 0, 0, 0
+}
+
 // lay lays the windows on the surface, w×h device pixels, bottom first.
 // Each texture holds its window's frame premultiplied, with its first row
 // at the bottom, as the window's own framebuffer would.
@@ -361,12 +385,14 @@ func Upright(pix []byte, w, h int) *image.RGBA {
 }
 
 // A drawer is what the compositor asks of a window's renderer: draw a
-// frame into a framebuffer, and say when it wants the frame drawn again
-// sharp. A test stands in for it, as a renderer needs a real GL.
+// frame into a framebuffer, say when it wants the frame drawn again sharp,
+// and let go of what it holds. A test stands in for it, as a renderer needs
+// a real GL.
 type drawer interface {
 	drawRects(fbo uint32, under color.NRGBA, ops []paint.Op, damage []geom.Rect, w, h int, scale float32) (sharpAt time.Time)
 	draw(fbo uint32, ops []paint.Op, w, h int, scale float32) (sharpAt time.Time)
 	rebind()
+	release()
 }
 
 // openRenderer makes p's renderer, and is the drawer of every real window.
@@ -397,3 +423,5 @@ func (d rendererDrawer) draw(fbo uint32, ops []paint.Op, w, h int, scale float32
 }
 
 func (d rendererDrawer) rebind() { d.r.Rebind() }
+
+func (d rendererDrawer) release() { d.r.Release() }

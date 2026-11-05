@@ -39,6 +39,8 @@ func (d *Driver) frame() {
 	}
 	var jobs []job
 	var stack []compose.Layer
+	gone := d.gone
+	d.gone = nil
 	scale, surfW, surfH := d.scale, d.surfW, d.surfH
 	for _, w := range d.windows {
 		r := w.rectLocked()
@@ -65,6 +67,9 @@ func (d *Driver) frame() {
 		}
 	}
 	d.mu.Unlock()
+	for _, p := range gone {
+		d.comp.Release(p)
+	}
 	if len(jobs) == 0 && !d.comp.Dirty(stack) {
 		return
 	}

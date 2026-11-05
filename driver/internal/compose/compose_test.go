@@ -25,6 +25,7 @@ type fakeGL struct {
 	texture uint32
 	sized   map[uint32][2]int32
 	read    []uint32
+	deleted []uint32
 }
 
 func (g *fakeGL) name() uint32                                                { g.names++; return g.names }
@@ -53,6 +54,8 @@ func (g *fakeGL) CreateFramebuffer() uint32                                   { 
 func (g *fakeGL) BindTexture(_, t uint32)                                     { g.texture = t }
 func (g *fakeGL) TexParameteri(uint32, uint32, int32)                         {}
 func (g *fakeGL) FramebufferTexture2D(uint32, uint32, uint32, uint32, int32)  {}
+func (g *fakeGL) DeleteTexture(t uint32)                                      { g.deleted = append(g.deleted, t) }
+func (g *fakeGL) DeleteFramebuffer(f uint32)                                  { g.deleted = append(g.deleted, f) }
 func (g *fakeGL) BindFramebuffer(_, f uint32)                                 { g.fbo = f }
 func (g *fakeGL) Viewport(_, _, w, _ int32)                                   { g.viewW = w }
 func (g *fakeGL) Disable(uint32)                                              {}
@@ -85,6 +88,7 @@ type fakeDrawer struct {
 	drew    []drawn
 	sharpAt time.Time
 	rebinds *int
+	gone    int
 }
 
 func (d *fakeDrawer) drawRects(fbo uint32, _ color.NRGBA, _ []paint.Op, _ []geom.Rect, w, h int, _ float32) time.Time {
@@ -98,6 +102,8 @@ func (d *fakeDrawer) draw(fbo uint32, _ []paint.Op, w, h int, _ float32) time.Ti
 }
 
 func (d *fakeDrawer) rebind() { *d.rebinds++ }
+
+func (d *fakeDrawer) release() { d.gone++ }
 
 // bench is a compositor on a fake GL, with windows of fake renderers.
 type bench struct {
@@ -369,6 +375,49 @@ func TestShootReadsWhereTheFrameWent(t *testing.T) {
 	<-got
 	if !slices.Equal(b.g.read, []uint32{0, base.fbo}) {
 		t.Fatalf("read %v, want the surface and then %d", b.g.read, base.fbo)
+	}
+}
+
+// A popup that closed frees its renderer, texture and framebuffer, each
+// once, and the window under it goes on with its own.
+func TestReleaseFreesWhatTheWindowHolds(t *testing.T) {
+	b := newBench(t)
+	base, popup := newPane(), newPane()
+	lb, lp := Layer{Pane: base, W: 100, H: 80}, Layer{Pane: popup, X: 5, Y: 5, W: 20, H: 20}
+	b.frame([]Layer{lb, lp}, 100, 80, &lb, &lp)
+	d := popup.drawer.(*fakeDrawer)
+	tex, fbo := popup.tex, popup.fbo
+	b.c.Release(popup)
+	if d.gone != 1 {
+		t.Fatalf("the renderer was let go %d times", d.gone)
+	}
+	if !slices.Equal(b.g.deleted, []uint32{fbo, tex}) {
+		t.Fatalf("deleted %v, want the framebuffer %d and the texture %d", b.g.deleted, fbo, tex)
+	}
+	if popup.R != nil || popup.drawer != nil || popup.tex != 0 || popup.fbo != 0 || popup.Last != nil {
+		t.Fatalf("after Release: %+v", popup)
+	}
+	// Again, it has nothing left to free.
+	b.c.Release(popup)
+	if d.gone != 1 || len(b.g.deleted) != 2 {
+		t.Fatalf("a second Release freed more: %d, %v", d.gone, b.g.deleted)
+	}
+	b.g.laid = nil
+	took(base)
+	b.frame([]Layer{lb}, 100, 80, &lb)
+	if len(b.g.laid) != 0 || base.drawer.(*fakeDrawer).gone != 0 {
+		t.Fatalf("the window left laid %v, and was let go %d times", b.g.laid, base.drawer.(*fakeDrawer).gone)
+	}
+}
+
+// A window can close with a frame waiting that never drew, or before it ever
+// drew at all.
+func TestReleaseOfAWindowThatNeverDrew(t *testing.T) {
+	b := newBench(t)
+	p := newPane()
+	b.c.Release(p)
+	if len(b.g.deleted) != 0 {
+		t.Fatalf("deleted %v", b.g.deleted)
 	}
 }
 

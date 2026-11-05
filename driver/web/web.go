@@ -73,8 +73,10 @@ type Driver struct {
 	// that says.
 	exactW, exactH int
 
-	// windows is the stack of open windows, bottom first.
+	// windows is the stack of open windows, bottom first, and gone the panes of
+	// windows closed, for the next frame to free.
 	windows []*Window
+	gone    []*compose.Pane
 	// pressed is the window a press started in, which keeps the
 	// pointer until it lifts, and hover the window a hovering mouse is
 	// over.
@@ -368,6 +370,7 @@ func (d *Driver) closed(w *Window) {
 	if d.typing == w {
 		d.typing = nil
 	}
+	d.gone = append(d.gone, &w.pane)
 	last := len(d.windows) == 0
 	d.mu.Unlock()
 	if last {
