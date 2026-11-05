@@ -1174,23 +1174,66 @@ func TestBrowser(t *testing.T) {
 		if got := headingOf(90); got != 270 {
 			t.Fatalf("heading of alpha 90 = %v", got)
 		}
+		send := func(alpha any) {
+			e := js.Global().Get("Event").New("deviceorientationabsolute")
+			e.Set("alpha", alpha)
+			js.Global().Call("dispatchEvent", e)
+		}
+		headings := func() (got []input.Heading) {
+			for _, x := range drain(w) {
+				if h, ok := x.(input.Heading); ok {
+					got = append(got, h)
+				}
+			}
+			return got
+		}
+		// Nothing has asked: the page doesn't listen, which would run a phone's sensors.
+		send(30)
+		if d.compass || d.compassOn {
+			t.Fatalf("with nothing watching, the page listens: %v, and heard: %v", d.compassOn, d.compass)
+		}
+		// Asking listens for a first reading, and a browser with no sensors ends that.
+		if w.HasCompass() {
+			t.Fatal("a compass before any reading")
+		}
+		if !d.compassOn {
+			t.Fatal("asking for a compass doesn't listen for one")
+		}
+		send(js.Null())
+		if d.compassOn || w.HasCompass() {
+			t.Fatalf("a reading of nothing: listening %v, compass %v", d.compassOn, d.compass)
+		}
+		send(30)
+		if w.HasCompass() {
+			t.Fatal("a reading came in after the page stopped listening")
+		}
+		// Watching listens, and stops with the last window that watches.
 		w.WatchHeading(true)
-		defer w.WatchHeading(false)
 		drain(w)
-		e := js.Global().Get("Event").New("deviceorientationabsolute")
-		e.Set("alpha", 30)
-		js.Global().Call("dispatchEvent", e)
+		send(30)
 		if !w.HasCompass() {
 			t.Fatal("no compass after a reading")
 		}
-		var got []input.Heading
-		for _, x := range drain(w) {
-			if h, ok := x.(input.Heading); ok {
-				got = append(got, h)
-			}
-		}
-		if len(got) != 1 || got[0].Degrees != 330 {
+		if got := headings(); len(got) != 1 || got[0].Degrees != 330 {
 			t.Fatalf("headings %v", got)
+		}
+		w.WatchHeading(false)
+		if d.compassOn {
+			t.Fatal("still listening with nothing watching")
+		}
+		send(40)
+		if got := headings(); len(got) != 0 {
+			t.Fatalf("headings with nothing watching: %v", got)
+		}
+		// A window that closes watches no more.
+		p, _ := d.NewWindow(driver.Options{})
+		p.(*Window).WatchHeading(true)
+		if !d.compassOn {
+			t.Fatal("a second window's watch doesn't listen")
+		}
+		_ = p.Close()
+		if d.compassOn {
+			t.Fatal("still listening after the window that watched closed")
 		}
 	})
 	_ = w.Close()

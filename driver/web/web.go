@@ -87,12 +87,15 @@ type Driver struct {
 	pointer     int
 	fingers     map[int]*Window
 	// compass says the browser has sent a heading, and headingTo holds the
-	// windows that watch it.
-	compass   bool
-	headingTo map[*Window]bool
-	lastTap   geom.Point
-	lastAt    time.Time
-	clicks    int
+	// windows that watch it. compassAsked says HasCompass has started the look for
+	// a first reading, probing that it still goes on, and compassOn that the page
+	// listens for readings now, which runs a phone's sensors.
+	compass, compassAsked, probing, compassOn bool
+	compassEvent                              js.Func
+	headingTo                                 map[*Window]bool
+	lastTap                                   geom.Point
+	lastAt                                    time.Time
+	clicks                                    int
 	// typing is the window that takes text.
 	typing                 *Window
 	composing, syncingText bool
@@ -362,6 +365,7 @@ func (d *Driver) closed(w *Window) {
 		}
 	}
 	delete(d.headingTo, w)
+	d.runCompassLocked()
 	if d.hover == w {
 		d.hover = nil
 	}
@@ -777,7 +781,11 @@ func (d *Driver) listen(doc js.Value) {
 			d.kick()
 		}
 	})
-	d.on(win, "deviceorientationabsolute", true, d.heading)
+	d.compassEvent = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer survive("compass")
+		d.heading(args[0])
+		return nil
+	})
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
 		f := js.FuncOf(func(_ js.Value, args []js.Value) any {

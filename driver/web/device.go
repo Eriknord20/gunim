@@ -97,43 +97,79 @@ func (d *Driver) fingerEvent(id int, e js.Value, phase input.FingerPhase) {
 	w.in.Push(input.Finger{ID: id, Pos: pos, Phase: phase, Time: now})
 }
 
+// compassProbe is how long the driver listens for a first reading to find out if
+// there is a compass, with no window watching.
+const compassProbe = 5 * time.Second
+
 // HasCompass implements [driver.Compass]. The browser says only by sending a
-// reading, so this is false until the first one has come, a moment after the
-// page opens.
+// reading, so the first call listens for one for a short while, and this is false
+// until it comes.
 func (w *Window) HasCompass() bool {
 	d := w.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if !d.compassAsked {
+		d.compassAsked, d.probing = true, true
+		d.runCompassLocked()
+		time.AfterFunc(compassProbe, func() {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			d.probing = false
+			d.runCompassLocked()
+		})
+	}
 	return d.compass
 }
 
-// WatchHeading implements [driver.Compass].
+// WatchHeading implements [driver.Compass]. The browser runs the phone's sensors
+// while the page listens for them, so it listens only while a window watches.
 func (w *Window) WatchHeading(on bool) {
 	d := w.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if on {
+	if on && !w.closed {
 		d.headingTo[w] = true
 	} else {
 		delete(d.headingTo, w)
 	}
+	d.runCompassLocked()
+}
+
+// runCompassLocked listens for readings while a window watches them, or while the
+// driver looks for a first one. It runs with mu held.
+func (d *Driver) runCompassLocked() {
+	want := d.probing || len(d.headingTo) > 0
+	if want == d.compassOn {
+		return
+	}
+	d.compassOn = want
+	win := js.Global()
+	if want {
+		win.Call("addEventListener", "deviceorientationabsolute", d.compassEvent, map[string]any{"passive": true})
+	} else {
+		win.Call("removeEventListener", "deviceorientationabsolute", d.compassEvent)
+	}
 }
 
 // heading takes a deviceorientationabsolute event. Its alpha turns
-// anticlockwise from north, and a heading clockwise.
+// anticlockwise from north, and a heading clockwise. A desktop browser with no
+// sensors can send one with no alpha, which answers the probe too.
 func (d *Driver) heading(e js.Value) {
 	alpha := e.Get("alpha")
-	if alpha.Type() != js.TypeNumber {
-		return
-	}
-	reading := input.Heading{Degrees: headingOf(alpha.Float()), Accuracy: input.HeadingMedium, Time: time.Now()}
+	reads := alpha.Type() == js.TypeNumber
 	d.mu.Lock()
-	d.compass = true
+	d.probing = false
+	d.compass = d.compass || reads
 	to := make([]*Window, 0, len(d.headingTo))
 	for w := range d.headingTo {
 		to = append(to, w)
 	}
+	d.runCompassLocked()
 	d.mu.Unlock()
+	if !reads {
+		return
+	}
+	reading := input.Heading{Degrees: headingOf(alpha.Float()), Accuracy: input.HeadingMedium, Time: stamp(e)}
 	for _, w := range to {
 		w.in.Push(reading)
 	}
