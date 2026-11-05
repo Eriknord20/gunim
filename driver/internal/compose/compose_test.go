@@ -393,6 +393,55 @@ func TestAWindowWithNoFrameYetIsLeftOut(t *testing.T) {
 	}
 }
 
+// A surface with nothing to show yet, as a canvas that has just stopped being
+// hidden, shows the window's background and not whatever a new surface holds.
+func TestAWindowWithNoFrameYetShowsItsBackground(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		under color.NRGBA
+		want  [4]float32
+	}{
+		{"solid", color.NRGBA{R: 255, G: 128, A: 255}, [4]float32{1, 128.0 / 255, 0, 1}},
+		{"half see-through", color.NRGBA{R: 255, A: 128}, [4]float32{128.0 / 255, 0, 0, 1}},
+		{"none told yet", color.NRGBA{}, [4]float32{0, 0, 0, 1}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newBench(t)
+			p := newPane()
+			// As a renderer left them, from a window closed before.
+			b.g.BindFramebuffer(gl.FRAMEBUFFER, 7)
+			b.g.Viewport(0, 0, 3, 3)
+			b.g.Enable(glScissorTest)
+			b.g.ClearColor(1, 1, 1, 1)
+			l := Layer{Pane: p, W: 100, H: 80, Under: c.under}
+			b.frame([]Layer{l}, 100, 80)
+			if len(b.g.calls) != 1 {
+				t.Fatalf("calls %+v, want one clear", b.g.calls)
+			}
+			got := b.g.calls[0]
+			if got.kind != "clear" || got.fbo != 0 || got.viewW != 100 || got.viewH != 80 || got.scissor {
+				t.Fatalf("the clear went by %+v", got)
+			}
+			for i := range got.clear {
+				if math.Abs(float64(got.clear[i]-c.want[i])) > 1e-5 {
+					t.Fatalf("cleared to %v, want %v", got.clear, c.want)
+				}
+			}
+			if b.g.clear != [4]float32{0, 0, 0, 0} {
+				t.Fatalf("left the clear colour at %v", b.g.clear)
+			}
+			if p.LastW != 0 || p.Last != nil {
+				t.Fatalf("it holds a last frame: %+v", p)
+			}
+			// Its first frame draws over it as any frame does.
+			b.frame([]Layer{l}, 100, 80, &l)
+			if got, want := took(p), []drawn{{fbo: 0, w: 100, h: 80}}; !slices.Equal(got, want) {
+				t.Fatalf("it drew %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestANoSizeFrameDrawsNothing(t *testing.T) {
 	b := newBench(t)
 	p := newPane()

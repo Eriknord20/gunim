@@ -829,6 +829,33 @@ func TestAScaleChangeWithNoResizeIsSeen(t *testing.T) {
 	}
 }
 
+// resizeStep calls fn in the browser's next resize step of the canvas, after the
+// driver has heard of the size and before the browser shows the canvas, each time
+// the canvas's size changes. The function it returns waits for the next one.
+func resizeStep(t *testing.T, d *Driver, fn func()) (next func()) {
+	t.Helper()
+	seen := make(chan struct{}, 8)
+	f := js.FuncOf(func(js.Value, []js.Value) any {
+		fn()
+		seen <- struct{}{}
+		return nil
+	})
+	ro := js.Global().Get("ResizeObserver").New(f)
+	t.Cleanup(func() {
+		ro.Call("disconnect")
+		f.Release()
+	})
+	ro.Call("observe", d.canvas)
+	return func() {
+		t.Helper()
+		select {
+		case <-seen:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no resize step came")
+		}
+	}
+}
+
 // loopErrors counts what the browser reports of a ResizeObserver loop.
 func loopErrors(t *testing.T) func() int {
 	t.Helper()
@@ -839,6 +866,72 @@ func loopErrors(t *testing.T) func() int {
 	})()`)
 	t.Cleanup(func() { js.Global().Call("removeEventListener", "error", count.Get("listen")) })
 	return func() int { return count.Get("n").Int() }
+}
+
+// canvasStyle sets the driver's canvas's style for the test, and puts all of it
+// back after.
+func canvasStyle(t *testing.T, d *Driver, style map[string]string) {
+	t.Helper()
+	st := d.canvas.Get("style")
+	was := st.Get("cssText").String()
+	attrW, attrH := d.canvas.Get("width").Int(), d.canvas.Get("height").Int()
+	t.Cleanup(func() {
+		st.Set("cssText", was)
+		d.canvas.Set("width", attrW)
+		d.canvas.Set("height", attrH)
+		d.mu.Lock()
+		d.surfW, d.surfH = attrW, attrH
+		d.mu.Unlock()
+		d.observedSize()
+	})
+	for k, v := range style {
+		st.Set(k, v)
+	}
+}
+
+// A canvas hidden at first has no frame to show as it first shows. What shows
+// then is the window's background, where a canvas with nothing drawn is black.
+func TestACanvasHiddenAtFirstShowsNoBlack(t *testing.T) {
+	d, _ := Open()
+	canvasStyle(t, d, map[string]string{"display": "none"})
+	for give := time.Now().Add(5 * time.Second); d.surfW != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(give) {
+			t.Fatal("the driver never heard the canvas was hidden")
+		}
+	}
+	_, w := testWindow(t)
+	w.SetBackground(testGreen)
+	// The engine presents at no size while the canvas is hidden.
+	present(t, w, testRed)
+	d.frame()
+	var first [4]byte
+	var drew bool
+	next := resizeStep(t, d, func() {
+		if !drew && d.surfW > 0 {
+			drew = true
+			first = pixelAt(d, d.surfW/2, d.surfH/2)
+		}
+	})
+	next() // Every observer hears once as it starts.
+	// Out of the browser's resize step, as a size set inside it is what it reports.
+	time.Sleep(50 * time.Millisecond)
+	d.canvas.Get("style").Set("display", "block")
+	next()
+	if !drew {
+		t.Fatal("the resize step saw no size")
+	}
+	if first[1] < 240 || first[0] > 10 {
+		t.Errorf("the first frame shown is %v, want the window's background", first)
+	}
+	if d.g.GetError() != 0 {
+		t.Error("WebGL error")
+	}
+	// The engine's own frame comes next, over it.
+	present(t, w, testRed)
+	d.frame()
+	if got := pixelAt(d, 4, 4); got[0] < 240 {
+		t.Errorf("the engine's frame shows %v", got)
+	}
 }
 
 // A canvas with height:auto follows its width, whatever the buffer's size, with

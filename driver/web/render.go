@@ -63,7 +63,7 @@ func (d *Driver) frame() {
 		w.sharpen = false
 		if !w.hidden && !w.stale {
 			x, y := int(math.Round(float64(r.Min.X*scale))), int(math.Round(float64(r.Min.Y*scale)))
-			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH})
+			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH, Under: w.under})
 		}
 	}
 	d.mu.Unlock()

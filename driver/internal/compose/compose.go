@@ -87,10 +87,12 @@ func (c *Compositor) Release(p *Pane) {
 
 // A Layer is a window as the compositor lays it: its texture at X, Y on
 // the surface, in device pixels from the top left, at W by H device
-// pixels.
+// pixels. Under is the colour under the window's frames, which it shows
+// until it has a frame.
 type Layer struct {
 	Pane       *Pane
 	X, Y, W, H int
+	Under      color.NRGBA
 }
 
 // A Compositor draws windows and lays their textures on the surface. It
@@ -261,7 +263,13 @@ func (c *Compositor) Shoot(p *Pane, w, h int, fn func(*image.RGBA)) {
 // it next.
 func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 	if c.solo != nil {
-		if !c.soloDrew {
+		switch {
+		case c.soloDrew:
+		case c.solo.Last == nil:
+			// A surface that has just come, as a canvas hidden at first, with the
+			// window's first frame still on its way.
+			c.clear(stack[0].Under, w, h)
+		default:
 			// Nothing new to draw, as the stack changed round it or the surface
 			// changed size, but the surface holds nothing after it was shown: the
 			// last frame again, to fill it.
@@ -357,18 +365,26 @@ func (p *Pane) dropTexture(g gl.Context) {
 	p.tex, p.fbo, p.texW, p.texH = 0, 0, 0, 0
 }
 
+// clear fills the surface, w×h device pixels, with a colour, over black where the
+// colour has alpha, as the surface has none.
+func (c *Compositor) clear(under color.NRGBA, w, h int) {
+	g := c.g
+	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
+	g.Viewport(0, 0, int32(w), int32(h))
+	g.Disable(glScissorTest)
+	a := float32(under.A) / 0xff
+	g.ClearColor(float32(under.R)/0xff*a, float32(under.G)/0xff*a, float32(under.B)/0xff*a, 1)
+	g.Clear(glColorBufferBit)
+	g.ClearColor(0, 0, 0, 0)
+}
+
 // lay lays the windows on the surface, w×h device pixels, bottom first.
 // Each texture holds its window's frame premultiplied, with its first row
 // at the bottom, as the window's own framebuffer would.
 func (c *Compositor) lay(stack []Layer, w, h int) {
 	g := c.g
 	c.last = append(c.last[:0], stack...)
-	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	g.Viewport(0, 0, int32(w), int32(h))
-	g.Disable(glScissorTest)
-	g.ClearColor(0, 0, 0, 1)
-	g.Clear(glColorBufferBit)
-	g.ClearColor(0, 0, 0, 0)
+	c.clear(color.NRGBA{}, w, h)
 	g.Enable(gl.BLEND)
 	g.BlendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	g.UseProgram(c.prog)
