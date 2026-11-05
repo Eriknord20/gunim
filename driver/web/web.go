@@ -44,7 +44,7 @@ import (
 	"unicode"
 
 	"github.com/marrasen/gunim/driver"
-	"github.com/marrasen/gunim/driver/internal/render"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/internal/gl"
@@ -57,8 +57,7 @@ type Driver struct {
 	// text is whichever of plain and secret takes text just now.
 	canvas, text, plain, secret js.Value
 	g                           gl.Context
-	shared                      render.Shared
-	comp                        *compositor
+	comp                        *compose.Compositor
 
 	// scale is the page's devicePixelRatio, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
@@ -151,7 +150,7 @@ func openDriver() (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	comp, err := newCompositor(g)
+	comp, err := compose.New(g, "web")
 	if err != nil {
 		return nil, err
 	}
@@ -327,19 +326,7 @@ func (d *Driver) screen() geom.Rect { return geom.Rect{Max: geom.Pt(d.cssW, d.cs
 // placeLocked puts popup w by anchor, in its parent's logical space:
 // below it, or above where there is more room, slid onto the canvas.
 func (d *Driver) placeLocked(w *Window, anchor geom.Rect) {
-	a := anchor.Add(w.parent.pos)
-	if w.over {
-		w.pos = a.Min
-		return
-	}
-	s := d.screen()
-	below, above := s.Max.Y-a.Max.Y, a.Min.Y-s.Min.Y
-	y := a.Max.Y
-	if w.above && above >= w.size.H || w.size.H > below && above > below {
-		y = a.Min.Y - w.size.H
-	}
-	x := max(s.Min.X, min(a.Min.X, s.Max.X-w.size.W))
-	w.pos = geom.Pt(x, y)
+	w.pos = compose.Place(anchor.Add(w.parent.pos), w.size, w.over, w.above, d.screen())
 }
 
 // kick asks the browser for an animation frame.

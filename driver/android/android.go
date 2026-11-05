@@ -41,6 +41,7 @@ import (
 	_ "unsafe" // for go:linkname
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -291,19 +292,7 @@ func (d *Driver) visibleLocked() geom.Rect {
 // there, slid sideways onto the screen, within the part of it that
 // shows above the keyboard. It runs with mu held.
 func (d *Driver) placeLocked(w *Window, anchor geom.Rect) {
-	a := anchor.Add(w.parent.pos)
-	if w.over {
-		w.pos = a.Min
-		return
-	}
-	s := d.visibleLocked()
-	below, above := s.Max.Y-a.Max.Y, a.Min.Y-s.Min.Y
-	y := a.Max.Y
-	if w.above && above >= w.size.H || w.size.H > below && above > below {
-		y = a.Min.Y - w.size.H
-	}
-	x := max(s.Min.X, min(a.Min.X, s.Max.X-w.size.W))
-	w.pos = geom.Pt(x, y)
+	w.pos = compose.Place(anchor.Add(w.parent.pos), w.size, w.over, w.above, d.visibleLocked())
 }
 
 // kick wakes the render thread.

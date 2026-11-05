@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/driver/internal/inbox"
-	"github.com/marrasen/gunim/driver/internal/render"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -46,12 +46,7 @@ type Window struct {
 
 	// The fields below belong to the frame loop.
 
-	r                 *render.Renderer
-	tex, fbo          uint32
-	texW, texH        int
-	last              []paint.Op
-	lastW, lastH      int
-	onTex             bool
+	pane              compose.Pane
 	state             *input.TextState
 	stateSeq, editSeq uint64
 	textBox           geom.Rect
@@ -78,6 +73,8 @@ func newWindow(d *Driver, o driver.Options) *Window {
 		transparent: o.Kind == driver.KindPopup,
 	}
 	w.in = inbox.New(w.quit)
+	w.pane.Transparent = w.transparent
+	w.pane.Sharp = func(at time.Time) { d.sharpenAt(w, at) }
 	return w
 }
 
@@ -160,9 +157,7 @@ func (w *Window) Place(anchor geom.Rect, size geom.Size) error {
 func (w *Window) PopupRoom(anchor geom.Rect) driver.Room {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
-	s := w.d.screen()
-	a := anchor.Add(w.rectLocked().Min)
-	return driver.Room{Below: s.Max.Y - a.Max.Y, Above: a.Min.Y - s.Min.Y, Left: a.Min.X - s.Min.X, Right: s.Max.X - a.Min.X}
+	return compose.PopupRoom(anchor.Add(w.rectLocked().Min), w.d.screen())
 }
 
 // ToScreen implements [driver.Screener]: the screen is the canvas.

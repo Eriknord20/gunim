@@ -177,6 +177,14 @@ func TestBrowser(t *testing.T) {
 	t.Run("screenshot orientation", func(t *testing.T) {
 		got := make(chan *image.RGBA, 1)
 		w.Shoot(func(img *image.RGBA) { got <- img })
+		// A shot is of the next frame the engine sends, so it waits for one.
+		d.frame()
+		select {
+		case <-got:
+			t.Fatal("the shot took the last frame, with no new one sent")
+		case <-time.After(50 * time.Millisecond):
+		}
+		_ = w.Present(solid(red, w.Size()), []geom.Rect{paint.Everything})
 		d.frame()
 		select {
 		case img := <-got:
@@ -185,10 +193,6 @@ func TestBrowser(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatal("screenshot timeout")
-		}
-		img := upright([]byte{1, 0, 0, 255, 2, 0, 0, 255}, 1, 2)
-		if img.RGBAAt(0, 0).R != 2 {
-			t.Fatal("screenshot inverted")
 		}
 	})
 	t.Run("deferred sharpening", func(t *testing.T) {
@@ -230,16 +234,18 @@ func TestBrowser(t *testing.T) {
 				t.Fatal("the sharpen timer never fired")
 			}
 		}
-		// What the frame draws is the last frame again, so a change to that shows it drew.
-		was := w.last
-		defer func() { w.last = was }()
-		w.last = solid(blue, w.Size())
+		// What the frame draws is the last frame again, where it drew stretched, so a
+		// change to that shows it drew.
+		was := w.pane.Last
+		defer func() { w.pane.Last = was }()
+		w.pane.Last = solid(blue, w.Size())
+		w.pane.R.Stretched = geom.Rect{Max: w.Size().Point()}
 		d.frame()
 		if sharpen() {
 			t.Fatal("the frame did not sharpen")
 		}
 		g := d.g
-		g.BindFramebuffer(gl.FRAMEBUFFER, w.r.WindowFBO)
+		g.BindFramebuffer(gl.FRAMEBUFFER, w.pane.R.WindowFBO)
 		var px [4]byte
 		g.ReadPixels(px[:], 2, 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE)
 		g.BindFramebuffer(gl.FRAMEBUFFER, 0)
@@ -458,8 +464,8 @@ func TestBrowser(t *testing.T) {
 		d.observedSize()
 		_ = w.Present(ops, []geom.Rect{paint.Everything})
 		d.frame()
-		if w.lastW != d.surfW || w.lastH != d.surfH || w.onTex {
-			t.Errorf("it drew at %dx%d on a canvas of %dx%d, on a texture %v", w.lastW, w.lastH, d.surfW, d.surfH, w.onTex)
+		if w.pane.LastW != d.surfW || w.pane.LastH != d.surfH || w.pane.OnTex {
+			t.Errorf("it drew at %dx%d on a canvas of %dx%d, on a texture %v", w.pane.LastW, w.pane.LastH, d.surfW, d.surfH, w.pane.OnTex)
 		}
 		d.exactW, d.exactH = 0, 0
 		d.observedSize()
