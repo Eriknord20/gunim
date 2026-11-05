@@ -1,4 +1,4 @@
-//go:build !(windows && amd64)
+//go:build !js && !(windows && amd64)
 
 package vst3
 
