@@ -445,7 +445,9 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("surfW %d, buffer %d", d.surfW, d.canvas.Get("width").Int())
 		}
 		// The square stays at the top, and what the new size added shows the background.
-		if p := pixel(4, 4); p[2] < 240 {
+		// The square starts 2 logical pixels in, so a device pixel in it depends on the scale.
+		inSquare := int(10 * d.scale)
+		if p := pixel(inSquare, inSquare); p[2] < 240 {
 			t.Errorf("the square at the top left shows %v", p)
 		}
 		if p := pixel(d.surfW-4, d.surfH-4); p[0] < 240 {
@@ -472,7 +474,7 @@ func TestBrowser(t *testing.T) {
 		st.Set("width", "440px")
 		st.Set("height", "330px")
 		d.observedSize()
-		if p := pixel(4, 4); p[2] < 240 {
+		if p := pixel(inSquare, inSquare); p[2] < 240 {
 			t.Errorf("under a popup, the square at the top left shows %v", p)
 		}
 		if p := pixel(d.surfW-4, d.surfH-4); p[0] < 240 {
