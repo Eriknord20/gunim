@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 )
 
 // fakeGL records what the compositor asks of GL, with no GL. Calls the
@@ -26,6 +27,40 @@ type fakeGL struct {
 	sized   map[uint32][2]int32
 	read    []uint32
 	deleted []uint32
+	// The GL state a draw or a clear goes by, and a record of each.
+	viewH   int32
+	scissor bool
+	clear   [4]float32
+	calls   []glCall
+	blend   bool
+	blendFn [4]uint32
+	program uint32
+	vao     uint32
+	active  uint32
+	// attached is each framebuffer's colour texture, and params each texture's
+	// settings.
+	attached map[uint32]uint32
+	params   map[uint32]map[uint32]int32
+}
+
+// glCall is the state a clear or a laid texture went by.
+type glCall struct {
+	kind         string
+	fbo          uint32
+	viewW, viewH int32
+	scissor      bool
+	clear        [4]float32
+	blend        bool
+	blendFn      [4]uint32
+	program, vao uint32
+	active       uint32
+}
+
+func (g *fakeGL) record(kind string) {
+	g.calls = append(g.calls, glCall{
+		kind: kind, fbo: g.fbo, viewW: g.viewW, viewH: g.viewH, scissor: g.scissor, clear: g.clear,
+		blend: g.blend, blendFn: g.blendFn, program: g.program, vao: g.vao, active: g.active,
+	})
 }
 
 func (g *fakeGL) name() uint32                                                { g.names++; return g.names }
@@ -40,10 +75,10 @@ func (g *fakeGL) LinkProgram(uint32)                                          {}
 func (g *fakeGL) DeleteShader(uint32)                                         {}
 func (g *fakeGL) GetProgrami(uint32, uint32) int                              { return gl.TRUE }
 func (g *fakeGL) GetUniformLocation(uint32, string) int32                     { return 1 }
-func (g *fakeGL) UseProgram(uint32)                                           {}
+func (g *fakeGL) UseProgram(p uint32)                                         { g.program = p }
 func (g *fakeGL) Uniform1i(int32, int32)                                      {}
 func (g *fakeGL) CreateVertexArray() uint32                                   { return g.name() }
-func (g *fakeGL) BindVertexArray(uint32)                                      {}
+func (g *fakeGL) BindVertexArray(a uint32)                                    { g.vao = a }
 func (g *fakeGL) CreateBuffer() uint32                                        { return g.name() }
 func (g *fakeGL) BindBuffer(uint32, uint32)                                   {}
 func (g *fakeGL) BufferData(uint32, []byte, uint32)                           {}
@@ -52,20 +87,42 @@ func (g *fakeGL) VertexAttribPointer(uint32, int32, uint32, bool, int32, int) {}
 func (g *fakeGL) CreateTexture() uint32                                       { return g.name() }
 func (g *fakeGL) CreateFramebuffer() uint32                                   { return g.name() }
 func (g *fakeGL) BindTexture(_, t uint32)                                     { g.texture = t }
-func (g *fakeGL) TexParameteri(uint32, uint32, int32)                         {}
-func (g *fakeGL) FramebufferTexture2D(uint32, uint32, uint32, uint32, int32)  {}
-func (g *fakeGL) DeleteTexture(t uint32)                                      { g.deleted = append(g.deleted, t) }
-func (g *fakeGL) DeleteFramebuffer(f uint32)                                  { g.deleted = append(g.deleted, f) }
-func (g *fakeGL) BindFramebuffer(_, f uint32)                                 { g.fbo = f }
-func (g *fakeGL) Viewport(_, _, w, _ int32)                                   { g.viewW = w }
-func (g *fakeGL) Disable(uint32)                                              {}
-func (g *fakeGL) Enable(uint32)                                               {}
-func (g *fakeGL) ClearColor(_, _, _, _ float32)                               {}
-func (g *fakeGL) Clear(uint32)                                                {}
-func (g *fakeGL) BlendFuncSeparate(_, _, _, _ uint32)                         {}
-func (g *fakeGL) ActiveTexture(uint32)                                        {}
-func (g *fakeGL) Uniform4fv(_ int32, v []float32)                             { g.rects = append(g.rects, [4]float32(v)) }
-func (g *fakeGL) DrawElements(uint32, int32, uint32, int)                     { g.laid = append(g.laid, g.texture) }
+func (g *fakeGL) TexParameteri(_, name uint32, v int32) {
+	if g.params == nil {
+		g.params = map[uint32]map[uint32]int32{}
+	}
+	if g.params[g.texture] == nil {
+		g.params[g.texture] = map[uint32]int32{}
+	}
+	g.params[g.texture][name] = v
+}
+func (g *fakeGL) FramebufferTexture2D(_, _, _, t uint32, _ int32) {
+	if g.attached == nil {
+		g.attached = map[uint32]uint32{}
+	}
+	g.attached[g.fbo] = t
+}
+func (g *fakeGL) DeleteTexture(t uint32)      { g.deleted = append(g.deleted, t) }
+func (g *fakeGL) DeleteFramebuffer(f uint32)  { g.deleted = append(g.deleted, f) }
+func (g *fakeGL) BindFramebuffer(_, f uint32) { g.fbo = f }
+func (g *fakeGL) Viewport(_, _, w, h int32)   { g.viewW, g.viewH = w, h }
+func (g *fakeGL) Disable(c uint32) {
+	g.scissor = g.scissor && c != glScissorTest
+	g.blend = g.blend && c != gl.BLEND
+}
+func (g *fakeGL) Enable(c uint32) {
+	g.scissor = g.scissor || c == glScissorTest
+	g.blend = g.blend || c == gl.BLEND
+}
+func (g *fakeGL) ClearColor(r, c, b, a float32)       { g.clear = [4]float32{r, c, b, a} }
+func (g *fakeGL) Clear(uint32)                        { g.record("clear") }
+func (g *fakeGL) BlendFuncSeparate(a, b, c, d uint32) { g.blendFn = [4]uint32{a, b, c, d} }
+func (g *fakeGL) ActiveTexture(t uint32)              { g.active = t }
+func (g *fakeGL) Uniform4fv(_ int32, v []float32)     { g.rects = append(g.rects, [4]float32(v)) }
+func (g *fakeGL) DrawElements(uint32, int32, uint32, int) {
+	g.laid = append(g.laid, g.texture)
+	g.record("lay")
+}
 func (g *fakeGL) ReadPixels([]byte, int32, int32, int32, int32, uint32, uint32) {
 	g.read = append(g.read, g.fbo)
 }
@@ -89,14 +146,32 @@ type fakeDrawer struct {
 	sharpAt time.Time
 	rebinds *int
 	gone    int
+	// g, if set, has the draws leave GL as a renderer does: its own framebuffer,
+	// viewport, program, vertex array, blending and texture unit, and a scissor on.
+	g *fakeGL
+}
+
+func (d *fakeDrawer) leaveState(fbo uint32, w, h int) {
+	if d.g != nil {
+		d.g.BindFramebuffer(gl.FRAMEBUFFER, fbo)
+		d.g.Viewport(0, 0, int32(w), int32(h))
+		d.g.Enable(glScissorTest)
+		d.g.Disable(gl.BLEND)
+		d.g.BlendFuncSeparate(0, 0, 0, 0)
+		d.g.UseProgram(9001)
+		d.g.BindVertexArray(9002)
+		d.g.ActiveTexture(gl.TEXTURE0 + 5)
+	}
 }
 
 func (d *fakeDrawer) drawRects(fbo uint32, _ color.NRGBA, _ []paint.Op, _ []geom.Rect, w, h int, _ float32) time.Time {
+	d.leaveState(fbo, w, h)
 	d.drew = append(d.drew, drawn{fbo: fbo, w: w, h: h})
 	return d.sharpAt
 }
 
 func (d *fakeDrawer) draw(fbo uint32, _ []paint.Op, w, h int, _ float32) time.Time {
+	d.leaveState(fbo, w, h)
 	d.drew = append(d.drew, drawn{fbo: fbo, whole: true, w: w, h: h})
 	return d.sharpAt
 }
@@ -121,7 +196,7 @@ func newBench(t *testing.T) *bench {
 		t.Fatal(err)
 	}
 	b := &bench{T: t, g: g, c: c}
-	c.open = func(*Pane) (drawer, error) { return &fakeDrawer{rebinds: &b.rebinds}, nil }
+	c.open = func(*Pane) (drawer, error) { return &fakeDrawer{rebinds: &b.rebinds, g: g}, nil }
 	return b
 }
 
@@ -512,6 +587,139 @@ func TestForgetKeepsTheLastFrame(t *testing.T) {
 	b.frame([]Layer{l, o}, 100, 80, &l)
 	if p.tex == 0 || p.tex == was {
 		t.Fatalf("the new context's texture is %d, the old one was %d", p.tex, was)
+	}
+}
+
+// Renderers leave their own viewport and a scissor on, and laying must not go by
+// them: one popup's viewport would cut every texture to its size, and a scissor
+// would leave part of the surface as the last frame left it.
+func TestLayingSetsTheGLStateItGoesBy(t *testing.T) {
+	for _, awkward := range []struct {
+		name string
+		move func(b *bench, lb, lp *Layer)
+	}{
+		{"a popup drew last", func(*bench, *Layer, *Layer) {}},
+		{"the surface changed size", func(_ *bench, lb, _ *Layer) { lb.W, lb.H = 80, 100 }},
+		{"the popup moved", func(_ *bench, _, lp *Layer) { lp.X, lp.Y = 30, 30 }},
+	} {
+		t.Run(awkward.name, func(t *testing.T) {
+			b := newBench(t)
+			lb := Layer{Pane: newPane(), W: 100, H: 80}
+			lp := Layer{Pane: newPane(), X: 5, Y: 5, W: 20, H: 20}
+			b.frame([]Layer{lb, lp}, 100, 80, &lb, &lp)
+			awkward.move(b, &lb, &lp)
+			b.g.calls = nil
+			// The popup draws last, and its renderer leaves its viewport and scissor.
+			b.frame([]Layer{lb, lp}, lb.W, lb.H, &lp)
+			if len(b.g.calls) != 3 {
+				t.Fatalf("calls %+v, want a clear and two layers", b.g.calls)
+			}
+			for i, c := range b.g.calls {
+				if c.fbo != 0 {
+					t.Errorf("call %d (%s) went to framebuffer %d", i, c.kind, c.fbo)
+				}
+				if c.viewW != int32(lb.W) || c.viewH != int32(lb.H) {
+					t.Errorf("call %d (%s) had a viewport of %dx%d on a surface of %dx%d", i, c.kind, c.viewW, c.viewH, lb.W, lb.H)
+				}
+				if c.scissor {
+					t.Errorf("call %d (%s) had a scissor on", i, c.kind)
+				}
+				if c.kind != "lay" {
+					continue
+				}
+				if !c.blend || c.blendFn != [4]uint32{gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA} {
+					t.Errorf("a layer blended %v with %v, want premultiplied", c.blend, c.blendFn)
+				}
+				if c.program != b.c.prog || c.vao != b.c.vao || c.active != gl.TEXTURE0 {
+					t.Errorf("a layer drew with program %d, vertex array %d, unit %#x", c.program, c.vao, c.active)
+				}
+			}
+			if b.g.vao != 0 {
+				t.Errorf("laying left vertex array %d bound", b.g.vao)
+			}
+			if c := b.g.calls[0]; c.kind != "clear" || c.clear != [4]float32{0, 0, 0, 1} {
+				t.Errorf("the surface was cleared to %v", c.clear)
+			}
+			// A renderer clears with what it finds, for the corners of a popup.
+			if b.g.clear != [4]float32{0, 0, 0, 0} {
+				t.Errorf("laying left the clear colour at %v, where a renderer wants nothing", b.g.clear)
+			}
+		})
+	}
+}
+
+// A window's texture is ready to draw into and to lay, and making it leaves no
+// framebuffer bound.
+func TestATextureIsReadyToDrawInto(t *testing.T) {
+	b := newBench(t)
+	p := newPane()
+	p.LastW, p.LastH = 20, 10
+	p.onTexture(b.g)
+	if b.g.fbo != 0 {
+		t.Errorf("making a texture left framebuffer %d bound", b.g.fbo)
+	}
+	if b.g.attached[p.fbo] != p.tex {
+		t.Errorf("framebuffer %d draws into %d, want %d", p.fbo, b.g.attached[p.fbo], p.tex)
+	}
+	if got := b.g.sized[p.tex]; got != [2]int32{20, 10} {
+		t.Errorf("the texture is %v", got)
+	}
+	want := map[uint32]int32{
+		gl.TEXTURE_MIN_FILTER: glLinear, gl.TEXTURE_MAG_FILTER: glLinear,
+		gl.TEXTURE_WRAP_S: gl.CLAMP_TO_EDGE, gl.TEXTURE_WRAP_T: gl.CLAMP_TO_EDGE,
+	}
+	for name, v := range want {
+		if got := b.g.params[p.tex][name]; got != v {
+			t.Errorf("texture setting %#x is %#x, want %#x", name, got, v)
+		}
+	}
+	if p.target != p.fbo || !p.OnTex {
+		t.Errorf("the next draw goes to %d, on a texture %v", p.target, p.OnTex)
+	}
+	// A size it has already, it keeps.
+	was := p.tex
+	b.g.sized = nil
+	p.onTexture(b.g)
+	if p.tex != was || b.g.sized != nil {
+		t.Errorf("at the same size the texture went from %d to %d, sized %v", was, p.tex, b.g.sized)
+	}
+}
+
+// fakeStyler records what a window's renderer is told about its text.
+type fakeStyler struct {
+	told        int
+	transparent bool
+}
+
+func (f *fakeStyler) SetText(_ text.Rendering, transparent bool) {
+	f.told++
+	f.transparent = transparent
+}
+
+// A window that blends with what is under it has no subpixel text, which only
+// comes out right over a surface that holds its colour.
+func TestARendererHearsWhetherItsWindowIsTransparent(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		var f fakeStyler
+		(&Pane{Transparent: want}).styleText(&f)
+		if f.told != 1 || f.transparent != want {
+			t.Errorf("a pane Transparent %v told it %v, %d times", want, f.transparent, f.told)
+		}
+	}
+}
+
+// A frame drawn straight onto the surface leaves nothing dirty, as a frame laid
+// from textures does.
+func TestAloneIsNotDirtyOnceDrawn(t *testing.T) {
+	b := newBench(t)
+	l := Layer{Pane: newPane(), W: 100, H: 80}
+	stack := []Layer{l}
+	if !b.c.Dirty(stack) {
+		t.Fatal("a stack never laid is not dirty")
+	}
+	b.frame(stack, 100, 80, &l)
+	if b.c.Dirty(stack) {
+		t.Fatal("the stack just drawn is dirty")
 	}
 }
 

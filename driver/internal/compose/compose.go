@@ -418,9 +418,18 @@ func (c *Compositor) openRenderer(p *Pane) (drawer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.SetText(text.Rendering{}, p.Transparent)
+	p.styleText(r)
 	p.R = r
 	return rendererDrawer{r}, nil
+}
+
+// styleText tells the window's renderer how to draw text.
+func (p *Pane) styleText(r textStyler) { r.SetText(text.Rendering{}, p.Transparent) }
+
+// textStyler is the part of a renderer that [Pane.styleText] tells, so a test can
+// stand in for it.
+type textStyler interface {
+	SetText(tr text.Rendering, transparent bool)
 }
 
 // rendererDrawer is a [render.Renderer] as a drawer. It is one pointer, so
