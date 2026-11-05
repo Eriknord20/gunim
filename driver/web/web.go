@@ -58,6 +58,8 @@ type Driver struct {
 	canvas, text, plain, secret js.Value
 	g                           gl.Context
 	comp                        *compose.Compositor
+	// ctx is the WebGL context behind g, which says what the GPU can draw.
+	ctx js.Value
 
 	// scale is the page's devicePixelRatio, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
@@ -72,6 +74,10 @@ type Driver struct {
 	// exactW and exactH are the canvas's size in device pixels, from a browser
 	// that says.
 	exactW, exactH int
+	// bufferLimit is the longest side of a drawing buffer the GPU and browser can
+	// draw on, or 0 for not known, and limitSaid says the log has told of it.
+	bufferLimit int
+	limitSaid   bool
 
 	// windows is the stack of open windows, bottom first, and gone the panes of
 	// windows closed, for the next frame to free.
@@ -156,7 +162,8 @@ func openDriver() (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{canvas: canvas, g: g, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}, kept: map[string]bool{}}
+	d := &Driver{canvas: canvas, g: g, ctx: ctx, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}, kept: map[string]bool{}}
+	d.bufferLimit = gpuLimit(ctx)
 	d.measure()
 	d.raf = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		defer survive("animation frame")
@@ -174,6 +181,14 @@ func openDriver() (*Driver, error) {
 	d.listenContext()
 	d.calibrateRefresh()
 	return d, nil
+}
+
+// gpuLimit returns the longest side the GPU can draw on, going by the textures,
+// the renderbuffers and the viewport it has.
+func gpuLimit(ctx js.Value) int {
+	param := func(name string) int { return ctx.Call("getParameter", ctx.Get(name)).Int() }
+	dims := ctx.Call("getParameter", ctx.Get("MAX_VIEWPORT_DIMS"))
+	return min(param("MAX_TEXTURE_SIZE"), param("MAX_RENDERBUFFER_SIZE"), dims.Index(0).Int(), dims.Index(1).Int())
 }
 
 // pinAutoSize fixes a side of the canvas that takes its size from its drawing
@@ -217,22 +232,71 @@ func (d *Driver) measure() bool {
 	}
 	pw, ph := int(math.Round(float64(w*s))), int(math.Round(float64(h*s)))
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	// clientWidth rounds, so at a fractional scale the browser's own count of
 	// device pixels is the one that fills the canvas exactly. Further off than
 	// rounding explains, it is out of date, or the scale is emulated.
 	if near(d.exactW, pw, s) && near(d.exactH, ph, s) {
 		pw, ph = d.exactW, d.exactH
 	}
-	changed := w != d.cssW || h != d.cssH || s != d.scale
-	d.cssW, d.cssH, d.scale = w, h, s
+	changed := w != d.cssW || h != d.cssH
+	d.cssW, d.cssH = w, h
+	if lw, lh, ls := fitLimit(w, h, s, pw, ph, d.bufferLimit); lw != pw || lh != ph {
+		d.sayLimitLocked(pw, ph, s, ls)
+		pw, ph, s = lw, lh, ls
+	}
 	if pw != d.surfW || ph != d.surfH {
-		d.surfW, d.surfH = pw, ph
 		d.canvas.Set("width", pw)
 		d.canvas.Set("height", ph)
+		// The browser can give a smaller buffer than it was asked for, as it does
+		// past what it counts as the GPU's limit or its own, and says so only here.
+		if !d.lost && d.ctx.Truthy() {
+			bw, bh := d.ctx.Get("drawingBufferWidth").Int(), d.ctx.Get("drawingBufferHeight").Int()
+			if bw > 0 && bh > 0 && (bw < pw || bh < ph) {
+				// A new limit holds from here on, so the next look at the same size
+				// doesn't ask for the big buffer again.
+				d.bufferLimit = max(bw, bh)
+				lw, lh, ls := fitLimit(w, h, s, pw, ph, d.bufferLimit)
+				d.sayLimitLocked(pw, ph, s, ls)
+				pw, ph, s = lw, lh, ls
+				d.canvas.Set("width", pw)
+				d.canvas.Set("height", ph)
+			}
+		}
+		d.surfW, d.surfH = pw, ph
 		changed = true
 	}
-	d.mu.Unlock()
+	if s != d.scale {
+		d.scale = s
+		changed = true
+	}
 	return changed
+}
+
+// fitLimit returns the drawing buffer's size and the scale for a canvas of w×h
+// logical pixels with no side past limit: the canvas stays whole and in its place,
+// drawn at a lower scale, and the browser stretches it to fit. It is pw×ph at scale
+// when that fits, or there is no limit known.
+func fitLimit(w, h, scale float32, pw, ph, limit int) (lw, lh int, ls float32) {
+	if limit <= 0 || (pw <= limit && ph <= limit) {
+		return pw, ph, scale
+	}
+	ls = min(float32(limit)/w, float32(limit)/h)
+	lw = min(limit, int(math.Round(float64(w*ls))))
+	lh = min(limit, int(math.Round(float64(h*ls))))
+	return max(lw, 1), max(lh, 1), ls
+}
+
+// sayLimitLocked tells the log once why a canvas draws at less than the page's
+// scale.
+func (d *Driver) sayLimitLocked(pw, ph int, wanted, got float32) {
+	if d.limitSaid {
+		return
+	}
+	d.limitSaid = true
+	log.Printf("gunim: web: a canvas of %dx%d device pixels is past the longest side of %d the GPU can draw, so it draws at scale %.3g, not %.3g. "+
+		`On a phone, a page with no <meta name="viewport" content="width=device-width, initial-scale=1"> lays out about 980 px wide, which does this`,
+		pw, ph, d.bufferLimit, got, wanted)
 }
 
 // near says a count of device pixels is within rounding of what was worked out

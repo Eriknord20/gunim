@@ -430,6 +430,7 @@ cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
 Serve those with a page that has a canvas and starts Go:
 
 ```html
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <body style="margin:0">
 <canvas id="gunim" style="display:block;width:100%;height:100vh"></canvas>
 <script src="wasm_exec.js"></script>
@@ -439,7 +440,11 @@ Serve those with a page that has a canvas and starts Go:
 </script>
 ```
 
+The viewport tag has a phone lay the page out at its own width. Without it, the phone lays out about 980 px wide, and the canvas draws at less than the phone's full resolution where it passes what the GPU can draw.
+
 The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. If the page has no element with the id `gunim`, the driver makes a canvas that fills it.
+
+A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
 
 gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` in the canvas's `style` attribute. Elements laid over the canvas keep their own events.
 

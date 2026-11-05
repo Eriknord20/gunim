@@ -5,6 +5,8 @@ package web
 import (
 	"image"
 	"image/color"
+	"math"
+	"strconv"
 	"syscall/js"
 	"testing"
 	"time"
@@ -434,5 +436,141 @@ func TestAPopupMovingShowsAtOnce(t *testing.T) {
 	}
 	if got := pixelAt(d, int(30*s), int(30*s)); got[0] < 240 {
 		t.Fatalf("at its old place it shows %v", got)
+	}
+}
+
+// setCanvasSize gives the driver's canvas a CSS size for the test, and puts it
+// back after.
+func setCanvasSize(t *testing.T, d *Driver, w, h string) {
+	t.Helper()
+	st := d.canvas.Get("style")
+	oldW, oldH := st.Get("width").String(), st.Get("height").String()
+	t.Cleanup(func() {
+		st.Set("width", oldW)
+		st.Set("height", oldH)
+		d.observedSize()
+	})
+	st.Set("width", w)
+	st.Set("height", h)
+	d.observedSize()
+}
+
+// keepLimit puts the driver's limit and what the log was told back after a test.
+func keepLimit(t *testing.T, d *Driver) {
+	t.Helper()
+	limit, said := d.bufferLimit, d.limitSaid
+	t.Cleanup(func() {
+		d.bufferLimit, d.limitSaid = limit, said
+		d.observedSize()
+	})
+}
+
+// A canvas far past any GPU's limit, here on the real limit of this one, draws
+// whole, at a lower scale.
+func TestACanvasPastTheGPUsLimitStillDraws(t *testing.T) {
+	d, w := testWindow(t)
+	keepLimit(t, d)
+	limit := gpuLimit(d.ctx)
+	wantW := float32(limit) * 3 / d.pageScale()
+	setCanvasSize(t, d, strconv.Itoa(int(wantW))+"px", "300px")
+	if d.surfW != limit {
+		t.Fatalf("the canvas is %v wide at scale %v, its buffer %d, on a limit of %d", wantW, d.scale, d.surfW, limit)
+	}
+	if bw := d.ctx.Get("drawingBufferWidth").Int(); bw != d.surfW || d.canvas.Get("width").Int() != bw {
+		t.Fatalf("the drawing buffer is %d, the canvas %d, the driver thinks %d", bw, d.canvas.Get("width").Int(), d.surfW)
+	}
+	if got := w.Size(); got.W != float32(int(wantW)) {
+		t.Fatalf("the window's logical size is %v", got)
+	}
+	if got := w.Scale(); got >= d.pageScale() || got <= 0 {
+		t.Fatalf("the window's scale is %v, the page's %v", got, d.pageScale())
+	}
+	present(t, w, testRed)
+	d.frame()
+	noGLError(t, d)
+	for _, at := range [][2]int{{4, 4}, {d.surfW - 4, 4}, {4, d.surfH - 4}, {d.surfW - 4, d.surfH - 4}} {
+		if got := pixelAt(d, at[0], at[1]); got[0] < 240 {
+			t.Errorf("at %v it shows %v", at, got)
+		}
+	}
+	// Under a popup too, which goes through textures of those sizes.
+	p := testPopup(t, d, w)
+	defer func() { _ = p.Close(); d.frame() }()
+	present(t, p, testBlue)
+	d.frame()
+	noGLError(t, d)
+	s := float64(d.scale)
+	if got := pixelAt(d, int(30*s), int(30*s)); got[2] < 240 {
+		t.Errorf("the popup shows %v at scale %v", got, s)
+	}
+	if got := pixelAt(d, d.surfW-4, d.surfH-4); got[0] < 240 {
+		t.Errorf("the far corner shows %v under a popup", got)
+	}
+}
+
+// A browser can give less than it was asked for, even under the GPU's limit, and
+// says so only in drawingBufferWidth and drawingBufferHeight.
+func TestABufferSmallerThanAskedForStillDraws(t *testing.T) {
+	d, w := testWindow(t)
+	keepLimit(t, d)
+	js.Global().Call("eval", `ctx => {
+		Object.defineProperty(ctx, "drawingBufferWidth", {configurable: true, get() { return Math.min(ctx.canvas.width, 400); }});
+		Object.defineProperty(ctx, "drawingBufferHeight", {configurable: true, get() { return Math.min(ctx.canvas.height, 400); }});
+	}`).Invoke(d.ctx)
+	t.Cleanup(func() {
+		r := js.Global().Get("Reflect")
+		r.Call("deleteProperty", d.ctx, "drawingBufferWidth")
+		r.Call("deleteProperty", d.ctx, "drawingBufferHeight")
+	})
+	cssW := 1000 / d.pageScale()
+	setCanvasSize(t, d, strconv.Itoa(int(cssW))+"px", strconv.Itoa(int(cssW/2))+"px")
+	if d.surfW != 400 || d.surfH > 400 || d.canvas.Get("width").Int() != 400 {
+		t.Fatalf("the buffer is %dx%d, the canvas %d wide, on 400 given", d.surfW, d.surfH, d.canvas.Get("width").Int())
+	}
+	if got, want := d.scale, float32(400)/float32(int(cssW)); got != want {
+		t.Fatalf("the scale is %v, want %v", got, want)
+	}
+	// The next look at the same size asks for no big buffer again, which would
+	// clear what shows.
+	sets := js.Global().Call("eval", `c => {
+		const count = {n: 0};
+		const size = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width");
+		Object.defineProperty(c, "width", {configurable: true, get() { return size.get.call(c); }, set(v) { count.n++; size.set.call(c, v); }});
+		return count;
+	}`).Invoke(d.canvas)
+	t.Cleanup(func() { js.Global().Get("Reflect").Call("deleteProperty", d.canvas, "width") })
+	d.measure()
+	if n := sets.Get("n").Int(); n != 0 {
+		t.Fatalf("the next look set the buffer's size %d times", n)
+	}
+	present(t, w, testRed)
+	d.frame()
+	if got := pixelAt(d, d.surfW-4, d.surfH-4); got[0] < 240 {
+		t.Fatalf("the far corner shows %v", got)
+	}
+}
+
+// pageScale is the page's device pixel ratio.
+func (d *Driver) pageScale() float32 { return float32(js.Global().Get("devicePixelRatio").Float()) }
+
+func TestFitLimit(t *testing.T) {
+	for _, c := range []struct {
+		w, h, scale float32
+		pw, ph      int
+		limit       int
+		lw, lh      int
+		ls          float32
+	}{
+		{100, 200, 2, 200, 400, 0, 200, 400, 2},
+		{100, 200, 2, 200, 400, 400, 200, 400, 2},
+		{100, 200, 2, 200, 400, 100, 50, 100, 0.5},
+		// The README's page on a phone, with no viewport tag.
+		{980, 2002.3, 2.625, 2572, 5256, 4096, 2005, 4096, 2.0456},
+		{4000, 10, 1, 4000, 10, 1000, 1000, 3, 0.25},
+	} {
+		lw, lh, ls := fitLimit(c.w, c.h, c.scale, c.pw, c.ph, c.limit)
+		if lw != c.lw || lh != c.lh || math.Abs(float64(ls-c.ls)) > 0.001 {
+			t.Errorf("%+v: got %dx%d at %v", c, lw, lh, ls)
+		}
 	}
 }
