@@ -93,7 +93,7 @@ func (d *Driver) syncText(w *Window) {
 	d.useMirror(state.Secret)
 	t := d.text
 	// A secret is only there while it has focus: see listenText.
-	if state.Secret && !t.Equal(js.Global().Get("document").Get("activeElement")) {
+	if state.Secret && (d.secretAway || !t.Equal(js.Global().Get("document").Get("activeElement"))) {
 		return
 	}
 	d.syncingText = true
@@ -145,7 +145,7 @@ func (d *Driver) useMirror(secret bool) {
 // changed, so a line ending the field holds differently from the text stays as it
 // is.
 func (d *Driver) domEdited(composing bool) {
-	if d.syncingText {
+	if d.syncingText || d.secretAway && d.text.Equal(d.secret) {
 		return
 	}
 	w := d.typingWindow()
@@ -264,12 +264,16 @@ func (d *Driver) listenText(doc js.Value) {
 		}
 	})
 	// A secret stays only while it has focus, and cannot be copied out.
+	// Switching windows blurs it and leaves it the active element, so what it holds
+	// then is no edit of the user's: secretAway says so until focus comes back.
 	d.on(d.secret, "blur", true, func(js.Value) {
+		d.secretAway = true
 		d.syncingText = true
 		d.secret.Set("value", "")
 		d.syncingText = false
 	})
 	d.on(d.secret, "focus", true, func(js.Value) {
+		d.secretAway = false
 		if w := d.typingWindow(); w != nil {
 			d.syncText(w)
 		}

@@ -823,6 +823,50 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("a plain field kept the password field: %v, %q", d.text.Get("tagName"), d.secret.Get("value"))
 		}
 	})
+	t.Run("switching windows leaves a secret alone", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		st := input.TextState{Text: "hunter2", Selection: [2]int{7, 7}, Composing: [2]int{7, 7}, Secret: true}
+		w.SetTextState(&st, w.editSeq)
+		d.secret.Call("focus")
+		if got := d.secret.Get("value").String(); got != "hunter2" {
+			t.Fatalf("focused, it holds %q", got)
+		}
+		drain(w)
+		doc := js.Global().Get("document")
+		// Switching windows, in Firefox above all: the field hears blur, and stays the
+		// active element, and a selectionchange comes after.
+		d.secret.Call("dispatchEvent", js.Global().Get("FocusEvent").New("blur"))
+		if !d.secret.Equal(doc.Get("activeElement")) {
+			t.Fatal("this test wants the field active")
+		}
+		if got := d.secret.Get("value").String(); got != "" {
+			t.Errorf("away, it holds %q", got)
+		}
+		// A real one, if this browser sends it for the field emptied, and one to be sure.
+		time.Sleep(50 * time.Millisecond)
+		doc.Call("dispatchEvent", js.Global().Get("Event").New("selectionchange"))
+		d.secret.Call("dispatchEvent", js.Global().Get("InputEvent").New("input"))
+		for _, e := range drain(w) {
+			if e, ok := e.(input.TextEdit); ok {
+				t.Errorf("the window going away sent an edit: %+v", e)
+			}
+		}
+		if w.state.Text != "hunter2" {
+			t.Errorf("the driver's copy holds %q", w.state.Text)
+		}
+		// A state that comes while away stays out of the page.
+		w.SetTextState(&st, w.editSeq)
+		if got := d.secret.Get("value").String(); got != "" {
+			t.Errorf("a state put %q back with the window away", got)
+		}
+		d.secret.Call("dispatchEvent", js.Global().Get("FocusEvent").New("focus"))
+		if got := d.secret.Get("value").String(); got != "hunter2" {
+			t.Errorf("back again, it holds %q", got)
+		}
+		drain(w)
+	})
 	t.Run("a text's line endings stay as they are", func(t *testing.T) {
 		w.SetTextInput(true)
 		defer w.SetTextInput(false)

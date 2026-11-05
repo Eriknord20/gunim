@@ -103,8 +103,11 @@ type Driver struct {
 	// typing is the window that takes text.
 	typing                 *Window
 	composing, syncingText bool
-	compStart              int
-	compSuffix, clipboard  string
+	// secretAway says focus left the password field, which holds nothing until it
+	// comes back.
+	secretAway            bool
+	compStart             int
+	compSuffix, clipboard string
 
 	safeProbe      js.Value
 	safe           geom.Insets
