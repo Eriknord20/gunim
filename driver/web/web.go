@@ -27,8 +27,9 @@
 //
 // Gunim takes every touch on the canvas, and scrolls and pans for itself. A page
 // that wants the browser to have some of them, as to scroll the page with
-// vertical swipes, sets touch-action in the canvas's own style attribute, and
-// that is kept. Elements a page lays over the canvas keep their own events.
+// vertical swipes, sets touch-action on the canvas, in its style attribute or a
+// stylesheet, and that is kept. Elements a page lays over the canvas keep their
+// own events.
 package web
 
 import (
@@ -517,6 +518,21 @@ func (d *Driver) at(e js.Value) geom.Point {
 	return geom.Pt(float32(e.Get("clientX").Float()-r.Get("left").Float()), float32(e.Get("clientY").Float()-r.Get("top").Float()))
 }
 
+// pageTouchAction returns what the page asks of the browser for touches on the
+// canvas, in its style attribute or a stylesheet, or "none", for gunim to take them
+// all, if the page asks nothing. A stylesheet's "auto" can't be told from no
+// rule at all, and counts as none.
+func pageTouchAction(c js.Value) string {
+	if t := c.Get("style").Get("touchAction").String(); t != "" {
+		return t
+	}
+	t := js.Global().Call("getComputedStyle", c).Get("touchAction")
+	if !t.Truthy() || t.String() == "auto" {
+		return "none"
+	}
+	return t.String()
+}
+
 // buttonBit is where a button is in a PointerEvent's buttons, which numbers them
 // differently from its button.
 func buttonBit(button int) int {
@@ -546,10 +562,7 @@ const (
 
 func (d *Driver) listen(doc js.Value) {
 	c := d.canvas
-	d.touchAction = c.Get("style").Get("touchAction").String()
-	if d.touchAction == "" {
-		d.touchAction = "none"
-	}
+	d.touchAction = pageTouchAction(c)
 	c.Get("style").Set("touchAction", d.touchAction)
 	// The driver's focus call on a press would have the browser draw its focus
 	// ring round the whole canvas. Windows draw focus in their own way.

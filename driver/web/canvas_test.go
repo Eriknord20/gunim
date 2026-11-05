@@ -707,3 +707,30 @@ func TestTheCanvasHasNoFocusRing(t *testing.T) {
 		t.Errorf("focused, the canvas has an outline of %s, %s", got, style.Get("outlineWidth"))
 	}
 }
+
+// A page's own touch-action stays, from its style attribute or a stylesheet.
+func TestAPagesOwnTouchActionStays(t *testing.T) {
+	doc := js.Global().Get("document")
+	sheet := doc.Call("createElement", "style")
+	sheet.Set("textContent", ".swipes { touch-action: pan-y; }")
+	doc.Get("head").Call("appendChild", sheet)
+	defer sheet.Call("remove")
+	for _, c := range []struct {
+		name, class, inline, want string
+	}{
+		{"nothing set", "", "", "none"},
+		{"a stylesheet", "swipes", "", "pan-y"},
+		{"the style attribute", "", "pan-x", "pan-x"},
+		{"both, where the attribute wins", "swipes", "pan-x", "pan-x"},
+		{"auto in the style attribute", "", "auto", "auto"},
+	} {
+		el := doc.Call("createElement", "canvas")
+		el.Set("className", c.class)
+		el.Get("style").Set("touchAction", c.inline)
+		doc.Get("body").Call("appendChild", el)
+		if got := pageTouchAction(el); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+		el.Call("remove")
+	}
+}

@@ -446,7 +446,7 @@ The canvas's CSS size is the window's size. One with no CSS size stays the size 
 
 A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
 
-gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` in the canvas's `style` attribute. Elements laid over the canvas keep their own events.
+gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` on the canvas, in its `style` attribute or a stylesheet. Elements laid over the canvas keep their own events.
 
 Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar and full screen, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it. Cut, copy and paste in a text field stay the browser's.
 
