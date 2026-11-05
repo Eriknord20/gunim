@@ -775,6 +775,135 @@ func TestBrowser(t *testing.T) {
 		}
 		w.SetTextInput(false)
 	})
+	t.Run("what is held comes up as focus leaves", func(t *testing.T) {
+		released := func() (keys []input.Key, buttons []input.Button, fingers []int) {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.KeyRelease:
+					keys = append(keys, e.Key)
+				case input.PointerUp:
+					if e.Pos != input.Away {
+						t.Errorf("a button let go at %v, where it might click", e.Pos)
+					}
+					buttons = append(buttons, e.Button)
+				case input.Finger:
+					if e.Phase == input.FingerUp {
+						if e.Pos != input.Away {
+							t.Errorf("a finger let go at %v", e.Pos)
+						}
+						fingers = append(fingers, e.ID)
+					}
+				}
+			}
+			return keys, buttons, fingers
+		}
+		up := func(name, code string) {
+			d.canvas.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keyup", map[string]any{"bubbles": true, "cancelable": true, "key": name, "code": code}))
+		}
+		leave := map[string]func(){
+			"the window": func() { js.Global().Call("dispatchEvent", js.Global().Get("Event").New("blur")) },
+		}
+		// With no window focus, focus moves and no blur fires.
+		if js.Global().Get("document").Call("hasFocus").Bool() {
+			leave["the page's own element"] = func() {
+				mine := js.Global().Get("document").Call("createElement", "input")
+				js.Global().Get("document").Get("body").Call("appendChild", mine)
+				mine.Call("focus")
+				mine.Call("remove")
+			}
+		}
+		// The tests before pressed keys without letting go.
+		d.releaseHeld()
+		for name, away := range leave {
+			d.canvas.Call("focus")
+			drain(w)
+			key(d.canvas, "w", "KeyW")
+			key(d.canvas, "Shift", "ShiftLeft", "shiftKey")
+			key(d.canvas, "r", "KeyR", "ctrlKey") // the browser's: gunim never heard it go down
+			drain(w)
+			away()
+			keys, _, _ := released()
+			slices.Sort(keys)
+			want := []input.Key{input.KeyW, input.KeyLeftShift}
+			slices.Sort(want)
+			if !slices.Equal(keys, want) {
+				t.Errorf("%s: released %v, want %v", name, keys, want)
+			}
+			// Its real release comes when focus is back, and is no second one.
+			d.canvas.Call("focus")
+			up("w", "KeyW")
+			if keys, _, _ := released(); len(keys) != 0 {
+				t.Errorf("%s: a key came up twice: %v", name, keys)
+			}
+		}
+		// Moving between what the driver owns holds on to them.
+		d.canvas.Call("focus")
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		w.SetTextState(&input.TextState{}, w.editSeq)
+		w.SetTextInput(true)
+		w.SetTextInput(false)
+		if keys, _, _ := released(); len(keys) != 0 {
+			t.Errorf("the keyboard moving to the field and back let go of %v", keys)
+		}
+		up("w", "KeyW")
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("after that, its own release gave %v", keys)
+		}
+		// A key whose release says it is composing still comes up.
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		d.canvas.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keyup", map[string]any{"bubbles": true, "cancelable": true, "key": "Process", "code": "KeyW", "isComposing": true}))
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("a composing release gave %v", keys)
+		}
+		// Buttons, each one held.
+		blur := leave["the window"]
+		mouse("pointerdown", 0, 1)
+		mouse("pointermove", 2, 3)
+		drain(w)
+		blur()
+		_, buttons, _ := released()
+		if !slices.Equal(buttons, []input.Button{input.ButtonPrimary, input.ButtonSecondary}) {
+			t.Errorf("buttons released %v", buttons)
+		}
+		mouse("pointerup", 2, 0)
+		if _, buttons, _ := released(); len(buttons) != 0 {
+			t.Errorf("a button came up twice: %v", buttons)
+		}
+		if d.pressed != nil {
+			t.Error("the press is still held")
+		}
+		// A finger of its own.
+		_ = w.TakeFingers(true)
+		pointer(d, "pointerdown", 1, 40, 40)
+		drain(w)
+		blur()
+		if _, _, fingers := released(); !slices.Equal(fingers, []int{1}) {
+			t.Errorf("fingers released %v", fingers)
+		}
+		pointer(d, "pointerup", 1, 40, 40)
+		_ = w.TakeFingers(false)
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		drain(w)
+		// Hiding the tab does the same.
+		d.canvas.Call("focus")
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		hidden := js.Global().Get("Object").Call("getOwnPropertyDescriptor", js.Global().Get("document"), "visibilityState")
+		js.Global().Get("Object").Call("defineProperty", js.Global().Get("document"), "visibilityState", map[string]any{"configurable": true, "value": "hidden"})
+		js.Global().Get("document").Call("dispatchEvent", js.Global().Get("Event").New("visibilitychange"))
+		if hidden.IsUndefined() {
+			js.Global().Get("Reflect").Call("deleteProperty", js.Global().Get("document"), "visibilityState")
+		} else {
+			js.Global().Get("Object").Call("defineProperty", js.Global().Get("document"), "visibilityState", hidden)
+		}
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("hiding the tab released %v", keys)
+		}
+	})
 	t.Run("a secret lives in a password field, only while focused", func(t *testing.T) {
 		if !js.Global().Get("document").Call("hasFocus").Bool() {
 			t.Skip("the page has no window focus, so focus and blur don't fire")

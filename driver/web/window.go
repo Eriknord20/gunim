@@ -236,6 +236,8 @@ func (w *Window) SetTextInput(active bool) {
 // goes back to the canvas, unless the page's own element has it.
 func (d *Driver) leaveMirror() {
 	doc := js.Global().Get("document")
+	d.movingFocus = true
+	defer func() { d.movingFocus = false }()
 	if active := doc.Get("activeElement"); active.Equal(d.plain) || active.Equal(d.secret) {
 		active.Call("blur")
 	}

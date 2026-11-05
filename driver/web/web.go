@@ -43,6 +43,7 @@ import (
 	"errors"
 	"log"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,12 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/internal/gl"
 )
+
+// heldKey is a key gunim heard go down.
+type heldKey struct {
+	w   *Window
+	key input.Key
+}
 
 // Driver is the browser implementation of [driver.Driver].
 type Driver struct {
@@ -71,11 +78,16 @@ type Driver struct {
 	// surfH are its drawing buffer's size in device pixels.
 	// lastTouch says the last press was a finger or a pen, not a mouse.
 	lastTouch bool
-	// kept holds the keys down that stay the browser\'s, by their place.
-	kept         map[string]bool
-	scale        float32
-	cssW, cssH   float32
-	surfW, surfH int
+	// held holds the keys down that gunim heard go down, by their place, and the
+	// window each went to. buttons holds the buttons down in the window pressed.
+	held    map[string]heldKey
+	buttons []input.Button
+	// pressTouch says the press held is a finger's or a pen's. movingFocus says the
+	// driver is moving the keyboard between what it owns.
+	pressTouch, movingFocus bool
+	scale                   float32
+	cssW, cssH              float32
+	surfW, surfH            int
 	// exactW and exactH are the canvas's size in device pixels, from a browser
 	// that says.
 	exactW, exactH int
@@ -164,7 +176,7 @@ func openDriver() (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &Driver{canvas: canvas, g: g, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}, kept: map[string]bool{}}
+	d := &Driver{canvas: canvas, g: g, comp: comp, quit: make(chan struct{}), rate: 60, fingers: map[int]*Window{}, headingTo: map[*Window]bool{}, held: map[string]heldKey{}}
 	d.measure()
 	d.raf = js.FuncOf(func(_ js.Value, args []js.Value) any {
 		defer survive("animation frame")
@@ -549,6 +561,8 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		d.lastAt, d.lastTap = now, p
 		d.pressed = w
+		d.pressTouch = touch
+		d.buttons = append(d.buttons[:0], buttonOf(e))
 		clicks, local := d.clicks, p.Sub(w.rectLocked().Min)
 		d.mu.Unlock()
 		// The driver moves focus itself. A mouse's press is cancelled at its
@@ -605,7 +619,15 @@ func (d *Driver) listen(doc js.Value) {
 			w.in.Push(input.PointerMove{Pos: local, Mods: modsOf(e), Touch: touch, Time: now})
 			// One button going down or up while another is held comes as a move.
 			if held && !finger && e.Get("button").Int() >= 0 {
-				if b := buttonOf(e); e.Get("buttons").Int()&buttonBit(e.Get("button").Int()) != 0 {
+				b := buttonOf(e)
+				down := e.Get("buttons").Int()&buttonBit(e.Get("button").Int()) != 0
+				d.mu.Lock()
+				d.buttons = slices.DeleteFunc(d.buttons, func(x input.Button) bool { return x == b })
+				if down {
+					d.buttons = append(d.buttons, b)
+				}
+				d.mu.Unlock()
+				if down {
 					w.in.Push(input.PointerDown{Pos: local, Button: b, Mods: modsOf(e), Clicks: 1, Time: now})
 				} else {
 					w.in.Push(input.PointerUp{Pos: local, Button: b, Mods: modsOf(e), Time: now})
@@ -624,6 +646,7 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		w := d.pressed
 		d.pressed = nil
+		d.buttons = d.buttons[:0]
 		var local geom.Point
 		if w != nil {
 			local = p.Sub(w.rectLocked().Min)
@@ -689,8 +712,24 @@ func (d *Driver) listen(doc js.Value) {
 	})
 
 	key := func(e js.Value, down bool) {
+		name, code := e.Get("key").String(), e.Get("code").String()
+		m, now := modsOf(e), time.Now()
+		if altGr(e) {
+			m &^= input.ModControl | input.ModAlt
+		}
+		if !down {
+			// A key gunim heard go down comes up, whatever is held as it does.
+			d.mu.Lock()
+			h, heard := d.held[keyPlace(code, name)]
+			delete(d.held, keyPlace(code, name))
+			d.mu.Unlock()
+			if heard {
+				h.w.in.Push(input.KeyRelease{Key: h.key, Mods: m, Time: now})
+			}
+			return
+		}
 		// A dead key is half a character, which the browser finishes.
-		if e.Get("key").String() == "Dead" {
+		if name == "Dead" {
 			return
 		}
 		if d.text.Equal(doc.Get("activeElement")) && d.editKeyOwnedByDOM(e) {
@@ -700,33 +739,13 @@ func (d *Driver) listen(doc js.Value) {
 		if w == nil {
 			return
 		}
-		k := keyOf(e.Get("code").String(), e.Get("key").String())
-		m, now := modsOf(e), time.Now()
-		if altGr(e) {
-			m &^= input.ModControl | input.ModAlt
+		if browserKey(name, code, m) {
+			return
 		}
-		// A key's owner is settled as it goes down, whatever is held as it comes up.
-		name, code := e.Get("key").String(), e.Get("code").String()
+		k := keyOf(code, name)
 		d.mu.Lock()
-		if !down {
-			kept := d.kept[code]
-			delete(d.kept, code)
-			d.mu.Unlock()
-			if !kept {
-				w.in.Push(input.KeyRelease{Key: k, Mods: m, Time: now})
-			}
-			return
-		}
-		kept := browserKey(name, code, m)
-		if kept {
-			d.kept[code] = true
-		} else {
-			delete(d.kept, code)
-		}
+		d.held[keyPlace(code, name)] = heldKey{w, k}
 		d.mu.Unlock()
-		if kept {
-			return
-		}
 		typed := len([]rune(name)) == 1 && m&(input.ModControl|input.ModSuper) == 0
 		var char rune
 		if r := []rune(strings.ToLower(name)); len(r) == 1 {
@@ -768,9 +787,24 @@ func (d *Driver) listen(doc js.Value) {
 	}
 	win := js.Global()
 	d.on(win, "focus", true, func(js.Value) { focus(true) })
-	d.on(win, "blur", true, func(js.Value) { focus(false) })
+	d.on(win, "blur", true, func(js.Value) {
+		focus(false)
+		d.releaseHeld()
+	})
+	// Focus going to the page's own element takes the keys' releases with it.
+	for _, el := range []js.Value{c, d.plain, d.secret} {
+		d.on(el, "blur", true, func(e js.Value) {
+			to := e.Get("relatedTarget")
+			if !d.movingFocus && !to.Equal(c) && !to.Equal(d.plain) && !to.Equal(d.secret) {
+				d.releaseHeld()
+			}
+		})
+	}
 	d.on(doc, "visibilitychange", true, func(js.Value) {
 		shown := doc.Get("visibilityState").String() == "visible"
+		if !shown {
+			d.releaseHeld()
+		}
 		d.mu.Lock()
 		ws := append([]*Window(nil), d.windows...)
 		d.mu.Unlock()
@@ -800,6 +834,42 @@ func (d *Driver) listen(doc js.Value) {
 			observer.Call("observe", c)
 		}
 	}
+}
+
+// releaseHeld lets go of every key, button and finger gunim holds down, as focus
+// has left and the browser won't say when they come up. The buttons and fingers
+// let go away from everything, so nothing takes it as a click.
+func (d *Driver) releaseHeld() {
+	now := time.Now()
+	d.mu.Lock()
+	keys := d.held
+	d.held = map[string]heldKey{}
+	pressed, touch, buttons := d.pressed, d.pressTouch, slices.Clone(d.buttons)
+	d.pressed, d.buttons = nil, d.buttons[:0]
+	fingers := d.fingers
+	d.fingers = map[int]*Window{}
+	d.mu.Unlock()
+	for _, h := range keys {
+		h.w.in.Push(input.KeyRelease{Key: h.key, Time: now})
+	}
+	if pressed != nil {
+		for _, b := range buttons {
+			pressed.in.Push(input.PointerUp{Pos: input.Away, Button: b, Touch: touch, Time: now})
+		}
+		pressed.in.Push(input.PointerLeave{Time: now})
+	}
+	for id, w := range fingers {
+		w.in.Push(input.Finger{ID: id, Pos: input.Away, Phase: input.FingerUp, Time: now})
+	}
+}
+
+// keyPlace is what tells a held key from another: its place, or for a soft
+// keyboard's key, which has none, its value.
+func keyPlace(code, name string) string {
+	if code != "" {
+		return code
+	}
+	return name
 }
 
 // readExactSize takes the canvas's size in device pixels from a ResizeObserver's
