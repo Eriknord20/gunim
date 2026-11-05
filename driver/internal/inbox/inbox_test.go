@@ -97,3 +97,27 @@ func TestInboxSwapsAWaitingMove(t *testing.T) {
 		t.Fatalf("got %v, want only %v", got, want)
 	}
 }
+
+func TestInboxWaitingCountsWhatIsNotYetRead(t *testing.T) {
+	quit := make(chan struct{})
+	defer close(quit)
+	q := New(quit)
+	if q.Waiting() {
+		t.Fatal("an empty inbox is waiting")
+	}
+	q.Push(1)
+	if !q.Waiting() {
+		t.Fatal("an item pushed isn't waiting")
+	}
+	// The goroutine has the item in hand, and it is still unread.
+	time.Sleep(10 * time.Millisecond)
+	if !q.Waiting() {
+		t.Fatal("an item on its way out isn't waiting")
+	}
+	<-q.Out()
+	for give := time.Now().Add(5 * time.Second); q.Waiting(); time.Sleep(time.Millisecond) {
+		if time.Now().After(give) {
+			t.Fatal("still waiting with everything read")
+		}
+	}
+}

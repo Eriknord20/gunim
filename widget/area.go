@@ -57,10 +57,11 @@ type TextArea struct {
 	lines *anim.Float
 	laid0 bool
 
-	// para is the text as laid out, kept up as it changes, and view how
-	// tall its window is, for navigating.
-	para areaText
-	view float32
+	// para is the text as laid out, kept up as it changes, paraW the width it breaks
+	// at, and view how tall its window is, for navigating.
+	para  areaText
+	paraW float32
+	view  float32
 	// followed is the caret the view last scrolled to keep in sight.
 	followed int
 	// completing is the list of suggestions open at the caret, and dismissedAt where the trigger was of the word
@@ -226,6 +227,10 @@ func (a *TextArea) Handle(e input.Event, u *gunim.UI) bool {
 			send(u, a, a.OnCommit(a.Text(), u))
 			return true
 		}
+		// Keys come faster than frames: a key moves through the text as it is now.
+		if a.laid0 {
+			a.reflow(u.Theme(), a.paraW)
+		}
 		if !a.key(e, u, areaNav{a}) {
 			return false
 		}
@@ -338,6 +343,13 @@ func (n areaNav) page() int {
 	return max(1, int(n.a.view/n.a.para.LineHeight)-1)
 }
 
+// reflow brings the paragraph up to the text, breaking lines at width.
+func (a *TextArea) reflow(th *theme.Live, width float32) {
+	shown, _ := a.shown()
+	head, tail, was, changed := a.shownChange()
+	a.para.update(faceIn(a.Face, th), text.Style{Size: TextSize.Get(th)}, width, shown, head, tail, was, changed)
+}
+
 // Layout implements [gunim.Node]. The area fills the width it is given,
 // or the theme's [AreaWidth], and is Rows lines tall.
 func (a *TextArea) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
@@ -348,9 +360,8 @@ func (a *TextArea) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) 
 	if w <= 0 {
 		w = AreaWidth.Get(th)
 	}
-	shown, _ := a.shown()
-	head, tail, was, changed := a.shownChange()
-	a.para.update(faceIn(a.Face, th), text.Style{Size: TextSize.Get(th)}, w-2*pad, shown, head, tail, was, changed)
+	a.paraW = w - 2*pad
+	a.reflow(th, a.paraW)
 	rows := float32(max(a.Rows, 1))
 	if a.MaxRows > a.Rows {
 		want := float32(min(max(a.para.count(), a.Rows, 1), a.MaxRows))

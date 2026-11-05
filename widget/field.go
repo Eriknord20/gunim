@@ -284,6 +284,8 @@ func (t *TextField) Handle(e input.Event, u *gunim.UI) bool {
 			t.insert(ghost, u)
 			break
 		}
+		// Keys come faster than frames: a key moves through the text as it is now.
+		t.run(u.Theme())
 		if !t.key(e, u, fieldNav{t}) {
 			return false
 		}

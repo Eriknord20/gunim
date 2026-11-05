@@ -44,6 +44,9 @@ type TextInputter interface {
 // are still on their way to the node. A state with seq level with it
 // that differs from the copy is a change the node made, such as text
 // set by the program, and the input method starts over from it.
+//
+// The engine calls SetTextState as soon as it has handled the event that changed
+// the state, and for a change it makes on its own at the next frame.
 type TextStater interface {
 	SetTextState(s *input.TextState, seq uint64)
 }

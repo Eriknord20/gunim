@@ -729,6 +729,15 @@ func TestBrowser(t *testing.T) {
 			{"d", "KeyD", []string{alt}, false},
 			{"ArrowRight", "ArrowRight", []string{cmd, alt}, false},
 			{"{", "BracketLeft", []string{cmd, shift}, false},
+			// The system's own on a Mac, and the browser's settings.
+			{"h", "KeyH", []string{cmd}, false},
+			{"m", "KeyM", []string{cmd}, false},
+			{"`", "Backquote", []string{cmd}, false},
+			{"~", "Backquote", []string{cmd, shift}, false},
+			{"<", "IntlBackslash", []string{cmd}, false},
+			{",", "Comma", []string{cmd}, false},
+			{"h", "KeyH", []string{cmd, alt}, false},
+			{"m", "KeyM", []string{cmd, alt}, false},
 			// The same places on other layouts.
 			{"к", "KeyR", []string{ctrl}, false},
 			{"д", "KeyL", []string{ctrl}, false},
@@ -746,6 +755,16 @@ func TestBrowser(t *testing.T) {
 			{"ArrowLeft", "ArrowLeft", []string{cmd}, true},
 			{"ы", "KeyS", []string{ctrl}, true},
 			{"!", "Digit1", []string{ctrl, shift}, true},
+			// The same with Shift: a shortcut of its own, and the program's.
+			{"H", "KeyH", []string{cmd, shift}, true},
+			{"M", "KeyM", []string{cmd, shift}, true},
+			{"<", "Comma", []string{cmd, shift}, true},
+			{"Р", "KeyH", []string{cmd, shift}, true},
+			// The same letters as above, with Control: those are the program's.
+			{"h", "KeyH", []string{ctrl}, true},
+			{"m", "KeyM", []string{ctrl}, true},
+			{",", "Comma", []string{ctrl}, true},
+			{"`", "Backquote", []string{ctrl}, true},
 			// Typed on the canvas: the handler may move focus to the mirror before
 			// the browser ends the key, which must not type it there too.
 			{"g", "KeyG", nil, true},
@@ -763,6 +782,27 @@ func TestBrowser(t *testing.T) {
 			}
 			if got := len(heard()) > 0; got != c.gunim {
 				t.Errorf("%q with %v: gunim heard it %v, want %v", c.name, c.mods, got, c.gunim)
+			}
+		}
+	})
+	t.Run("the system's Command keys with Option and Shift", func(t *testing.T) {
+		super, option, shift := input.ModSuper, input.ModAlt, input.ModShift
+		for _, c := range []struct {
+			name, code string
+			mods       input.Mods
+			kept       bool
+		}{
+			{"h", "KeyH", super | option, true},
+			{"m", "KeyM", super | option, true},
+			{"˙", "KeyH", super | option, true},
+			{"H", "KeyH", super | option | shift, false},
+			{"M", "KeyM", super | option | shift, false},
+			// Moving between windows backward is the system's too.
+			{"~", "Backquote", super | shift, true},
+			{">", "IntlBackslash", super | shift, true},
+		} {
+			if got := browserKey(c.name, c.code, c.mods); got != c.kept {
+				t.Errorf("%q on %s with %v: kept %v, want %v", c.name, c.code, c.mods, got, c.kept)
 			}
 		}
 	})
@@ -819,12 +859,49 @@ func TestBrowser(t *testing.T) {
 		if key(d.text, "v", "KeyV", "ctrlKey") || len(heard()) != 0 {
 			t.Error("paste with no text state left the browser, which brings the text")
 		}
+		if !key(d.text, "Insert", "Insert", "ctrlKey") || len(heard()) != 1 {
+			t.Error("Control+Insert with no text state stayed the browser's")
+		}
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete with no text state stayed the browser's")
+		}
+		if key(d.text, "Insert", "Insert", "shiftKey") || len(heard()) != 0 {
+			t.Error("Shift+Insert with no text state left the browser, which brings the text")
+		}
 		w.SetTextState(&input.TextState{Text: "abc"}, w.editSeq)
 		drain(w)
 		for _, c := range [][2]string{{"c", "KeyC"}, {"x", "KeyX"}, {"v", "KeyV"}} {
 			if key(d.text, c[0], c[1], "ctrlKey") || len(heard()) != 0 {
 				t.Errorf("%s in a field left the browser", c[0])
 			}
+		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{0, 3}}, w.editSeq)
+		drain(w)
+		for _, c := range []struct{ name, mod string }{{"Insert", "ctrlKey"}, {"Insert", "shiftKey"}, {"Delete", "shiftKey"}} {
+			if key(d.text, c.name, c.name, c.mod) || len(heard()) != 0 {
+				t.Errorf("%s with %s in a field left the browser", c.name, c.mod)
+			}
+		}
+		// Those alone stay gunim's.
+		if !key(d.text, "Delete", "Delete") || len(heard()) != 1 {
+			t.Error("Delete in a field left gunim")
+		}
+		// Shift+Delete cuts only what the browser can cut: a selection in a plain field.
+		// The browser would do nothing with the others.
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{1, 1}}, w.editSeq)
+		drain(w)
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete with nothing selected was left to the browser")
+		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{0, 3}, Secret: true}, w.editSeq)
+		drain(w)
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete in a password field was left to the browser")
+		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{3, 0}}, w.editSeq)
+		drain(w)
+		if key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 0 {
+			t.Error("Shift+Delete on a backward selection was not left to the browser")
 		}
 	})
 	t.Run("dead keys and AltGr stay the browser's", func(t *testing.T) {
@@ -859,6 +936,50 @@ func TestBrowser(t *testing.T) {
 			t.Error("a space in the mirror was cancelled, which is what types it")
 		}
 		drain(w)
+	})
+	t.Run("Control and Alt with a key's own character type nothing", func(t *testing.T) {
+		d.canvas.Call("focus")
+		drain(w)
+		for _, c := range []struct {
+			name, code string
+			mods       []string
+			altGr      bool
+		}{
+			{"1", "Digit1", []string{"ctrlKey", "altKey"}, false},
+			{"!", "Digit1", []string{"ctrlKey", "altKey", "shiftKey"}, false},
+			{"-", "Minus", []string{"ctrlKey", "altKey"}, false},
+			{",", "Comma", []string{"ctrlKey", "altKey"}, false},
+			{"1", "Numpad1", []string{"ctrlKey", "altKey"}, false},
+			// What AltGr types on other layouts, from a browser that doesn't say it's AltGr.
+			{"@", "Digit2", []string{"ctrlKey", "altKey"}, true},
+			{"{", "Digit7", []string{"ctrlKey", "altKey"}, true},
+			{"€", "KeyE", []string{"ctrlKey", "altKey"}, true},
+			// The same character, from a browser that says.
+			{"1", "Digit1", []string{"ctrlKey", "altKey", "modifierAltGraph"}, true},
+		} {
+			key(d.canvas, c.name, c.code, c.mods...)
+			var press []input.KeyPress
+			var typed []string
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.KeyPress:
+					press = append(press, e)
+				case input.TextInput:
+					typed = append(typed, e.Text)
+				}
+			}
+			if len(press) != 1 {
+				t.Errorf("%q on %s reached gunim as %v", c.name, c.code, press)
+				continue
+			}
+			if c.altGr {
+				if !press[0].Typed || press[0].Mods&(input.ModControl|input.ModAlt) != 0 || !slices.Equal(typed, []string{c.name}) {
+					t.Errorf("AltGr %q on %s: %+v typed %q", c.name, c.code, press[0], typed)
+				}
+			} else if press[0].Typed || press[0].Mods&input.ModControl == 0 || press[0].Mods&input.ModAlt == 0 || len(typed) != 0 {
+				t.Errorf("%q on %s with Control and Alt: %+v typed %q", c.name, c.code, press[0], typed)
+			}
+		}
 	})
 	t.Run("a field reached by keys takes the keyboard, and a finger's waits", func(t *testing.T) {
 		doc := js.Global().Get("document")
@@ -895,6 +1016,229 @@ func TestBrowser(t *testing.T) {
 			t.Error("the page's own field lost the keyboard")
 		}
 		w.SetTextInput(false)
+	})
+	t.Run("a key after a tap brings the keyboard back to the field", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		tap := func() {
+			pointer(d, "pointerdown", 7, 5, 5)
+			pointer(d, "pointerup", 7, 5, 5)
+			drain(w)
+		}
+		d.canvas.Call("focus")
+		tap()
+		// Tab, on the canvas, moves the engine's focus to a field: a physical key
+		// means no finger's tap is needed for it to take the keyboard.
+		if !key(d.canvas, "Tab", "Tab") {
+			t.Error("Tab on the canvas was left to the browser")
+		}
+		w.SetTextInput(true)
+		if !d.text.Equal(doc.Get("activeElement")) {
+			t.Errorf("after a tap and Tab, %v has the keyboard", doc.Get("activeElement").Get("tagName"))
+		}
+		// A dead key now reaches the mirror, which is what finishes it.
+		if key(d.text, "Dead", "BracketRight") {
+			t.Error("a dead key in the field was cancelled")
+		}
+		w.SetTextInput(false)
+		drain(w)
+		// The field is on already, and the finger's tap left the keyboard away.
+		d.canvas.Call("focus")
+		tap()
+		w.SetTextInput(true)
+		if d.text.Equal(doc.Get("activeElement")) {
+			t.Fatal("a finger's field took the keyboard")
+		}
+		key(d.canvas, "Dead", "BracketRight")
+		if !d.text.Equal(doc.Get("activeElement")) {
+			t.Errorf("a dead key on the canvas left %v with the keyboard", doc.Get("activeElement").Get("tagName"))
+		}
+		w.SetTextInput(false)
+		drain(w)
+		// A soft keyboard's key has no place, and says nothing of a keyboard at hand.
+		tap()
+		d.text.Call("focus")
+		key(d.text, "Backspace", "")
+		d.canvas.Call("focus")
+		w.SetTextInput(true)
+		if d.text.Equal(doc.Get("activeElement")) {
+			t.Error("a soft keyboard's key let a later field bring the keyboard up with no tap")
+		}
+		w.SetTextInput(false)
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		drain(w)
+	})
+	t.Run("what is held comes up as focus leaves", func(t *testing.T) {
+		released := func() (keys []input.Key, buttons []input.Button, fingers []int) {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.KeyRelease:
+					keys = append(keys, e.Key)
+				case input.PointerUp:
+					if e.Pos != input.Away {
+						t.Errorf("a button let go at %v, where it might click", e.Pos)
+					}
+					buttons = append(buttons, e.Button)
+				case input.Finger:
+					if e.Phase == input.FingerUp {
+						if e.Pos != input.Away {
+							t.Errorf("a finger let go at %v", e.Pos)
+						}
+						fingers = append(fingers, e.ID)
+					}
+				}
+			}
+			return keys, buttons, fingers
+		}
+		up := func(name, code string) {
+			d.canvas.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keyup", map[string]any{"bubbles": true, "cancelable": true, "key": name, "code": code}))
+		}
+		leave := map[string]func(){
+			"the window": func() { js.Global().Call("dispatchEvent", js.Global().Get("Event").New("blur")) },
+		}
+		// With no window focus, focus moves and no blur fires.
+		if js.Global().Get("document").Call("hasFocus").Bool() {
+			leave["the page's own element"] = func() {
+				mine := js.Global().Get("document").Call("createElement", "input")
+				js.Global().Get("document").Get("body").Call("appendChild", mine)
+				mine.Call("focus")
+				mine.Call("remove")
+			}
+		}
+		// The tests before pressed keys without letting go.
+		d.releaseHeld()
+		for name, away := range leave {
+			d.canvas.Call("focus")
+			drain(w)
+			key(d.canvas, "w", "KeyW")
+			key(d.canvas, "Shift", "ShiftLeft", "shiftKey")
+			key(d.canvas, "r", "KeyR", "ctrlKey") // the browser's: gunim never heard it go down
+			drain(w)
+			away()
+			keys, _, _ := released()
+			slices.Sort(keys)
+			want := []input.Key{input.KeyW, input.KeyLeftShift}
+			slices.Sort(want)
+			if !slices.Equal(keys, want) {
+				t.Errorf("%s: released %v, want %v", name, keys, want)
+			}
+			// Its real release comes when focus is back, and is no second one.
+			d.canvas.Call("focus")
+			up("w", "KeyW")
+			if keys, _, _ := released(); len(keys) != 0 {
+				t.Errorf("%s: a key came up twice: %v", name, keys)
+			}
+		}
+		// Moving between what the driver owns holds on to them.
+		d.canvas.Call("focus")
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		w.SetTextState(&input.TextState{}, w.editSeq)
+		w.SetTextInput(true)
+		w.SetTextInput(false)
+		if keys, _, _ := released(); len(keys) != 0 {
+			t.Errorf("the keyboard moving to the field and back let go of %v", keys)
+		}
+		up("w", "KeyW")
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("after that, its own release gave %v", keys)
+		}
+		// A key whose release says it is composing still comes up.
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		d.canvas.Call("dispatchEvent", js.Global().Get("KeyboardEvent").New("keyup", map[string]any{"bubbles": true, "cancelable": true, "key": "Process", "code": "KeyW", "isComposing": true}))
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("a composing release gave %v", keys)
+		}
+		// Buttons, each one held.
+		blur := leave["the window"]
+		mouse("pointerdown", 0, 1)
+		mouse("pointermove", 2, 3)
+		drain(w)
+		blur()
+		_, buttons, _ := released()
+		if !slices.Equal(buttons, []input.Button{input.ButtonPrimary, input.ButtonSecondary}) {
+			t.Errorf("buttons released %v", buttons)
+		}
+		mouse("pointerup", 2, 0)
+		if _, buttons, _ := released(); len(buttons) != 0 {
+			t.Errorf("a button came up twice: %v", buttons)
+		}
+		if d.pressed != nil {
+			t.Error("the press is still held")
+		}
+		// A finger of its own.
+		_ = w.TakeFingers(true)
+		pointer(d, "pointerdown", 1, 40, 40)
+		drain(w)
+		blur()
+		if _, _, fingers := released(); !slices.Equal(fingers, []int{1}) {
+			t.Errorf("fingers released %v", fingers)
+		}
+		pointer(d, "pointerup", 1, 40, 40)
+		_ = w.TakeFingers(false)
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		drain(w)
+		// Hiding the tab does the same.
+		d.canvas.Call("focus")
+		key(d.canvas, "w", "KeyW")
+		drain(w)
+		hidden := js.Global().Get("Object").Call("getOwnPropertyDescriptor", js.Global().Get("document"), "visibilityState")
+		js.Global().Get("Object").Call("defineProperty", js.Global().Get("document"), "visibilityState", map[string]any{"configurable": true, "value": "hidden"})
+		js.Global().Get("document").Call("dispatchEvent", js.Global().Get("Event").New("visibilitychange"))
+		if hidden.IsUndefined() {
+			js.Global().Get("Reflect").Call("deleteProperty", js.Global().Get("document"), "visibilityState")
+		} else {
+			js.Global().Get("Object").Call("defineProperty", js.Global().Get("document"), "visibilityState", hidden)
+		}
+		if keys, _, _ := released(); !slices.Equal(keys, []input.Key{input.KeyW}) {
+			t.Errorf("hiding the tab released %v", keys)
+		}
+	})
+	t.Run("a pinch ends as focus leaves, with its press let go once", func(t *testing.T) {
+		drain(w)
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerdown", 2, 80, 80)
+		var ups int
+		ended := func() (pinches []input.PinchPhase) {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerUp:
+					ups++
+				case input.Pinch:
+					pinches = append(pinches, e.Phase)
+				}
+			}
+			return pinches
+		}
+		if got := ended(); !slices.Equal(got, []input.PinchPhase{input.PinchStart}) || ups != 1 {
+			t.Fatalf("two fingers gave %v and %d presses let go", got, ups)
+		}
+		js.Global().Call("dispatchEvent", js.Global().Get("Event").New("blur"))
+		if got := ended(); !slices.Equal(got, []input.PinchPhase{input.PinchEnd}) || ups != 1 {
+			t.Errorf("focus leaving gave %v, and %d presses let go in all", got, ups)
+		}
+		pointer(d, "pointermove", 2, 90, 90)
+		pointer(d, "pointerup", 2, 90, 90)
+		pointer(d, "pointerup", 1, 40, 40)
+		if got := ended(); len(got) != 0 || ups != 1 {
+			t.Errorf("the fingers lifting after gave %v, and %d presses let go in all", got, ups)
+		}
+		if d.pressed != nil || d.pinch != (pinchState{}) {
+			t.Errorf("the pinch is still held: %v, %+v", d.pressed != nil, d.pinch)
+		}
+		// A new press starts afresh.
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerup", 1, 40, 40)
+		if got := ended(); len(got) != 0 || ups != 2 {
+			t.Errorf("a new tap gave %v, and %d presses let go in all", got, ups)
+		}
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
 	})
 	t.Run("a secret lives in a password field, only while focused", func(t *testing.T) {
 		if !js.Global().Get("document").Call("hasFocus").Bool() {
@@ -943,6 +1287,219 @@ func TestBrowser(t *testing.T) {
 		if !d.text.Equal(d.plain) || d.secret.Get("value").String() != "" {
 			t.Errorf("a plain field kept the password field: %v, %q", d.text.Get("tagName"), d.secret.Get("value"))
 		}
+	})
+	t.Run("switching windows leaves a secret alone", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		st := input.TextState{Text: "hunter2", Selection: [2]int{7, 7}, Composing: [2]int{7, 7}, Secret: true}
+		w.SetTextState(&st, w.editSeq)
+		d.secret.Call("focus")
+		if got := d.secret.Get("value").String(); got != "hunter2" {
+			t.Fatalf("focused, it holds %q", got)
+		}
+		drain(w)
+		doc := js.Global().Get("document")
+		// Switching windows, in Firefox above all: the field hears blur, and stays the
+		// active element, and a selectionchange comes after.
+		d.secret.Call("dispatchEvent", js.Global().Get("FocusEvent").New("blur"))
+		if !d.secret.Equal(doc.Get("activeElement")) {
+			t.Fatal("this test wants the field active")
+		}
+		if got := d.secret.Get("value").String(); got != "" {
+			t.Errorf("away, it holds %q", got)
+		}
+		// A real one, if this browser sends it for the field emptied, and one to be sure.
+		time.Sleep(50 * time.Millisecond)
+		doc.Call("dispatchEvent", js.Global().Get("Event").New("selectionchange"))
+		d.secret.Call("dispatchEvent", js.Global().Get("InputEvent").New("input"))
+		for _, e := range drain(w) {
+			if e, ok := e.(input.TextEdit); ok {
+				t.Errorf("the window going away sent an edit: %+v", e)
+			}
+		}
+		if w.state.Text != "hunter2" {
+			t.Errorf("the driver's copy holds %q", w.state.Text)
+		}
+		// A state that comes while away stays out of the page.
+		w.SetTextState(&st, w.editSeq)
+		if got := d.secret.Get("value").String(); got != "" {
+			t.Errorf("a state put %q back with the window away", got)
+		}
+		d.secret.Call("dispatchEvent", js.Global().Get("FocusEvent").New("focus"))
+		if got := d.secret.Get("value").String(); got != "hunter2" {
+			t.Errorf("back again, it holds %q", got)
+		}
+		drain(w)
+	})
+	t.Run("closing a window from its field leaves nothing behind", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		for _, st := range []input.TextState{{Text: "hunter2", Secret: true}, {Text: "plain"}} {
+			raw, err := d.NewWindow(driver.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			x := raw.(*Window)
+			x.SetTextState(&st, 0)
+			x.SetTextInput(true)
+			// A secret goes in on focus, and with no window focus that never fires.
+			if got := d.text.Get("value").String(); got != st.Text && doc.Call("hasFocus").Bool() {
+				t.Errorf("the mirror holds %q", got)
+			}
+			_ = x.Close()
+			for name, m := range map[string]js.Value{"textarea": d.plain, "password field": d.secret} {
+				if got := m.Get("value").String(); got != "" {
+					t.Errorf("after %q, the %s holds %q", st.Text, name, got)
+				}
+			}
+			if !d.canvas.Equal(doc.Get("activeElement")) {
+				t.Errorf("after %q, %v has the keyboard", st.Text, doc.Get("activeElement").Get("tagName"))
+			}
+			// Typing reaches the window underneath.
+			drain(w)
+			key(d.canvas, "g", "KeyG")
+			found := false
+			for _, e := range drain(w) {
+				if e, ok := e.(input.TextInput); ok && e.Text == "g" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("after %q, typing went nowhere", st.Text)
+			}
+		}
+		// The page's own element keeps the keyboard.
+		mine := doc.Call("createElement", "input")
+		doc.Get("body").Call("appendChild", mine)
+		defer mine.Call("remove")
+		raw, _ := d.NewWindow(driver.Options{})
+		raw.(*Window).SetTextInput(true)
+		mine.Call("focus")
+		_ = raw.Close()
+		if !mine.Equal(doc.Get("activeElement")) {
+			t.Error("closing a window took the keyboard from the page's own element")
+		}
+		d.canvas.Call("focus")
+		drain(w)
+	})
+	t.Run("a text's line endings stay as they are", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		doc := js.Global().Get("document")
+		selection := func() { doc.Call("dispatchEvent", js.Global().Get("Event").New("selectionchange")) }
+		edits := func() (got []input.TextEdit) {
+			for _, e := range drain(w) {
+				if e, ok := e.(input.TextEdit); ok {
+					got = append(got, e)
+				}
+			}
+			return got
+		}
+		// "a\r\nb\r\nc" holds its bytes at 0 a, 1 \r, 2 \n, 3 b, 4 \r, 5 \n, 6 c.
+		const crlf = "a\r\nb\r\nc"
+		set := func(caret int) {
+			w.SetTextState(&input.TextState{Text: crlf, Multiline: true, Selection: [2]int{caret, caret}, Composing: [2]int{caret, caret}}, w.editSeq)
+		}
+		for _, c := range []struct{ bytes, field int }{{0, 0}, {1, 1}, {3, 2}, {4, 3}, {6, 4}, {7, 5}, {2, 1}} {
+			set(c.bytes)
+			if got := d.text.Get("value").String(); got != "a\nb\nc" {
+				t.Fatalf("the textarea holds %q", got)
+			}
+			if got := d.text.Get("selectionStart").Int(); got != c.field {
+				t.Errorf("a caret at byte %d is at %d in the field, want %d", c.bytes, got, c.field)
+			}
+			// The click into the text, and the selectionchange it brings, change nothing:
+			// that includes a caret between the \r and the \n.
+			selection()
+			if got := edits(); len(got) != 0 {
+				t.Errorf("a caret at byte %d sent %+v", c.bytes, got)
+			}
+			if w.state.Text != crlf || w.state.Selection != [2]int{c.bytes, c.bytes} {
+				t.Errorf("a caret at byte %d left %+v", c.bytes, w.state)
+			}
+		}
+		// A caret moved in the field lands on the bytes after the line ending.
+		set(0)
+		d.text.Call("setSelectionRange", 2, 2)
+		selection()
+		if got := edits(); len(got) != 1 || got[0].Selection != [2]int{3, 3} || got[0].With != "" || got[0].Replace[0] != got[0].Replace[1] {
+			t.Errorf("a caret moved after a line ending sent %+v", got)
+		}
+		// Typing changes what is typed, and leaves the line endings around it.
+		set(4)
+		d.text.Call("setRangeText", "X", 3, 3, "end")
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		got := edits()
+		if len(got) != 1 || got[0].Replace != [2]int{4, 4} || got[0].With != "X" || got[0].Selection != [2]int{5, 5} {
+			t.Fatalf("typing X sent %+v", got)
+		}
+		if w.state.Text != "a\r\nbX\r\nc" {
+			t.Errorf("after typing, the copy holds %q", w.state.Text)
+		}
+		// A deleted line ending goes whole.
+		w.SetTextState(&input.TextState{Text: crlf, Multiline: true, Selection: [2]int{3, 3}, Composing: [2]int{3, 3}}, w.editSeq)
+		d.text.Set("value", "ab\nc")
+		d.text.Call("setSelectionRange", 1, 1)
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		if w.state.Text != "ab\r\nc" || w.state.Selection != [2]int{1, 1} {
+			t.Errorf("after deleting a line ending, the copy holds %+v", w.state)
+		}
+		drain(w)
+		// A long text's stretch counts from where it starts.
+		w.SetTextState(&input.TextState{Text: crlf, Start: 100, Multiline: true, Selection: [2]int{103, 103}, Composing: [2]int{103, 103}}, w.editSeq)
+		if got := d.text.Get("selectionStart").Int(); got != 2 {
+			t.Errorf("a caret in a stretch is at %d in the field", got)
+		}
+		d.text.Call("setRangeText", "Y", 2, 2, "end")
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		got = edits()
+		if len(got) != 1 || got[0].Replace != [2]int{103, 103} || got[0].With != "Y" || got[0].Selection != [2]int{104, 104} {
+			t.Errorf("typing in a stretch sent %+v", got)
+		}
+	})
+	t.Run("text follows in order when the engine is held up", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{3, 3}, Composing: [2]int{3, 3}}, w.editSeq)
+		d.text.Call("focus")
+		drain(w)
+		before := func(data string) (cancelled bool) {
+			e := js.Global().Get("InputEvent").New("beforeinput", map[string]any{"bubbles": true, "cancelable": true, "inputType": "insertText", "data": data})
+			return !d.text.Call("dispatchEvent", e).Bool()
+		}
+		// With the engine level, the browser types in the mirror.
+		if before("x") {
+			t.Fatal("typing with the engine level was cancelled")
+		}
+		// A key the engine has yet to take: nothing reads the inbox in this test.
+		key(d.text, "Backspace", "Backspace")
+		if !before("d") {
+			t.Fatal("typing into a mirror out of date was left to the browser")
+		}
+		var got []string
+		for _, e := range drain(w) {
+			switch e := e.(type) {
+			case input.KeyPress:
+				got = append(got, fmt.Sprint(e.Key))
+			case input.TextInput:
+				got = append(got, e.Text)
+			}
+		}
+		if want := []string{fmt.Sprint(input.KeyBackspace), "d"}; !slices.Equal(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if got := d.text.Get("value").String(); got != "abc" {
+			t.Errorf("the mirror holds %q", got)
+		}
+		// What has no text to follow with stays the browser's.
+		key(d.text, "Backspace", "Backspace")
+		e := js.Global().Get("InputEvent").New("beforeinput", map[string]any{"bubbles": true, "cancelable": true, "inputType": "insertFromPaste"})
+		if !d.text.Call("dispatchEvent", e).Bool() {
+			t.Error("a paste with no data to queue was cancelled")
+		}
+		drain(w)
 	})
 	t.Run("typing with no text state still arrives", func(t *testing.T) {
 		w.SetTextInput(true)
