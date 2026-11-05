@@ -228,7 +228,23 @@ func (w *Window) SetTextInput(active bool) {
 		d.syncText(w)
 		d.focusMirror()
 	} else {
-		d.text.Call("blur")
+		d.leaveMirror()
+	}
+}
+
+// leaveMirror ends typing: nothing of the field stays in the page, and the keyboard
+// goes back to the canvas, unless the page's own element has it.
+func (d *Driver) leaveMirror() {
+	doc := js.Global().Get("document")
+	if active := doc.Get("activeElement"); active.Equal(d.plain) || active.Equal(d.secret) {
+		active.Call("blur")
+	}
+	d.syncingText = true
+	d.plain.Set("value", "")
+	d.secret.Set("value", "")
+	d.syncingText = false
+	d.text = d.plain
+	if active := doc.Get("activeElement"); active.IsNull() || active.Equal(doc.Get("body")) {
 		d.canvas.Call("focus", map[string]any{"preventScroll": true})
 	}
 }

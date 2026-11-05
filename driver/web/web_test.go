@@ -867,6 +867,56 @@ func TestBrowser(t *testing.T) {
 		}
 		drain(w)
 	})
+	t.Run("closing a window from its field leaves nothing behind", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		for _, st := range []input.TextState{{Text: "hunter2", Secret: true}, {Text: "plain"}} {
+			raw, err := d.NewWindow(driver.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			x := raw.(*Window)
+			x.SetTextState(&st, 0)
+			x.SetTextInput(true)
+			// A secret goes in on focus, and with no window focus that never fires.
+			if got := d.text.Get("value").String(); got != st.Text && doc.Call("hasFocus").Bool() {
+				t.Errorf("the mirror holds %q", got)
+			}
+			_ = x.Close()
+			for name, m := range map[string]js.Value{"textarea": d.plain, "password field": d.secret} {
+				if got := m.Get("value").String(); got != "" {
+					t.Errorf("after %q, the %s holds %q", st.Text, name, got)
+				}
+			}
+			if !d.canvas.Equal(doc.Get("activeElement")) {
+				t.Errorf("after %q, %v has the keyboard", st.Text, doc.Get("activeElement").Get("tagName"))
+			}
+			// Typing reaches the window underneath.
+			drain(w)
+			key(d.canvas, "g", "KeyG")
+			found := false
+			for _, e := range drain(w) {
+				if e, ok := e.(input.TextInput); ok && e.Text == "g" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("after %q, typing went nowhere", st.Text)
+			}
+		}
+		// The page's own element keeps the keyboard.
+		mine := doc.Call("createElement", "input")
+		doc.Get("body").Call("appendChild", mine)
+		defer mine.Call("remove")
+		raw, _ := d.NewWindow(driver.Options{})
+		raw.(*Window).SetTextInput(true)
+		mine.Call("focus")
+		_ = raw.Close()
+		if !mine.Equal(doc.Get("activeElement")) {
+			t.Error("closing a window took the keyboard from the page's own element")
+		}
+		d.canvas.Call("focus")
+		drain(w)
+	})
 	t.Run("a text's line endings stay as they are", func(t *testing.T) {
 		w.SetTextInput(true)
 		defer w.SetTextInput(false)

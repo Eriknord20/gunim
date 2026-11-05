@@ -375,11 +375,16 @@ func (d *Driver) closed(w *Window) {
 	if d.hover == w {
 		d.hover = nil
 	}
-	if d.typing == w {
+	typing := d.typing == w
+	if typing {
 		d.typing = nil
+		d.composing = false
 	}
 	last := len(d.windows) == 0
 	d.mu.Unlock()
+	if typing {
+		d.leaveMirror()
+	}
 	if last {
 		select {
 		case <-d.quit:
