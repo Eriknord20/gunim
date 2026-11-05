@@ -924,6 +924,23 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("fingers left %v", d.fingers)
 		}
 	})
+	t.Run("a new vertex store holds just what it was given", func(t *testing.T) {
+		g := d.g
+		b := g.CreateBuffer()
+		defer g.DeleteBuffer(b)
+		g.BindBuffer(gl.ARRAY_BUFFER, b)
+		defer g.BindBuffer(gl.ARRAY_BUFFER, 0)
+		g.BufferData(gl.ARRAY_BUFFER, []byte{9, 8, 7}, gl.STREAM_DRAW)
+		ctx := d.canvas.Call("getContext", "webgl2")
+		if n := ctx.Call("getBufferParameter", gl.ARRAY_BUFFER, ctx.Get("BUFFER_SIZE")).Int(); n != 3 {
+			t.Fatalf("the store holds %d bytes, want 3", n)
+		}
+		back := js.Global().Get("Uint8Array").New(3)
+		ctx.Call("getBufferSubData", gl.ARRAY_BUFFER, 0, back)
+		if got := [3]int{back.Index(0).Int(), back.Index(1).Int(), back.Index(2).Int()}; got != [3]int{9, 8, 7} {
+			t.Fatalf("the store holds %v", got)
+		}
+	})
 	t.Run("vibration and sharing", func(t *testing.T) {
 		nav := js.Global().Get("navigator")
 		calls := []any{}
