@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -293,7 +294,28 @@ func (w *FLACWriter) Close() error {
 	if err := w.enc.Close(); err != nil {
 		return err
 	}
+	if err := w.nameBlocks(); err != nil {
+		return err
+	}
 	_, err = w.seek.Seek(end, io.SeekStart)
+	return err
+}
+
+// nameBlocks writes the block sizes into the header of a finished file. The
+// encoder names the shortest block it wrote, the last among them, which FLAC
+// leaves out of the minimum: under 16 frames, readers refuse the file.
+func (w *FLACWriter) nameBlocks() error {
+	size := uint16(flacBlock)
+	if w.written < flacBlock {
+		size = uint16(max(w.written, flacFewest))
+	}
+	var b [4]byte
+	binary.BigEndian.PutUint16(b[0:], size)
+	binary.BigEndian.PutUint16(b[2:], size)
+	if _, err := w.seek.Seek(8, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := w.seek.Write(b[:])
 	return err
 }
 
@@ -311,7 +333,7 @@ type FLACInts struct {
 // and when the stream holds other than the frames its header counts.
 // It may read past the stream's end in r.
 func DecodeFLACInts(r io.Reader, maxFrames int64) (FLACInts, error) {
-	s, err := flac.New(r)
+	s, err := flac.New(HealFLAC(r))
 	if err != nil {
 		return FLACInts{}, err
 	}
