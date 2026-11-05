@@ -46,6 +46,7 @@ type Context interface {
 	BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlpha uint32, dstAlpha uint32)
 	BufferInit(target uint32, size int, usage uint32)
 	// BufferData gives the buffer a new store holding data, which must not be empty.
+	// It is a gunim change.
 	BufferData(target uint32, data []byte, usage uint32)
 	BufferSubData(target uint32, offset int, data []byte)
 	CheckFramebufferStatus(target uint32) uint32

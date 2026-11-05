@@ -117,6 +117,7 @@ func (d *DebugContext) BufferInit(arg0 uint32, arg1 int, arg2 uint32) {
 	}
 }
 
+// BufferData is a gunim change.
 func (d *DebugContext) BufferData(arg0 uint32, arg1 []uint8, arg2 uint32) {
 	d.Context.BufferData(arg0, arg1, arg2)
 	fmt.Fprintln(os.Stderr, "BufferData")
