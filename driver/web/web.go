@@ -1024,7 +1024,14 @@ func (d *Driver) releaseHeld() {
 	keys := d.held
 	d.held = map[string]heldKey{}
 	pressed, touch, buttons := d.pressed, d.pressTouch, slices.Clone(d.buttons)
-	d.pressed, d.buttons = nil, d.buttons[:0]
+	if pressed != nil {
+		d.pinchEndLocked(pressed, now)
+		if d.pinch.pinched {
+			// The press was let go as the pinch started.
+			buttons = nil
+		}
+	}
+	d.pressed, d.buttons, d.pinch = nil, d.buttons[:0], pinchState{}
 	fingers := d.fingers
 	d.fingers = map[int]*Window{}
 	d.mu.Unlock()

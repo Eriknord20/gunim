@@ -1173,6 +1173,48 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("hiding the tab released %v", keys)
 		}
 	})
+	t.Run("a pinch ends as focus leaves, with its press let go once", func(t *testing.T) {
+		drain(w)
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerdown", 2, 80, 80)
+		var ups int
+		ended := func() (pinches []input.PinchPhase) {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerUp:
+					ups++
+				case input.Pinch:
+					pinches = append(pinches, e.Phase)
+				}
+			}
+			return pinches
+		}
+		if got := ended(); !slices.Equal(got, []input.PinchPhase{input.PinchStart}) || ups != 1 {
+			t.Fatalf("two fingers gave %v and %d presses let go", got, ups)
+		}
+		js.Global().Call("dispatchEvent", js.Global().Get("Event").New("blur"))
+		if got := ended(); !slices.Equal(got, []input.PinchPhase{input.PinchEnd}) || ups != 1 {
+			t.Errorf("focus leaving gave %v, and %d presses let go in all", got, ups)
+		}
+		pointer(d, "pointermove", 2, 90, 90)
+		pointer(d, "pointerup", 2, 90, 90)
+		pointer(d, "pointerup", 1, 40, 40)
+		if got := ended(); len(got) != 0 || ups != 1 {
+			t.Errorf("the fingers lifting after gave %v, and %d presses let go in all", got, ups)
+		}
+		if d.pressed != nil || d.pinch != (pinchState{}) {
+			t.Errorf("the pinch is still held: %v, %+v", d.pressed != nil, d.pinch)
+		}
+		// A new press starts afresh.
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerup", 1, 40, 40)
+		if got := ended(); len(got) != 0 || ups != 2 {
+			t.Errorf("a new tap gave %v, and %d presses let go in all", got, ups)
+		}
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+	})
 	t.Run("a secret lives in a password field, only while focused", func(t *testing.T) {
 		if !js.Global().Get("document").Call("hasFocus").Bool() {
 			t.Skip("the page has no window focus, so focus and blur don't fire")
