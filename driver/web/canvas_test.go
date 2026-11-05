@@ -690,3 +690,20 @@ func TestTheRefreshEstimateAllocatesNothing(t *testing.T) {
 		t.Fatalf("%v allocations a frame", n)
 	}
 }
+
+// The first click focuses the canvas from code, which has the browser draw its
+// focus ring round all of it, unless told not to.
+func TestTheCanvasHasNoFocusRing(t *testing.T) {
+	d, _ := testWindow(t)
+	d.canvas.Call("focus", map[string]any{"preventScroll": true})
+	if !d.canvas.Equal(js.Global().Get("document").Get("activeElement")) {
+		t.Fatal("the canvas took no focus")
+	}
+	if !d.canvas.Call("matches", ":focus-visible").Bool() {
+		t.Log("the browser does not count this focus as visible")
+	}
+	style := js.Global().Call("getComputedStyle", d.canvas)
+	if got := style.Get("outlineStyle").String(); got != "none" {
+		t.Errorf("focused, the canvas has an outline of %s, %s", got, style.Get("outlineWidth"))
+	}
+}

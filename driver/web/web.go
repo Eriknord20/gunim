@@ -551,6 +551,11 @@ func (d *Driver) listen(doc js.Value) {
 		d.touchAction = "none"
 	}
 	c.Get("style").Set("touchAction", d.touchAction)
+	// The driver's focus call on a press would have the browser draw its focus
+	// ring round the whole canvas. Windows draw focus in their own way.
+	if c.Get("style").Get("outline").String() == "" {
+		c.Get("style").Set("outline", "none")
+	}
 	c.Get("style").Set("userSelect", "none")
 	c.Get("style").Set("webkitUserSelect", "none")
 	c.Get("style").Set("webkitTapHighlightColor", "transparent")
