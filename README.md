@@ -445,6 +445,14 @@ gunim takes every touch on the canvas and scrolls for itself. For the browser to
 
 Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar and full screen, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it. Cut, copy and paste in a text field stay the browser's.
 
+`driver/web`'s tests need a real browser. This builds them, runs them in headless Chrome and exits with their result:
+
+```sh
+go run ./tools/webtest
+```
+
+A test that skips fails the run. Name a browser with `-chrome path`. On Windows, or for another browser or a phone, `go run ./tools/webtest -serve 127.0.0.1:8784` serves the test page to open there. The result is on the page and in `window.testResult`.
+
 A browser holds sound back until the user's first click, key or touch, and `speaker.Open` waits for it. Mount the interface before opening the speaker, or the page stays blank until then.
 
 Host files, plugins, native audio drivers and other windows of the system aren't there. The driver's tests need a real browser, so they are built with `GOOS=js GOARCH=wasm go test -c ./driver/web` and run in a page, and CI builds, vets and lints for the browser without running them.
