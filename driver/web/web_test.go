@@ -823,6 +823,82 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("a plain field kept the password field: %v, %q", d.text.Get("tagName"), d.secret.Get("value"))
 		}
 	})
+	t.Run("a text's line endings stay as they are", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		doc := js.Global().Get("document")
+		selection := func() { doc.Call("dispatchEvent", js.Global().Get("Event").New("selectionchange")) }
+		edits := func() (got []input.TextEdit) {
+			for _, e := range drain(w) {
+				if e, ok := e.(input.TextEdit); ok {
+					got = append(got, e)
+				}
+			}
+			return got
+		}
+		// "a\r\nb\r\nc" holds its bytes at 0 a, 1 \r, 2 \n, 3 b, 4 \r, 5 \n, 6 c.
+		const crlf = "a\r\nb\r\nc"
+		set := func(caret int) {
+			w.SetTextState(&input.TextState{Text: crlf, Multiline: true, Selection: [2]int{caret, caret}, Composing: [2]int{caret, caret}}, w.editSeq)
+		}
+		for _, c := range []struct{ bytes, field int }{{0, 0}, {1, 1}, {3, 2}, {4, 3}, {6, 4}, {7, 5}, {2, 1}} {
+			set(c.bytes)
+			if got := d.text.Get("value").String(); got != "a\nb\nc" {
+				t.Fatalf("the textarea holds %q", got)
+			}
+			if got := d.text.Get("selectionStart").Int(); got != c.field {
+				t.Errorf("a caret at byte %d is at %d in the field, want %d", c.bytes, got, c.field)
+			}
+			// The click into the text, and the selectionchange it brings, change nothing:
+			// that includes a caret between the \r and the \n.
+			selection()
+			if got := edits(); len(got) != 0 {
+				t.Errorf("a caret at byte %d sent %+v", c.bytes, got)
+			}
+			if w.state.Text != crlf || w.state.Selection != [2]int{c.bytes, c.bytes} {
+				t.Errorf("a caret at byte %d left %+v", c.bytes, w.state)
+			}
+		}
+		// A caret moved in the field lands on the bytes after the line ending.
+		set(0)
+		d.text.Call("setSelectionRange", 2, 2)
+		selection()
+		if got := edits(); len(got) != 1 || got[0].Selection != [2]int{3, 3} || got[0].With != "" || got[0].Replace[0] != got[0].Replace[1] {
+			t.Errorf("a caret moved after a line ending sent %+v", got)
+		}
+		// Typing changes what is typed, and leaves the line endings around it.
+		set(4)
+		d.text.Call("setRangeText", "X", 3, 3, "end")
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		got := edits()
+		if len(got) != 1 || got[0].Replace != [2]int{4, 4} || got[0].With != "X" || got[0].Selection != [2]int{5, 5} {
+			t.Fatalf("typing X sent %+v", got)
+		}
+		if w.state.Text != "a\r\nbX\r\nc" {
+			t.Errorf("after typing, the copy holds %q", w.state.Text)
+		}
+		// A deleted line ending goes whole.
+		w.SetTextState(&input.TextState{Text: crlf, Multiline: true, Selection: [2]int{3, 3}, Composing: [2]int{3, 3}}, w.editSeq)
+		d.text.Set("value", "ab\nc")
+		d.text.Call("setSelectionRange", 1, 1)
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		if w.state.Text != "ab\r\nc" || w.state.Selection != [2]int{1, 1} {
+			t.Errorf("after deleting a line ending, the copy holds %+v", w.state)
+		}
+		drain(w)
+		// A long text's stretch counts from where it starts.
+		w.SetTextState(&input.TextState{Text: crlf, Start: 100, Multiline: true, Selection: [2]int{103, 103}, Composing: [2]int{103, 103}}, w.editSeq)
+		if got := d.text.Get("selectionStart").Int(); got != 2 {
+			t.Errorf("a caret in a stretch is at %d in the field", got)
+		}
+		d.text.Call("setRangeText", "Y", 2, 2, "end")
+		d.text.Call("dispatchEvent", js.Global().Get("Event").New("input", map[string]any{"bubbles": true}))
+		got = edits()
+		if len(got) != 1 || got[0].Replace != [2]int{103, 103} || got[0].With != "Y" || got[0].Selection != [2]int{104, 104} {
+			t.Errorf("typing in a stretch sent %+v", got)
+		}
+	})
 	t.Run("text follows in order when the engine is held up", func(t *testing.T) {
 		w.SetTextInput(true)
 		defer w.SetTextInput(false)

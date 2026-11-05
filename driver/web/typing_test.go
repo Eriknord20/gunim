@@ -308,3 +308,24 @@ func TestAKeyJustAfterAClickTypesAtTheClick(t *testing.T) {
 	k.typed("x")
 	k.wants("xabcdef", 1)
 }
+
+func TestLongTextEditsTheStretchTheMirrorHolds(t *testing.T) {
+	field := widget.NewTextArea()
+	long := strings.Repeat("0123456789\r\n", 1000)
+	field.SetText(long, nil)
+	d := show(t, field)
+	focusField(t, d, field)
+	k := &typist{t: t, d: d, field: field}
+	k.key("Home", "Home", "ctrlKey")
+	k.key("End", "End", "ctrlKey")
+	m := d.Mirror()
+	if strings.Contains(m.Get("value").String(), "\r") {
+		t.Error("the mirror holds a \\r")
+	}
+	k.key("a", "KeyA")
+	k.key("Backspace", "Backspace")
+	k.key("b", "KeyB")
+	if got := field.Text(); got != long+"b" {
+		t.Fatalf("the text ends %q, %d runes, want %d", got[len(got)-20:], len(got), len(long)+1)
+	}
+}

@@ -6,15 +6,41 @@ import (
 	"strings"
 	"syscall/js"
 	"time"
-	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/marrasen/gunim/input"
 )
 
-// DOM selections count UTF-16 code units; Gunim text state counts UTF-8 bytes.
+// fieldText returns s as a textarea holds it, with every line ending a single \n.
+func fieldText(s string) string {
+	if !strings.Contains(s, "\r") {
+		return s
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+}
+
+// fieldWidth returns how many UTF-16 code units the rune r at s[i] takes in a
+// textarea. The \r of a \r\n takes none.
+func fieldWidth(s string, i int, r rune) int {
+	switch {
+	case r == '\r' && i+1 < len(s) && s[i+1] == '\n':
+		return 0
+	case r > 0xffff:
+		return 2
+	}
+	return 1
+}
+
+// DOM selections count UTF-16 code units in the field's text, and Gunim text state
+// counts UTF-8 bytes in its own. utf16Offset goes from the second to the first, and
+// byteOffset back.
 func utf16Offset(s string, at int) int {
 	at = max(0, min(at, len(s)))
-	return len(utf16.Encode([]rune(s[:at])))
+	n := 0
+	for i, r := range s[:at] {
+		n += fieldWidth(s, i, r)
+	}
+	return n
 }
 func byteOffset(s string, at int) int {
 	n := 0
@@ -22,13 +48,27 @@ func byteOffset(s string, at int) int {
 		if n >= at {
 			return i
 		}
-		if r > 0xffff {
-			n += 2
-		} else {
-			n++
-		}
+		n += fieldWidth(s, i, r)
 	}
 	return len(s)
+}
+
+// differ returns how many bytes two texts share at the start and at the end, whole
+// characters only, and with the two never overlapping in either text.
+func differ(was, now string) (start, end int) {
+	for start < len(was) && start < len(now) && was[start] == now[start] {
+		start++
+	}
+	for start > 0 && (start < len(was) && !utf8.RuneStart(was[start]) || start < len(now) && !utf8.RuneStart(now[start])) {
+		start--
+	}
+	for end < len(was)-start && end < len(now)-start && was[len(was)-1-end] == now[len(now)-1-end] {
+		end++
+	}
+	for end > 0 && !utf8.RuneStart(was[len(was)-end]) {
+		end--
+	}
+	return start, end
 }
 
 func (d *Driver) syncText(w *Window) {
@@ -58,8 +98,8 @@ func (d *Driver) syncText(w *Window) {
 	}
 	d.syncingText = true
 	defer func() { d.syncingText = false }()
-	if t.Get("value").String() != state.Text {
-		t.Set("value", state.Text)
+	if want := fieldText(state.Text); t.Get("value").String() != want {
+		t.Set("value", want)
 	}
 	a, b := utf16Offset(state.Text, state.Selection[0]-state.Start), utf16Offset(state.Text, state.Selection[1]-state.Start)
 	direction := "forward"
@@ -100,6 +140,10 @@ func (d *Driver) useMirror(secret bool) {
 		to.Call("focus", map[string]any{"preventScroll": true})
 	}
 }
+
+// domEdited sends what the browser did to the mirror, as an edit of only what
+// changed, so a line ending the field holds differently from the text stays as it
+// is.
 func (d *Driver) domEdited(composing bool) {
 	if d.syncingText {
 		return
@@ -124,29 +168,42 @@ func (d *Driver) domEdited(composing bool) {
 	}
 	old := *w.state
 	d.mu.Unlock()
-	text := d.text.Get("value").String()
-	a := old.Start + byteOffset(text, d.text.Get("selectionStart").Int())
-	b := old.Start + byteOffset(text, d.text.Get("selectionEnd").Int())
+	now := d.text.Get("value").String()
+	anchor, caret := d.text.Get("selectionStart").Int(), d.text.Get("selectionEnd").Int()
 	if d.text.Get("selectionDirection").String() == "backward" {
-		a, b = b, a
+		anchor, caret = caret, anchor
 	}
-	comp := [2]int{b, b}
+	was := fieldText(old.Text)
+	front, back := differ(was, now)
+	from := byteOffset(old.Text, utf16Offset(was, front))
+	to := byteOffset(old.Text, utf16Offset(was, len(was)-back))
+	with := now[front : len(now)-back]
+	next := old.Text[:from] + with + old.Text[to:]
+	place := func(units int) int { return old.Start + byteOffset(next, units) }
+	// A caret the engine puts inside a \r\n shows before it in the field, where it
+	// has not moved.
+	sel := old.Selection
+	moved := utf16Offset(old.Text, old.Selection[0]-old.Start) != anchor || utf16Offset(old.Text, old.Selection[1]-old.Start) != caret
+	if was != now || moved {
+		sel = [2]int{place(anchor), place(caret)}
+	}
+	comp := [2]int{sel[1], sel[1]}
 	if composing {
-		end := len(text) - len(d.compSuffix)
-		comp = [2]int{old.Start + min(d.compStart, len(text)), old.Start + max(d.compStart, end)}
+		a, b := min(d.compStart, len(now)), len(now)-len(d.compSuffix)
+		comp = [2]int{place(utf16Offset(now, a)), place(utf16Offset(now, max(a, b)))}
 	}
 	// Equal ends are no composition, wherever they stand.
 	sameComposing := old.Composing == comp || (old.Composing[0] == old.Composing[1] && comp[0] == comp[1])
-	if old.Text == text && old.Selection == [2]int{a, b} && sameComposing {
+	if was == now && !moved && sameComposing {
 		return
 	}
-	edit := input.TextEdit{Replace: [2]int{old.Start, old.End()}, With: text, Selection: [2]int{a, b}, Composing: comp, Time: time.Now()}
+	edit := input.TextEdit{Replace: [2]int{old.Start + from, old.Start + to}, With: with, Selection: sel, Composing: comp, Time: time.Now()}
 	d.mu.Lock()
 	w.editSeq++
 	edit.Seq = w.editSeq
-	next, ok := old.Apply(edit)
+	after, ok := old.Apply(edit)
 	if ok {
-		w.state = &next
+		w.state = &after
 	}
 	d.mu.Unlock()
 	if ok {
