@@ -45,8 +45,8 @@ jobs:
         env:
           CGO_ENABLED: 0
 
-      # The browser is a platform of its own, and the tests for its driver need
-      # a browser to run. Until they have one, it builds and vets here.
+      # The browser is a platform of its own. It builds and vets here, and the
+      # browser job runs the tests for its driver.
       - name: Vet and build for the browser
         if: runner.os == 'Linux'
         run: |
@@ -118,6 +118,23 @@ jobs:
         run: go test ./audio/internal/audiounit/ ./audio/driver/
         env:
           CGO_ENABLED: 0
+
+  # driver/web's tests need a real browser, and the runner fails if any of them
+  # skips, so this runs them all. It tells Chrome its page has window focus.
+  browser:
+    name: Test the browser driver (Chrome, ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Test in Chrome
+        run: go run ./tools/webtest
 
   lint:
     name: Lint
