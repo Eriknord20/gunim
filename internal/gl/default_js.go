@@ -190,6 +190,12 @@ func (c *webContext) BlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha uint32
 func (c *webContext) BufferInit(target uint32, size int, usage uint32) {
 	c.gl.Call("bufferData", target, size, usage)
 }
+
+// BufferData passes the length, as the scratch buffer is usually longer than data.
+func (c *webContext) BufferData(target uint32, data []byte, usage uint32) {
+	c.put(data)
+	c.gl.Call("bufferData", target, c.u8, usage, 0, len(data))
+}
 func (c *webContext) BufferSubData(target uint32, offset int, data []byte) {
 	if len(data) == 0 {
 		return
