@@ -698,12 +698,30 @@ func TestBrowser(t *testing.T) {
 		if key(d.text, "v", "KeyV", "ctrlKey") || len(heard()) != 0 {
 			t.Error("paste with no text state left the browser, which brings the text")
 		}
+		if !key(d.text, "Insert", "Insert", "ctrlKey") || len(heard()) != 1 {
+			t.Error("Control+Insert with no text state stayed the browser's")
+		}
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete with no text state stayed the browser's")
+		}
+		if key(d.text, "Insert", "Insert", "shiftKey") || len(heard()) != 0 {
+			t.Error("Shift+Insert with no text state left the browser, which brings the text")
+		}
 		w.SetTextState(&input.TextState{Text: "abc"}, w.editSeq)
 		drain(w)
 		for _, c := range [][2]string{{"c", "KeyC"}, {"x", "KeyX"}, {"v", "KeyV"}} {
 			if key(d.text, c[0], c[1], "ctrlKey") || len(heard()) != 0 {
 				t.Errorf("%s in a field left the browser", c[0])
 			}
+		}
+		for _, c := range []struct{ name, mod string }{{"Insert", "ctrlKey"}, {"Insert", "shiftKey"}, {"Delete", "shiftKey"}} {
+			if key(d.text, c.name, c.name, c.mod) || len(heard()) != 0 {
+				t.Errorf("%s with %s in a field left the browser", c.name, c.mod)
+			}
+		}
+		// Those alone stay gunim's.
+		if !key(d.text, "Delete", "Delete") || len(heard()) != 1 {
+			t.Error("Delete in a field left gunim")
 		}
 	})
 	t.Run("dead keys and AltGr stay the browser's", func(t *testing.T) {
