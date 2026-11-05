@@ -1162,23 +1162,26 @@ func browserKey(name, code string, m input.Mods) bool {
 	case !command:
 		return arrow || name == "Home" || lower == "d"
 	case alt:
+		if m&input.ModSuper == 0 {
+			return false
+		}
 		// On a Mac: the developer tools, moving along the tabs, and hiding the other
-		// windows or minimizing them all.
-		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c" || lower == "h" || lower == "m" || arrow)
+		// windows or minimizing them all, which with Shift are other shortcuts.
+		return lower == "i" || lower == "j" || lower == "c" || arrow || m&input.ModShift == 0 && (lower == "h" || lower == "m")
 	}
 	if m&input.ModControl != 0 && m&input.ModSuper != 0 {
 		// Full screen on a Mac.
 		return lower == "f"
 	}
 	if m&input.ModSuper != 0 {
-		// The system's own on a Mac: hiding and minimizing the window, and moving
-		// between windows, on the key left of the 1 or, on some keyboards, of the Z.
-		// And the browser's settings.
-		switch lower {
-		case "h", "m", "`", "~", ",":
+		// The system's own on a Mac: moving between windows, either way, on the key left
+		// of the 1 or, on some keyboards, of the Z.
+		if lower == "`" || lower == "~" || code == "Backquote" || code == "IntlBackslash" {
 			return true
 		}
-		if code == "Backquote" || code == "IntlBackslash" {
+		// And hiding and minimizing the window, and the browser's settings. With Shift
+		// these are other shortcuts, and the program's.
+		if m&input.ModShift == 0 && (lower == "h" || lower == "m" || lower == ",") {
 			return true
 		}
 	}

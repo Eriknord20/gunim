@@ -730,6 +730,11 @@ func TestBrowser(t *testing.T) {
 			{"ArrowLeft", "ArrowLeft", []string{cmd}, true},
 			{"ы", "KeyS", []string{ctrl}, true},
 			{"!", "Digit1", []string{ctrl, shift}, true},
+			// The same with Shift: a shortcut of its own, and the program's.
+			{"H", "KeyH", []string{cmd, shift}, true},
+			{"M", "KeyM", []string{cmd, shift}, true},
+			{"<", "Comma", []string{cmd, shift}, true},
+			{"Р", "KeyH", []string{cmd, shift}, true},
 			// The same letters as above, with Control: those are the program's.
 			{"h", "KeyH", []string{ctrl}, true},
 			{"m", "KeyM", []string{ctrl}, true},
@@ -752,6 +757,27 @@ func TestBrowser(t *testing.T) {
 			}
 			if got := len(heard()) > 0; got != c.gunim {
 				t.Errorf("%q with %v: gunim heard it %v, want %v", c.name, c.mods, got, c.gunim)
+			}
+		}
+	})
+	t.Run("the system's Command keys with Option and Shift", func(t *testing.T) {
+		super, option, shift := input.ModSuper, input.ModAlt, input.ModShift
+		for _, c := range []struct {
+			name, code string
+			mods       input.Mods
+			kept       bool
+		}{
+			{"h", "KeyH", super | option, true},
+			{"m", "KeyM", super | option, true},
+			{"˙", "KeyH", super | option, true},
+			{"H", "KeyH", super | option | shift, false},
+			{"M", "KeyM", super | option | shift, false},
+			// Moving between windows backward is the system's too.
+			{"~", "Backquote", super | shift, true},
+			{">", "IntlBackslash", super | shift, true},
+		} {
+			if got := browserKey(c.name, c.code, c.mods); got != c.kept {
+				t.Errorf("%q on %s with %v: kept %v, want %v", c.name, c.code, c.mods, got, c.kept)
 			}
 		}
 	})
