@@ -1145,6 +1145,31 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("the page logged %q", got)
 		}
 	})
+	t.Run("the keyboard covers only what the canvas has down there", func(t *testing.T) {
+		win := js.Global()
+		height := win.Get("innerHeight").Float()
+		bottom := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
+		if bottom >= height-50 {
+			t.Skip("the page has no room under the canvas")
+		}
+		defer func() { d.viewportChanged() }()
+		defer define(win, "visualViewport", js.Undefined())()
+		seen := func(h float64) float32 {
+			define(win, "visualViewport", js.ValueOf(map[string]any{"scale": 1, "offsetTop": 0, "height": h}))
+			d.viewportChanged()
+			return w.KeyboardCover()
+		}
+		// The page's bottom is covered, but the canvas ends above the keyboard.
+		if got := seen(bottom + 20); got != 0 {
+			t.Errorf("a keyboard below the canvas covers %v of it", got)
+		}
+		if got, want := seen(bottom-30), float32(30); math.Abs(float64(got-want)) > .01 {
+			t.Errorf("a keyboard over the canvas's last 30 px covers %v of it", got)
+		}
+		if got := seen(height); got != 0 {
+			t.Errorf("with the keyboard down it covers %v", got)
+		}
+	})
 	t.Run("compass", func(t *testing.T) {
 		if got := headingOf(90); got != 270 {
 			t.Fatalf("heading of alpha 90 = %v", got)

@@ -214,11 +214,17 @@ func (d *Driver) viewportChanged() {
 			bottom = vv.Get("offsetTop").Float() + vv.Get("height").Float()
 		}
 	}
+	// The keyboard covers the canvas only where the canvas reaches down to it, and
+	// a canvas in the middle of a page has its own bottom edge.
+	edge := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
 	d.mu.Lock()
 	if d.typing == nil || d.viewportHeight == 0 {
 		d.viewportHeight = height
 	}
-	cover := float32(max(0, d.viewportHeight-bottom))
+	var cover float32
+	if d.viewportHeight-bottom > 0 {
+		cover = float32(max(0, edge-bottom))
+	}
 	d.mu.Unlock()
 	style := win.Call("getComputedStyle", d.safeProbe)
 	read := func(name string) float32 {
@@ -260,6 +266,8 @@ func (d *Driver) listenViewport(doc js.Value) {
 	}
 	d.on(js.Global(), "orientationchange", true, func(js.Value) { d.mu.Lock(); d.viewportHeight = 0; d.mu.Unlock(); d.viewportChanged() })
 	d.on(js.Global(), "resize", true, func(js.Value) { d.viewportChanged() })
+	// The page scrolling moves the canvas against the keyboard.
+	d.on(js.Global(), "scroll", true, func(js.Value) { d.viewportChanged() })
 	d.viewportChanged()
 }
 
