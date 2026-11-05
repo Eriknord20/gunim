@@ -962,36 +962,146 @@ func TestBrowser(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a second finger leaves the first one's press alone", func(t *testing.T) {
-		seen := drain(w)
-		pointer(d, "pointerdown", 1, 40, 40)
+	t.Run("a second finger leaves a mouse's press alone", func(t *testing.T) {
+		drain(w)
+		mouse("pointerdown", 0, 1)
 		pointer(d, "pointerdown", 2, 200, 200)
 		pointer(d, "pointermove", 2, 210, 210)
-		pointer(d, "pointermove", 1, 50, 50)
 		pointer(d, "pointerup", 2, 210, 210)
-		pointer(d, "pointerup", 1, 50, 50)
-		seen = append(seen[:0], drain(w)...)
+		mouse("pointerup", 0, 0)
 		var downs, ups int
-		for _, e := range seen {
+		for _, e := range drain(w) {
 			switch e := e.(type) {
 			case input.PointerDown:
 				downs++
-				if e.Pos != geom.Pt(40, 40) {
-					t.Fatalf("pressed at %v", e.Pos)
-				}
 			case input.PointerUp:
 				ups++
-				if e.Pos != geom.Pt(50, 50) {
-					t.Fatalf("let go at %v", e.Pos)
+				if e.Pos == input.Away {
+					t.Error("the finger called off the mouse's press")
 				}
 			case input.PointerMove:
 				if e.Pos == geom.Pt(210, 210) {
-					t.Fatal("the second finger moved the pointer")
+					t.Error("the finger moved the pointer")
 				}
+			case input.Pinch:
+				t.Errorf("a mouse and a finger pinched: %+v", e)
 			}
 		}
 		if downs != 1 || ups != 1 {
-			t.Fatalf("downs=%d ups=%d, in %v", downs, ups, seen)
+			t.Fatalf("downs=%d ups=%d", downs, ups)
+		}
+	})
+	// pinches lists what a touch's events came to, as words.
+	pinches := func() (got []string) {
+		for _, e := range drain(w) {
+			switch e := e.(type) {
+			case input.PointerDown:
+				got = append(got, "down")
+			case input.PointerUp:
+				if e.Pos == input.Away {
+					got = append(got, "called off")
+				} else {
+					got = append(got, "up")
+				}
+			case input.PointerLeave:
+				got = append(got, "leave")
+			case input.Pinch:
+				got = append(got, fmt.Sprintf("pinch %d at %v by %v scale %.2f", e.Phase, e.Pos, e.Delta, e.Scale))
+			}
+		}
+		return got
+	}
+	t.Run("two fingers pinch, as on Android", func(t *testing.T) {
+		drain(w)
+		start, move, end := input.PinchStart, input.PinchMove, input.PinchEnd
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointermove", 1, 40, 100)
+		if got := pinches(); !slices.Equal(got, []string{"down"}) {
+			t.Fatalf("one finger came to %q", got)
+		}
+		// The second calls off the first's press, and the pinch starts between them.
+		pointer(d, "pointerdown", 2, 80, 100)
+		want := []string{"called off", fmt.Sprintf("pinch %d at %v by %v scale 1.00", start, geom.Pt(60, 100), geom.Point{})}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the second finger came to %q, want %q", got, want)
+		}
+		// The second moves out: twice as far apart, and the middle moves half as far.
+		pointer(d, "pointermove", 2, 120, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 2.00", move, geom.Pt(80, 100), geom.Pt(20, 0))}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the move came to %q, want %q", got, want)
+		}
+		// A third finger is nothing.
+		pointer(d, "pointerdown", 3, 200, 200)
+		pointer(d, "pointermove", 3, 210, 210)
+		pointer(d, "pointerup", 3, 210, 210)
+		if got := pinches(); len(got) != 0 {
+			t.Fatalf("a third finger came to %q", got)
+		}
+		// The first moves in: the fingers come back to half as far apart.
+		pointer(d, "pointermove", 1, 80, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 0.50", move, geom.Pt(100, 100), geom.Pt(20, 0))}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the first's move came to %q, want %q", got, want)
+		}
+		// The second lifts, which ends it. The first only lifts after.
+		pointer(d, "pointerup", 2, 120, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(100, 100), geom.Point{})}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the lift came to %q, want %q", got, want)
+		}
+		pointer(d, "pointermove", 1, 90, 100)
+		pointer(d, "pointerup", 1, 90, 100)
+		if got := pinches(); !slices.Equal(got, []string{"leave"}) {
+			t.Fatalf("the first finger left came to %q", got)
+		}
+	})
+	t.Run("a pinch ends when either finger lifts, and can start again", func(t *testing.T) {
+		drain(w)
+		start, end := input.PinchStart, input.PinchEnd
+		first := func(got []string) string {
+			if len(got) == 0 {
+				return ""
+			}
+			return got[len(got)-1]
+		}
+		// The first lifts first: the second, left down, does nothing more.
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointerdown", 2, 80, 100)
+		drain(w)
+		pointer(d, "pointerup", 1, 40, 100)
+		want := []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(60, 100), geom.Point{}), "leave"}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the first finger's lift came to %q, want %q", got, want)
+		}
+		pointer(d, "pointermove", 2, 90, 100)
+		pointer(d, "pointerup", 2, 90, 100)
+		if got := pinches(); len(got) != 0 {
+			t.Fatalf("the finger left over came to %q", got)
+		}
+		// A new second finger while the first stays down pinches again, with no second
+		// press to call off.
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointerdown", 2, 80, 100)
+		pointer(d, "pointerup", 2, 80, 100)
+		drain(w)
+		pointer(d, "pointerdown", 4, 120, 100)
+		got := pinches()
+		if want := fmt.Sprintf("pinch %d at %v by %v scale 1.00", start, geom.Pt(80, 100), geom.Point{}); len(got) != 1 || first(got) != want {
+			t.Fatalf("the new finger came to %q, want %q", got, want)
+		}
+		// A cancel ends it too.
+		pointer(d, "pointercancel", 4, 120, 100)
+		pointer(d, "pointercancel", 1, 40, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(80, 100), geom.Point{}), "leave"}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the cancels came to %q, want %q", got, want)
+		}
+		// And the next touch is a press again.
+		pointer(d, "pointerdown", 6, 50, 50)
+		pointer(d, "pointerup", 6, 50, 50)
+		if got := pinches(); !slices.Equal(got, []string{"down", "up", "leave"}) {
+			t.Fatalf("the next touch came to %q", got)
 		}
 	})
 	t.Run("a window that takes fingers hears each one", func(t *testing.T) {

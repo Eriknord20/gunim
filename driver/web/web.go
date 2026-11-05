@@ -80,12 +80,13 @@ type Driver struct {
 	// over.
 	pressed, hover *Window
 	// pointer is the id of the pointer pressing: one drives the pointer at
-	// a time, as gunim has one, and another finger is its own or nothing.
+	// a time, as gunim has one, and a second finger is its own or pinches.
 	// fingers is the window each finger of its own came down in, by id.
 	// touchAction is what the page asked of the browser for touches.
 	touchAction string
 	pointer     int
 	fingers     map[int]*Window
+	pinch       pinchState
 	// compass says the browser has sent a heading, and headingTo holds the
 	// windows that watch it. compassAsked says HasCompass has started the look for
 	// a first reading, probing that it still goes on, and compassOn that the page
@@ -416,6 +417,7 @@ func (d *Driver) closed(w *Window) {
 	}
 	if d.pressed == w {
 		d.pressed = nil
+		d.pinch = pinchState{}
 	}
 	for id, x := range d.fingers {
 		if x == w {
@@ -495,6 +497,78 @@ func (d *Driver) at(e js.Value) geom.Point {
 	return geom.Pt(float32(e.Get("clientX").Float()-r.Get("left").Float()), float32(e.Get("clientY").Float()-r.Get("top").Float()))
 }
 
+// pinchState is two fingers pressing. touch says what presses is a finger, which a
+// second can pinch with. first and at are where the first and second fingers are.
+// pinched says a second finger came down: from then on the first only lifts. going
+// says the two are down now, and second is the second's id while they are.
+// spread is how far apart they were last, and mid the point between them, in logical
+// pixels on the canvas.
+type pinchState struct {
+	touch, pinched, going bool
+	second                int
+	first, at, mid        geom.Point
+	spread                float32
+}
+
+// measure returns how far apart the fingers are, and the point between them.
+func (g *pinchState) measure() (spread float32, mid geom.Point) {
+	return float32(math.Hypot(float64(g.first.X-g.at.X), float64(g.first.Y-g.at.Y))), g.first.Add(g.at).Mul(0.5)
+}
+
+// pinchStartLocked starts a pinch in w with finger id at p. As on Android, the first
+// finger's press is let go at [input.Away], so it neither clicks nor scrolls nor opens
+// a menu, and the window hears [input.Pinch] from then on. The engine gives it to a
+// node that zooms with a pinch, and otherwise makes it Ctrl with the wheel.
+func (d *Driver) pinchStartLocked(w *Window, id int, p geom.Point, now time.Time) {
+	g := &d.pinch
+	if !g.pinched {
+		w.in.Push(input.PointerUp{Pos: input.Away, Button: input.ButtonPrimary, Touch: true, Time: now})
+	}
+	g.pinched, g.going, g.second, g.at = true, true, id, p
+	g.spread, g.mid = g.measure()
+	w.in.Push(input.Pinch{Pos: g.mid.Sub(w.rectLocked().Min), Scale: 1, Phase: input.PinchStart, Time: now})
+}
+
+// pinchMoveLocked takes finger id's move to p, and reports whether it belongs to a
+// pinch: the two fingers' moves, and those of the first once a pinch has ended.
+func (d *Driver) pinchMoveLocked(id int, p geom.Point, now time.Time) bool {
+	g, w := &d.pinch, d.pressed
+	if w == nil {
+		return false
+	}
+	switch {
+	case id == d.pointer:
+		g.first = p
+	case g.going && id == g.second:
+		g.at = p
+	default:
+		return false
+	}
+	if !g.going {
+		return g.pinched
+	}
+	spread, mid := g.measure()
+	scale := float32(1)
+	if g.spread > 0 && spread > 0 {
+		scale = spread / g.spread
+	}
+	delta := mid.Sub(g.mid)
+	g.spread, g.mid = spread, mid
+	w.in.Push(input.Pinch{Pos: mid.Sub(w.rectLocked().Min), Delta: delta, Scale: scale, Phase: input.PinchMove, Time: now})
+	return true
+}
+
+// pinchEndLocked ends the pinch going on in w, if there is one, where the fingers
+// last were.
+func (d *Driver) pinchEndLocked(w *Window, now time.Time) {
+	g := &d.pinch
+	if !g.going {
+		return
+	}
+	g.going, g.second = false, 0
+	w.in.Push(input.Pinch{Pos: g.mid.Sub(w.rectLocked().Min), Scale: 1, Phase: input.PinchEnd, Time: now})
+}
+
 // buttonBit is where a button is in a PointerEvent's buttons, which numbers them
 // differently from its button.
 func buttonBit(button int) int {
@@ -570,16 +644,23 @@ func (d *Driver) listen(doc js.Value) {
 		d.mu.Lock()
 		d.lastTouch = e.Get("pointerType").String() != "mouse"
 		if d.pressed != nil && id != d.pointer {
-			// A second finger: its own in a window that takes fingers, and
-			// otherwise it leaves the press the first one holds alone.
+			// Another finger: its own in a window that takes fingers. The second
+			// one pinches, if what presses is a finger too, and otherwise it leaves
+			// the press alone.
 			w := d.pressed
+			pinches := !w.takesFingers && d.pinch.touch && !d.pinch.going && e.Get("pointerType").String() == "touch"
 			if w.takesFingers {
 				d.fingers[id] = w
 			}
+			if pinches {
+				d.pinchStartLocked(w, id, p, now)
+			}
 			d.mu.Unlock()
 			e.Call("preventDefault")
-			if w.takesFingers {
+			if w.takesFingers || pinches {
 				capture(c, e.Get("pointerId"))
+			}
+			if w.takesFingers {
 				d.fingerEvent(id, e, input.FingerDown)
 			}
 			return
@@ -590,6 +671,7 @@ func (d *Driver) listen(doc js.Value) {
 			return
 		}
 		d.pointer = id
+		d.pinch = pinchState{touch: e.Get("pointerType").String() == "touch", first: p}
 		if w.takesFingers && e.Get("pointerType").String() != "mouse" {
 			d.fingers[id] = w
 		}
@@ -634,7 +716,7 @@ func (d *Driver) listen(doc js.Value) {
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerMove)
 		d.mu.Lock()
-		if d.pressed != nil && id != d.pointer {
+		if d.pinchMoveLocked(id, p, now) || (d.pressed != nil && id != d.pointer) {
 			d.mu.Unlock()
 			return
 		}
@@ -677,17 +759,27 @@ func (d *Driver) listen(doc js.Value) {
 		d.fingerEvent(id, e, input.FingerUp)
 		d.mu.Lock()
 		if d.pressed != nil && id != d.pointer {
+			if id == d.pinch.second {
+				d.pinchEndLocked(d.pressed, now)
+			}
 			d.mu.Unlock()
 			return
 		}
 		w := d.pressed
 		d.pressed = nil
 		var local geom.Point
+		pinched := w != nil && d.pinch.pinched
 		if w != nil {
 			local = p.Sub(w.rectLocked().Min)
+			d.pinchEndLocked(w, now)
 		}
 		d.mu.Unlock()
 		if w == nil {
+			return
+		}
+		if pinched {
+			// Its press was let go as the pinch started, so the finger only lifts.
+			w.in.Push(input.PointerLeave{Time: now})
 			return
 		}
 		if cancel {
