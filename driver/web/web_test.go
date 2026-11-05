@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -1237,6 +1238,56 @@ func TestBrowser(t *testing.T) {
 		}
 	})
 	_ = w.Close()
+	t.Run("the driver leaves the page as it ends", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		count := func() int { return doc.Get("body").Get("children").Length() }
+		errs := spyConsole()
+		defer errs.stop()
+		if err := d.Run(context.Background(), func() {}); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.listening) != 0 || !d.plain.Get("isConnected").IsUndefined() && d.plain.Get("isConnected").Bool() {
+			t.Errorf("%d listeners left, text mirror on the page: %v", len(d.listening), d.plain.Get("isConnected"))
+		}
+		// What the page sends now reaches nothing, and logs nothing.
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerup", 1, 40, 40)
+		key(d.canvas, "g", "KeyG")
+		js.Global().Call("dispatchEvent", js.Global().Get("Event").New("resize"))
+		doc.Call("dispatchEvent", js.Global().Get("Event").New("visibilitychange"))
+		time.Sleep(50 * time.Millisecond)
+		if got := errs.stop(); len(got) != 0 {
+			t.Errorf("the page logged %q", got)
+		}
+		// A program can open it again, and each event is heard once.
+		before := count()
+		again, err := Open()
+		if err != nil || again == d {
+			t.Fatalf("opened again: %v, the same: %v", err, again == d)
+		}
+		raw, err := again.NewWindow(driver.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := raw.(*Window)
+		drain(next)
+		pointer(again, "pointerdown", 1, 40, 40)
+		downs := 0
+		for _, e := range drain(next) {
+			if _, ok := e.(input.PointerDown); ok {
+				downs++
+			}
+		}
+		if downs != 1 {
+			t.Errorf("a press came %d times", downs)
+		}
+		pointer(again, "pointerup", 1, 40, 40)
+		_ = next.Close()
+		_ = again.Run(context.Background(), func() {})
+		if got := count(); got != before {
+			t.Errorf("the page holds %d elements, from %d", got, before)
+		}
+	})
 }
 
 // pointer sends a touch's event to the canvas, as the browser would.

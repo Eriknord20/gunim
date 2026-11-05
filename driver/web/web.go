@@ -113,19 +113,38 @@ type Driver struct {
 	stats          frameStats
 	frameAsked     bool
 	raf            js.Func
-	funcs          []js.Func
-	quit           chan struct{}
+	// rafID is the animation frame asked for, while frameAsked says one is.
+	rafID js.Value
+	// listening holds what the driver listens to, and observer and observed the
+	// ResizeObserver, for stop to let go of.
+	listening []listener
+	observer  js.Value
+	observed  js.Func
+	stopped   bool
+	quit      chan struct{}
+}
+
+// listener is one DOM event the driver listens to.
+type listener struct {
+	target js.Value
+	name   string
+	fn     js.Func
 }
 
 var (
+	openMu    sync.Mutex
 	theDriver *Driver
 	openErr   error
-	openOnce  sync.Once
 )
 
-// Open returns the driver, built on the page's canvas the first time.
+// Open returns the driver, built on the page's canvas the first time, and again
+// after [Driver.Run] has ended.
 func Open() (*Driver, error) {
-	openOnce.Do(func() { theDriver, openErr = openDriver() })
+	openMu.Lock()
+	defer openMu.Unlock()
+	if theDriver == nil && openErr == nil {
+		theDriver, openErr = openDriver()
+	}
 	return theDriver, openErr
 }
 
@@ -272,14 +291,53 @@ func (d *Driver) observedSize() {
 }
 
 // Run implements [driver.Driver]. The browser pumps the events, so Run
-// waits for ctx to end or the last window to close.
+// waits for ctx to end or the last window to close. The driver lets go of the page
+// as it returns.
 func (d *Driver) Run(ctx context.Context, ready func()) error {
 	ready()
 	select {
 	case <-ctx.Done():
 	case <-d.quit:
 	}
+	d.stop()
 	return nil
+}
+
+// stop takes the driver off the page: its listeners, the functions behind them and
+// the elements it added. A listener left behind a program that has exited makes the
+// browser log an error at every event.
+func (d *Driver) stop() {
+	openMu.Lock()
+	if theDriver == d {
+		theDriver = nil
+	}
+	openMu.Unlock()
+	d.mu.Lock()
+	if d.stopped {
+		d.mu.Unlock()
+		return
+	}
+	d.stopped, d.probing = true, false
+	d.runCompassLocked()
+	if d.frameAsked {
+		js.Global().Call("cancelAnimationFrame", d.rafID)
+		d.frameAsked = false
+	}
+	d.mu.Unlock()
+	for _, l := range d.listening {
+		l.target.Call("removeEventListener", l.name, l.fn)
+		l.fn.Release()
+	}
+	d.listening = nil
+	if d.observer.Truthy() {
+		d.observer.Call("disconnect")
+		d.observed.Release()
+	}
+	d.raf.Release()
+	d.compassEvent.Release()
+	for _, el := range []js.Value{d.plain, d.secret, d.safeProbe} {
+		el.Call("remove")
+	}
 }
 
 // Monitors implements [driver.Driver]: the browser's viewport.
@@ -340,11 +398,11 @@ func (d *Driver) kick() {
 }
 
 func (d *Driver) kickLocked() {
-	if d.frameAsked {
+	if d.frameAsked || d.stopped {
 		return
 	}
 	d.frameAsked = true
-	js.Global().Call("requestAnimationFrame", d.raf)
+	d.rafID = js.Global().Call("requestAnimationFrame", d.raf)
 }
 
 // closed takes w out of the stack.
@@ -405,7 +463,7 @@ func (d *Driver) on(target js.Value, name string, passive bool, fn func(e js.Val
 		fn(args[0])
 		return nil
 	})
-	d.funcs = append(d.funcs, f)
+	d.listening = append(d.listening, listener{target, name, f})
 	target.Call("addEventListener", name, f, js.ValueOf(map[string]any{"passive": passive}))
 }
 
@@ -788,20 +846,19 @@ func (d *Driver) listen(doc js.Value) {
 	})
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
-		f := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		d.observed = js.FuncOf(func(_ js.Value, args []js.Value) any {
 			defer survive("resize")
 			d.readExactSize(args[0])
 			d.observedSize()
 			return nil
 		})
-		d.funcs = append(d.funcs, f)
-		observer := ro.New(f)
+		d.observer = ro.New(d.observed)
 		// A browser without the box refuses to observe it.
 		entry := win.Get("ResizeObserverEntry")
 		if !entry.IsUndefined() && js.Global().Get("Reflect").Call("has", entry.Get("prototype"), "devicePixelContentBoxSize").Bool() {
-			observer.Call("observe", c, map[string]any{"box": "device-pixel-content-box"})
+			d.observer.Call("observe", c, map[string]any{"box": "device-pixel-content-box"})
 		} else {
-			observer.Call("observe", c)
+			d.observer.Call("observe", c)
 		}
 	}
 }

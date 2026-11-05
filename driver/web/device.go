@@ -138,7 +138,7 @@ func (w *Window) WatchHeading(on bool) {
 // runCompassLocked listens for readings while a window watches them, or while the
 // driver looks for a first one. It runs with mu held.
 func (d *Driver) runCompassLocked() {
-	want := d.probing || len(d.headingTo) > 0
+	want := (d.probing || len(d.headingTo) > 0) && !d.stopped
 	if want == d.compassOn {
 		return
 	}
