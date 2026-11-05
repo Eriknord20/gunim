@@ -117,6 +117,14 @@ func (d *DebugContext) BufferInit(arg0 uint32, arg1 int, arg2 uint32) {
 	}
 }
 
+func (d *DebugContext) BufferData(arg0 uint32, arg1 []uint8, arg2 uint32) {
+	d.Context.BufferData(arg0, arg1, arg2)
+	fmt.Fprintln(os.Stderr, "BufferData")
+	if e := d.Context.GetError(); e != 0 {
+		panic(fmt.Sprintf("gl: GetError() returned %d at BufferData", e))
+	}
+}
+
 func (d *DebugContext) BufferSubData(arg0 uint32, arg1 int, arg2 []uint8) {
 	d.Context.BufferSubData(arg0, arg1, arg2)
 	fmt.Fprintln(os.Stderr, "BufferSubData")

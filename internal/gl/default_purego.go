@@ -231,6 +231,10 @@ func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
 	c.call(c.gpBufferData, uintptr(target), uintptr(size), 0, uintptr(usage))
 }
 
+func (c *defaultContext) BufferData(target uint32, data []byte, usage uint32) {
+	c.call(c.gpBufferData, uintptr(target), uintptr(len(data)), uintptr(unsafe.Pointer(&data[0])), uintptr(usage))
+}
+
 func (c *defaultContext) BufferSubData(target uint32, offset int, data []byte) {
 	purego.SyscallN(c.gpBufferSubData, uintptr(target), uintptr(offset), uintptr(len(data)), uintptr(unsafe.Pointer(&data[0])))
 	runtime.KeepAlive(data)
