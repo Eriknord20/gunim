@@ -607,3 +607,86 @@ func TestAMadeCanvasFillsThePage(t *testing.T) {
 		t.Errorf("the canvas's height is %q, want %q", got, want)
 	}
 }
+
+// A refresh rate reads the same at any speed of panel, and through missed frames.
+func TestTheRefreshEstimate(t *testing.T) {
+	estimate := func(hz float64, frames int, gapAt func(i int) float64) float64 {
+		x := &Driver{rate: 60}
+		now := 1000.0
+		for i := range frames {
+			now += gapAt(i) * 1000 / hz
+			x.observeRefresh(now)
+			// The first frames have a second callback with the same timestamp.
+			x.observeRefresh(now)
+		}
+		return x.rate
+	}
+	even := func(int) float64 { return 1 }
+	for _, c := range []struct {
+		name string
+		hz   float64
+		gaps func(int) float64
+		want float64
+	}{
+		{"60 Hz", 60, even, 60},
+		{"120 Hz", 120, even, 120},
+		{"240 Hz", 240, even, 240},
+		{"300 Hz", 300, even, 300},
+		{"360 Hz", 360, even, 360},
+		{"500 Hz", 500, even, 500},
+		{"one frame in two misses at 60 Hz", 60, func(i int) float64 { return float64(1 + i%2) }, 60},
+		{"two frames in three miss at 120 Hz", 120, func(i int) float64 { return float64(1 + (i%3+1)/2) }, 120},
+		{"four frames in five miss at 60 Hz", 60, func(i int) float64 {
+			if i%5 == 0 {
+				return 1
+			}
+			return 2
+		}, 60},
+		{"a wrong short gap in twenty at 60 Hz", 60, func(i int) float64 {
+			if i%20 == 0 {
+				return 0.5
+			}
+			return 1
+		}, 60},
+		{"the page rests between some frames", 60, func(i int) float64 {
+			if i%3 == 0 {
+				return 100
+			}
+			return 1
+		}, 60},
+	} {
+		if got := estimate(c.hz, 100, c.gaps); math.Abs(got-c.want) > 0.01 {
+			t.Errorf("%s: read %v Hz", c.name, got)
+		}
+	}
+	// A move to a slower panel shows once the last one's gaps have gone by.
+	x := &Driver{rate: 60}
+	now := 1000.0
+	for range 100 {
+		now += 1000.0 / 120
+		x.observeRefresh(now)
+	}
+	for range 100 {
+		now += 1000.0 / 60
+		x.observeRefresh(now)
+	}
+	if math.Abs(x.rate-60) > 0.01 {
+		t.Errorf("after moving from 120 Hz to 60 Hz it reads %v", x.rate)
+	}
+	// With too few gaps to go by, the rate stays as it was.
+	if got := estimate(120, 5, even); got != 60 {
+		t.Errorf("after 5 frames it reads %v", got)
+	}
+}
+
+// A frame of the estimate allocates nothing, as it runs on every animation frame.
+func TestTheRefreshEstimateAllocatesNothing(t *testing.T) {
+	x := &Driver{rate: 60}
+	now := 1000.0
+	if n := testing.AllocsPerRun(100, func() {
+		now += 16.7
+		x.observeRefresh(now)
+	}); n != 0 {
+		t.Fatalf("%v allocations a frame", n)
+	}
+}

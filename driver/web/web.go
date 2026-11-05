@@ -114,12 +114,16 @@ type Driver struct {
 	lost           bool
 	rate           float64
 	lastRAF        float64
-	samples        []float64
-	stats          frameStats
-	frameAsked     bool
-	raf            js.Func
-	funcs          []js.Func
-	quit           chan struct{}
+	// gaps is a ring of the last gaps between animation frames, gapCount of them
+	// so far and the next at gapAt, and sortedGaps room to sort them in.
+	gaps            [60]float64
+	sortedGaps      [60]float64
+	gapAt, gapCount int
+	stats           frameStats
+	frameAsked      bool
+	raf             js.Func
+	funcs           []js.Func
+	quit            chan struct{}
 }
 
 var (
