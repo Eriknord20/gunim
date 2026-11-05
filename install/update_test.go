@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -378,6 +379,64 @@ func TestAnOlderCopyLeavesANewerInstall(t *testing.T) {
 		if raw, _ := os.ReadFile(exe); string(raw) != "six" {
 			t.Fatalf("set to %s, the installed v1.6.0 now holds %q", mode, raw)
 		}
+	}
+}
+
+// A busy moment leaves the program in place: the new one goes in once the
+// file is free, and where it never can, the old one comes back though
+// that move is refused for a moment too.
+func TestReplaceRidesOutABusyMoment(t *testing.T) {
+	if !movesAside {
+		t.Skip("this system replaces a program in one move")
+	}
+	t.Cleanup(func() { rename = os.Rename })
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "studio")
+	part := filepath.Join(dir, "part")
+	busy := errors.New("the file is busy")
+
+	write := func(f, body string) {
+		t.Helper()
+		if err := os.WriteFile(f, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(exe, "one")
+	write(part, "two")
+	refusals := 3
+	rename = func(from, to string) error {
+		if from == part && refusals > 0 {
+			refusals--
+			return busy
+		}
+		return os.Rename(from, to)
+	}
+	if err := Replace(part, exe); err != nil {
+		t.Fatal(err)
+	}
+	for f, want := range map[string]string{exe: "two", exe + ".old": "one"} {
+		if raw, _ := os.ReadFile(f); string(raw) != want {
+			t.Errorf("%s holds %q, want %q", f, raw, want)
+		}
+	}
+
+	write(part, "three")
+	refusals = 3
+	rename = func(from, to string) error {
+		if from == part {
+			return busy
+		}
+		if refusals > 0 {
+			refusals--
+			return busy
+		}
+		return os.Rename(from, to)
+	}
+	if err := Replace(part, exe); !errors.Is(err, busy) {
+		t.Fatalf("a replace that never could says %v", err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "two" {
+		t.Errorf("after a replace that never could, the program holds %q", raw)
 	}
 }
 

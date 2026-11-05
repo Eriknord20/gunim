@@ -302,6 +302,7 @@ func TestTrialsMovingTheProgramAside(t *testing.T) {
 		TestAFailedDownloadOnTrialChangesNothing,
 		TestTheProgramBeingReplacedLeavesTheTrial,
 		TestMoveAsidePastABusyOld,
+		TestReplaceRidesOutABusyMoment,
 	} {
 		test(t)
 	}

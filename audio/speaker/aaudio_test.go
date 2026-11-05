@@ -1056,8 +1056,12 @@ func TestAAudioGrowsNoLeadFromAnOpening(t *testing.T) {
 		outs[len(outs)-1].sh.Err.Store(-899)
 		time.Sleep(3 * time.Second)
 		synctest.Wait()
-		if l, want := s.Latency(), before+grown; l < want-2*time.Millisecond || l > want+2*time.Millisecond {
-			t.Errorf("back on the speaker the speaker works %v ahead, want %v: %v as before, and %v grown", l, want, before, grown)
+		// The latency holds the delay the timestamps tell, which moves
+		// within a burst as the callback runs, so each reading is good to
+		// a burst. Here it reads 30 to 32.125 ms.
+		slack := audio.DurationAt(int64(f.burst), 48000)
+		if l, want := s.Latency(), before+grown; l < want-slack || l > want+slack {
+			t.Errorf("back on the speaker the speaker works %v ahead, want %v within %v: %v as before, and %v grown", l, want, slack, before, grown)
 		}
 	})
 }
