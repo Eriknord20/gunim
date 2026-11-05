@@ -231,6 +231,13 @@ func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
 	c.call(c.gpBufferData, uintptr(target), uintptr(size), 0, uintptr(usage))
 }
 
+// BufferData is a gunim change. It passes the address of data, so it calls
+// purego.SyscallN directly, as the doc comment on call asks.
+func (c *defaultContext) BufferData(target uint32, data []byte, usage uint32) {
+	purego.SyscallN(c.gpBufferData, uintptr(target), uintptr(len(data)), uintptr(unsafe.Pointer(&data[0])), uintptr(usage))
+	runtime.KeepAlive(data)
+}
+
 func (c *defaultContext) BufferSubData(target uint32, offset int, data []byte) {
 	purego.SyscallN(c.gpBufferSubData, uintptr(target), uintptr(offset), uintptr(len(data)), uintptr(unsafe.Pointer(&data[0])))
 	runtime.KeepAlive(data)
