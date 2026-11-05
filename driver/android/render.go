@@ -172,7 +172,13 @@ func (d *Driver) frame(c *compose.Compositor) {
 	}
 	c.Begin(stack, surfW, surfH)
 	for _, j := range jobs {
-		if c.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) && j.shot != nil {
+		if !c.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) {
+			if j.shot != nil {
+				j.w.keepShot(j.shot)
+			}
+			continue
+		}
+		if j.shot != nil {
 			c.Shoot(&j.w.pane, j.fbW, j.fbH, j.shot)
 		}
 	}

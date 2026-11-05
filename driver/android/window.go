@@ -159,6 +159,16 @@ func (w *Window) Shoot(fn func(*image.RGBA)) {
 	w.d.kick()
 }
 
+// keepShot puts back a shot whose frame could not draw, for a later
+// frame, unless a newer shot has taken its place.
+func (w *Window) keepShot(fn func(*image.RGBA)) {
+	w.d.mu.Lock()
+	if w.shot == nil {
+		w.shot = fn
+	}
+	w.d.mu.Unlock()
+}
+
 // ContentOrigin implements [driver.Positioner]: where the window lies
 // on the screen, in device pixels, as it would with the windows slid
 // down from over the keyboard.

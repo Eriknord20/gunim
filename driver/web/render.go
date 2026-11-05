@@ -77,6 +77,9 @@ func (d *Driver) frame() {
 	for _, j := range jobs {
 		start := time.Now()
 		if !d.comp.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) {
+			if j.shot != nil {
+				j.w.keepShot(j.shot)
+			}
 			continue
 		}
 		if j.shot != nil {

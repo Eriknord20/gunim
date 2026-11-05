@@ -3,11 +3,14 @@
 package web
 
 import (
+	"image"
 	"image/color"
 	"syscall/js"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/paint"
@@ -249,4 +252,76 @@ func TestAWindowAloneMakesNoTextureAcrossResizes(t *testing.T) {
 		t.Errorf("the window under it shows %v", got)
 	}
 	noGLError(t, d)
+}
+
+// brokenGL refuses to compile shaders, as a context that has run out of memory
+// might, so no renderer can be made. It lets the compositor's own compile first.
+type brokenGL struct {
+	gl.Context
+	broken bool
+}
+
+func (g *brokenGL) GetShaderi(shader, name uint32) int {
+	if g.broken {
+		return gl.FALSE
+	}
+	return g.Context.GetShaderi(shader, name)
+}
+
+// A frame that could not draw keeps its shot for one that can, on the shot's
+// own window and past any number of tries.
+func TestAShotOutlivesARendererThatCantBeMade(t *testing.T) {
+	d, w := testWindow(t)
+	present(t, w, testRed)
+	d.frame()
+	broken := &brokenGL{Context: d.g}
+	comp, err := compose.New(broken, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken.broken = true
+	was := d.comp
+	d.comp = comp
+	p := testPopup(t, d, w)
+	got := make(chan *image.RGBA, 1)
+	defer func() { d.comp = was; _ = p.Close(); d.frame() }()
+	p.Shoot(func(m *image.RGBA) { got <- m })
+	for range 3 {
+		present(t, p, testBlue)
+		d.frame()
+		select {
+		case <-got:
+			t.Fatal("a window that could not draw gave a shot")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if p.shot == nil {
+		t.Fatal("the frame took the shot with it")
+	}
+	d.comp = was
+	present(t, p, testBlue)
+	d.frame()
+	select {
+	case m := <-got:
+		if m.RGBAAt(4, 4).B < 240 {
+			t.Fatalf("the shot shows %v", m.RGBAAt(4, 4))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the shot never came")
+	}
+	if p.shot != nil {
+		t.Fatal("the shot is still waiting")
+	}
+}
+
+// A newer shot asked for while the frame failed stays the one that waits.
+func TestAShotAskedForMeanwhileStays(t *testing.T) {
+	_, w := testWindow(t)
+	older, newer := 0, 0
+	w.Shoot(func(*image.RGBA) { newer++ })
+	w.keepShot(func(*image.RGBA) { older++ })
+	w.shot(nil)
+	if older != 0 || newer != 1 {
+		t.Fatalf("the older ran %d times, the newer %d", older, newer)
+	}
 }
