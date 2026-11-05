@@ -343,7 +343,7 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		s.held = false
-		s.release(th)
+		s.release(th, e.Time)
 		u.Invalidate()
 		return true
 	case input.Scroll:
@@ -425,8 +425,8 @@ func (s *scrolling) track(y float32, t time.Time) {
 
 // speed returns how fast the pointer moved over the last tenth of a
 // second, in pixels a second down the screen, or zero when it had come
-// to rest before letting go.
-func (s *scrolling) speed() float32 {
+// to rest before letting go at at. A zero at means now.
+func (s *scrolling) speed(at time.Time) float32 {
 	if s.trails < 2 {
 		return 0
 	}
@@ -438,18 +438,21 @@ func (s *scrolling) speed() float32 {
 		}
 		first = p
 	}
+	if at.IsZero() {
+		at = s.u.Clock()
+	}
 	dt := last.t.Sub(first.t).Seconds()
-	if dt <= 0 || s.u.Clock().Sub(last.t) > 100*time.Millisecond {
+	if dt <= 0 || at.Sub(last.t) > 100*time.Millisecond {
 		return 0
 	}
 	return float32(float64(last.y-first.y) / dt)
 }
 
-// release ends a drag: flinging on at the pointer's speed, or springing
-// back from past an end.
-func (s *scrolling) release(th *theme.Live) {
+// release ends a drag let go at t: flinging on at the pointer's speed, or
+// springing back from past an end.
+func (s *scrolling) release(th *theme.Live, t time.Time) {
 	at := s.offset.Value()
-	v := -s.speed()
+	v := -s.speed(t)
 	if at < 0 || at > s.end() || math.Abs(float64(v)) < 50 {
 		s.target = s.clamp(at)
 		s.offset.Retarget(s.target, Settle.Get(th))

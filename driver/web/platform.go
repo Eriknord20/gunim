@@ -10,49 +10,130 @@ import (
 	"strconv"
 	"strings"
 	"syscall/js"
+	"time"
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 )
 
-// await waits on a browser promise without blocking JavaScript's event loop.
-func await(p js.Value) (value js.Value, err error) {
-	done := make(chan struct{}, 1)
-	resolve := js.FuncOf(func(_ js.Value, a []js.Value) any {
-		if len(a) > 0 {
-			value = a[0]
-		}
-		done <- struct{}{}
-		return nil
-	})
-	reject := js.FuncOf(func(_ js.Value, a []js.Value) any {
-		err = errors.New("web: browser operation rejected")
-		if len(a) > 0 {
-			err = fmt.Errorf("web: %s", a[0].String())
-		}
-		done <- struct{}{}
-		return nil
-	})
-	defer resolve.Release()
-	defer reject.Release()
-	p.Call("then", resolve, reject)
-	<-done
-	return value, err
+// browserError is what the browser threw or rejected a promise with. Name is the
+// kind, as AbortError for a share the user closed.
+type browserError struct{ name, message string }
+
+func (e *browserError) Error() string {
+	switch {
+	case e.name == "":
+		return "web: " + e.message
+	case e.message == "":
+		return "web: " + e.name
+	}
+	return "web: " + e.name + ": " + e.message
 }
-func clipboardCall(method string, args ...any) (value js.Value, err error) {
+
+// errorOf reads what the browser threw. It is usually an Error or a DOMException,
+// but a promise can reject with anything.
+func errorOf(v js.Value) *browserError {
+	if v.Type() == js.TypeObject {
+		name, message := v.Get("name"), v.Get("message")
+		if name.Type() == js.TypeString || message.Type() == js.TypeString {
+			e := &browserError{}
+			if name.Type() == js.TypeString {
+				e.name = name.String()
+			}
+			if message.Type() == js.TypeString {
+				e.message = message.String()
+			}
+			return e
+		}
+	}
+	return &browserError{message: js.Global().Call("String", v).String()}
+}
+
+// call calls a browser method, and returns what it throws as an error, where
+// syscall/js would raise a panic that ends the program.
+func call(target js.Value, method string, args ...any) (value js.Value, err error) {
 	defer func() {
-		if v := recover(); v != nil {
-			err = fmt.Errorf("web clipboard: %v", v)
+		switch r := recover().(type) {
+		case nil:
+		case js.Error:
+			err = errorOf(r.Value)
+		default:
+			err = fmt.Errorf("web: %s: %v", method, r)
 		}
 	}()
+	return target.Call(method, args...), nil
+}
+
+// errNoAnswer is the error from a browser that has not settled a promise in time.
+var errNoAnswer = errors.New("web: the browser has not answered")
+
+// await waits on a browser promise without blocking JavaScript's event loop. A
+// limit above zero gives up after that long.
+func await(p js.Value, limit time.Duration) (js.Value, error) {
+	type answer struct {
+		value js.Value
+		err   error
+	}
+	done := make(chan answer, 1)
+	var resolve, reject js.Func
+	// They are let go as the promise settles, however long after giving up: the
+	// browser may yet call one of them.
+	settle := func(a answer) {
+		done <- a
+		resolve.Release()
+		reject.Release()
+	}
+	resolve = js.FuncOf(func(_ js.Value, a []js.Value) any {
+		v := js.Undefined()
+		if len(a) > 0 {
+			v = a[0]
+		}
+		settle(answer{value: v})
+		return nil
+	})
+	reject = js.FuncOf(func(_ js.Value, a []js.Value) any {
+		v := js.Undefined()
+		if len(a) > 0 {
+			v = a[0]
+		}
+		settle(answer{err: errorOf(v)})
+		return nil
+	})
+	p.Call("then", resolve, reject)
+	var giveUp <-chan time.Time
+	if limit > 0 {
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		giveUp = t.C
+	}
+	select {
+	case a := <-done:
+		return a.value, a.err
+	case <-giveUp:
+		return js.Undefined(), errNoAnswer
+	}
+}
+
+// clipboardWait is how long the clipboard may hold up its caller, which is the
+// window's own goroutine: the window draws nothing meanwhile. A browser can ask the
+// user first, with a permission prompt or Firefox's Paste button, and the user may
+// never answer.
+var clipboardWait = 3 * time.Second
+
+func clipboardCall(method string, args ...any) (js.Value, error) {
 	c := js.Global().Get("navigator").Get("clipboard")
 	if c.IsUndefined() || c.Get(method).IsUndefined() {
 		return js.Undefined(), errors.ErrUnsupported
 	}
-	return await(c.Call(method, args...))
+	p, err := call(c, method, args...)
+	if err != nil {
+		return js.Undefined(), err
+	}
+	return await(p, clipboardWait)
 }
 
-// Clipboard reads the system's clipboard, if the browser allows it.
+// Clipboard reads the system's clipboard, if the browser allows it. It waits
+// clipboardWait at most for the browser's answer.
 func (w *Window) Clipboard() (string, error) {
 	v, err := clipboardCall("readText")
 	if err != nil {
@@ -61,7 +142,8 @@ func (w *Window) Clipboard() (string, error) {
 	return v.String(), nil
 }
 
-// SetClipboard writes the system's clipboard, if the browser allows it.
+// SetClipboard writes the system's clipboard, if the browser allows it. It waits
+// clipboardWait at most for the browser's answer.
 func (w *Window) SetClipboard(s string) error { _, err := clipboardCall("writeText", s); return err }
 
 // Shoot has fn called with the next frame drawn.
@@ -132,7 +214,12 @@ func (w *Window) SetTextCaret(r geom.Rect) {
 	style.Set("left", strconv.FormatFloat(cr.Get("left").Float()+float64(r.Min.X+at.X), 'f', -1, 64)+"px")
 	style.Set("top", strconv.FormatFloat(cr.Get("top").Float()+float64(r.Min.Y+at.Y), 'f', -1, 64)+"px")
 }
-func (d *Driver) viewportChanged() {
+func (d *Driver) viewportChanged() { d.readViewport(true) }
+
+// readViewport takes in where the keyboard and safe area are, and with keepField
+// brings a field the keyboard covers back into view. A scroll by the user leaves
+// keepField off, or the page would pull them back.
+func (d *Driver) readViewport(keepField bool) {
 	win := js.Global()
 	height := win.Get("innerHeight").Float()
 	vv := win.Get("visualViewport")
@@ -142,11 +229,17 @@ func (d *Driver) viewportChanged() {
 			bottom = vv.Get("offsetTop").Float() + vv.Get("height").Float()
 		}
 	}
+	// The keyboard covers the canvas only where the canvas reaches down to it, and
+	// a canvas in the middle of a page has its own bottom edge.
+	edge := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
 	d.mu.Lock()
 	if d.typing == nil || d.viewportHeight == 0 {
 		d.viewportHeight = height
 	}
-	cover := float32(max(0, d.viewportHeight-bottom))
+	var cover float32
+	if d.viewportHeight-bottom > 0 {
+		cover = float32(max(0, edge-bottom))
+	}
 	d.mu.Unlock()
 	style := win.Call("getComputedStyle", d.safeProbe)
 	read := func(name string) float32 {
@@ -165,7 +258,7 @@ func (d *Driver) viewportChanged() {
 			w.in.Push(driver.Redraw{})
 		}
 	}
-	if cover > 0 && typing != nil {
+	if keepField && cover > 0 && typing != nil {
 		d.mu.Lock()
 		box := typing.textBox.Add(typing.rectLocked().Min)
 		d.mu.Unlock()
@@ -188,6 +281,8 @@ func (d *Driver) listenViewport(doc js.Value) {
 	}
 	d.on(js.Global(), "orientationchange", true, func(js.Value) { d.mu.Lock(); d.viewportHeight = 0; d.mu.Unlock(); d.viewportChanged() })
 	d.on(js.Global(), "resize", true, func(js.Value) { d.viewportChanged() })
+	// The page scrolling moves the canvas against the keyboard.
+	d.on(js.Global(), "scroll", true, func(js.Value) { d.readViewport(false) })
 	d.viewportChanged()
 }
 

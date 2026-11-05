@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -14,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -352,6 +355,69 @@ func TestBrowser(t *testing.T) {
 		mouse("pointerup", 0, 0)
 		drain(w)
 	})
+	t.Run("events carry when they happened, however late they run", func(t *testing.T) {
+		drain(w)
+		r := d.canvas.Call("getBoundingClientRect")
+		x, y := r.Get("left").Float()+40, r.Get("top").Float()+40
+		// A burst, all run now, that a hand made 16 ms apart.
+		base := js.Global().Get("performance").Call("now").Float() - 200
+		event := func(class, kind string, ms float64, init map[string]any) {
+			init["bubbles"], init["cancelable"], init["clientX"], init["clientY"] = true, true, x, y
+			d.canvas.Call("dispatchEvent", stamped(js.Global().Get(class).New(kind, init), ms))
+		}
+		touch := func(kind string, ms float64) {
+			event("PointerEvent", kind, ms, map[string]any{"pointerId": 5, "pointerType": "touch", "button": 0, "buttons": 1})
+		}
+		var times []time.Time
+		note := func() {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerDown:
+					times = append(times, e.Time)
+				case input.PointerMove:
+					times = append(times, e.Time)
+				case input.PointerUp:
+					times = append(times, e.Time)
+				case input.Scroll:
+					times = append(times, e.Time)
+				case input.KeyPress:
+					times = append(times, e.Time)
+				}
+			}
+		}
+		touch("pointerdown", base)
+		note()
+		touch("pointermove", base+16)
+		note()
+		touch("pointerup", base+32)
+		note()
+		event("WheelEvent", "wheel", base+48, map[string]any{"deltaY": 10})
+		note()
+		event("KeyboardEvent", "keydown", base+64, map[string]any{"key": "g", "code": "KeyG"})
+		note()
+		// The press and the lift each bring a move of their own.
+		ms := time.Millisecond
+		want := []time.Duration{0, 0, 16 * ms, 32 * ms, 32 * ms, 48 * ms, 64 * ms}
+		if len(times) != len(want) {
+			t.Fatalf("heard %d events, want %d", len(times), len(want))
+		}
+		for i, at := range want {
+			gap := times[i].Sub(times[0])
+			if off := gap - at; off < -2*ms || off > 2*ms {
+				t.Errorf("event %d came %v after the first, want %v", i, gap, at)
+			}
+		}
+		if age := time.Since(times[0]); age < 100*time.Millisecond {
+			t.Errorf("the first was stamped %v ago, want about 200 ms", age)
+		}
+		// A stamp ahead of the clock is no time to come: it reads as now.
+		event("KeyboardEvent", "keydown", base+100000, map[string]any{"key": "h", "code": "KeyH"})
+		times = nil
+		note()
+		if len(times) != 1 || times[0].After(time.Now()) {
+			t.Errorf("a stamp from the future reads %v", times)
+		}
+	})
 	t.Run("chorded buttons each press and let go", func(t *testing.T) {
 		drain(w)
 		mouse("pointerdown", 0, 1)
@@ -370,6 +436,36 @@ func TestBrowser(t *testing.T) {
 		want := []string{fmt.Sprint("down ", input.ButtonPrimary), fmt.Sprint("down ", input.ButtonSecondary), fmt.Sprint("up ", input.ButtonPrimary), fmt.Sprint("up ", input.ButtonSecondary)}
 		if !slices.Equal(got, want) {
 			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+	t.Run("a mouse's side buttons are its own, and the browser keeps out", func(t *testing.T) {
+		for _, c := range []struct {
+			button, bit int
+			want        input.Button
+		}{{3, 8, input.ButtonBack}, {4, 16, input.ButtonForward}} {
+			drain(w)
+			mouse("pointerdown", c.button, c.bit)
+			mouse("pointerup", c.button, 0)
+			var got []input.Button
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerDown:
+					got = append(got, e.Button)
+				case input.PointerUp:
+					got = append(got, e.Button)
+				}
+			}
+			if !slices.Equal(got, []input.Button{c.want, c.want}) {
+				t.Errorf("button %d came as %v, want %v twice", c.button, got, c.want)
+			}
+			up := js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true, "cancelable": true, "button": c.button})
+			if d.canvas.Call("dispatchEvent", up).Bool() {
+				t.Errorf("button %d's mouseup was left for the browser, which would go back a page", c.button)
+			}
+		}
+		up := js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true, "cancelable": true, "button": 0})
+		if !d.canvas.Call("dispatchEvent", up).Bool() {
+			t.Error("the primary button's mouseup was cancelled, which Web Audio's wait for a gesture hangs on")
 		}
 	})
 	t.Run("only the canvas's own events count", func(t *testing.T) {
@@ -893,36 +989,146 @@ func TestBrowser(t *testing.T) {
 			}
 		}
 	})
-	t.Run("a second finger leaves the first one's press alone", func(t *testing.T) {
-		seen := drain(w)
-		pointer(d, "pointerdown", 1, 40, 40)
+	t.Run("a second finger leaves a mouse's press alone", func(t *testing.T) {
+		drain(w)
+		mouse("pointerdown", 0, 1)
 		pointer(d, "pointerdown", 2, 200, 200)
 		pointer(d, "pointermove", 2, 210, 210)
-		pointer(d, "pointermove", 1, 50, 50)
 		pointer(d, "pointerup", 2, 210, 210)
-		pointer(d, "pointerup", 1, 50, 50)
-		seen = append(seen[:0], drain(w)...)
+		mouse("pointerup", 0, 0)
 		var downs, ups int
-		for _, e := range seen {
+		for _, e := range drain(w) {
 			switch e := e.(type) {
 			case input.PointerDown:
 				downs++
-				if e.Pos != geom.Pt(40, 40) {
-					t.Fatalf("pressed at %v", e.Pos)
-				}
 			case input.PointerUp:
 				ups++
-				if e.Pos != geom.Pt(50, 50) {
-					t.Fatalf("let go at %v", e.Pos)
+				if e.Pos == input.Away {
+					t.Error("the finger called off the mouse's press")
 				}
 			case input.PointerMove:
 				if e.Pos == geom.Pt(210, 210) {
-					t.Fatal("the second finger moved the pointer")
+					t.Error("the finger moved the pointer")
 				}
+			case input.Pinch:
+				t.Errorf("a mouse and a finger pinched: %+v", e)
 			}
 		}
 		if downs != 1 || ups != 1 {
-			t.Fatalf("downs=%d ups=%d, in %v", downs, ups, seen)
+			t.Fatalf("downs=%d ups=%d", downs, ups)
+		}
+	})
+	// pinches lists what a touch's events came to, as words.
+	pinches := func() (got []string) {
+		for _, e := range drain(w) {
+			switch e := e.(type) {
+			case input.PointerDown:
+				got = append(got, "down")
+			case input.PointerUp:
+				if e.Pos == input.Away {
+					got = append(got, "called off")
+				} else {
+					got = append(got, "up")
+				}
+			case input.PointerLeave:
+				got = append(got, "leave")
+			case input.Pinch:
+				got = append(got, fmt.Sprintf("pinch %d at %v by %v scale %.2f", e.Phase, e.Pos, e.Delta, e.Scale))
+			}
+		}
+		return got
+	}
+	t.Run("two fingers pinch, as on Android", func(t *testing.T) {
+		drain(w)
+		start, move, end := input.PinchStart, input.PinchMove, input.PinchEnd
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointermove", 1, 40, 100)
+		if got := pinches(); !slices.Equal(got, []string{"down"}) {
+			t.Fatalf("one finger came to %q", got)
+		}
+		// The second calls off the first's press, and the pinch starts between them.
+		pointer(d, "pointerdown", 2, 80, 100)
+		want := []string{"called off", fmt.Sprintf("pinch %d at %v by %v scale 1.00", start, geom.Pt(60, 100), geom.Point{})}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the second finger came to %q, want %q", got, want)
+		}
+		// The second moves out: twice as far apart, and the middle moves half as far.
+		pointer(d, "pointermove", 2, 120, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 2.00", move, geom.Pt(80, 100), geom.Pt(20, 0))}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the move came to %q, want %q", got, want)
+		}
+		// A third finger is nothing.
+		pointer(d, "pointerdown", 3, 200, 200)
+		pointer(d, "pointermove", 3, 210, 210)
+		pointer(d, "pointerup", 3, 210, 210)
+		if got := pinches(); len(got) != 0 {
+			t.Fatalf("a third finger came to %q", got)
+		}
+		// The first moves in: the fingers come back to half as far apart.
+		pointer(d, "pointermove", 1, 80, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 0.50", move, geom.Pt(100, 100), geom.Pt(20, 0))}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the first's move came to %q, want %q", got, want)
+		}
+		// The second lifts, which ends it. The first only lifts after.
+		pointer(d, "pointerup", 2, 120, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(100, 100), geom.Point{})}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the lift came to %q, want %q", got, want)
+		}
+		pointer(d, "pointermove", 1, 90, 100)
+		pointer(d, "pointerup", 1, 90, 100)
+		if got := pinches(); !slices.Equal(got, []string{"leave"}) {
+			t.Fatalf("the first finger left came to %q", got)
+		}
+	})
+	t.Run("a pinch ends when either finger lifts, and can start again", func(t *testing.T) {
+		drain(w)
+		start, end := input.PinchStart, input.PinchEnd
+		first := func(got []string) string {
+			if len(got) == 0 {
+				return ""
+			}
+			return got[len(got)-1]
+		}
+		// The first lifts first: the second, left down, does nothing more.
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointerdown", 2, 80, 100)
+		drain(w)
+		pointer(d, "pointerup", 1, 40, 100)
+		want := []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(60, 100), geom.Point{}), "leave"}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the first finger's lift came to %q, want %q", got, want)
+		}
+		pointer(d, "pointermove", 2, 90, 100)
+		pointer(d, "pointerup", 2, 90, 100)
+		if got := pinches(); len(got) != 0 {
+			t.Fatalf("the finger left over came to %q", got)
+		}
+		// A new second finger while the first stays down pinches again, with no second
+		// press to call off.
+		pointer(d, "pointerdown", 1, 40, 100)
+		pointer(d, "pointerdown", 2, 80, 100)
+		pointer(d, "pointerup", 2, 80, 100)
+		drain(w)
+		pointer(d, "pointerdown", 4, 120, 100)
+		got := pinches()
+		if want := fmt.Sprintf("pinch %d at %v by %v scale 1.00", start, geom.Pt(80, 100), geom.Point{}); len(got) != 1 || first(got) != want {
+			t.Fatalf("the new finger came to %q, want %q", got, want)
+		}
+		// A cancel ends it too.
+		pointer(d, "pointercancel", 4, 120, 100)
+		pointer(d, "pointercancel", 1, 40, 100)
+		want = []string{fmt.Sprintf("pinch %d at %v by %v scale 1.00", end, geom.Pt(80, 100), geom.Point{}), "leave"}
+		if got := pinches(); !slices.Equal(got, want) {
+			t.Fatalf("the cancels came to %q, want %q", got, want)
+		}
+		// And the next touch is a press again.
+		pointer(d, "pointerdown", 6, 50, 50)
+		pointer(d, "pointerup", 6, 50, 50)
+		if got := pinches(); !slices.Equal(got, []string{"down", "up", "leave"}) {
+			t.Fatalf("the next touch came to %q", got)
 		}
 	})
 	t.Run("a window that takes fingers hears each one", func(t *testing.T) {
@@ -994,30 +1200,307 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("sharing files: %v", err)
 		}
 	})
+	t.Run("a share the user closes is no error, and others keep their words", func(t *testing.T) {
+		nav := js.Global().Get("navigator")
+		defer define(nav, "share", js.Undefined())()
+		for _, c := range []struct {
+			page string
+			want []string
+		}{
+			{`()=>Promise.reject(new DOMException("Share canceled","AbortError"))`, nil},
+			{`()=>Promise.reject(new DOMException("Must be handling a user gesture","NotAllowedError"))`, []string{"NotAllowedError", "Must be handling a user gesture"}},
+			{`()=>{throw new TypeError("no share")}`, []string{"TypeError", "no share"}},
+			{`()=>Promise.reject("just words")`, []string{"just words"}},
+			{`()=>Promise.reject()`, []string{"undefined"}},
+			{`()=>Promise.reject({odd:1})`, []string{"object"}},
+		} {
+			define(nav, "share", js.Global().Call("eval", c.page))
+			err := w.Share(driver.Share{Text: "hej"})
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("%s: %v", c.page, err)
+			case c.want != nil && err == nil:
+				t.Errorf("%s: no error", c.page)
+			}
+			for _, word := range c.want {
+				if err != nil && !strings.Contains(err.Error(), word) {
+					t.Errorf("%s: %q leaves out %q", c.page, err, word)
+				}
+			}
+		}
+	})
+	t.Run("a malformed link is an error", func(t *testing.T) {
+		defer define(js.Global(), "open", js.Undefined())()
+		var opened []string
+		spy := js.FuncOf(func(_ js.Value, a []js.Value) any {
+			opened = append(opened, a[0].String())
+			return js.Null()
+		})
+		defer spy.Release()
+		define(js.Global(), "open", spy.Value)
+		for _, bad := range []string{"http://[bad", "javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,hi"} {
+			if err := w.OpenLink(bad); err == nil {
+				t.Errorf("%q gave no error", bad)
+			}
+		}
+		if len(opened) != 0 {
+			t.Errorf("the browser was asked to open %q", opened)
+		}
+		if err := w.OpenLink("https://example.com/a?b=c"); err != nil || !slices.Equal(opened, []string{"https://example.com/a?b=c"}) {
+			t.Errorf("a good link: %v, opened %q", err, opened)
+		}
+		// Whatever else a link on the page can hold opens too.
+		for _, good := range []string{"mailto:a@example.com", "tel:+4612345", "/docs/page"} {
+			opened = nil
+			if err := w.OpenLink(good); err != nil || !slices.Equal(opened, []string{good}) {
+				t.Errorf("%q: %v, opened %q", good, err, opened)
+			}
+		}
+		// What the browser itself throws comes back the same way.
+		define(js.Global(), "open", js.Global().Call("eval", `()=>{throw new DOMException("no","SyntaxError")}`))
+		if err := w.OpenLink("https://example.com"); err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("a browser that throws: %v", err)
+		}
+	})
+	t.Run("a clipboard the browser never answers lets the window go on", func(t *testing.T) {
+		nav := js.Global().Get("navigator")
+		defer define(nav, "clipboard", js.Undefined())()
+		settle := js.Global().Get("Object").New()
+		mock := js.Global().Call("eval", `(s=>({readText:()=>new Promise(r=>{s.go=r}),writeText:()=>new Promise(r=>{s.go=r})}))`).Invoke(settle)
+		define(nav, "clipboard", mock)
+		was := clipboardWait
+		defer func() { clipboardWait = was }()
+		clipboardWait = 50 * time.Millisecond
+		errs := spyConsole()
+		defer errs.stop()
+		start := time.Now()
+		if _, err := w.Clipboard(); !errors.Is(err, errNoAnswer) {
+			t.Errorf("reading: %v", err)
+		}
+		if err := w.SetClipboard("x"); !errors.Is(err, errNoAnswer) {
+			t.Errorf("writing: %v", err)
+		}
+		if took := time.Since(start); took > 10*time.Second {
+			t.Errorf("it took %v", took)
+		}
+		// The browser answers after all, and finds what it calls still there.
+		settle.Call("go", "late")
+		time.Sleep(20 * time.Millisecond)
+		if got := errs.stop(); len(got) != 0 {
+			t.Errorf("the page logged %q", got)
+		}
+	})
+	t.Run("sound opens before the first gesture", func(t *testing.T) {
+		// A browser holds sound back until a click, a key or a touch. Open can't wait
+		// for that: what the first click plays is set up after it.
+		opened := make(chan error, 1)
+		go func() {
+			_, err := speaker.Open(audio.NewMixer(), speaker.Options{Name: "gunim test"})
+			opened <- err
+		}()
+		select {
+		case err := <-opened:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("speaker.Open waits for a gesture nothing here will make")
+		}
+	})
+	t.Run("the user's scroll stays with the keyboard up, and a covered field comes into view", func(t *testing.T) {
+		win := js.Global()
+		doc := win.Get("document")
+		spacer := doc.Call("createElement", "div")
+		spacer.Get("style").Set("height", "5000px")
+		doc.Get("body").Call("appendChild", spacer)
+		defer func() {
+			spacer.Call("remove")
+			win.Call("scrollTo", 0, 0)
+			d.mu.Lock()
+			d.typing = nil
+			w.textBox = geom.Rect{}
+			d.mu.Unlock()
+			d.viewportChanged()
+		}()
+		defer define(win, "visualViewport", js.Undefined())()
+		win.Call("scrollTo", 0, 0)
+		d.mu.Lock()
+		d.typing = w
+		w.textBox = geom.Rect{Min: geom.Pt(0, 200), Max: geom.Pt(100, 230)}
+		d.mu.Unlock()
+		// A keyboard over the canvas's last 40 px, and so over the field.
+		edge := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
+		define(win, "visualViewport", js.ValueOf(map[string]any{"scale": 1, "offsetTop": 0, "height": edge - 40}))
+		win.Call("dispatchEvent", win.Get("Event").New("scroll"))
+		if got := win.Get("scrollY").Float(); got != 0 {
+			t.Errorf("a scroll by the user moved the page on to %v", got)
+		}
+		if w.KeyboardCover() == 0 {
+			t.Error("a scroll doesn't take in the keyboard's cover")
+		}
+		d.viewportChanged()
+		if got := win.Get("scrollY").Float(); got == 0 {
+			t.Error("the keyboard opening left the field covered")
+		}
+	})
+	t.Run("the keyboard covers only what the canvas has down there", func(t *testing.T) {
+		win := js.Global()
+		height := win.Get("innerHeight").Float()
+		bottom := d.canvas.Call("getBoundingClientRect").Get("bottom").Float()
+		if bottom >= height-50 {
+			t.Skip("the page has no room under the canvas")
+		}
+		defer func() { d.viewportChanged() }()
+		defer define(win, "visualViewport", js.Undefined())()
+		seen := func(h float64) float32 {
+			define(win, "visualViewport", js.ValueOf(map[string]any{"scale": 1, "offsetTop": 0, "height": h}))
+			d.viewportChanged()
+			return w.KeyboardCover()
+		}
+		// The page's bottom is covered, but the canvas ends above the keyboard.
+		if got := seen(bottom + 20); got != 0 {
+			t.Errorf("a keyboard below the canvas covers %v of it", got)
+		}
+		if got, want := seen(bottom-30), float32(30); math.Abs(float64(got-want)) > .01 {
+			t.Errorf("a keyboard over the canvas's last 30 px covers %v of it", got)
+		}
+		if got := seen(height); got != 0 {
+			t.Errorf("with the keyboard down it covers %v", got)
+		}
+	})
 	t.Run("compass", func(t *testing.T) {
 		if got := headingOf(90); got != 270 {
 			t.Fatalf("heading of alpha 90 = %v", got)
 		}
-		w.WatchHeading(true)
-		defer w.WatchHeading(false)
-		drain(w)
-		e := js.Global().Get("Event").New("deviceorientationabsolute")
-		e.Set("alpha", 30)
-		js.Global().Call("dispatchEvent", e)
-		if !w.HasCompass() {
-			t.Fatal("no compass after a reading")
+		send := func(alpha any) {
+			e := js.Global().Get("Event").New("deviceorientationabsolute")
+			e.Set("alpha", alpha)
+			js.Global().Call("dispatchEvent", e)
 		}
-		var got []input.Heading
-		for _, x := range drain(w) {
-			if h, ok := x.(input.Heading); ok {
-				got = append(got, h)
+		headings := func() (got []input.Heading) {
+			for _, x := range drain(w) {
+				if h, ok := x.(input.Heading); ok {
+					got = append(got, h)
+				}
 			}
+			return got
 		}
-		if len(got) != 1 || got[0].Degrees != 330 {
+		// Nothing has asked: the page doesn't listen, which would run a phone's sensors.
+		send(30)
+		if d.compass || d.compassOn {
+			t.Fatalf("with nothing watching, the page listens: %v, and heard: %v", d.compassOn, d.compass)
+		}
+		// Asking listens for a first reading, and one with no alpha isn't that.
+		if w.HasCompass() {
+			t.Fatal("a compass before any reading")
+		}
+		if !d.compassOn {
+			t.Fatal("asking for a compass doesn't listen for one")
+		}
+		send(js.Null())
+		if !d.compassOn || w.HasCompass() {
+			t.Fatalf("a reading of nothing: listening %v, compass %v", d.compassOn, d.compass)
+		}
+		// A first reading comes however late it is. It ends the listening and asks for
+		// a frame, after which the engine starts a window's watch.
+		drain(w)
+		send(30)
+		if !w.HasCompass() {
+			t.Fatal("no compass after a first reading")
+		}
+		if d.compassOn {
+			t.Fatal("still listening after a first reading, with nothing watching")
+		}
+		if !slices.ContainsFunc(drain(w), func(x any) bool { _, ok := x.(driver.Redraw); return ok }) {
+			t.Fatal("a first reading asks for no frame")
+		}
+		// Watching listens, and stops with the last window that watches.
+		w.WatchHeading(true)
+		drain(w)
+		send(30)
+		if got := headings(); len(got) != 1 || got[0].Degrees != 330 {
 			t.Fatalf("headings %v", got)
+		}
+		w.WatchHeading(false)
+		if d.compassOn {
+			t.Fatal("still listening with nothing watching")
+		}
+		send(40)
+		if got := headings(); len(got) != 0 {
+			t.Fatalf("headings with nothing watching: %v", got)
+		}
+		// A window that closes watches no more.
+		p, _ := d.NewWindow(driver.Options{})
+		p.(*Window).WatchHeading(true)
+		if !d.compassOn {
+			t.Fatal("a second window's watch doesn't listen")
+		}
+		_ = p.Close()
+		if d.compassOn {
+			t.Fatal("still listening after the window that watched closed")
 		}
 	})
 	_ = w.Close()
+	t.Run("the driver leaves the page as it ends", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		count := func() int { return doc.Get("body").Get("children").Length() }
+		errs := spyConsole()
+		defer errs.stop()
+		d.mu.Lock()
+		d.lostNote = doc.Call("createElement", "div")
+		doc.Get("body").Call("appendChild", d.lostNote)
+		note := d.lostNote
+		d.mu.Unlock()
+		if err := d.Run(context.Background(), func() {}); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.listening) != 0 || !d.plain.Get("isConnected").IsUndefined() && d.plain.Get("isConnected").Bool() {
+			t.Errorf("%d listeners left, text mirror on the page: %v", len(d.listening), d.plain.Get("isConnected"))
+		}
+		if note.Get("isConnected").Bool() {
+			t.Error("the lost-context note stays on the page")
+		}
+		// A released listener still attached would log an error here.
+		d.scaleQuery.Call("dispatchEvent", js.Global().Get("Event").New("change"))
+		// What the page sends now reaches nothing, and logs nothing.
+		pointer(d, "pointerdown", 1, 40, 40)
+		pointer(d, "pointerup", 1, 40, 40)
+		key(d.canvas, "g", "KeyG")
+		js.Global().Call("dispatchEvent", js.Global().Get("Event").New("resize"))
+		doc.Call("dispatchEvent", js.Global().Get("Event").New("visibilitychange"))
+		time.Sleep(50 * time.Millisecond)
+		if got := errs.stop(); len(got) != 0 {
+			t.Errorf("the page logged %q", got)
+		}
+		// A program can open it again, and each event is heard once.
+		before := count()
+		again, err := Open()
+		if err != nil || again == d {
+			t.Fatalf("opened again: %v, the same: %v", err, again == d)
+		}
+		raw, err := again.NewWindow(driver.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := raw.(*Window)
+		drain(next)
+		pointer(again, "pointerdown", 1, 40, 40)
+		downs := 0
+		for _, e := range drain(next) {
+			if _, ok := e.(input.PointerDown); ok {
+				downs++
+			}
+		}
+		if downs != 1 {
+			t.Errorf("a press came %d times", downs)
+		}
+		pointer(again, "pointerup", 1, 40, 40)
+		_ = next.Close()
+		_ = again.Run(context.Background(), func() {})
+		if got := count(); got != before {
+			t.Errorf("the page holds %d elements, from %d", got, before)
+		}
+	})
 }
 
 // pointer sends a touch's event to the canvas, as the browser would.
@@ -1034,15 +1517,74 @@ func pointer(d *Driver, kind string, id int, x, y float64) {
 	d.canvas.Call("dispatchEvent", e)
 }
 
-// drain returns the events waiting for w, once its inbox has fed them through.
-func drain(w *Window) []any {
-	var out []any
-	for {
-		select {
-		case e := <-w.Input():
-			out = append(out, e)
-		case <-time.After(30 * time.Millisecond):
-			return out
+// define sets a property of a browser object, and returns what puts it back.
+func define(target js.Value, name string, value js.Value) (restore func()) {
+	obj := js.Global().Get("Object")
+	prior := obj.Call("getOwnPropertyDescriptor", target, name)
+	obj.Call("defineProperty", target, name, map[string]any{"configurable": true, "writable": true, "value": value})
+	return func() {
+		if prior.IsUndefined() {
+			js.Global().Get("Reflect").Call("deleteProperty", target, name)
+		} else {
+			obj.Call("defineProperty", target, name, prior)
 		}
 	}
+}
+
+// consoleSpy keeps what the page logs as errors, as syscall/js does for a call to a
+// released function.
+type consoleSpy struct {
+	got     []string
+	spy     js.Func
+	restore func()
+}
+
+func spyConsole() *consoleSpy {
+	s := &consoleSpy{}
+	s.spy = js.FuncOf(func(_ js.Value, a []js.Value) any {
+		if len(a) > 0 {
+			s.got = append(s.got, js.Global().Call("String", a[0]).String())
+		}
+		return nil
+	})
+	s.restore = define(js.Global().Get("console"), "error", s.spy.Value)
+	return s
+}
+
+// stop ends the spying, and returns what it kept. It can be called twice.
+func (s *consoleSpy) stop() []string {
+	if s.restore != nil {
+		s.restore()
+		s.restore = nil
+		s.spy.Release()
+	}
+	return s.got
+}
+
+// fence marks the end of what drain waits for.
+type fence struct{}
+
+// drain returns the events pushed for w so far: its inbox keeps their order, so the
+// fence pushed now comes after every one of them, however busy the machine is.
+func drain(w *Window) []any {
+	var out []any
+	w.in.Push(fence{})
+	for {
+		select {
+		case e, ok := <-w.Input():
+			if _, end := e.(fence); end || !ok {
+				return out
+			}
+			out = append(out, e)
+		case <-time.After(30 * time.Second):
+			panic("the inbox never fed its fence through")
+		}
+	}
+}
+
+// stamped gives a browser event the time it says it happened, in the browser's own
+// clock, as an event a busy page runs late carries.
+func stamped(e js.Value, ms float64) js.Value {
+	js.Global().Get("Object").Call("defineProperty", e, "timeStamp", map[string]any{"value": ms})
+	return e
 }

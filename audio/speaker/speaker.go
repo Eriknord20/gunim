@@ -338,7 +338,8 @@ var (
 var ErrOpen = errors.New("speaker: the speakers are open already")
 
 // Open starts the speakers playing m. A process has them open once at
-// a time.
+// a time. In a browser, which holds sound back until the user's first click, key or
+// touch, Open returns at once, and what plays meanwhile sounds from then on.
 func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	opened.Lock()
 	defer opened.Unlock()

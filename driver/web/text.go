@@ -176,7 +176,7 @@ func (d *Driver) listenText(doc js.Value) {
 					d.mu.Unlock()
 					if single {
 						e.Call("preventDefault")
-						w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+						w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: stamp(e)})
 					}
 				}
 			}

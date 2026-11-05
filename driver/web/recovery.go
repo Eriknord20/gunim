@@ -178,7 +178,10 @@ func (d *Driver) calibrateRefresh() {
 			d.observeRefresh(args[0].Float())
 		}
 		remaining--
-		if remaining > 0 {
+		d.mu.Lock()
+		stopped := d.stopped
+		d.mu.Unlock()
+		if remaining > 0 && !stopped {
 			js.Global().Call("requestAnimationFrame", callback)
 		} else {
 			callback.Release()
