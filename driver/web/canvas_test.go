@@ -942,7 +942,7 @@ func TestAutoHeightFollowsTheWidth(t *testing.T) {
 		box := doc.Call("createElement", "div")
 		box.Get("style").Set("width", "400px")
 		doc.Get("body").Call("appendChild", box)
-		defer box.Call("remove")
+		t.Cleanup(func() { box.Call("remove") })
 		c := doc.Call("createElement", "canvas")
 		c.Set("width", 400)
 		c.Set("height", 100)
