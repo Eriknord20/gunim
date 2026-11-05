@@ -428,8 +428,7 @@ func newCompositor(g gl.Context) (*compositor, error) {
 	for _, v := range []float32{0, 0, 1, 0, 1, 1, 0, 1} {
 		verts = binary.LittleEndian.AppendUint32(verts, math.Float32bits(v))
 	}
-	g.BufferInit(gl.ARRAY_BUFFER, len(verts), glStaticDraw)
-	g.BufferSubData(gl.ARRAY_BUFFER, 0, verts)
+	g.BufferData(gl.ARRAY_BUFFER, verts, glStaticDraw)
 	g.EnableVertexAttribArray(0)
 	g.VertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0)
 	c.ibo = g.CreateBuffer()
@@ -438,8 +437,7 @@ func newCompositor(g gl.Context) (*compositor, error) {
 	for _, i := range []uint16{0, 1, 2, 0, 2, 3} {
 		idx = binary.LittleEndian.AppendUint16(idx, i)
 	}
-	g.BufferInit(gl.ELEMENT_ARRAY_BUFFER, len(idx), glStaticDraw)
-	g.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, idx)
+	g.BufferData(gl.ELEMENT_ARRAY_BUFFER, idx, glStaticDraw)
 	g.BindVertexArray(0)
 	return c, nil
 }

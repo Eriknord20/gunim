@@ -44,7 +44,6 @@ type Context interface {
 	RenderbufferStorageMultisample(target uint32, samples int32, internalFormat uint32, width int32, height int32)
 	BlendEquationSeparate(modeRGB uint32, modeAlpha uint32)
 	BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlpha uint32, dstAlpha uint32)
-	BufferInit(target uint32, size int, usage uint32)
 	// BufferData gives the buffer a new store holding data, which must not be empty.
 	// It is a gunim change.
 	BufferData(target uint32, data []byte, usage uint32)
