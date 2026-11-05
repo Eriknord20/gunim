@@ -332,6 +332,34 @@ func TestLongTextEditsTheStretchTheMirrorHolds(t *testing.T) {
 	}
 }
 
+// TestShiftDeleteAlwaysDoesSomething: it cuts where the browser can, which takes a
+// selection and a field it may copy from, and deletes everywhere else.
+func TestShiftDeleteAlwaysDoesSomething(t *testing.T) {
+	field := widget.NewTextField()
+	k := typistFor(t, field)
+	k.typed("abc")
+	k.key("Home", "Home")
+	k.key("Delete", "Delete", "shiftKey")
+	k.check("after Shift+Delete with nothing selected")
+	k.wants("bc", 0)
+}
+
+func TestShiftDeleteInAPasswordDeletes(t *testing.T) {
+	field := widget.NewTextField()
+	field.Secret = true
+	k := typistFor(t, field)
+	k.typed("abc")
+	k.key("Delete", "Delete", "shiftKey")
+	k.wants("abc", 3) // nothing after the caret
+	k.key("Home", "Home")
+	k.key("Delete", "Delete", "shiftKey")
+	k.wants("bc", 0)
+	k.key("a", "KeyA", "ctrlKey")
+	k.key("Delete", "Delete", "shiftKey")
+	k.wants("", 0)
+	k.check("after deleting the selection")
+}
+
 // composer is a browser's input method, working on the mirror as a dead key or a
 // language's input method does: each step replaces what it composed so far.
 type composer struct {

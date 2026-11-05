@@ -824,6 +824,8 @@ func TestBrowser(t *testing.T) {
 				t.Errorf("%s in a field left the browser", c[0])
 			}
 		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{0, 3}}, w.editSeq)
+		drain(w)
 		for _, c := range []struct{ name, mod string }{{"Insert", "ctrlKey"}, {"Insert", "shiftKey"}, {"Delete", "shiftKey"}} {
 			if key(d.text, c.name, c.name, c.mod) || len(heard()) != 0 {
 				t.Errorf("%s with %s in a field left the browser", c.name, c.mod)
@@ -832,6 +834,23 @@ func TestBrowser(t *testing.T) {
 		// Those alone stay gunim's.
 		if !key(d.text, "Delete", "Delete") || len(heard()) != 1 {
 			t.Error("Delete in a field left gunim")
+		}
+		// Shift+Delete cuts only what the browser can cut: a selection in a plain field.
+		// The browser would do nothing with the others.
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{1, 1}}, w.editSeq)
+		drain(w)
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete with nothing selected was left to the browser")
+		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{0, 3}, Secret: true}, w.editSeq)
+		drain(w)
+		if !key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 1 {
+			t.Error("Shift+Delete in a password field was left to the browser")
+		}
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{3, 0}}, w.editSeq)
+		drain(w)
+		if key(d.text, "Delete", "Delete", "shiftKey") || len(heard()) != 0 {
+			t.Error("Shift+Delete on a backward selection was not left to the browser")
 		}
 	})
 	t.Run("dead keys and AltGr stay the browser's", func(t *testing.T) {

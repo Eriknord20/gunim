@@ -314,10 +314,20 @@ func (d *Driver) editKeyOwnedByDOM(e js.Value) bool {
 	switch {
 	case ctrl && name == "v", shift && !ctrl && name == "insert":
 		return true
-	case ctrl && (name == "x" || name == "c"), ctrl && !shift && name == "insert", shift && !ctrl && name == "delete":
+	case ctrl && (name == "x" || name == "c"), ctrl && !shift && name == "insert":
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		return d.typing != nil && d.typing.state != nil
+	case shift && !ctrl && name == "delete":
+		// The browser cuts a selection in a plain field and does nothing else, where
+		// the key still has to delete, which gunim does.
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.typing == nil || d.typing.state == nil {
+			return false
+		}
+		s := d.typing.state
+		return !s.Secret && s.Selection[0] != s.Selection[1]
 	}
 	return false
 }
