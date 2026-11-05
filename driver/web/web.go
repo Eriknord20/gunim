@@ -110,8 +110,9 @@ type Driver struct {
 	compStart              int
 	compSuffix, clipboard  string
 
-	// scaleQuery is the media query that tells of the page's scale changing, and
-	// scaleChanged what hears it.
+	// pageScale is the page's devicePixelRatio as last measured, scaleQuery the media
+	// query that tells of it changing, and scaleChanged what hears that.
+	pageScale    float32
 	scaleQuery   js.Value
 	scaleChanged js.Func
 
@@ -183,6 +184,7 @@ func openDriver() (*Driver, error) {
 		d.mu.Lock()
 		d.frameAsked = false
 		d.mu.Unlock()
+		d.checkScale()
 		d.frame()
 		return nil
 	})
@@ -250,6 +252,10 @@ func pinAutoSize(c js.Value) {
 	}
 	c.Set("width", bw)
 	c.Set("height", bh)
+	// Lay it out as it now stands. The page's own ResizeObserver hears after the
+	// driver's, of the last layout, and a try above would read to it as a size that
+	// then changed, which the browser reports as a loop.
+	c.Get("clientWidth")
 }
 
 // measure reads the canvas's size and the page's scale, and sizes the
@@ -258,6 +264,9 @@ func (d *Driver) measure() bool {
 	w := float32(d.canvas.Get("clientWidth").Float())
 	h := float32(d.canvas.Get("clientHeight").Float())
 	s := float32(js.Global().Get("devicePixelRatio").Float())
+	d.mu.Lock()
+	d.pageScale = s
+	d.mu.Unlock()
 	if s <= 0 || math.IsNaN(float64(s)) {
 		s = 1
 	}
@@ -924,7 +933,9 @@ func (d *Driver) listen(doc js.Value) {
 }
 
 // watchScale listens for the page's scale to change. That can come with no resize,
-// as on a move to another screen, and a media query is the one thing that tells.
+// as on a move to another screen, and a media query is what tells of it on a page at
+// rest. DevTools' emulation changes the scale with no such event, so each animation
+// frame looks as well; see checkScale.
 func (d *Driver) watchScale() {
 	d.scaleChanged = js.FuncOf(func(js.Value, []js.Value) any {
 		defer survive("scale")
@@ -945,6 +956,18 @@ func (d *Driver) armScale() {
 	}
 	d.scaleQuery = win.Call("matchMedia", "(resolution: "+strconv.FormatFloat(win.Get("devicePixelRatio").Float(), 'f', -1, 64)+"dppx)")
 	d.scaleQuery.Call("addEventListener", "change", d.scaleChanged)
+}
+
+// checkScale follows the page's scale if it has changed with nothing to say so.
+func (d *Driver) checkScale() {
+	s := float32(js.Global().Get("devicePixelRatio").Float())
+	d.mu.Lock()
+	same := s == d.pageScale
+	d.mu.Unlock()
+	if !same {
+		d.armScale()
+		d.resized()
+	}
 }
 
 // readExactSize takes the canvas's size in device pixels from a ResizeObserver's

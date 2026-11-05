@@ -473,7 +473,7 @@ func TestACanvasPastTheGPUsLimitStillDraws(t *testing.T) {
 	d, w := testWindow(t)
 	keepLimit(t, d)
 	limit := gpuLimit(d.ctx)
-	wantW := float32(limit) * 3 / d.pageScale()
+	wantW := float32(limit) * 3 / pageRatio()
 	setCanvasSize(t, d, strconv.Itoa(int(wantW))+"px", "300px")
 	if d.surfW != limit {
 		t.Fatalf("the canvas is %v wide at scale %v, its buffer %d, on a limit of %d", wantW, d.scale, d.surfW, limit)
@@ -484,8 +484,8 @@ func TestACanvasPastTheGPUsLimitStillDraws(t *testing.T) {
 	if got := w.Size(); got.W != float32(int(wantW)) {
 		t.Fatalf("the window's logical size is %v", got)
 	}
-	if got := w.Scale(); got >= d.pageScale() || got <= 0 {
-		t.Fatalf("the window's scale is %v, the page's %v", got, d.pageScale())
+	if got := w.Scale(); got >= pageRatio() || got <= 0 {
+		t.Fatalf("the window's scale is %v, the page's %v", got, pageRatio())
 	}
 	present(t, w, testRed)
 	d.frame()
@@ -524,7 +524,7 @@ func TestABufferSmallerThanAskedForStillDraws(t *testing.T) {
 		r.Call("deleteProperty", d.ctx, "drawingBufferWidth")
 		r.Call("deleteProperty", d.ctx, "drawingBufferHeight")
 	})
-	cssW := 1000 / d.pageScale()
+	cssW := 1000 / pageRatio()
 	setCanvasSize(t, d, strconv.Itoa(int(cssW))+"px", strconv.Itoa(int(cssW/2))+"px")
 	if d.surfW != 400 || d.surfH > 400 || d.canvas.Get("width").Int() != 400 {
 		t.Fatalf("the buffer is %dx%d, the canvas %d wide, on 400 given", d.surfW, d.surfH, d.canvas.Get("width").Int())
@@ -552,8 +552,8 @@ func TestABufferSmallerThanAskedForStillDraws(t *testing.T) {
 	}
 }
 
-// pageScale is the page's device pixel ratio.
-func (d *Driver) pageScale() float32 { return float32(js.Global().Get("devicePixelRatio").Float()) }
+// pageRatio is the page's device pixel ratio.
+func pageRatio() float32 { return float32(js.Global().Get("devicePixelRatio").Float()) }
 
 func TestFitLimit(t *testing.T) {
 	for _, c := range []struct {
@@ -693,6 +693,28 @@ func TestTheRefreshEstimateAllocatesNothing(t *testing.T) {
 	}
 }
 
+// DevTools' emulation changes the page's scale with no event. An animation frame
+// finds it.
+func TestAScaleChangeWithNoEventIsFoundByAFrame(t *testing.T) {
+	d, w := testWindow(t)
+	f := fakePageScale(t, d, 1)
+	present(t, w, testRed)
+	d.resized()
+	d.frame()
+	d.checkScale()
+	if got := f.lastQuery(); got != "(resolution: 1dppx)" {
+		t.Fatalf("listening for %q with no change", got)
+	}
+	f.setQuietly(2)
+	d.checkScale()
+	if got := w.Scale(); got != 2 {
+		t.Fatalf("the window's scale is %v", got)
+	}
+	if got := f.lastQuery(); got != "(resolution: 2dppx)" {
+		t.Fatalf("listening for %q", got)
+	}
+}
+
 // The first click focuses the canvas from code, which has the browser draw its
 // focus ring round all of it, unless told not to.
 func TestTheCanvasHasNoFocusRing(t *testing.T) {
@@ -774,6 +796,9 @@ func (f *fakeScale) set(to float64) {
 	js.Global().Set("devicePixelRatio", to)
 	f.state.Get("live").Call("dispatchEvent", js.Global().Get("Event").New("change"))
 }
+
+// setQuietly changes the page's scale with no event, as DevTools' emulation does.
+func (f *fakeScale) setQuietly(to float64) { js.Global().Set("devicePixelRatio", to) }
 
 func (f *fakeScale) lastQuery() string {
 	q := f.state.Get("queries")
@@ -1022,6 +1047,12 @@ func TestACanvasShownLeavesNoResizeObserverLoop(t *testing.T) {
 			ro := js.Global().Get("ResizeObserver").New(f)
 			defer ro.Call("disconnect")
 			ro.Call("observe", el)
+			// A page's own observer hears after the driver's.
+			pages := js.FuncOf(func(js.Value, []js.Value) any { return nil })
+			defer pages.Release()
+			own := js.Global().Get("ResizeObserver").New(pages)
+			defer own.Call("disconnect")
+			own.Call("observe", el)
 			time.Sleep(50 * time.Millisecond)
 			el.Get("style").Set("display", "block")
 			select {
