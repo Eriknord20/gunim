@@ -46,6 +46,7 @@ type Window struct {
 	// stale says the window was hidden and has presented nothing since, so its
 	// last frame is the popup's before, and it stays out of sight.
 	stale bool
+	held  compose.Held
 
 	// The fields below belong to the frame loop.
 
@@ -144,16 +145,22 @@ func (w *Window) Close() error {
 	return nil
 }
 
-// Place implements [driver.Placer].
+// Place implements [driver.Placer]. A new size takes effect on the screen with the
+// frame the engine presents next, which asks for the animation frame.
 func (w *Window) Place(anchor geom.Rect, size geom.Size) error {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
 	if w.parent == nil || w.fills {
 		return nil
 	}
+	was, resized := w.rectLocked(), size != w.size
 	w.size = size
 	w.d.placeLocked(w, anchor)
-	w.d.kickLocked()
+	if resized {
+		w.held.Resized(was)
+	} else {
+		w.d.kickLocked()
+	}
 	return nil
 }
 

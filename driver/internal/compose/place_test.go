@@ -55,3 +55,27 @@ func TestPopupRoom(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestHeldKeepsTheWindowUntilItsFrameComes(t *testing.T) {
+	var h Held
+	was := geom.Rect{Min: geom.Pt(1, 2), Max: geom.Pt(11, 12)}
+	now := geom.Rect{Min: geom.Pt(3, 4), Max: geom.Pt(33, 44)}
+	if got := h.Rect(was, false); got != was {
+		t.Fatalf("holding nothing, got %v", got)
+	}
+	h.Resized(was)
+	if got := h.Rect(now, false); got != was {
+		t.Fatalf("with no frame, got %v, want %v", got, was)
+	}
+	// Told again before its frame comes, it still shows the frame it showed.
+	h.Resized(now)
+	if got := h.Rect(geom.Rect{Max: geom.Pt(50, 50)}, false); got != was {
+		t.Fatalf("told twice, got %v, want %v", got, was)
+	}
+	if got := h.Rect(now, true); got != now {
+		t.Fatalf("with its frame, got %v, want %v", got, now)
+	}
+	if got := h.Rect(now, false); got != now {
+		t.Fatalf("after its frame, got %v, want %v", got, now)
+	}
+}

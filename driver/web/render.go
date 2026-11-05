@@ -43,7 +43,7 @@ func (d *Driver) frame() {
 	d.gone = nil
 	scale, surfW, surfH := d.scale, d.surfW, d.surfH
 	for _, w := range d.windows {
-		r := w.rectLocked()
+		r := w.held.Rect(w.rectLocked(), w.next != nil)
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.fills {
 			// The browser's count of device pixels can differ from this by one.

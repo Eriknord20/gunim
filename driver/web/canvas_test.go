@@ -373,3 +373,66 @@ func TestAReusedPopupNeverShowsThePopupBefore(t *testing.T) {
 	}
 	noGLError(t, d)
 }
+
+// A popup told a new size waits for its frame at that size: the frames between
+// lay its last frame where it was, with no draw of that frame at the new size.
+func TestAPopupChangingSizeDrawsOnce(t *testing.T) {
+	d, w := testWindow(t)
+	present(t, w, testRed)
+	p := testPopup(t, d, w)
+	defer func() { _ = p.Close(); d.frame() }()
+	present(t, p, testBlue)
+	d.frame()
+	s := float64(d.scale)
+	wasW := int(40 * s)
+	anchor := geom.Rect{Min: geom.Pt(20, 20), Max: geom.Pt(20, 20)}
+	if err := p.Place(anchor, geom.Sz(80, 60)); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Size(); got != geom.Sz(80, 60) {
+		t.Fatalf("the window says its size is %v", got)
+	}
+	// Another window's frame comes first, as it does on Android's render thread.
+	present(t, w, testRed)
+	d.frame()
+	if p.pane.LastW != wasW {
+		t.Fatalf("with no frame at its new size, it drew at %d wide, was %d", p.pane.LastW, wasW)
+	}
+	// The frame still shows where it did, and only there.
+	if got := pixelAt(d, int(30*s), int(30*s)); got[2] < 240 {
+		t.Fatalf("in the old size it shows %v", got)
+	}
+	if got := pixelAt(d, int(80*s), int(30*s)); got[0] < 240 {
+		t.Fatalf("past the old size it shows %v", got)
+	}
+	present(t, p, testGreen)
+	d.frame()
+	if p.pane.LastW != int(80*s) {
+		t.Fatalf("with its frame it drew at %d wide, want %d", p.pane.LastW, int(80*s))
+	}
+	if got := pixelAt(d, int(80*s), int(30*s)); got[1] < 240 {
+		t.Fatalf("at its new size it shows %v", got)
+	}
+	noGLError(t, d)
+}
+
+// A move at the same size needs no new frame, and shows at once.
+func TestAPopupMovingShowsAtOnce(t *testing.T) {
+	d, w := testWindow(t)
+	present(t, w, testRed)
+	p := testPopup(t, d, w)
+	defer func() { _ = p.Close(); d.frame() }()
+	present(t, p, testBlue)
+	d.frame()
+	s := float64(d.scale)
+	if err := p.Place(geom.Rect{Min: geom.Pt(100, 100), Max: geom.Pt(100, 100)}, geom.Sz(40, 40)); err != nil {
+		t.Fatal(err)
+	}
+	d.frame()
+	if got := pixelAt(d, int(110*s), int(110*s)); got[2] < 240 {
+		t.Fatalf("at its new place it shows %v", got)
+	}
+	if got := pixelAt(d, int(30*s), int(30*s)); got[0] < 240 {
+		t.Fatalf("at its old place it shows %v", got)
+	}
+}

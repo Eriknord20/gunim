@@ -144,7 +144,7 @@ func (d *Driver) frame(c *compose.Compositor) {
 	scale, surfW, surfH, rate := d.density, d.surfW, d.surfH, d.rate
 	pan, panning := d.panLocked(time.Now())
 	for _, w := range d.windows {
-		r := w.rectLocked()
+		r := w.held.Rect(w.rectLocked(), w.next != nil)
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.next != nil {
 			j := job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under}
