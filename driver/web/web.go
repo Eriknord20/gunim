@@ -947,12 +947,25 @@ func browserKey(name, code string, m input.Mods) bool {
 	case !command:
 		return arrow || name == "Home" || lower == "d"
 	case alt:
-		// On a Mac: the developer tools, and moving along the tabs.
-		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c" || arrow)
+		// On a Mac: the developer tools, moving along the tabs, and hiding the other
+		// windows or minimizing them all.
+		return m&input.ModSuper != 0 && (lower == "i" || lower == "j" || lower == "c" || lower == "h" || lower == "m" || arrow)
 	}
 	if m&input.ModControl != 0 && m&input.ModSuper != 0 {
 		// Full screen on a Mac.
 		return lower == "f"
+	}
+	if m&input.ModSuper != 0 {
+		// The system's own on a Mac: hiding and minimizing the window, and moving
+		// between windows, on the key left of the 1 or, on some keyboards, of the Z.
+		// And the browser's settings.
+		switch lower {
+		case "h", "m", "`", "~", ",":
+			return true
+		}
+		if code == "Backquote" || code == "IntlBackslash" {
+			return true
+		}
 	}
 	switch lower {
 	case "r", "t", "n", "w", "l", "f5", "tab", "pageup", "pagedown",
@@ -988,6 +1001,8 @@ func shortcutName(name, code string) string {
 		return "["
 	case code == "BracketRight":
 		return "]"
+	case code == "Comma":
+		return ","
 	}
 	return strings.ToLower(name)
 }

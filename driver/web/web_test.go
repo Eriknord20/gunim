@@ -608,6 +608,15 @@ func TestBrowser(t *testing.T) {
 			{"d", "KeyD", []string{alt}, false},
 			{"ArrowRight", "ArrowRight", []string{cmd, alt}, false},
 			{"{", "BracketLeft", []string{cmd, shift}, false},
+			// The system's own on a Mac, and the browser's settings.
+			{"h", "KeyH", []string{cmd}, false},
+			{"m", "KeyM", []string{cmd}, false},
+			{"`", "Backquote", []string{cmd}, false},
+			{"~", "Backquote", []string{cmd, shift}, false},
+			{"<", "IntlBackslash", []string{cmd}, false},
+			{",", "Comma", []string{cmd}, false},
+			{"h", "KeyH", []string{cmd, alt}, false},
+			{"m", "KeyM", []string{cmd, alt}, false},
 			// The same places on other layouts.
 			{"к", "KeyR", []string{ctrl}, false},
 			{"д", "KeyL", []string{ctrl}, false},
@@ -625,6 +634,11 @@ func TestBrowser(t *testing.T) {
 			{"ArrowLeft", "ArrowLeft", []string{cmd}, true},
 			{"ы", "KeyS", []string{ctrl}, true},
 			{"!", "Digit1", []string{ctrl, shift}, true},
+			// The same letters as above, with Control: those are the program's.
+			{"h", "KeyH", []string{ctrl}, true},
+			{"m", "KeyM", []string{ctrl}, true},
+			{",", "Comma", []string{ctrl}, true},
+			{"`", "Backquote", []string{ctrl}, true},
 			// Typed on the canvas: the handler may move focus to the mirror before
 			// the browser ends the key, which must not type it there too.
 			{"g", "KeyG", nil, true},
