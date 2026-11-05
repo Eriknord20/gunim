@@ -325,3 +325,51 @@ func TestAShotAskedForMeanwhileStays(t *testing.T) {
 		t.Fatalf("the older ran %d times, the newer %d", older, newer)
 	}
 }
+
+// A spare popup shown again has its last frame from the popup before. That frame
+// stays out of sight, however the frames fall, until its own arrives.
+func TestAReusedPopupNeverShowsThePopupBefore(t *testing.T) {
+	d, w := testWindow(t)
+	present(t, w, testRed)
+	p := testPopup(t, d, w)
+	defer func() { _ = p.Close(); d.frame() }()
+	present(t, p, testBlue)
+	d.frame()
+	s := float64(d.scale)
+	x, y := int(30*s), int(30*s)
+	if got := pixelAt(d, x, y); got[2] < 240 {
+		t.Fatalf("the popup shows %v", got)
+	}
+	_ = p.Hide()
+	d.frame()
+	if got := pixelAt(d, x, y); got[0] < 240 {
+		t.Fatalf("hidden, it shows %v", got)
+	}
+	// Shown, with the frames running before its own comes.
+	_ = p.Show()
+	for i := range 3 {
+		if i > 0 {
+			present(t, w, testRed)
+		}
+		d.frame()
+		if got := pixelAt(d, x, y); got[0] < 240 {
+			t.Fatalf("frame %d after Show shows %v, the popup before", i, got)
+		}
+	}
+	present(t, p, testGreen)
+	d.frame()
+	if got := pixelAt(d, x, y); got[1] < 240 {
+		t.Fatalf("with its own frame it shows %v", got)
+	}
+	// A frame sent while hidden is its own, and shows with Show.
+	_ = p.Hide()
+	d.frame()
+	present(t, p, testBlue)
+	d.frame()
+	_ = p.Show()
+	d.frame()
+	if got := pixelAt(d, x, y); got[2] < 240 {
+		t.Fatalf("with a frame sent while hidden it shows %v", got)
+	}
+	noGLError(t, d)
+}

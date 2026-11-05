@@ -44,6 +44,9 @@ type Window struct {
 	size   geom.Size
 	hidden bool
 	closed bool
+	// stale says the window was hidden and has presented nothing since,
+	// so its last frame is the popup's before, and it stays out of sight.
+	stale bool
 	// next is the frame waiting for the render thread, and under the
 	// colour under the window's frames.
 	next  *frame
@@ -124,6 +127,7 @@ func (w *Window) Present(ops []paint.Op, damage []geom.Rect) error {
 		return errClosed
 	}
 	w.next = &frame{ops: ops, damage: damage}
+	w.stale = false
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -253,7 +257,7 @@ func (w *Window) SetBackground(c color.NRGBA) {
 // Hide implements [driver.Recycler].
 func (w *Window) Hide() error {
 	w.d.mu.Lock()
-	w.hidden = true
+	w.hidden, w.stale = true, true
 	w.d.excludeGesturesLocked()
 	w.d.keepAwakeLocked()
 	w.d.mu.Unlock()
@@ -261,7 +265,8 @@ func (w *Window) Hide() error {
 	return nil
 }
 
-// Show implements [driver.Recycler].
+// Show implements [driver.Recycler]. The window shows from its next
+// frame, as the last one it drew was for the popup before.
 func (w *Window) Show() error {
 	w.d.mu.Lock()
 	w.hidden = false

@@ -164,6 +164,7 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("hide=%v", p)
 		}
 		_ = p.Show()
+		_ = p.Present(solid(blue, p.Size()), []geom.Rect{paint.Everything})
 		d.frame()
 		if p := pixel(int(30*d.scale), int(30*d.scale)); p[2] < 240 {
 			t.Fatalf("show=%v", p)
