@@ -141,6 +141,7 @@ func TestBrowser(t *testing.T) {
 	}
 	red := color.NRGBA{R: 255, A: 255}
 	blue := color.NRGBA{B: 255, A: 255}
+	green := color.NRGBA{G: 255, A: 255}
 	_ = w.Present(solid(red, w.Size()), []geom.Rect{paint.Everything})
 	d.frame()
 	pixel := func(x, y int) []byte {
@@ -197,9 +198,6 @@ func TestBrowser(t *testing.T) {
 		}
 	})
 	t.Run("deferred sharpening", func(t *testing.T) {
-		for len(w.presented) > 0 {
-			<-w.presented
-		}
 		// Hold back the browser's next animation frame, which would take the
 		// sharpening away unseen, and on a slow machine can be seconds off.
 		asked := func() bool {
@@ -220,6 +218,13 @@ func TestBrowser(t *testing.T) {
 			d.frameAsked = false
 			d.mu.Unlock()
 		}()
+		// A small frame has the renderer keep its canvas, so that sharpening draws the
+		// part drawn stretched and no more.
+		_ = w.Present(solid(red, w.Size()), []geom.Rect{{Max: geom.Pt(1, 1)}})
+		d.frame()
+		for len(w.presented) > 0 {
+			<-w.presented
+		}
 		at := time.Now().Add(50 * time.Millisecond)
 		d.sharpenAt(w, at)
 		if w.sharpTimer == nil || !w.sharpAt.Equal(at) {
@@ -236,22 +241,41 @@ func TestBrowser(t *testing.T) {
 			}
 		}
 		// What the frame draws is the last frame again, where it drew stretched, so a
-		// change to that shows it drew.
+		// change to that shows it drew. The rest of the window stays as it was.
 		was := w.pane.Last
 		defer func() { w.pane.Last = was }()
 		w.pane.Last = solid(blue, w.Size())
-		w.pane.R.Stretched = geom.Rect{Max: w.Size().Point()}
+		w.pane.R.Stretched = geom.Rect{Min: geom.Pt(10, 10), Max: geom.Pt(30, 30)}
 		d.frame()
 		if sharpen() {
 			t.Fatal("the frame did not sharpen")
 		}
-		g := d.g
-		g.BindFramebuffer(gl.FRAMEBUFFER, w.pane.R.WindowFBO)
-		var px [4]byte
-		g.ReadPixels(px[:], 2, 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE)
-		g.BindFramebuffer(gl.FRAMEBUFFER, 0)
-		if px[2] < 240 {
-			t.Fatalf("the sharpening drew nothing: %v", px)
+		inside, outside := int(20*d.scale), int(60*d.scale)
+		if p := pixel(inside, inside); p[2] < 240 {
+			t.Fatalf("the part drawn stretched shows %v after sharpening", p)
+		}
+		if p := pixel(outside, outside); p[0] < 240 {
+			t.Fatalf("the rest of the window shows %v after sharpening", p)
+		}
+		// Under a popup the window's frame goes through its texture, and the same holds.
+		pw, err := d.NewWindow(driver.Options{Kind: driver.KindPopup, Parent: w, Size: geom.Sz(10, 10), Anchor: geom.Rect{Min: geom.Pt(100, 100), Max: geom.Pt(100, 100)}, Over: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = pw.Close(); d.frame() }()
+		_ = pw.Present(solid(green, pw.Size()), []geom.Rect{paint.Everything})
+		d.frame()
+		w.pane.Last = solid(red, w.Size())
+		w.pane.R.Stretched = geom.Rect{Min: geom.Pt(10, 10), Max: geom.Pt(30, 30)}
+		d.mu.Lock()
+		w.sharpen = true
+		d.mu.Unlock()
+		d.frame()
+		if p := pixel(inside, inside); p[0] < 240 {
+			t.Fatalf("under a popup, the part drawn stretched shows %v after sharpening", p)
+		}
+		if p := pixel(int(70*d.scale), int(70*d.scale)); p[2] < 240 {
+			t.Fatalf("under a popup, the rest of the window shows %v after sharpening", p)
 		}
 		if len(w.presented) != 0 {
 			t.Fatal("a sharpened frame said it presented one the engine never sent")
