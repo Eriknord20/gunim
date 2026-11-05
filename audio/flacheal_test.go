@@ -7,7 +7,7 @@ import (
 )
 
 // shortLast writes a FLAC file of n frames, to a file it can seek in.
-func shortLast(t *testing.T, n int) ([]byte, []int32) {
+func shortLast(t *testing.T, n int) (file []byte, samples []int32) {
 	t.Helper()
 	in := make([]int32, 2*n)
 	for i := range in {

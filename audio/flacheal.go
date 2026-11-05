@@ -71,16 +71,18 @@ func healFLACSeeker(r io.ReadSeeker) (io.ReadSeeker, error) {
 		return nil, err
 	}
 	h := &healedFLAC{ReadSeeker: r, pos: start}
-	_, err = io.ReadFull(r, h.head[:])
-	if _, serr := r.Seek(start, io.SeekStart); serr != nil {
-		return nil, serr
+	// A file too short to hold the sizes is the parser's to refuse.
+	_, short := io.ReadFull(r, h.head[:])
+	if _, err := r.Seek(start, io.SeekStart); err != nil {
+		return nil, err
 	}
-	if err != nil || start != 0 || !healFLACSizes(h.head[:]) {
-		return r, nil
+	if short == nil && start == 0 && healFLACSizes(h.head[:]) {
+		return h, nil
 	}
-	return h, nil
+	return r, nil
 }
 
+// Read reads the file, with its first bytes put right.
 func (h *healedFLAC) Read(p []byte) (int, error) {
 	n, err := h.ReadSeeker.Read(p)
 	if h.pos < flacSizesEnd {
@@ -90,6 +92,7 @@ func (h *healedFLAC) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Seek moves in the file, keeping track of where it is.
 func (h *healedFLAC) Seek(off int64, whence int) (int64, error) {
 	pos, err := h.ReadSeeker.Seek(off, whence)
 	if err == nil {
