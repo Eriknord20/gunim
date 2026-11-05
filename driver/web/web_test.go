@@ -823,6 +823,42 @@ func TestBrowser(t *testing.T) {
 			t.Errorf("a plain field kept the password field: %v, %q", d.text.Get("tagName"), d.secret.Get("value"))
 		}
 	})
+	t.Run("text follows in order when the engine is held up", func(t *testing.T) {
+		w.SetTextInput(true)
+		defer w.SetTextInput(false)
+		defer w.SetTextState(&input.TextState{}, w.editSeq)
+		w.SetTextState(&input.TextState{Text: "abc", Selection: [2]int{3, 3}, Composing: [2]int{3, 3}}, w.editSeq)
+		d.text.Call("focus")
+		drain(w)
+		before := func(data string) (cancelled bool) {
+			e := js.Global().Get("InputEvent").New("beforeinput", map[string]any{"bubbles": true, "cancelable": true, "inputType": "insertText", "data": data})
+			return !d.text.Call("dispatchEvent", e).Bool()
+		}
+		// With the engine level, the browser types in the mirror.
+		if before("x") {
+			t.Fatal("typing with the engine level was cancelled")
+		}
+		// A key the engine has yet to take: nothing reads the inbox in this test.
+		key(d.text, "Backspace", "Backspace")
+		if !before("d") {
+			t.Fatal("typing into a mirror out of date was left to the browser")
+		}
+		var got []string
+		for _, e := range drain(w) {
+			switch e := e.(type) {
+			case input.KeyPress:
+				got = append(got, fmt.Sprint(e.Key))
+			case input.TextInput:
+				got = append(got, e.Text)
+			}
+		}
+		if want := []string{fmt.Sprint(input.KeyBackspace), "d"}; !slices.Equal(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if got := d.text.Get("value").String(); got != "abc" {
+			t.Errorf("the mirror holds %q", got)
+		}
+	})
 	t.Run("typing with no text state still arrives", func(t *testing.T) {
 		w.SetTextInput(true)
 		defer w.SetTextInput(false)

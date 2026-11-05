@@ -168,16 +168,25 @@ func (d *Driver) listenText(doc js.Value) {
 		})
 		d.on(t, "compositionend", false, func(js.Value) { d.composing = false; d.domEdited(false) })
 		d.on(t, "beforeinput", false, func(e js.Value) {
-			if kind := e.Get("inputType").String(); kind == "insertLineBreak" || kind == "insertParagraph" {
-				w := d.typingWindow()
-				if w != nil {
-					d.mu.Lock()
-					single := w.state != nil && !w.state.Multiline
-					d.mu.Unlock()
-					if single {
-						e.Call("preventDefault")
-						w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
-					}
+			w := d.typingWindow()
+			if w == nil {
+				return
+			}
+			d.mu.Lock()
+			hasState := w.state != nil
+			single := hasState && !w.state.Multiline
+			d.mu.Unlock()
+			switch kind := e.Get("inputType").String(); {
+			case single && (kind == "insertLineBreak" || kind == "insertParagraph"):
+				e.Call("preventDefault")
+				w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+			case hasState && kind == "insertText" && !d.composing && e.Get("cancelable").Bool() && w.in.Waiting():
+				// The engine is held up, as waiting on the clipboard, with input it has
+				// yet to read, so the mirror is out of date. The text follows that input
+				// in order, and the mirror catches up with the engine.
+				e.Call("preventDefault")
+				if data := e.Get("data"); data.Type() == js.TypeString {
+					w.in.Push(input.TextInput{Text: data.String(), Time: time.Now()})
 				}
 			}
 		})

@@ -23,6 +23,8 @@ type Inbox struct {
 	mu     sync.Mutex
 	items  []any
 	closed bool
+	// sending says an item is on its way out, taken from items but not yet read.
+	sending bool
 }
 
 // New returns an inbox that stops feeding when quit closes.
@@ -52,6 +54,13 @@ func (q *Inbox) Close() {
 	q.nudge()
 }
 
+// Waiting reports whether anything pushed has yet to be read from Out.
+func (q *Inbox) Waiting() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.sending || len(q.items) > 0
+}
+
 func (q *Inbox) nudge() {
 	select {
 	case q.wake <- struct{}{}:
@@ -79,10 +88,14 @@ func (q *Inbox) feed() {
 		ev := q.items[0]
 		q.items = q.items[1:]
 		ev = q.lastMove(ev)
+		q.sending = true
 		q.mu.Unlock()
 		if !q.send(ev) {
 			return
 		}
+		q.mu.Lock()
+		q.sending = false
+		q.mu.Unlock()
 	}
 }
 
