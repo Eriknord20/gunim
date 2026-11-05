@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"strconv"
 	"syscall/js"
 	"testing"
@@ -732,5 +733,97 @@ func TestAPagesOwnTouchActionStays(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 		el.Call("remove")
+	}
+}
+
+// fakeScale stands in for the browser's page scale and its media queries, as a
+// test can't move the page to another screen.
+type fakeScale struct {
+	state js.Value
+}
+
+func fakePageScale(t *testing.T, d *Driver, was float64) *fakeScale {
+	t.Helper()
+	state := js.Global().Call("eval", `was => {
+		const state = {queries: [], live: null};
+		state.put = {};
+		for (const k of ["matchMedia", "devicePixelRatio"]) state.put[k] = Object.getOwnPropertyDescriptor(window, k);
+		window.matchMedia = q => {
+			const t = new EventTarget();
+			state.queries.push(q);
+			state.live = t;
+			return t;
+		};
+		Object.defineProperty(window, "devicePixelRatio", {configurable: true, writable: true, value: was});
+		return state;
+	}`).Invoke(was)
+	d.armScale()
+	t.Cleanup(func() {
+		o := js.Global().Get("Object")
+		o.Call("defineProperty", js.Global(), "matchMedia", state.Get("put").Get("matchMedia"))
+		o.Call("defineProperty", js.Global(), "devicePixelRatio", state.Get("put").Get("devicePixelRatio"))
+		d.armScale()
+		d.resized()
+	})
+	return &fakeScale{state}
+}
+
+// set changes the page's scale, and tells the query listening last.
+func (f *fakeScale) set(to float64) {
+	js.Global().Set("devicePixelRatio", to)
+	f.state.Get("live").Call("dispatchEvent", js.Global().Get("Event").New("change"))
+}
+
+func (f *fakeScale) lastQuery() string {
+	q := f.state.Get("queries")
+	return q.Index(q.Length() - 1).String()
+}
+
+// A change of the page's scale with no resize reaches the windows, popups too.
+func TestAScaleChangeWithNoResizeIsSeen(t *testing.T) {
+	d, w := testWindow(t)
+	f := fakePageScale(t, d, 1)
+	present(t, w, testRed)
+	p := testPopup(t, d, w)
+	defer func() { _ = p.Close(); d.frame() }()
+	present(t, p, testBlue)
+	d.resized()
+	d.frame()
+	cssW, cssH := d.cssW, d.cssH
+	if got := f.lastQuery(); got != "(resolution: 1dppx)" {
+		t.Fatalf("listening for %q", got)
+	}
+	for _, to := range []float64{2, 1.25, 3} {
+		drain(w)
+		drain(p)
+		f.set(to)
+		if got := w.Scale(); got != float32(to) {
+			t.Fatalf("the window's scale is %v, want %v", got, to)
+		}
+		if d.cssW != cssW || d.cssH != cssH {
+			t.Fatalf("the logical size went from %vx%v to %vx%v", cssW, cssH, d.cssW, d.cssH)
+		}
+		want := int(math.Round(float64(cssW) * to))
+		if d.surfW != want || d.canvas.Get("width").Int() != want {
+			t.Fatalf("at scale %v the buffer is %d wide, the driver thinks %d, want %d", to, d.canvas.Get("width").Int(), d.surfW, want)
+		}
+		if got, want := f.lastQuery(), "(resolution: "+strconv.FormatFloat(to, 'f', -1, 64)+"dppx)"; got != want {
+			t.Fatalf("after a change, listening for %q, want %q", got, want)
+		}
+		// The window's last frame draws at once, and fills the buffer.
+		d.frame()
+		if got := pixelAt(d, d.surfW-4, d.surfH-4); got[0] < 240 {
+			t.Errorf("at scale %v the far corner shows %v", to, got)
+		}
+		s := float64(d.scale)
+		if got := pixelAt(d, int(30*s), int(30*s)); got[2] < 240 {
+			t.Errorf("at scale %v the popup shows %v", to, got)
+		}
+		noGLError(t, d)
+		for name, x := range map[string]*Window{"window": w, "popup": p} {
+			if !slices.Contains(drain(x), any(driver.Redraw{})) {
+				t.Errorf("the %s heard no Redraw at scale %v", name, to)
+			}
+		}
 	}
 }

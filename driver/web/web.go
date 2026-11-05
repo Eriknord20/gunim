@@ -108,6 +108,11 @@ type Driver struct {
 	compStart              int
 	compSuffix, clipboard  string
 
+	// scaleQuery is the media query that tells of the page's scale changing, and
+	// scaleChanged what hears it.
+	scaleQuery   js.Value
+	scaleChanged js.Func
+
 	safeProbe      js.Value
 	safe           geom.Insets
 	keyboard       float32
@@ -325,13 +330,17 @@ func near(exact, worked int, scale float32) bool {
 
 // resized follows the canvas to its new size, and reports whether it changed.
 func (d *Driver) resized() bool {
+	d.mu.Lock()
+	scale := d.scale
+	d.mu.Unlock()
 	if !d.measure() {
 		return false
 	}
 	d.mu.Lock()
 	var fill []*Window
 	for _, w := range d.windows {
-		if w.fills {
+		// At a new scale, every window draws afresh for it.
+		if w.fills || d.scale != scale {
 			fill = append(fill, w)
 		}
 	}
@@ -870,6 +879,7 @@ func (d *Driver) listen(doc js.Value) {
 	})
 	d.on(win, "deviceorientationabsolute", true, d.heading)
 	d.on(win, "resize", true, func(js.Value) { d.resized() })
+	d.watchScale()
 	if ro := win.Get("ResizeObserver"); !ro.IsUndefined() {
 		f := js.FuncOf(func(_ js.Value, args []js.Value) any {
 			defer survive("resize")
@@ -887,6 +897,30 @@ func (d *Driver) listen(doc js.Value) {
 			observer.Call("observe", c)
 		}
 	}
+}
+
+// watchScale listens for the page's scale to change. That can come with no resize,
+// as on a move to another screen, and a media query is the one thing that tells.
+func (d *Driver) watchScale() {
+	d.scaleChanged = js.FuncOf(func(js.Value, []js.Value) any {
+		defer survive("scale")
+		d.armScale()
+		d.resized()
+		return nil
+	})
+	d.funcs = append(d.funcs, d.scaleChanged)
+	d.armScale()
+}
+
+// armScale listens for the page's scale to leave what it is now. A query says only
+// whether the scale matches, so each change needs one of its own.
+func (d *Driver) armScale() {
+	win := js.Global()
+	if d.scaleQuery.Truthy() {
+		d.scaleQuery.Call("removeEventListener", "change", d.scaleChanged)
+	}
+	d.scaleQuery = win.Call("matchMedia", "(resolution: "+strconv.FormatFloat(win.Get("devicePixelRatio").Float(), 'f', -1, 64)+"dppx)")
+	d.scaleQuery.Call("addEventListener", "change", d.scaleChanged)
 }
 
 // readExactSize takes the canvas's size in device pixels from a ResizeObserver's
