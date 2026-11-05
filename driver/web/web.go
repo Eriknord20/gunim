@@ -499,7 +499,7 @@ func (d *Driver) listen(doc js.Value) {
 
 	d.on(c, "contextmenu", false, func(e js.Value) { e.Call("preventDefault") })
 	d.on(c, "pointerdown", false, func(e js.Value) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, id := d.touchOf(e), e.Get("pointerId").Int()
 		d.mu.Lock()
 		d.lastTouch = e.Get("pointerType").String() != "mouse"
@@ -557,7 +557,7 @@ func (d *Driver) listen(doc js.Value) {
 	// focus.
 	d.on(c, "mousedown", false, func(e js.Value) { e.Call("preventDefault") })
 	d.on(c, "pointermove", true, func(e js.Value) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerMove)
 		d.mu.Lock()
@@ -599,7 +599,7 @@ func (d *Driver) listen(doc js.Value) {
 		}
 	})
 	up := func(e js.Value, cancel bool) {
-		p, now := d.at(e), time.Now()
+		p, now := d.at(e), stamp(e)
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
 		d.fingerEvent(id, e, input.FingerUp)
 		d.mu.Lock()
@@ -644,7 +644,7 @@ func (d *Driver) listen(doc js.Value) {
 		}
 		d.mu.Unlock()
 		if w != nil {
-			w.in.Push(input.PointerLeave{Time: time.Now()})
+			w.in.Push(input.PointerLeave{Time: stamp(e)})
 		}
 	})
 	d.on(c, "wheel", false, func(e js.Value) {
@@ -669,7 +669,7 @@ func (d *Driver) listen(doc js.Value) {
 		e.Call("preventDefault")
 		w.in.Push(input.Scroll{
 			Pos: local, Delta: geom.Pt(float32(-dx), float32(-dy)),
-			Notches: geom.Pt(float32(-dx/100), float32(-dy/100)), Mods: modsOf(e), Time: time.Now(),
+			Notches: geom.Pt(float32(-dx/100), float32(-dy/100)), Mods: modsOf(e), Time: stamp(e),
 		})
 	})
 
@@ -686,7 +686,7 @@ func (d *Driver) listen(doc js.Value) {
 			return
 		}
 		k := keyOf(e.Get("code").String(), e.Get("key").String())
-		m, now := modsOf(e), time.Now()
+		m, now := modsOf(e), stamp(e)
 		if altGr(e) {
 			m &^= input.ModControl | input.ModAlt
 		}
@@ -801,6 +801,22 @@ func (d *Driver) readExactSize(entries js.Value) {
 	d.exactW, d.exactH = box.Index(0).Get("inlineSize").Int(), box.Index(0).Get("blockSize").Int()
 	d.mu.Unlock()
 }
+
+// stamp returns when the browser says e happened, on Go's clock. A busy page runs
+// its handlers late and all at once, so the time a handler runs says nothing of how
+// fast a finger went. A browser that rounds its stamps, or one ahead of the clock,
+// reads as now.
+func stamp(e js.Value) time.Time {
+	now := time.Now()
+	age := performance.Call("now").Float() - e.Get("timeStamp").Float()
+	if age <= 0 || math.IsNaN(age) {
+		return now
+	}
+	return now.Add(-time.Duration(age * float64(time.Millisecond)))
+}
+
+// performance is the clock events are stamped by.
+var performance = js.Global().Get("performance")
 
 // survive keeps a JavaScript exception thrown into a callback, which
 // syscall/js raises as a panic, from ending the program: the event is

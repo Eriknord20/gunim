@@ -327,6 +327,69 @@ func TestBrowser(t *testing.T) {
 		mouse("pointerup", 0, 0)
 		drain(w)
 	})
+	t.Run("events carry when they happened, however late they run", func(t *testing.T) {
+		drain(w)
+		r := d.canvas.Call("getBoundingClientRect")
+		x, y := r.Get("left").Float()+40, r.Get("top").Float()+40
+		// A burst, all run now, that a hand made 16 ms apart.
+		base := js.Global().Get("performance").Call("now").Float() - 200
+		event := func(class, kind string, ms float64, init map[string]any) {
+			init["bubbles"], init["cancelable"], init["clientX"], init["clientY"] = true, true, x, y
+			d.canvas.Call("dispatchEvent", stamped(js.Global().Get(class).New(kind, init), ms))
+		}
+		touch := func(kind string, ms float64) {
+			event("PointerEvent", kind, ms, map[string]any{"pointerId": 5, "pointerType": "touch", "button": 0, "buttons": 1})
+		}
+		var times []time.Time
+		note := func() {
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerDown:
+					times = append(times, e.Time)
+				case input.PointerMove:
+					times = append(times, e.Time)
+				case input.PointerUp:
+					times = append(times, e.Time)
+				case input.Scroll:
+					times = append(times, e.Time)
+				case input.KeyPress:
+					times = append(times, e.Time)
+				}
+			}
+		}
+		touch("pointerdown", base)
+		note()
+		touch("pointermove", base+16)
+		note()
+		touch("pointerup", base+32)
+		note()
+		event("WheelEvent", "wheel", base+48, map[string]any{"deltaY": 10})
+		note()
+		event("KeyboardEvent", "keydown", base+64, map[string]any{"key": "g", "code": "KeyG"})
+		note()
+		// The press and the lift each bring a move of their own.
+		ms := time.Millisecond
+		want := []time.Duration{0, 0, 16 * ms, 32 * ms, 32 * ms, 48 * ms, 64 * ms}
+		if len(times) != len(want) {
+			t.Fatalf("heard %d events, want %d", len(times), len(want))
+		}
+		for i, at := range want {
+			gap := times[i].Sub(times[0])
+			if off := gap - at; off < -2*ms || off > 2*ms {
+				t.Errorf("event %d came %v after the first, want %v", i, gap, at)
+			}
+		}
+		if age := time.Since(times[0]); age < 100*time.Millisecond {
+			t.Errorf("the first was stamped %v ago, want about 200 ms", age)
+		}
+		// A stamp ahead of the clock is no time to come: it reads as now.
+		event("KeyboardEvent", "keydown", base+100000, map[string]any{"key": "h", "code": "KeyH"})
+		times = nil
+		note()
+		if len(times) != 1 || times[0].After(time.Now()) {
+			t.Errorf("a stamp from the future reads %v", times)
+		}
+	})
 	t.Run("chorded buttons each press and let go", func(t *testing.T) {
 		drain(w)
 		mouse("pointerdown", 0, 1)
@@ -1009,15 +1072,30 @@ func pointer(d *Driver, kind string, id int, x, y float64) {
 	d.canvas.Call("dispatchEvent", e)
 }
 
-// drain returns the events waiting for w, once its inbox has fed them through.
+// fence marks the end of what drain waits for.
+type fence struct{}
+
+// drain returns the events pushed for w so far: its inbox keeps their order, so the
+// fence pushed now comes after every one of them, however busy the machine is.
 func drain(w *Window) []any {
 	var out []any
+	w.in.Push(fence{})
 	for {
 		select {
-		case e := <-w.Input():
+		case e, ok := <-w.Input():
+			if _, end := e.(fence); end || !ok {
+				return out
+			}
 			out = append(out, e)
-		case <-time.After(30 * time.Millisecond):
-			return out
+		case <-time.After(30 * time.Second):
+			panic("the inbox never fed its fence through")
 		}
 	}
+}
+
+// stamped gives a browser event the time it says it happened, in the browser's own
+// clock, as an event a busy page runs late carries.
+func stamped(e js.Value, ms float64) js.Value {
+	js.Global().Get("Object").Call("defineProperty", e, "timeStamp", map[string]any{"value": ms})
+	return e
 }

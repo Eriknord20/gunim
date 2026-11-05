@@ -75,7 +75,7 @@ func (w *Window) TakeFingers(on bool) error {
 // fingerEvent hands pointer id's event to the window its finger came down
 // in, if it is a finger of its own.
 func (d *Driver) fingerEvent(id int, e js.Value, phase input.FingerPhase) {
-	p, now := d.at(e), time.Now()
+	p, now := d.at(e), stamp(e)
 	d.mu.Lock()
 	w, ok := d.fingers[id]
 	if !ok {
