@@ -591,8 +591,7 @@ func New(g gl.Context, isES bool, sh *Shared) (*Renderer, error) {
 	}
 	r.ibo = g.CreateBuffer()
 	g.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, r.ibo)
-	g.BufferInit(gl.ELEMENT_ARRAY_BUFFER, len(idx), glStaticDraw)
-	g.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, idx)
+	g.BufferData(gl.ELEMENT_ARRAY_BUFFER, idx, glStaticDraw)
 
 	r.initGlyphs()
 	r.Rebind()

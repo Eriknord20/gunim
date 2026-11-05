@@ -227,10 +227,6 @@ func (c *defaultContext) BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlph
 	c.call(c.gpBlendFuncSeparate, uintptr(srcRGB), uintptr(dstRGB), uintptr(srcAlpha), uintptr(dstAlpha))
 }
 
-func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
-	c.call(c.gpBufferData, uintptr(target), uintptr(size), 0, uintptr(usage))
-}
-
 // BufferData is a gunim change. It passes the address of data, so it calls
 // purego.SyscallN directly, as the doc comment on call asks.
 func (c *defaultContext) BufferData(target uint32, data []byte, usage uint32) {
