@@ -251,12 +251,6 @@ func (d *Driver) listenText(doc js.Value) {
 			is := e.Get("isComposing")
 			d.domEdited(d.composing || (!is.IsUndefined() && is.Bool()))
 		})
-		d.on(t, "paste", false, func(e js.Value) {
-			c := e.Get("clipboardData")
-			if !c.IsNull() && !c.IsUndefined() {
-				d.clipboard = c.Call("getData", "text/plain").String()
-			}
-		})
 	}
 	d.on(doc, "selectionchange", true, func(js.Value) {
 		if !d.syncingText && !d.composing && doc.Get("activeElement").Equal(d.text) {

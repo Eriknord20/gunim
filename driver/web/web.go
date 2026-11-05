@@ -117,9 +117,9 @@ type Driver struct {
 	composing, syncingText bool
 	// secretAway says focus left the password field, which holds nothing until it
 	// comes back.
-	secretAway            bool
-	compStart             int
-	compSuffix, clipboard string
+	secretAway bool
+	compStart  int
+	compSuffix string
 
 	safeProbe      js.Value
 	safe           geom.Insets
