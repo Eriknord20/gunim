@@ -33,3 +33,36 @@ func PopupRoom(anchor, room geom.Rect) driver.Room {
 		Right: room.Max.X - anchor.Min.X,
 	}
 }
+
+// Held keeps a window at the place and size of the frame it shows, from the
+// moment it is told a new size until a frame at that size comes. A window always
+// presents after it changes size. Until then, laying it at the new size would
+// draw its old frame whole a first time, only to draw it again a moment later,
+// and a popup animating its size would pay that every frame.
+//
+// The zero Held holds nothing.
+type Held struct {
+	on   bool
+	rect geom.Rect
+}
+
+// Resized notes the window has a new size, and lay at was with the frame it shows.
+func (h *Held) Resized(was geom.Rect) {
+	if !h.on {
+		h.on, h.rect = true, was
+	}
+}
+
+// Rect returns where a frame lays the window, which is at now: its place and size
+// as told. frame says the frame draws a new frame of the window, which ends the
+// hold.
+func (h *Held) Rect(now geom.Rect, frame bool) geom.Rect {
+	if !h.on {
+		return now
+	}
+	if frame {
+		h.on = false
+		return now
+	}
+	return h.rect
+}

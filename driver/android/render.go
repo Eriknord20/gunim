@@ -139,10 +139,12 @@ func (d *Driver) frame(c *compose.Compositor) {
 	}
 	var jobs []job
 	var stack []compose.Layer
+	gone := d.gone
+	d.gone = nil
 	scale, surfW, surfH, rate := d.density, d.surfW, d.surfH, d.rate
 	pan, panning := d.panLocked(time.Now())
 	for _, w := range d.windows {
-		r := w.rectLocked()
+		r := w.held.Rect(w.rectLocked(), w.next != nil)
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.next != nil {
 			j := job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under}
@@ -156,18 +158,27 @@ func (d *Driver) frame(c *compose.Compositor) {
 			jobs = append(jobs, job{w: w, f: &frame{ops: w.pane.Last}, fbW: fbW, fbH: fbH, under: w.under, again: true})
 		}
 		w.sharpen = false
-		if !w.hidden {
+		if !w.hidden && !w.stale {
 			x, y := int(math.Round(float64(r.Min.X*scale))), int(math.Round(float64(r.Min.Y*scale)))-pan
-			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH})
+			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH, Under: w.under})
 		}
 	}
 	d.mu.Unlock()
+	for _, p := range gone {
+		c.Release(p)
+	}
 	if len(jobs) == 0 && !c.Dirty(stack) {
 		return
 	}
 	c.Begin(stack, surfW, surfH)
 	for _, j := range jobs {
-		if c.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) && j.shot != nil {
+		if !c.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) {
+			if j.shot != nil {
+				j.w.keepShot(j.shot)
+			}
+			continue
+		}
+		if j.shot != nil {
 			c.Shoot(&j.w.pane, j.fbW, j.fbH, j.shot)
 		}
 	}

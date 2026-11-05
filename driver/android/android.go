@@ -88,8 +88,10 @@ type Driver struct {
 	rate    float64
 	// surfW and surfH are the surface's size in device pixels.
 	surfW, surfH int
-	// windows is the stack of open windows, bottom first.
+	// windows is the stack of open windows, bottom first, and gone the
+	// panes of windows closed, for the render thread to free.
 	windows []*Window
+	gone    []*compose.Pane
 	// opened holds the files handed over before a window opened to take
 	// them, one batch to an entry.
 	opened [][]string
@@ -724,6 +726,7 @@ func (d *Driver) closed(w *Window) {
 	d.runCompassLocked()
 	d.excludeGesturesLocked()
 	d.keepAwakeLocked()
+	d.gone = append(d.gone, &w.pane)
 	last := true
 	for _, x := range d.windows {
 		if x.fills {

@@ -7,7 +7,8 @@
 // A driver's frame collects the frames waiting and the windows showing,
 // and asks [Compositor.Dirty] whether there is anything to do. It then
 // calls [Compositor.Begin], [Compositor.Draw] for each frame waiting, and
-// [Compositor.Finish], and shows the surface in its own way.
+// [Compositor.Finish], and shows the surface in its own way. Each window
+// that closes goes to [Compositor.Release], on the thread that draws.
 package compose
 
 import (
@@ -71,12 +72,27 @@ func (p *Pane) Forget() {
 	p.target, p.OnTex = 0, false
 }
 
+// Release frees what a closed window holds of the GPU: its renderer, its
+// texture and its framebuffer. It runs on the thread that draws, outside a
+// frame. The pane holds nothing after it, so a window that closes while its
+// frame waits is safe to release.
+func (c *Compositor) Release(p *Pane) {
+	if p.drawer != nil {
+		p.drawer.release()
+	}
+	p.dropTexture(c.g)
+	p.Forget()
+	p.Last, p.LastW, p.LastH = nil, 0, 0
+}
+
 // A Layer is a window as the compositor lays it: its texture at X, Y on
 // the surface, in device pixels from the top left, at W by H device
-// pixels.
+// pixels. Under is the colour under the window's frames, which it shows
+// until it has a frame.
 type Layer struct {
 	Pane       *Pane
 	X, Y, W, H int
+	Under      color.NRGBA
 }
 
 // A Compositor draws windows and lays their textures on the surface. It
@@ -222,15 +238,12 @@ func (c *Compositor) Draw(p *Pane, ops []paint.Op, damage []geom.Rect, w, h int,
 		}
 		p.drawer = d
 	}
-	if p.texW != w || p.texH != h {
-		p.resize(c.g, w, h)
-	}
 	p.Last, p.LastW, p.LastH = ops, w, h
 	if p == c.solo {
-		p.target, p.OnTex = 0, false
+		p.onSurface(c.g)
 		c.soloDrew = true
 	} else {
-		p.target, p.OnTex = p.fbo, true
+		p.onTexture(c.g)
 	}
 	p.Sharp(p.drawer.drawRects(p.target, under, ops, damage, w, h, scale))
 	return true
@@ -250,12 +263,18 @@ func (c *Compositor) Shoot(p *Pane, w, h int, fn func(*image.RGBA)) {
 // it next.
 func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 	if c.solo != nil {
-		if !c.soloDrew {
+		switch {
+		case c.soloDrew:
+		case c.solo.Last == nil:
+			// A surface that has just come, as a canvas hidden at first, with the
+			// window's first frame still on its way.
+			c.clear(stack[0].Under, w, h)
+		default:
 			// Nothing new to draw, as the stack changed round it or the surface
 			// changed size, but the surface holds nothing after it was shown: the
 			// last frame again, to fill it.
 			c.solo.LastW, c.solo.LastH = w, h
-			c.solo.redraw(c.g, 0, scale)
+			c.solo.redraw(c.g, true, scale)
 		}
 		c.last = append(c.last[:0], stack...)
 	} else {
@@ -268,7 +287,7 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 				if l.Pane.Last != nil {
 					l.Pane.LastW, l.Pane.LastH = l.W, l.H
 				}
-				l.Pane.redraw(c.g, l.Pane.fbo, scale)
+				l.Pane.redraw(c.g, false, scale)
 			}
 		}
 		c.lay(stack, w, h)
@@ -283,18 +302,38 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 	}
 }
 
-// redraw draws the window's last frame again, whole, into fbo: its
-// texture, or 0 for the surface.
-func (p *Pane) redraw(g gl.Context, fbo uint32, scale float32) {
+// redraw draws the window's last frame again, whole, straight onto the
+// surface or into its texture.
+func (p *Pane) redraw(g gl.Context, surface bool, scale float32) {
 	if p.drawer == nil || p.Last == nil {
 		return
 	}
-	if fbo != 0 && (p.texW != p.LastW || p.texH != p.LastH) {
+	if surface {
+		p.onSurface(g)
+	} else {
+		p.onTexture(g)
+	}
+	p.Sharp(p.drawer.draw(p.target, p.Last, p.LastW, p.LastH, scale))
+}
+
+// onSurface has the window's next draw go straight onto the surface. Its
+// texture has no use then. One from a popup just closed stays for the next
+// popup, while it is still the right size. One of another size goes, as it
+// would only hold GPU memory: about 33 MB at 4K.
+func (p *Pane) onSurface(g gl.Context) {
+	if p.texW != p.LastW || p.texH != p.LastH {
+		p.dropTexture(g)
+	}
+	p.target, p.OnTex = 0, false
+}
+
+// onTexture has the window's next draw go into its texture, made at the size
+// of its last frame.
+func (p *Pane) onTexture(g gl.Context) {
+	if p.texW != p.LastW || p.texH != p.LastH {
 		p.resize(g, p.LastW, p.LastH)
 	}
-	p.target = fbo
-	p.Sharp(p.drawer.draw(fbo, p.Last, p.LastW, p.LastH, scale))
-	p.OnTex = fbo != 0
+	p.target, p.OnTex = p.fbo, true
 }
 
 // resize gives the window a texture of width×height device pixels to draw
@@ -316,18 +355,36 @@ func (p *Pane) resize(g gl.Context, width, height int) {
 	p.texW, p.texH = width, height
 }
 
+// dropTexture frees the window's texture and framebuffer, if it has them.
+func (p *Pane) dropTexture(g gl.Context) {
+	if p.tex == 0 {
+		return
+	}
+	g.DeleteFramebuffer(p.fbo)
+	g.DeleteTexture(p.tex)
+	p.tex, p.fbo, p.texW, p.texH = 0, 0, 0, 0
+}
+
+// clear fills the surface, w×h device pixels, with a colour, over black where the
+// colour has alpha, as the surface has none.
+func (c *Compositor) clear(under color.NRGBA, w, h int) {
+	g := c.g
+	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
+	g.Viewport(0, 0, int32(w), int32(h))
+	g.Disable(glScissorTest)
+	a := float32(under.A) / 0xff
+	g.ClearColor(float32(under.R)/0xff*a, float32(under.G)/0xff*a, float32(under.B)/0xff*a, 1)
+	g.Clear(glColorBufferBit)
+	g.ClearColor(0, 0, 0, 0)
+}
+
 // lay lays the windows on the surface, w×h device pixels, bottom first.
 // Each texture holds its window's frame premultiplied, with its first row
 // at the bottom, as the window's own framebuffer would.
 func (c *Compositor) lay(stack []Layer, w, h int) {
 	g := c.g
 	c.last = append(c.last[:0], stack...)
-	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	g.Viewport(0, 0, int32(w), int32(h))
-	g.Disable(glScissorTest)
-	g.ClearColor(0, 0, 0, 1)
-	g.Clear(glColorBufferBit)
-	g.ClearColor(0, 0, 0, 0)
+	c.clear(color.NRGBA{}, w, h)
 	g.Enable(gl.BLEND)
 	g.BlendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 	g.UseProgram(c.prog)
@@ -361,12 +418,14 @@ func Upright(pix []byte, w, h int) *image.RGBA {
 }
 
 // A drawer is what the compositor asks of a window's renderer: draw a
-// frame into a framebuffer, and say when it wants the frame drawn again
-// sharp. A test stands in for it, as a renderer needs a real GL.
+// frame into a framebuffer, say when it wants the frame drawn again sharp,
+// and let go of what it holds. A test stands in for it, as a renderer needs
+// a real GL.
 type drawer interface {
 	drawRects(fbo uint32, under color.NRGBA, ops []paint.Op, damage []geom.Rect, w, h int, scale float32) (sharpAt time.Time)
 	draw(fbo uint32, ops []paint.Op, w, h int, scale float32) (sharpAt time.Time)
 	rebind()
+	release()
 }
 
 // openRenderer makes p's renderer, and is the drawer of every real window.
@@ -375,9 +434,18 @@ func (c *Compositor) openRenderer(p *Pane) (drawer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.SetText(text.Rendering{}, p.Transparent)
+	p.styleText(r)
 	p.R = r
 	return rendererDrawer{r}, nil
+}
+
+// styleText tells the window's renderer how to draw text.
+func (p *Pane) styleText(r textStyler) { r.SetText(text.Rendering{}, p.Transparent) }
+
+// textStyler is the part of a renderer that [Pane.styleText] tells, so a test can
+// stand in for it.
+type textStyler interface {
+	SetText(tr text.Rendering, transparent bool)
 }
 
 // rendererDrawer is a [render.Renderer] as a drawer. It is one pointer, so
@@ -397,3 +465,5 @@ func (d rendererDrawer) draw(fbo uint32, ops []paint.Op, w, h int, scale float32
 }
 
 func (d rendererDrawer) rebind() { d.r.Rebind() }
+
+func (d rendererDrawer) release() { d.r.Release() }
