@@ -1426,6 +1426,13 @@ func TestBrowser(t *testing.T) {
 		if got := d.text.Get("value").String(); got != "abc" {
 			t.Errorf("the mirror holds %q", got)
 		}
+		// What has no text to follow with stays the browser's.
+		key(d.text, "Backspace", "Backspace")
+		e := js.Global().Get("InputEvent").New("beforeinput", map[string]any{"bubbles": true, "cancelable": true, "inputType": "insertFromPaste"})
+		if !d.text.Call("dispatchEvent", e).Bool() {
+			t.Error("a paste with no data to queue was cancelled")
+		}
+		drain(w)
 	})
 	t.Run("typing with no text state still arrives", func(t *testing.T) {
 		w.SetTextInput(true)

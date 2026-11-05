@@ -360,6 +360,63 @@ func TestShiftDeleteInAPasswordDeletes(t *testing.T) {
 	k.check("after deleting the selection")
 }
 
+// TestAPasteWhileTheEngineIsHeldUp: the engine's goroutine sleeps in a program's
+// OnChange, with a key waiting for it, so the mirror is out of date.
+func TestAPasteWhileTheEngineIsHeldUp(t *testing.T) {
+	field := widget.NewTextField()
+	k := typistFor(t, field)
+	settle := func(want string) {
+		t.Helper()
+		for give := time.Now().Add(5 * time.Second); field.Text() != want || k.d.Mirror().Get("value").String() != want; time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(give) {
+				t.Fatalf("the field holds %q and the mirror %q, want %q", field.Text(), k.d.Mirror().Get("value"), want)
+			}
+		}
+		k.check("after the engine caught up")
+	}
+	field.OnChange = func(string, *gunim.UI) gunim.Intent {
+		time.Sleep(300 * time.Millisecond)
+		return nil
+	}
+	// paste is what the browser does for a paste. Its data is what it would put in.
+	paste := func(text string) {
+		m := activeElement()
+		before := eventOf("InputEvent", "beforeinput", map[string]any{"inputType": "insertFromPaste", "data": text})
+		if m.Call("dispatchEvent", before).Bool() {
+			m.Call("setRangeText", text, m.Get("selectionStart"), m.Get("selectionEnd"), "end")
+			m.Call("dispatchEvent", eventOf("InputEvent", "input", map[string]any{"inputType": "insertFromPaste", "data": text}))
+		}
+	}
+	// soft is what the browser does for a soft keyboard's delete, which has no key.
+	soft := func(kind string) {
+		m := activeElement()
+		before := eventOf("InputEvent", "beforeinput", map[string]any{"inputType": kind})
+		if m.Call("dispatchEvent", before).Bool() {
+			at := m.Get("selectionStart").Int()
+			if kind == "deleteContentBackward" {
+				m.Call("setRangeText", "", max(at-1, 0), at, "end")
+			} else {
+				m.Call("setRangeText", "", at, at+1, "end")
+			}
+			m.Call("dispatchEvent", eventOf("InputEvent", "input", map[string]any{"inputType": kind}))
+		}
+	}
+	k.key("x", "KeyX")
+	k.key("y", "KeyY")
+	k.key("!", "Digit1")
+	k.key("Backspace", "Backspace")
+	paste("ZZ")
+	k.key("q", "KeyQ")
+	settle("xyZZq")
+	k.key("ArrowLeft", "ArrowLeft")
+	k.key("a", "KeyA")
+	soft("deleteContentBackward")
+	k.key("ArrowLeft", "ArrowLeft")
+	soft("deleteContentForward")
+	k.key("b", "KeyB")
+	settle("xyZbq")
+}
+
 // composer is a browser's input method, working on the mirror as a dead key or a
 // language's input method does: each step replaces what it composed so far.
 type composer struct {

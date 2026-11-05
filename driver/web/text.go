@@ -211,6 +211,28 @@ func (d *Driver) domEdited(composing bool) {
 	}
 }
 
+// queueBehind takes an edit of the browser's while the engine is held up, as waiting
+// on the clipboard, with input it has yet to read. The mirror is out of date then, so
+// an edit there would be of the wrong text. What says the same thing with no place in
+// the text follows that input in order, and the mirror catches up with the engine.
+// That leaves a cut and a keyboard's suggestion, which name text the mirror holds, to
+// the browser.
+func (d *Driver) queueBehind(w *Window, kind string, e js.Value) {
+	switch kind {
+	case "insertText", "insertFromPaste":
+		if data := e.Get("data"); data.Type() == js.TypeString {
+			e.Call("preventDefault")
+			w.in.Push(input.TextInput{Text: data.String(), Time: stamp(e)})
+		}
+	case "deleteContentBackward":
+		e.Call("preventDefault")
+		w.in.Push(input.KeyPress{Key: input.KeyBackspace, Time: stamp(e)})
+	case "deleteContentForward":
+		e.Call("preventDefault")
+		w.in.Push(input.KeyPress{Key: input.KeyDelete, Time: stamp(e)})
+	}
+}
+
 // compositionEnded sends the end of a composition. An edit sent brings a new state
 // back. With none to send, the engine's latest state goes to the mirror now.
 func (d *Driver) compositionEnded() {
@@ -257,14 +279,8 @@ func (d *Driver) listenText(doc js.Value) {
 			case single && (kind == "insertLineBreak" || kind == "insertParagraph"):
 				e.Call("preventDefault")
 				w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: stamp(e)})
-			case hasState && kind == "insertText" && !d.composing && e.Get("cancelable").Bool() && w.in.Waiting():
-				// The engine is held up, as waiting on the clipboard, with input it has
-				// yet to read, so the mirror is out of date. The text follows that input
-				// in order, and the mirror catches up with the engine.
-				e.Call("preventDefault")
-				if data := e.Get("data"); data.Type() == js.TypeString {
-					w.in.Push(input.TextInput{Text: data.String(), Time: stamp(e)})
-				}
+			case hasState && !d.composing && e.Get("cancelable").Bool() && w.in.Waiting():
+				d.queueBehind(w, kind, e)
 			}
 		})
 		d.on(t, "input", false, func(e js.Value) {
