@@ -80,7 +80,7 @@ type ringOutput struct {
 func openRing(s *Speaker, o Options) (*ringOutput, error) {
 	r := &ringOutput{s: s, chans: 2, wake: make(chan struct{}, 1), quit: make(chan struct{}), done: make(chan struct{}),
 		direct: o.Direct}
-	c := driver.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Log: s.logf}
+	c := driver.Config{Name: o.Driver, Rate: o.rate(), Buffer: o.Buffer, Outputs: o.Outputs, Reset: s.askReset, Overrun: s.ranDryOnce, Log: s.logf}
 	if len(o.Outputs) > 2 {
 		r.chans = len(o.Outputs)
 		c.FillN = r.takeN
