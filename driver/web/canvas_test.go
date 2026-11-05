@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall/js"
 	"testing"
 	"time"
@@ -825,5 +826,124 @@ func TestAScaleChangeWithNoResizeIsSeen(t *testing.T) {
 				t.Errorf("the %s heard no Redraw at scale %v", name, to)
 			}
 		}
+	}
+}
+
+// loopErrors counts what the browser reports of a ResizeObserver loop.
+func loopErrors(t *testing.T) func() int {
+	t.Helper()
+	count := js.Global().Call("eval", `(() => {
+		const count = {n: 0, listen: e => { if (String(e.message).includes("ResizeObserver")) count.n++; }};
+		addEventListener("error", count.listen);
+		return count;
+	})()`)
+	t.Cleanup(func() { js.Global().Call("removeEventListener", "error", count.Get("listen")) })
+	return func() int { return count.Get("n").Int() }
+}
+
+// A canvas with height:auto follows its width, whatever the buffer's size, with
+// nothing pinned, shown from the start or hidden first.
+func TestAutoHeightFollowsTheWidth(t *testing.T) {
+	doc := js.Global().Get("document")
+	for _, hidden := range []bool{false, true} {
+		box := doc.Call("createElement", "div")
+		box.Get("style").Set("width", "400px")
+		doc.Get("body").Call("appendChild", box)
+		defer box.Call("remove")
+		c := doc.Call("createElement", "canvas")
+		c.Set("width", 400)
+		c.Set("height", 100)
+		c.Get("style").Set("cssText", "display:block;width:100%;height:auto")
+		box.Call("appendChild", c)
+		x := &Driver{canvas: c}
+		if hidden {
+			c.Get("style").Set("display", "none")
+			x.measure()
+			c.Get("style").Set("display", "block")
+		}
+		x.measure()
+		if got := c.Get("style").Get("height").String(); got != "auto" {
+			t.Errorf("hidden %v: the height became %q", hidden, got)
+		}
+		if got := c.Get("style").Get("width").String(); got != "100%" {
+			t.Errorf("hidden %v: the width became %q", hidden, got)
+		}
+		if got := c.Get("clientHeight").Int(); got != 100 {
+			t.Errorf("hidden %v: it is %d tall at 400 wide", hidden, got)
+		}
+		box.Get("style").Set("width", "200px")
+		x.measure()
+		if got := c.Get("clientHeight").Int(); got != 50 {
+			t.Errorf("hidden %v: it is %d tall at 200 wide", hidden, got)
+		}
+		// The scale above 1 and the rounding of the buffer leave the ratio be.
+		box.Get("style").Set("width", "333px")
+		for range 5 {
+			x.measure()
+		}
+		if got := c.Get("clientHeight").Int(); got != 83 {
+			t.Errorf("hidden %v: it is %d tall at 333 wide", hidden, got)
+		}
+		// With no rule of its own for the width either, a page's aspect-ratio stands.
+		x2 := &Driver{canvas: c}
+		c.Get("style").Set("aspectRatio", "2 / 1")
+		x2.measure()
+		if got := c.Get("style").Get("aspectRatio").String(); !strings.HasPrefix(got, "2") {
+			t.Errorf("hidden %v: a page's aspect ratio became %q", hidden, got)
+		}
+	}
+}
+
+// The canvas settling into its size on the first look leaves nothing for the
+// browser to report as a ResizeObserver loop. Each case is a page's new canvas,
+// hidden at first, heard as the driver hears its own.
+func TestACanvasShownLeavesNoResizeObserverLoop(t *testing.T) {
+	doc := js.Global().Get("document")
+	// What the test before left settles first.
+	time.Sleep(200 * time.Millisecond)
+	errs := loopErrors(t)
+	for _, c := range []struct {
+		name, css string
+	}{
+		{"no size in CSS", ""},
+		{"a percent width and auto height", "width:33.3%;height:auto"},
+		{"auto width and a height", "width:auto;height:121px"},
+		{"both sides given", "width:50.5%;height:120.5px"},
+		{"auto both ways with a max width", "max-width:50.5%;height:auto"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			el := doc.Call("createElement", "canvas")
+			el.Get("style").Set("cssText", "display:none;"+c.css)
+			doc.Get("body").Call("appendChild", el)
+			defer el.Call("remove")
+			x := &Driver{canvas: el}
+			x.measure()
+			seen := make(chan struct{}, 8)
+			f := js.FuncOf(func(_ js.Value, args []js.Value) any {
+				x.readExactSize(args[0])
+				x.measure()
+				seen <- struct{}{}
+				return nil
+			})
+			defer f.Release()
+			ro := js.Global().Get("ResizeObserver").New(f)
+			defer ro.Call("disconnect")
+			ro.Call("observe", el)
+			time.Sleep(50 * time.Millisecond)
+			el.Get("style").Set("display", "block")
+			select {
+			case <-seen:
+			case <-time.After(10 * time.Second):
+				t.Fatal("no resize step came")
+			}
+			// Some more animation frames, for the report to come.
+			time.Sleep(200 * time.Millisecond)
+			if n := errs(); n != 0 {
+				t.Errorf("%d reports of a ResizeObserver loop", n)
+			}
+			if el.Get("clientWidth").Int() == 0 || el.Get("clientHeight").Int() == 0 {
+				t.Errorf("it shows at %vx%v", el.Get("clientWidth"), el.Get("clientHeight"))
+			}
+		})
 	}
 }

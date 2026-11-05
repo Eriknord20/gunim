@@ -73,8 +73,9 @@ type Driver struct {
 	cssW, cssH   float32
 	surfW, surfH int
 	// exactW and exactH are the canvas's size in device pixels, from a browser
-	// that says.
+	// that says. pinned says the canvas has been through pinAutoSize.
 	exactW, exactH int
+	pinned         bool
 	// bufferLimit is the longest side of a drawing buffer the GPU and browser can
 	// draw on, or 0 for not known, and limitSaid says the log has told of it.
 	bufferLimit int
@@ -214,19 +215,36 @@ func gpuLimit(ctx js.Value) int {
 	return min(param("MAX_TEXTURE_SIZE"), param("MAX_RENDERBUFFER_SIZE"), dims.Index(0).Int(), dims.Index(1).Int())
 }
 
-// pinAutoSize fixes a side of the canvas that takes its size from its drawing
-// buffer, as one with no CSS size does. Otherwise sizing the buffer to match
-// the canvas would grow the canvas, without end at a scale above 1.
+// pinAutoSize keeps the canvas's CSS size from following its drawing buffer, which
+// is about to take the canvas's size in device pixels. It runs once, as the canvas
+// first has a size, and leaves the buffer as it found it.
+//
+// A side with no CSS size at all follows the buffer alone, and would grow without
+// end at a scale above 1: that side is fixed where it is. A side given as auto
+// while the other side has a size, as height:auto with width:100%, follows the
+// other side at the buffer's ratio, and stays free to. The ratio then goes into
+// CSS, so the buffer's rounding can't nudge the canvas, which the browser would
+// report as a ResizeObserver loop.
 func pinAutoSize(c js.Value) {
 	w, h := c.Get("clientWidth").Int(), c.Get("clientHeight").Int()
-	c.Set("width", w*2+7)
-	c.Set("height", h*2+7)
+	bw, bh := c.Get("width").Int(), c.Get("height").Int()
+	moved := func() bool { return c.Get("clientWidth").Int() != w || c.Get("clientHeight").Int() != h }
+	// Twice the buffer at the same ratio moves only a side that follows it alone.
+	c.Set("width", bw*2)
+	c.Set("height", bh*2)
 	if c.Get("clientWidth").Int() != w {
 		c.Get("style").Set("width", strconv.Itoa(w)+"px")
 	}
 	if c.Get("clientHeight").Int() != h {
 		c.Get("style").Set("height", strconv.Itoa(h)+"px")
 	}
+	// Another ratio moves a side that follows the other.
+	c.Set("width", bw*2+7)
+	if moved() && bw > 0 && bh > 0 {
+		c.Get("style").Set("aspectRatio", strconv.Itoa(bw)+" / "+strconv.Itoa(bh))
+	}
+	c.Set("width", bw)
+	c.Set("height", bh)
 }
 
 // measure reads the canvas's size and the page's scale, and sizes the
@@ -248,9 +266,10 @@ func (d *Driver) measure() bool {
 		return changed
 	}
 	d.mu.Lock()
-	unsized := d.cssW == 0 || d.cssH == 0
+	pin := !d.pinned
+	d.pinned = true
 	d.mu.Unlock()
-	if unsized {
+	if pin {
 		pinAutoSize(d.canvas)
 	}
 	pw, ph := int(math.Round(float64(w*s))), int(math.Round(float64(h*s)))

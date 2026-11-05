@@ -442,7 +442,7 @@ Serve those with a page that has a canvas and starts Go:
 
 The viewport tag has a phone lay the page out at its own width. Without it, the phone lays out about 980 px wide, and the canvas draws at less than the phone's full resolution where it passes what the GPU can draw. `100dvh` follows a phone's address bar as it comes and goes, and a browser without `dvh` uses the `100vh` before it.
 
-The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. If the page has no element with the id `gunim`, the driver makes a canvas that fills it, and sets the body's margin to 0.
+The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. With `height:auto` and a width, or the other way round, the free side follows at the ratio of the canvas's `width` and `height` attributes. If the page has no element with the id `gunim`, the driver makes a canvas that fills it, and sets the body's margin to 0.
 
 A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
 
