@@ -1062,6 +1062,89 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("sharing files: %v", err)
 		}
 	})
+	t.Run("a share the user closes is no error, and others keep their words", func(t *testing.T) {
+		nav := js.Global().Get("navigator")
+		defer define(nav, "share", js.Undefined())()
+		for _, c := range []struct {
+			page string
+			want []string
+		}{
+			{`()=>Promise.reject(new DOMException("Share canceled","AbortError"))`, nil},
+			{`()=>Promise.reject(new DOMException("Must be handling a user gesture","NotAllowedError"))`, []string{"NotAllowedError", "Must be handling a user gesture"}},
+			{`()=>{throw new TypeError("no share")}`, []string{"TypeError", "no share"}},
+			{`()=>Promise.reject("just words")`, []string{"just words"}},
+			{`()=>Promise.reject()`, []string{"undefined"}},
+			{`()=>Promise.reject({odd:1})`, []string{"object"}},
+		} {
+			define(nav, "share", js.Global().Call("eval", c.page))
+			err := w.Share(driver.Share{Text: "hej"})
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("%s: %v", c.page, err)
+			case c.want != nil && err == nil:
+				t.Errorf("%s: no error", c.page)
+			}
+			for _, word := range c.want {
+				if err != nil && !strings.Contains(err.Error(), word) {
+					t.Errorf("%s: %q leaves out %q", c.page, err, word)
+				}
+			}
+		}
+	})
+	t.Run("a malformed link is an error", func(t *testing.T) {
+		defer define(js.Global(), "open", js.Undefined())()
+		var opened []string
+		spy := js.FuncOf(func(_ js.Value, a []js.Value) any {
+			opened = append(opened, a[0].String())
+			return js.Null()
+		})
+		defer spy.Release()
+		define(js.Global(), "open", spy.Value)
+		for _, bad := range []string{"http://[bad", "javascript:alert(1)", "data:text/html,hi", "no scheme"} {
+			if err := w.OpenLink(bad); err == nil {
+				t.Errorf("%q gave no error", bad)
+			}
+		}
+		if len(opened) != 0 {
+			t.Errorf("the browser was asked to open %q", opened)
+		}
+		if err := w.OpenLink("https://example.com/a?b=c"); err != nil || !slices.Equal(opened, []string{"https://example.com/a?b=c"}) {
+			t.Errorf("a good link: %v, opened %q", err, opened)
+		}
+		// What the browser itself throws comes back the same way.
+		define(js.Global(), "open", js.Global().Call("eval", `()=>{throw new DOMException("no","SyntaxError")}`))
+		if err := w.OpenLink("https://example.com"); err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("a browser that throws: %v", err)
+		}
+	})
+	t.Run("a clipboard the browser never answers lets the window go on", func(t *testing.T) {
+		nav := js.Global().Get("navigator")
+		defer define(nav, "clipboard", js.Undefined())()
+		settle := js.Global().Get("Object").New()
+		mock := js.Global().Call("eval", `(s=>({readText:()=>new Promise(r=>{s.go=r}),writeText:()=>new Promise(r=>{s.go=r})}))`).Invoke(settle)
+		define(nav, "clipboard", mock)
+		was := clipboardWait
+		defer func() { clipboardWait = was }()
+		clipboardWait = 50 * time.Millisecond
+		errs := spyConsole()
+		defer errs.stop()
+		start := time.Now()
+		if _, err := w.Clipboard(); !errors.Is(err, errNoAnswer) {
+			t.Errorf("reading: %v", err)
+		}
+		if err := w.SetClipboard("x"); !errors.Is(err, errNoAnswer) {
+			t.Errorf("writing: %v", err)
+		}
+		if took := time.Since(start); took > 10*time.Second {
+			t.Errorf("it took %v", took)
+		}
+		// The browser answers after all, and finds what it calls still there.
+		settle.Call("go", "late")
+		time.Sleep(20 * time.Millisecond)
+		if got := errs.stop(); len(got) != 0 {
+			t.Errorf("the page logged %q", got)
+		}
+	})
 	t.Run("compass", func(t *testing.T) {
 		if got := headingOf(90); got != 270 {
 			t.Fatalf("heading of alpha 90 = %v", got)
@@ -1100,6 +1183,50 @@ func pointer(d *Driver, kind string, id int, x, y float64) {
 		"clientX": r.Get("left").Float() + x, "clientY": r.Get("top").Float() + y,
 	})
 	d.canvas.Call("dispatchEvent", e)
+}
+
+// define sets a property of a browser object, and returns what puts it back.
+func define(target js.Value, name string, value js.Value) (restore func()) {
+	obj := js.Global().Get("Object")
+	prior := obj.Call("getOwnPropertyDescriptor", target, name)
+	obj.Call("defineProperty", target, name, map[string]any{"configurable": true, "writable": true, "value": value})
+	return func() {
+		if prior.IsUndefined() {
+			js.Global().Get("Reflect").Call("deleteProperty", target, name)
+		} else {
+			obj.Call("defineProperty", target, name, prior)
+		}
+	}
+}
+
+// consoleSpy keeps what the page logs as errors, as syscall/js does for a call to a
+// released function.
+type consoleSpy struct {
+	got     []string
+	spy     js.Func
+	restore func()
+}
+
+func spyConsole() *consoleSpy {
+	s := &consoleSpy{}
+	s.spy = js.FuncOf(func(_ js.Value, a []js.Value) any {
+		if len(a) > 0 {
+			s.got = append(s.got, js.Global().Call("String", a[0]).String())
+		}
+		return nil
+	})
+	s.restore = define(js.Global().Get("console"), "error", s.spy.Value)
+	return s
+}
+
+// stop ends the spying, and returns what it kept. It can be called twice.
+func (s *consoleSpy) stop() []string {
+	if s.restore != nil {
+		s.restore()
+		s.restore = nil
+		s.spy.Release()
+	}
+	return s.got
 }
 
 // fence marks the end of what drain waits for.

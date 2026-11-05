@@ -40,9 +40,13 @@ func (w *Window) Share(s driver.Share) error {
 	if nav.Get("share").IsUndefined() || len(s.Paths) > 0 {
 		return driver.ErrNoSharer
 	}
-	_, err := await(nav.Call("share", map[string]any{"title": s.Subject, "text": s.Text}))
-	var jsErr js.Error
-	if errors.As(err, &jsErr) && jsErr.Value.Get("name").String() == "AbortError" {
+	p, err := call(nav, "share", map[string]any{"title": s.Subject, "text": s.Text})
+	if err == nil {
+		// The share sheet stays until the user closes it.
+		_, err = await(p, 0)
+	}
+	var closed *browserError
+	if errors.As(err, &closed) && closed.name == "AbortError" {
 		return nil
 	}
 	return err

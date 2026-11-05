@@ -4,8 +4,10 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
+	"net/url"
 	"sync"
 	"syscall/js"
 	"time"
@@ -263,10 +265,19 @@ func (w *Window) SetCursor(c input.Cursor) {
 	w.d.canvas.Get("style").Set("cursor", name)
 }
 
-// OpenLink implements [driver.LinkOpener] with a new tab.
-func (w *Window) OpenLink(url string) error {
-	js.Global().Call("open", url, "_blank", "noopener")
-	return nil
+// OpenLink implements [driver.LinkOpener] with a new tab. It takes an http or https
+// address, and returns an error for anything else. It can't tell a popup blocker
+// stopped the tab, as a tab opened with noopener says nothing back.
+func (w *Window) OpenLink(address string) error {
+	u, err := url.Parse(address)
+	if err != nil {
+		return fmt.Errorf("web: opening a link: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("web: opening %q: only http and https addresses open", address)
+	}
+	_, err = call(js.Global(), "open", address, "_blank", "noopener")
+	return err
 }
 
 var (
