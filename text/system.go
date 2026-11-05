@@ -64,7 +64,7 @@ func loadSystem() *fontscan.FontMap {
 func systemFace(r rune) *font.Face {
 	fm := loadSystem()
 	if fm == nil {
-		return nil
+		return platformFace(r)
 	}
 	fm.SetScript(language.LookupScript(r))
 	ff := fm.ResolveFace(r)

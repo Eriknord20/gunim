@@ -106,12 +106,16 @@ func run(runFor time.Duration, shot string, after time.Duration, zoom float32, s
 	}
 	return gunim.Main(ctx, func(a *gunim.App) error {
 		if sound {
-			mix := audio.NewMixer()
-			if _, err := speaker.Open(mix, speaker.Options{Name: "gunim widgets"}); err != nil {
-				log.Printf("widgets: no sound: %v", err)
-			} else {
-				a.SetCues(cues.New(mix))
-			}
+			// A browser holds sound back until the first click, key or touch, so
+			// this doesn't hold the window back with it.
+			go func() {
+				mix := audio.NewMixer()
+				if _, err := speaker.Open(mix, speaker.Options{Name: "gunim widgets"}); err != nil {
+					log.Printf("widgets: no sound: %v", err)
+				} else {
+					a.SetCues(cues.New(mix))
+				}
+			}()
 		}
 		w, err := a.NewWindow(gunim.WindowOptions{
 			Title: "gunim widgets",

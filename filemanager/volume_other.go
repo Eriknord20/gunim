@@ -19,5 +19,5 @@ func volumeOf(path string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("reading the volume of %s: the system does not say", path)
 	}
-	return strconv.FormatInt(int64(st.Dev), 10), nil
+	return strconv.FormatInt(int64(st.Dev), 10), nil //nolint:unconvert
 }
