@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/driver/internal/inbox"
-	"github.com/marrasen/gunim/driver/internal/render"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -74,18 +74,8 @@ type Window struct {
 	// edge gestures, in the window's logical pixels.
 	excluded []geom.Rect
 
-	// The fields below belong to the render thread.
-
-	r          *render.Renderer
-	tex, fbo   uint32
-	texW, texH int
-	// last is the last frame drawn, at lastW by lastH, for drawing
-	// again where the window moves between the surface and its texture;
-	// onTex says its texture holds it, as it does unless the window
-	// drew alone, straight onto the surface.
-	last         []paint.Op
-	lastW, lastH int
-	onTex        bool
+	// pane belongs to the render thread.
+	pane compose.Pane
 }
 
 // frame is one frame for the render thread.
@@ -105,6 +95,8 @@ func newWindow(d *Driver, o driver.Options) *Window {
 		transparent: o.Kind == driver.KindPopup,
 	}
 	w.in = inbox.New(w.quit)
+	w.pane.Transparent = w.transparent
+	w.pane.Sharp = func(at time.Time) { d.sharpenAt(w, at) }
 	return w
 }
 
@@ -219,14 +211,7 @@ func (w *Window) Place(anchor geom.Rect, size geom.Size) error {
 func (w *Window) PopupRoom(anchor geom.Rect) driver.Room {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
-	s := w.d.visibleLocked()
-	a := anchor.Add(w.rectLocked().Min)
-	return driver.Room{
-		Below: s.Max.Y - a.Max.Y,
-		Above: a.Min.Y - s.Min.Y,
-		Left:  a.Min.X - s.Min.X,
-		Right: s.Max.X - a.Min.X,
-	}
+	return compose.PopupRoom(anchor.Add(w.rectLocked().Min), w.d.visibleLocked())
 }
 
 // ToScreen implements [driver.Screener]. The screen's coordinates are

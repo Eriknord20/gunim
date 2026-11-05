@@ -3,14 +3,13 @@
 package web
 
 import (
-	"image"
 	"log"
 	"math"
 	"sort"
 	"syscall/js"
 	"time"
 
-	"github.com/marrasen/gunim/driver/internal/render"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/paint"
@@ -31,7 +30,7 @@ func (d *Driver) listenContext() {
 			log.Print(err)
 			return
 		}
-		comp, err := newCompositor(g)
+		comp, err := compose.New(g, "web")
 		if err != nil {
 			log.Print(err)
 			return
@@ -39,19 +38,13 @@ func (d *Driver) listenContext() {
 		d.mu.Lock()
 		d.g = g
 		d.comp = comp
-		d.shared = render.Shared{}
 		d.lost = false
 		for _, w := range d.windows {
-			w.r = nil
-			w.tex = 0
-			w.fbo = 0
-			w.texW = 0
-			w.texH = 0
-			w.onTex = false
+			w.pane.Forget()
 			if w.next != nil {
 				w.next.damage = []geom.Rect{paint.Everything}
-			} else if w.last != nil {
-				w.next = &frame{ops: w.last, damage: []geom.Rect{paint.Everything}}
+			} else if w.pane.Last != nil {
+				w.next = &frame{ops: w.pane.Last, damage: []geom.Rect{paint.Everything}}
 			}
 		}
 		d.mu.Unlock()
@@ -81,13 +74,6 @@ func (d *Driver) sharpenAt(w *Window, at time.Time) {
 		d.mu.Unlock()
 		d.kick()
 	})
-}
-func upright(pix []byte, w, h int) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		copy(img.Pix[y*img.Stride:(y+1)*img.Stride], pix[(h-1-y)*w*4:(h-y)*w*4])
-	}
-	return img
 }
 
 // Estimate the actual panel rate from consecutive RAFs; ignore gaps at idle.
