@@ -219,6 +219,9 @@ func (u *UI) handleRaw(root *state, ev any) {
 			return
 		}
 		u.dispatchTouch(root, e.Pos, mk, e.Touch)
+		if e.Touch {
+			u.fingerOn = u.hit(root, e.Pos)
+		}
 		u.shapePointer(root, e.Pos)
 		if root == u.root {
 			u.movedAt(e.Mods)
@@ -322,6 +325,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 		if root == u.root {
 			u.pointerIn = false
 		}
+		u.fingerGone(e.Time)
 		u.updateHover(root, geom.Pt(-1, -1), e.Time)
 	case input.Drop:
 		data := e.Data
@@ -924,6 +928,20 @@ func (u *UI) updateHover(root *state, p geom.Point, t time.Time) {
 		if _, ok := s.node.(PointerClaimer); ok {
 			u.deliver(s, input.PointerMove{Pos: u.local(s, p), Time: t})
 		}
+	}
+}
+
+// fingerGone tells the nodes a finger's move last reached that it has gone. A finger
+// has no hover, so none hears it enter. But a move reaches them all the same, and a
+// node that follows moves, to light the part under the pointer, would stay lit.
+func (u *UI) fingerGone(t time.Time) {
+	s := u.fingerOn
+	u.fingerOn = nil
+	for ; s != nil && s.parent != nil; s = s.parent {
+		if u.hover != nil && u.hover.within(s) {
+			return
+		}
+		u.deliver(s, input.PointerLeave{Time: t})
 	}
 }
 

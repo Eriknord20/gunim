@@ -734,7 +734,9 @@ func copyFile(ctx context.Context, from, to string, progress func(float32)) erro
 // running program's file cannot be written over, as on Windows, the old
 // one is moved aside to to.old first, which [CleanOld] takes away
 // later, and moved back if the new one cannot be put in place, so to
-// is never left missing.
+// is never left missing. Both moves try a few times, as a file another
+// process or another writer touches for a moment cannot be replaced on
+// Windows.
 func Replace(part, to string) error { return replaceKeeping(part, to, false) }
 
 // replaceKeeping is Replace of the file at to, which with keep leaves
@@ -749,14 +751,17 @@ func replaceKeeping(part, to string, keep bool) error {
 			}
 		}
 	}
-	if err := os.Rename(part, to); err != nil {
+	if err := persist(func() error { return rename(part, to) }); err != nil {
 		if old != "" {
-			_ = os.Rename(old, to)
+			_ = persist(func() error { return rename(old, to) })
 		}
 		return fmt.Errorf("put %s in place: %w", filepath.Base(to), err)
 	}
 	return nil
 }
+
+// rename is os.Rename, which the tests make fail for a moment.
+var rename = os.Rename
 
 // moveAside moves the file at file to file.old, for Replace, or, with
 // keep, to a name of its own beside it, and returns where. One at

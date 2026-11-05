@@ -53,6 +53,23 @@ func TestAFlingCarriesOnAfterRelease(t *testing.T) {
 	}
 }
 
+// A busy page hears a release late, and when it happened still decides the fling.
+func TestAFlingHeardLateStillFlings(t *testing.T) {
+	w, l, run := newDragList(t)
+	const late = 400 * time.Millisecond
+	end := time.Now().Add(-late)
+	start := end.Add(-100 * time.Millisecond)
+	w.Input(input.PointerDown{Pos: geom.Pt(100, 300), Clicks: 1, Time: start})
+	for i := 1; i <= 8; i++ {
+		w.Input(input.PointerMove{Pos: geom.Pt(100, 300-25*float32(i)), Time: start.Add(100 * time.Millisecond * time.Duration(i) / 8)})
+	}
+	w.Input(input.PointerUp{Pos: geom.Pt(100, 100), Time: end})
+	run(120)
+	if l.Offset() < 600 {
+		t.Fatalf("the fling stopped at %v, want well past the 200 dragged", l.Offset())
+	}
+}
+
 func TestADragPastTheTopStretchesAndSpringsBack(t *testing.T) {
 	w, l, run := newDragList(t)
 	start := time.Now()

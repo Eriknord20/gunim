@@ -29,12 +29,17 @@ const (
 	longPress  = 400 * time.Millisecond
 	flingDecay = 0.33
 	flingStop  = 20
+	// speedSpan is the shortest time a finger's speed is read over. Moves
+	// closer than this count together: a pixel of wobble as a finger lifts,
+	// over a tenth of a millisecond, would read as a fling the other way.
+	speedSpan = 4 * time.Millisecond
 )
 
 // touchPress follows a finger's press in a window: where it went down,
 // whether its moves have chosen yet, whether it became a long press,
-// and, for a scroll, where it was last and how fast it moves, in
-// logical pixels a second. stopLong stops the wait for a long press.
+// and, for a scroll, where it was last, how fast it moves, in logical
+// pixels a second, and where and when that speed was last read. stopLong
+// stops the wait for a long press.
 type touchPress struct {
 	root        *state
 	start, last geom.Point
@@ -43,6 +48,8 @@ type touchPress struct {
 	scrolling   bool
 	held        bool
 	vel         geom.Point
+	readAt      geom.Point
+	readTime    time.Time
 	stopLong    func()
 }
 
@@ -102,16 +109,19 @@ func (u *UI) touchEvent(root *state, ev any) bool {
 			}
 			t.scrolling = true
 			u.handleRaw(root, input.PointerUp{Pos: input.Away, Button: input.ButtonPrimary, Mods: e.Mods, Touch: true, Time: e.Time})
+			u.fingerGone(e.Time)
 			// The scroll starts from here, with no jump for the slop.
 			t.last, t.lastAt = e.Pos, e.Time
+			t.readAt, t.readTime = e.Pos, e.Time
 			return true
 		}
 		if !t.scrolling {
 			return false
 		}
 		delta := e.Pos.Sub(t.last)
-		if dt := e.Time.Sub(t.lastAt).Seconds(); dt > 0 {
-			t.vel = t.vel.Mul(0.6).Add(delta.Mul(float32(0.4 / dt)))
+		if dt := e.Time.Sub(t.readTime); dt >= speedSpan {
+			t.vel = t.vel.Mul(0.6).Add(e.Pos.Sub(t.readAt).Mul(float32(0.4 / dt.Seconds())))
+			t.readAt, t.readTime = e.Pos, e.Time
 		}
 		t.last, t.lastAt = e.Pos, e.Time
 		u.handleRaw(root, input.Scroll{Pos: t.start, Delta: delta, Mods: e.Mods, Touch: true, Time: e.Time})

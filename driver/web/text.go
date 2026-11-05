@@ -236,14 +236,14 @@ func (d *Driver) listenText(doc js.Value) {
 			switch kind := e.Get("inputType").String(); {
 			case single && (kind == "insertLineBreak" || kind == "insertParagraph"):
 				e.Call("preventDefault")
-				w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: time.Now()})
+				w.in.Push(input.KeyPress{Key: input.KeyEnter, Time: stamp(e)})
 			case hasState && kind == "insertText" && !d.composing && e.Get("cancelable").Bool() && w.in.Waiting():
 				// The engine is held up, as waiting on the clipboard, with input it has
 				// yet to read, so the mirror is out of date. The text follows that input
 				// in order, and the mirror catches up with the engine.
 				e.Call("preventDefault")
 				if data := e.Get("data"); data.Type() == js.TypeString {
-					w.in.Push(input.TextInput{Text: data.String(), Time: time.Now()})
+					w.in.Push(input.TextInput{Text: data.String(), Time: stamp(e)})
 				}
 			}
 		})
