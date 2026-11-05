@@ -61,6 +61,7 @@ const (
 	vtSetFileName    = 15
 	vtSetTitle       = 17
 	vtGetResult      = 20
+	vtSetDefaultExt  = 22
 	vtGetResults     = 27
 	vtArrayGetCount  = 7
 	vtArrayGetItemAt = 8
@@ -93,9 +94,11 @@ type dialog struct {
 	clsid, iid *windows.GUID
 	title      string
 	filters    []driver.FileFilter
-	options    uint32
-	folder     string
-	name       string
+	// saves says it asks where to save.
+	saves   bool
+	options uint32
+	folder  string
+	name    string
 }
 
 // showDialog shows d owned by w, and runs chosen with the dialog once the
@@ -143,6 +146,12 @@ func (w *Window) showDialog(d dialog, chosen func(dlg unsafe.Pointer) error) err
 	setFolder(dlg, d.folder)
 	if err := setText(dlg, vtSetFileName, d.name, "file name"); err != nil {
 		return err
+	}
+	if d.saves {
+		// A name typed with no extension takes the file type's, not none.
+		if err := setText(dlg, vtSetDefaultExt, defaultExt(d.filters), "default extension"); err != nil {
+			return err
+		}
 	}
 	if len(d.filters) > 0 {
 		specs := make([]filterSpec, len(d.filters))
@@ -233,7 +242,7 @@ func (w *Window) ChooseFiles(o driver.ChooseOptions) ([]string, error) {
 // IFileSaveDialog.
 func (w *Window) SaveFile(o driver.SaveOptions) (string, error) {
 	d := dialog{clsid: &clsidFileSaveDialog, iid: &iidFileSaveDialog, title: o.Title, name: o.Name,
-		folder: o.Folder, filters: o.Filters, options: fosForceFileSystem | fosPathMustExist | fosOverwritePrompt}
+		folder: o.Folder, filters: o.Filters, saves: true, options: fosForceFileSystem | fosPathMustExist | fosOverwritePrompt}
 	var path string
 	err := w.showDialog(d, func(dlg unsafe.Pointer) error {
 		var item unsafe.Pointer
@@ -246,6 +255,19 @@ func (w *Window) SaveFile(o driver.SaveOptions) (string, error) {
 		return err
 	})
 	return path, err
+}
+
+// defaultExt is the extension of the first filter's first pattern, with no dot, as "wav" of "*.wav", or "" where it
+// names none, as "*".
+func defaultExt(filters []driver.FileFilter) string {
+	if len(filters) == 0 || len(filters[0].Patterns) == 0 {
+		return ""
+	}
+	p := filters[0].Patterns[0]
+	if !strings.HasPrefix(p, "*.") || strings.ContainsAny(p[2:], "*?") {
+		return ""
+	}
+	return p[2:]
 }
 
 // itemPath returns the path of an IShellItem.
