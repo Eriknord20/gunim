@@ -198,6 +198,11 @@ func Open(c Config) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	return retryRefused(func() (*Device, error) { return openOnce(clsid, c) }, time.Sleep)
+}
+
+// openOnce loads the driver and starts it, once. It runs with openMu held.
+func openOnce(clsid windows.GUID, c Config) (*Device, error) {
 	t, err := newSTA()
 	if err != nil {
 		return nil, err
@@ -345,7 +350,7 @@ func (d *Device) open(clsid windows.GUID, c Config) error {
 	}
 	hwnd, _, _ := procGetDesktopWindow.Call()
 	if d.call(mInit, hwnd) == 0 {
-		return &Error{Op: "starting " + c.Name, Message: d.refused()}
+		return &Error{Op: "starting " + c.Name, Message: d.refused(), refused: true}
 	}
 	var ins, outs int32
 	if r := d.call(mGetChannels, uintptr(unsafe.Pointer(&ins)), uintptr(unsafe.Pointer(&outs))); r != codeOK {
