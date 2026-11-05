@@ -455,7 +455,7 @@ A test that skips fails the run. Name a browser with `-chrome path`. On Windows,
 
 A browser holds sound back until the user's first click, key or touch, and `speaker.Open` waits for it. Mount the interface before opening the speaker, or the page stays blank until then.
 
-Host files, plugins, native audio drivers and other windows of the system aren't there. The driver's tests need a real browser, so they are built with `GOOS=js GOARCH=wasm go test -c ./driver/web` and run in a page, and CI builds, vets and lints for the browser without running them.
+Host files, plugins, native audio drivers and other windows of the system aren't there.
 
 ## Android
 
