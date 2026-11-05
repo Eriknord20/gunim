@@ -205,6 +205,9 @@ type Error struct {
 	// says of it, where it says anything.
 	Code    int32
 	Message string
+	// refused says the driver would not start at all, which can pass by
+	// itself: see retryRefused.
+	refused bool
 }
 
 func (e *Error) Error() string {
