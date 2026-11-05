@@ -322,3 +322,38 @@ func TestAFingersScrollSaysAFingerScrolled(t *testing.T) {
 		}
 	}
 }
+
+// As a finger lifts, a busy browser hands over its last moves together, the last a
+// pixel or two back the way it came. That is wobble, and the fling goes on the way
+// the finger went.
+func TestAWobbleAsAFingerLiftsTurnsNoFlingBack(t *testing.T) {
+	r := &recorder{}
+	w, finger := touchStage(t, r)
+	at := time.Now()
+	finger(input.PointerDown{Pos: geom.Pt(100, 300), Button: input.ButtonPrimary, Clicks: 1, Touch: true, Time: at})
+	y := float32(300)
+	for range 10 {
+		at = at.Add(16 * time.Millisecond)
+		y -= 20
+		finger(input.PointerMove{Pos: geom.Pt(100, y), Touch: true, Time: at})
+	}
+	for _, step := range []struct {
+		back float32
+		gap  time.Duration
+	}{{3, 100 * time.Microsecond}, {2, 100 * time.Microsecond}} {
+		at = at.Add(step.gap)
+		y += step.back
+		finger(input.PointerMove{Pos: geom.Pt(100, y), Touch: true, Time: at})
+	}
+	finger(input.PointerUp{Pos: geom.Pt(100, y), Button: input.ButtonPrimary, Touch: true, Time: at})
+	r.events = nil
+	for f := range 30 {
+		w.Frame(time.Second / 60)
+		for _, e := range r.events {
+			if s, ok := e.(input.Scroll); ok && s.Delta.Y > 0 {
+				t.Fatalf("frame %d: a fling up went back down by %v", f, s.Delta.Y)
+			}
+		}
+		r.events = nil
+	}
+}
