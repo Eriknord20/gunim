@@ -15,10 +15,10 @@ import (
 	"github.com/marrasen/gunim/driver/internal/render"
 )
 
-// frame runs in requestAnimationFrame. It draws the frames waiting
-// into their windows, lays the windows on the canvas, bottom first,
-// and tells each window its frame is shown. The browser shows the
-// canvas as the callback returns.
+// frame runs in requestAnimationFrame, and after a new size in the
+// ResizeObserver's step. It draws the frames waiting into their windows,
+// lays the windows on the canvas, bottom first, and tells each window its
+// frame is shown. The browser shows the canvas as the callback returns.
 func (d *Driver) frame() {
 	d.mu.Lock()
 	lost := d.lost

@@ -11,9 +11,10 @@
 // the canvas bottom first.
 //
 // The canvas's CSS size is the windows' logical size, and the page's
-// devicePixelRatio their scale, so a page lays the canvas out as it
-// likes and gunim follows it. Frames are drawn in requestAnimationFrame,
-// and only while a window has a frame to show.
+// devicePixelRatio their scale, or less past what the GPU can draw, so a
+// page lays the canvas out as it likes and gunim follows it. Frames are
+// drawn in requestAnimationFrame, and in the ResizeObserver's step for a
+// new size, and only while there is something new to show.
 //
 // The browser's own pointer, keyboard and focus events become gunim's
 // input. Text comes through a hidden textarea, or a password field for a
@@ -62,12 +63,12 @@ type Driver struct {
 	// ctx is the WebGL context behind g, which says what the GPU can draw.
 	ctx js.Value
 
-	// scale is the page's devicePixelRatio, and cssW and cssH the
+	// scale is the page's devicePixelRatio, or less past bufferLimit, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
 	// surfH are its drawing buffer's size in device pixels.
 	// lastTouch says the last press was a finger or a pen, not a mouse.
 	lastTouch bool
-	// kept holds the keys down that stay the browser\'s, by their place.
+	// kept holds the keys down that stay the browser's, by their place.
 	kept         map[string]bool
 	scale        float32
 	cssW, cssH   float32
@@ -1077,7 +1078,7 @@ func gunimKey(name string, m input.Mods, inText bool) bool {
 }
 
 // keyWindow returns the window keys go to: the one taking text, or the
-// topmost that fills the canvas.
+// topmost that shows.
 func (d *Driver) keyWindow() *Window {
 	d.mu.Lock()
 	defer d.mu.Unlock()
