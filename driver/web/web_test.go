@@ -775,6 +775,58 @@ func TestBrowser(t *testing.T) {
 		}
 		w.SetTextInput(false)
 	})
+	t.Run("a key after a tap brings the keyboard back to the field", func(t *testing.T) {
+		doc := js.Global().Get("document")
+		tap := func() {
+			pointer(d, "pointerdown", 7, 5, 5)
+			pointer(d, "pointerup", 7, 5, 5)
+			drain(w)
+		}
+		d.canvas.Call("focus")
+		tap()
+		// Tab, on the canvas, moves the engine's focus to a field: a physical key
+		// means no finger's tap is needed for it to take the keyboard.
+		if !key(d.canvas, "Tab", "Tab") {
+			t.Error("Tab on the canvas was left to the browser")
+		}
+		w.SetTextInput(true)
+		if !d.text.Equal(doc.Get("activeElement")) {
+			t.Errorf("after a tap and Tab, %v has the keyboard", doc.Get("activeElement").Get("tagName"))
+		}
+		// A dead key now reaches the mirror, which is what finishes it.
+		if key(d.text, "Dead", "BracketRight") {
+			t.Error("a dead key in the field was cancelled")
+		}
+		w.SetTextInput(false)
+		drain(w)
+		// The field is on already, and the finger's tap left the keyboard away.
+		d.canvas.Call("focus")
+		tap()
+		w.SetTextInput(true)
+		if d.text.Equal(doc.Get("activeElement")) {
+			t.Fatal("a finger's field took the keyboard")
+		}
+		key(d.canvas, "Dead", "BracketRight")
+		if !d.text.Equal(doc.Get("activeElement")) {
+			t.Errorf("a dead key on the canvas left %v with the keyboard", doc.Get("activeElement").Get("tagName"))
+		}
+		w.SetTextInput(false)
+		drain(w)
+		// A soft keyboard's key has no place, and says nothing of a keyboard at hand.
+		tap()
+		d.text.Call("focus")
+		key(d.text, "Backspace", "")
+		d.canvas.Call("focus")
+		w.SetTextInput(true)
+		if d.text.Equal(doc.Get("activeElement")) {
+			t.Error("a soft keyboard's key let a later field bring the keyboard up with no tap")
+		}
+		w.SetTextInput(false)
+		d.mu.Lock()
+		d.lastTouch = false
+		d.mu.Unlock()
+		drain(w)
+	})
 	t.Run("what is held comes up as focus leaves", func(t *testing.T) {
 		released := func() (keys []input.Key, buttons []input.Button, fingers []int) {
 			for _, e := range drain(w) {

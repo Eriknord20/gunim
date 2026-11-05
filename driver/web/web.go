@@ -76,7 +76,7 @@ type Driver struct {
 	// scale is the page's devicePixelRatio, and cssW and cssH the
 	// canvas's size in CSS pixels, which are logical pixels. surfW and
 	// surfH are its drawing buffer's size in device pixels.
-	// lastTouch says the last press was a finger or a pen, not a mouse.
+	// lastTouch says the last input was a finger or a pen, not a mouse or a key.
 	lastTouch bool
 	// held holds the keys down that gunim heard go down, by their place, and the
 	// window each went to. buttons holds the buttons down in the window pressed.
@@ -727,6 +727,17 @@ func (d *Driver) listen(doc js.Value) {
 				h.w.in.Push(input.KeyRelease{Key: h.key, Mods: m, Time: now})
 			}
 			return
+		}
+		// A soft keyboard's keys have no place. Any other key means a keyboard is at
+		// hand, so a field takes the keyboard from here on, whatever a finger did last.
+		if code != "" {
+			d.mu.Lock()
+			d.lastTouch = false
+			typing := d.typing != nil
+			d.mu.Unlock()
+			if typing && !d.text.Equal(doc.Get("activeElement")) {
+				d.focusMirror()
+			}
 		}
 		// A dead key is half a character, which the browser finishes.
 		if name == "Dead" {
