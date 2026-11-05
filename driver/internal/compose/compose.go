@@ -236,15 +236,12 @@ func (c *Compositor) Draw(p *Pane, ops []paint.Op, damage []geom.Rect, w, h int,
 		}
 		p.drawer = d
 	}
-	if p.texW != w || p.texH != h {
-		p.resize(c.g, w, h)
-	}
 	p.Last, p.LastW, p.LastH = ops, w, h
 	if p == c.solo {
-		p.target, p.OnTex = 0, false
+		p.onSurface(c.g)
 		c.soloDrew = true
 	} else {
-		p.target, p.OnTex = p.fbo, true
+		p.onTexture(c.g)
 	}
 	p.Sharp(p.drawer.drawRects(p.target, under, ops, damage, w, h, scale))
 	return true
@@ -269,7 +266,7 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 			// changed size, but the surface holds nothing after it was shown: the
 			// last frame again, to fill it.
 			c.solo.LastW, c.solo.LastH = w, h
-			c.solo.redraw(c.g, 0, scale)
+			c.solo.redraw(c.g, true, scale)
 		}
 		c.last = append(c.last[:0], stack...)
 	} else {
@@ -282,7 +279,7 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 				if l.Pane.Last != nil {
 					l.Pane.LastW, l.Pane.LastH = l.W, l.H
 				}
-				l.Pane.redraw(c.g, l.Pane.fbo, scale)
+				l.Pane.redraw(c.g, false, scale)
 			}
 		}
 		c.lay(stack, w, h)
@@ -297,18 +294,38 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 	}
 }
 
-// redraw draws the window's last frame again, whole, into fbo: its
-// texture, or 0 for the surface.
-func (p *Pane) redraw(g gl.Context, fbo uint32, scale float32) {
+// redraw draws the window's last frame again, whole, straight onto the
+// surface or into its texture.
+func (p *Pane) redraw(g gl.Context, surface bool, scale float32) {
 	if p.drawer == nil || p.Last == nil {
 		return
 	}
-	if fbo != 0 && (p.texW != p.LastW || p.texH != p.LastH) {
+	if surface {
+		p.onSurface(g)
+	} else {
+		p.onTexture(g)
+	}
+	p.Sharp(p.drawer.draw(p.target, p.Last, p.LastW, p.LastH, scale))
+}
+
+// onSurface has the window's next draw go straight onto the surface. Its
+// texture has no use then. One from a popup just closed stays for the next
+// popup, while it is still the right size. One of another size goes, as it
+// would only hold GPU memory: about 33 MB at 4K.
+func (p *Pane) onSurface(g gl.Context) {
+	if p.texW != p.LastW || p.texH != p.LastH {
+		p.dropTexture(g)
+	}
+	p.target, p.OnTex = 0, false
+}
+
+// onTexture has the window's next draw go into its texture, made at the size
+// of its last frame.
+func (p *Pane) onTexture(g gl.Context) {
+	if p.texW != p.LastW || p.texH != p.LastH {
 		p.resize(g, p.LastW, p.LastH)
 	}
-	p.target = fbo
-	p.Sharp(p.drawer.draw(fbo, p.Last, p.LastW, p.LastH, scale))
-	p.OnTex = fbo != 0
+	p.target, p.OnTex = p.fbo, true
 }
 
 // resize gives the window a texture of width×height device pixels to draw

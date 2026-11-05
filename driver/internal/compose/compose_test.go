@@ -421,17 +421,95 @@ func TestReleaseOfAWindowThatNeverDrew(t *testing.T) {
 	}
 }
 
+// Alone on the surface, a window has no use for a texture, and a popup
+// opening later has one made.
+func TestAloneOnTheSurfaceMakesNoTexture(t *testing.T) {
+	b := newBench(t)
+	base, popup := newPane(), newPane()
+	lb := Layer{Pane: base, W: 100, H: 80}
+	for _, sz := range [][2]int{{100, 80}, {120, 90}, {80, 100}} {
+		lb.W, lb.H = sz[0], sz[1]
+		b.frame([]Layer{lb}, lb.W, lb.H, &lb)
+		b.frame([]Layer{{Pane: base, W: lb.W, H: lb.H}}, lb.W, lb.H)
+	}
+	if base.tex != 0 || base.fbo != 0 || len(b.g.sized) != 0 {
+		t.Fatalf("alone, it made a texture: %d, sized %v", base.tex, b.g.sized)
+	}
+	took(base)
+	lp := Layer{Pane: popup, X: 5, Y: 5, W: 20, H: 20}
+	b.frame([]Layer{lb, lp}, lb.W, lb.H, &lp)
+	if base.tex == 0 || b.g.sized[base.tex] != [2]int32{int32(lb.W), int32(lb.H)} {
+		t.Fatalf("with a popup open its texture is %d, %v", base.tex, b.g.sized[base.tex])
+	}
+	if got, want := took(base), []drawn{{fbo: base.fbo, whole: true, w: lb.W, h: lb.H}}; !slices.Equal(got, want) {
+		t.Fatalf("it drew %v, want %v", got, want)
+	}
+	if !slices.Equal(b.g.laid, []uint32{base.tex, popup.tex}) {
+		t.Fatalf("laid %v", b.g.laid)
+	}
+}
+
+// A popup that opens in the same frame as a new frame of the window under it
+// has the texture made for that frame.
+func TestPopupOpeningWithAFrameOfTheWindow(t *testing.T) {
+	b := newBench(t)
+	base, popup := newPane(), newPane()
+	lb, lp := Layer{Pane: base, W: 100, H: 80}, Layer{Pane: popup, X: 5, Y: 5, W: 20, H: 20}
+	b.frame([]Layer{lb}, 100, 80, &lb)
+	took(base)
+	b.frame([]Layer{lb, lp}, 100, 80, &lb, &lp)
+	if got, want := took(base), []drawn{{fbo: base.fbo, w: 100, h: 80}}; !slices.Equal(got, want) {
+		t.Fatalf("it drew %v, want %v", got, want)
+	}
+	if base.tex == 0 || !slices.Equal(b.g.laid, []uint32{base.tex, popup.tex}) {
+		t.Fatalf("laid %v", b.g.laid)
+	}
+}
+
+// A texture left from a popup stays for the next popup at the same size, and
+// goes at any other.
+func TestAloneAgainKeepsATextureOfTheRightSize(t *testing.T) {
+	b := newBench(t)
+	base, popup := newPane(), newPane()
+	lb, lp := Layer{Pane: base, W: 100, H: 80}, Layer{Pane: popup, X: 5, Y: 5, W: 20, H: 20}
+	b.frame([]Layer{lb, lp}, 100, 80, &lb, &lp)
+	tex, fbo := base.tex, base.fbo
+	b.frame([]Layer{lb}, 100, 80)
+	b.frame([]Layer{lb}, 100, 80, &lb)
+	if base.tex != tex || len(b.g.deleted) != 0 {
+		t.Fatalf("at the same size the texture is %d, was %d, deleted %v", base.tex, tex, b.g.deleted)
+	}
+	lb.W, lb.H = 120, 90
+	b.frame([]Layer{lb}, 120, 90, &lb)
+	if base.tex != 0 || !slices.Equal(b.g.deleted, []uint32{fbo, tex}) {
+		t.Fatalf("at a new size the texture is %d, deleted %v", base.tex, b.g.deleted)
+	}
+	// The same goes for the last frame drawn again at the new size, with no
+	// frame of its own.
+	b.frame([]Layer{lb, lp}, 120, 90)
+	if base.tex == 0 {
+		t.Fatal("a popup opened and the window under it has no texture")
+	}
+	b.g.deleted = nil
+	lb.W, lb.H = 100, 80
+	b.frame([]Layer{lb}, 100, 80)
+	if base.tex != 0 || len(b.g.deleted) != 2 {
+		t.Fatalf("at a new size with no frame the texture is %d, deleted %v", base.tex, b.g.deleted)
+	}
+}
+
 func TestForgetKeepsTheLastFrame(t *testing.T) {
 	b := newBench(t)
 	p := newPane()
 	l := Layer{Pane: p, W: 100, H: 80}
-	b.frame([]Layer{l}, 100, 80, &l)
+	o := Layer{Pane: newPane(), X: 5, Y: 5, W: 20, H: 20}
+	b.frame([]Layer{l, o}, 100, 80, &l)
 	was := p.tex
 	p.Forget()
 	if p.tex != 0 || p.fbo != 0 || p.texW != 0 || p.drawer != nil || p.Last == nil || p.LastW != 100 {
 		t.Fatalf("after Forget: %+v", p)
 	}
-	b.frame([]Layer{l}, 100, 80, &l)
+	b.frame([]Layer{l, o}, 100, 80, &l)
 	if p.tex == 0 || p.tex == was {
 		t.Fatalf("the new context's texture is %d, the old one was %d", p.tex, was)
 	}
