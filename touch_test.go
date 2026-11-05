@@ -323,6 +323,47 @@ func TestAFingersScrollSaysAFingerScrolled(t *testing.T) {
 	}
 }
 
+// A node that follows moves, to light what is under the pointer, hears when a finger
+// has gone, or it would stay lit.
+func TestANodeAFingerMovedOverHearsItGo(t *testing.T) {
+	left := func(r *recorder) (n int) {
+		for _, e := range r.events {
+			if _, ok := e.(input.PointerLeave); ok {
+				n++
+			}
+		}
+		return n
+	}
+	r := &recorder{}
+	_, finger := touchStage(t, r)
+	// A tap: the driver moves, presses, lets go and leaves.
+	at := time.Now()
+	finger(input.PointerMove{Pos: geom.Pt(100, 100), Touch: true, Time: at})
+	if left(r) != 0 {
+		t.Fatal("it heard the finger go before it had")
+	}
+	finger(input.PointerDown{Pos: geom.Pt(100, 100), Button: input.ButtonPrimary, Clicks: 1, Touch: true, Time: at})
+	finger(input.PointerUp{Pos: geom.Pt(100, 100), Button: input.ButtonPrimary, Touch: true, Time: at})
+	finger(input.PointerLeave{Time: at})
+	if left(r) != 1 {
+		t.Fatalf("after a tap it heard the finger go %d times", left(r))
+	}
+	// A scroll: it hears as the scroll starts, once.
+	finger(input.PointerMove{Pos: geom.Pt(100, 300), Touch: true, Time: at})
+	swipe(finger, geom.Pt(100, 300), geom.Pt(100, 100), 5, at, 0)
+	finger(input.PointerLeave{Time: at})
+	if left(r) != 2 {
+		t.Fatalf("after a scroll it heard the finger go %d times in all", left(r))
+	}
+	// A mouse resting on it keeps it lit.
+	finger(input.PointerMove{Pos: geom.Pt(100, 100), Time: at})
+	r.events = nil
+	finger(input.PointerMove{Pos: geom.Pt(100, 100), Touch: true, Time: at})
+	if left(r) != 0 {
+		t.Fatal("a finger's move told it the mouse had gone")
+	}
+}
+
 // As a finger lifts, a busy browser hands over its last moves together, the last a
 // pixel or two back the way it came. That is wobble, and the fling goes on the way
 // the finger went.
