@@ -444,6 +444,8 @@ The viewport tag has a phone lay the page out at its own width. Without it, the 
 
 The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. With `height:auto` and a width, or the other way round, the free side follows at the ratio of the canvas's `width` and `height` attributes. If the page has no element with the id `gunim`, the driver makes a canvas that fills it, and sets the body's margin to 0.
 
+If the browser loses the GPU context, the canvas waits for it to come back. After 5 s with no context the page shows a short note with a Reload button, in English, in an element with the id `gunim-context-lost`, and the canvas's `data-gunim-context` attribute is `gone`. A page can style or hide the note and show its own.
+
 A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
 
 gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` on the canvas, in its `style` attribute or a stylesheet. Elements laid over the canvas keep their own events.

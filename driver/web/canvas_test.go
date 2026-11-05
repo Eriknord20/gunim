@@ -1040,3 +1040,93 @@ func TestACanvasShownLeavesNoResizeObserverLoop(t *testing.T) {
 		})
 	}
 }
+
+// A context lost for good would leave the bare page, with no word why. A context
+// that comes back after that takes the note away, and draws again.
+func TestALostContextSaysSo(t *testing.T) {
+	d, w := testWindow(t)
+	present(t, w, testRed)
+	d.frame()
+	was := contextWait
+	defer func() { contextWait = was }()
+	doc := js.Global().Get("document")
+	ext := d.ctx.Call("getExtension", "WEBGL_lose_context")
+	if ext.IsNull() {
+		t.Fatal("no way to lose the context here")
+	}
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for give := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(give) {
+				t.Fatalf("%s never came", what)
+			}
+		}
+	}
+	lost := func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.lost
+	}
+	note := func() js.Value { return doc.Call("getElementById", "gunim-context-lost") }
+	attr := func() string { return d.canvas.Call("getAttribute", "data-gunim-context").String() }
+
+	// Back soon, the user hears nothing.
+	contextWait = 300 * time.Millisecond
+	ext.Call("loseContext")
+	waitFor("the loss", lost)
+	time.Sleep(20 * time.Millisecond)
+	ext.Call("restoreContext")
+	waitFor("the context's return", func() bool { return !lost() })
+	time.Sleep(400 * time.Millisecond)
+	if !note().IsNull() {
+		t.Fatal("a context back in time left a note")
+	}
+	if got := attr(); got != "restored" {
+		t.Fatalf("the attribute is %q", got)
+	}
+
+	// Gone too long, the user does.
+	contextWait = 20 * time.Millisecond
+	ext.Call("loseContext")
+	waitFor("the loss", lost)
+	waitFor("the note", func() bool { return !note().IsNull() })
+	if got := note().Get("textContent").String(); !strings.Contains(got, "Reload the page") {
+		t.Errorf("the note says %q", got)
+	}
+	if note().Call("querySelector", "button").IsNull() {
+		t.Error("the note has no button")
+	}
+	if got := js.Global().Call("getComputedStyle", note()).Get("position").String(); got != "fixed" {
+		t.Errorf("the note is %s", got)
+	}
+	if got := attr(); got != "gone" {
+		t.Errorf("the attribute is %q", got)
+	}
+	// The frames meanwhile wait.
+	present(t, w, testBlue)
+	d.frame()
+	ext.Call("restoreContext")
+	waitFor("the context's return", func() bool { return !lost() })
+	if !note().IsNull() {
+		t.Error("the note stayed after the context came back")
+	}
+	if got := attr(); got != "restored" {
+		t.Errorf("the attribute is %q", got)
+	}
+	present(t, w, testGreen)
+	d.frame()
+	if got := pixelAt(d, 4, 4); got[1] < 240 {
+		t.Errorf("after coming back it shows %v", got)
+	}
+	noGLError(t, d)
+
+	// And once more, the same note serves.
+	ext.Call("loseContext")
+	waitFor("the loss", lost)
+	waitFor("the note", func() bool { return !note().IsNull() })
+	ext.Call("restoreContext")
+	waitFor("the context's return", func() bool { return !lost() })
+	if n := doc.Call("querySelectorAll", "#gunim-context-lost").Length(); n != 0 {
+		t.Errorf("%d notes stayed", n)
+	}
+}

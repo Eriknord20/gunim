@@ -119,8 +119,12 @@ type Driver struct {
 	keyboard       float32
 	viewportHeight float64
 	lost           bool
-	rate           float64
-	lastRAF        float64
+	// lostTimer runs out when a lost context has been gone too long, and lostNote
+	// is what then tells the user.
+	lostTimer *time.Timer
+	lostNote  js.Value
+	rate      float64
+	lastRAF   float64
 	// gaps is a ring of the last gaps between animation frames, gapCount of them
 	// so far and the next at gapAt, and sortedGaps room to sort them in.
 	gaps            [60]float64
