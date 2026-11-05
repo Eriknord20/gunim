@@ -410,6 +410,36 @@ func TestBrowser(t *testing.T) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
 	})
+	t.Run("a mouse's side buttons are its own, and the browser keeps out", func(t *testing.T) {
+		for _, c := range []struct {
+			button, bit int
+			want        input.Button
+		}{{3, 8, input.ButtonBack}, {4, 16, input.ButtonForward}} {
+			drain(w)
+			mouse("pointerdown", c.button, c.bit)
+			mouse("pointerup", c.button, 0)
+			var got []input.Button
+			for _, e := range drain(w) {
+				switch e := e.(type) {
+				case input.PointerDown:
+					got = append(got, e.Button)
+				case input.PointerUp:
+					got = append(got, e.Button)
+				}
+			}
+			if !slices.Equal(got, []input.Button{c.want, c.want}) {
+				t.Errorf("button %d came as %v, want %v twice", c.button, got, c.want)
+			}
+			up := js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true, "cancelable": true, "button": c.button})
+			if d.canvas.Call("dispatchEvent", up).Bool() {
+				t.Errorf("button %d's mouseup was left for the browser, which would go back a page", c.button)
+			}
+		}
+		up := js.Global().Get("MouseEvent").New("mouseup", map[string]any{"bubbles": true, "cancelable": true, "button": 0})
+		if !d.canvas.Call("dispatchEvent", up).Bool() {
+			t.Error("the primary button's mouseup was cancelled, which Web Audio's wait for a gesture hangs on")
+		}
+	})
 	t.Run("only the canvas's own events count", func(t *testing.T) {
 		drain(w)
 		parent := d.canvas.Get("parentElement")

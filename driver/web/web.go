@@ -451,6 +451,10 @@ func buttonOf(e js.Value) input.Button {
 		return input.ButtonMiddle
 	case 2:
 		return input.ButtonSecondary
+	case 3:
+		return input.ButtonBack
+	case 4:
+		return input.ButtonForward
 	}
 	return input.ButtonPrimary
 }
@@ -556,6 +560,13 @@ func (d *Driver) listen(doc js.Value) {
 	// The browser's own focus change on a mouse press would undo a text field's
 	// focus.
 	d.on(c, "mousedown", false, func(e js.Value) { e.Call("preventDefault") })
+	// A mouse's side buttons are gunim's, which hears them as a step through its
+	// own history. Left alone, the browser would go back a page, out of the program.
+	d.on(c, "mouseup", false, func(e js.Value) {
+		if b := e.Get("button").Int(); b == 3 || b == 4 {
+			e.Call("preventDefault")
+		}
+	})
 	d.on(c, "pointermove", true, func(e js.Value) {
 		p, now := d.at(e), stamp(e)
 		touch, finger, id := d.touchOf(e), e.Get("pointerType").String() != "mouse", e.Get("pointerId").Int()
