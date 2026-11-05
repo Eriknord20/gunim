@@ -141,13 +141,7 @@ func openDriver() (*Driver, error) {
 	}
 	canvas := doc.Call("getElementById", "gunim")
 	if canvas.IsNull() {
-		canvas = doc.Call("createElement", "canvas")
-		canvas.Set("id", "gunim")
-		s := canvas.Get("style")
-		s.Set("display", "block")
-		s.Set("width", "100vw")
-		s.Set("height", "100vh")
-		doc.Get("body").Call("appendChild", canvas)
+		canvas = makeCanvas(doc)
 	}
 	opts := js.ValueOf(map[string]any{
 		"alpha": false, "antialias": false, "depth": false, "stencil": false,
@@ -181,6 +175,25 @@ func openDriver() (*Driver, error) {
 	d.listenContext()
 	d.calibrateRefresh()
 	return d, nil
+}
+
+// makeCanvas makes the canvas for a page with none, filling the page, and takes
+// off the body's default margins, which would have the page scroll by them. Its
+// height follows the phone's address bar as that comes and goes, where 100vh would
+// leave the bottom of the canvas out of reach. A browser without dvh refuses the
+// second height and keeps the first.
+func makeCanvas(doc js.Value) js.Value {
+	canvas := doc.Call("createElement", "canvas")
+	canvas.Set("id", "gunim")
+	s := canvas.Get("style")
+	s.Set("display", "block")
+	s.Set("width", "100vw")
+	s.Set("height", "100vh")
+	s.Set("height", "100dvh")
+	body := doc.Get("body")
+	body.Get("style").Set("margin", "0")
+	body.Call("appendChild", canvas)
+	return canvas
 }
 
 // gpuLimit returns the longest side the GPU can draw on, going by the textures,

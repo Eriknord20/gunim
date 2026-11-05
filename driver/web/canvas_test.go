@@ -574,3 +574,36 @@ func TestFitLimit(t *testing.T) {
 		}
 	}
 }
+
+// The canvas the driver makes for a page fills it, and the page has nothing to
+// scroll, whatever margins it would have had.
+func TestAMadeCanvasFillsThePage(t *testing.T) {
+	doc := js.Global().Get("document")
+	frame := doc.Call("createElement", "iframe")
+	frame.Get("style").Set("cssText", "width:300px;height:200px;border:0")
+	doc.Get("body").Call("appendChild", frame)
+	defer frame.Call("remove")
+	inner := frame.Get("contentDocument")
+	c := makeCanvas(inner)
+	if c.Get("id").String() != "gunim" || !inner.Call("getElementById", "gunim").Equal(c) {
+		t.Fatal("the page does not hold the canvas")
+	}
+	if got := c.Call("getBoundingClientRect"); got.Get("left").Int() != 0 || got.Get("top").Int() != 0 ||
+		got.Get("width").Int() != 300 || got.Get("height").Int() != 200 {
+		t.Errorf("the canvas lies at %v, %v, %v by %v", got.Get("left"), got.Get("top"), got.Get("width"), got.Get("height"))
+	}
+	root := inner.Get("documentElement")
+	if sw, cw := root.Get("scrollWidth").Int(), root.Get("clientWidth").Int(); sw > cw {
+		t.Errorf("the page scrolls sideways: %d in %d", sw, cw)
+	}
+	if sh, ch := root.Get("scrollHeight").Int(), root.Get("clientHeight").Int(); sh > ch {
+		t.Errorf("the page scrolls: %d in %d", sh, ch)
+	}
+	want := "100vh"
+	if js.Global().Get("CSS").Call("supports", "height", "100dvh").Bool() {
+		want = "100dvh"
+	}
+	if got := c.Get("style").Get("height").String(); got != want {
+		t.Errorf("the canvas's height is %q, want %q", got, want)
+	}
+}
