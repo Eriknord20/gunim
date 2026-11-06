@@ -204,7 +204,7 @@ type Plugin struct {
 	// crashed says the plugin crashed as it processed, and processFn is the
 	// function that does that, whose module going dead takes the plugin with it.
 	crashed   atomic.Bool
-	processFn uintptr
+	processFn atomic.Uintptr
 	// owner is the file of the module that made it, which a crash in it, or in a library of its, is told of by.
 	owner string
 	// ed is the editor, open, on the plugins' thread.
@@ -290,8 +290,8 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 	if p.proc == 0 {
 		return fmt.Errorf("vst3: %s: no audio processor", p.Class.Name)
 	}
-	p.processFn = method(p.proc, mProcess)
-	ownFn(p.processFn, p.owner)
+	p.processFn.Store(method(p.proc, mProcess))
+	ownFn(p.processFn.Load(), p.owner)
 	// The controller: the component itself, or one of its own class.
 	if ctrl := query(p.comp, iidEditController); ctrl != 0 {
 		p.ctrl, p.single = ctrl, true
@@ -357,6 +357,10 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 func (p *Plugin) readValues() {
 	for i := range p.edits.slots {
 		v := callFloatOut(p.ctrl, mGetParamNormalized, uintptr(p.edits.slots[i].id))
+		if p.Gone() {
+			// That is no value, and those not read yet stay what they were last known to be.
+			return
+		}
 		p.values[i].Store(math.Float64bits(v))
 	}
 }
@@ -380,7 +384,10 @@ func (p *Plugin) setupBuses() error {
 	infos := func(dir, n int) []busInfo {
 		out := make([]busInfo, n)
 		for i := range n {
-			call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&out[i])))
+			if result(call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&out[i])))) == resultCrashed {
+				// What it wrote before it did is no bus.
+				out[i] = busInfo{}
+			}
 		}
 		return out
 	}
@@ -407,7 +414,7 @@ func (p *Plugin) setupBuses() error {
 			call(p.proc, mGetBusArrangement, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&a)))
 			ch := bits.OnesCount64(a)
 			if ch == 0 {
-				ch = int(info[i].channels)
+				ch = min(max(int(info[i].channels), 0), maxBusChannels)
 			}
 			b := &out[i]
 			b.Name, b.Channels, b.Main = utf16String(info[i].name[:]), ch, info[i].busType == busMain
@@ -519,12 +526,13 @@ func (p *Plugin) SetActive(on bool) error {
 	return err
 }
 
-// ErrStuck is the error of what needs the plugins' thread, where a plugin's crash has left that thread stuck.
-var ErrStuck = errors.New("vst3: a plugin that crashed has left the plugins' thread stuck")
+// ErrStuck is the error of what needs the plugins' thread, where it isn't answering after a plugin's crash: held by the
+// plugin that crashed or by another, perhaps only for a moment. See [PluginsStuck].
+var ErrStuck = errors.New("vst3: the plugins' thread isn't answering, since a plugin crashed")
 
 // Gone reports whether the plugin crashed, or another of its module did: it is then called no more, and plays silence. Its
 // latency stays what it was, so what it plays into stays in time. It is safe to call from any goroutine.
-func (p *Plugin) Gone() bool { return p.crashed.Load() || moduleDead(p.processFn) }
+func (p *Plugin) Gone() bool { return p.crashed.Load() || moduleDead(p.processFn.Load()) }
 
 // ErrClosed is the error of a plugin, or an ARA document, closed.
 var ErrClosed = errors.New("vst3: closed")
@@ -533,18 +541,23 @@ var ErrClosed = errors.New("vst3: closed")
 // by then, and reports whether it ran. Close lets the plugin's objects
 // go on that thread too, after it marks the plugin closed, so a job that
 // runs finds them all there.
+//
+// A job the wait for ran out on, after a plugin's crash, may still run, or still be running, though this reports it didn't.
+// So a caller reads what a job wrote only where this reports it ran.
 func (p *Plugin) whileOpen(job func()) bool {
-	ran := false
-	onUI(func() {
+	var ran atomic.Bool
+	if !ranOnUI(func() {
 		if p.closed.Load() || p.Gone() {
 			return
 		}
-		ran = true
+		ran.Store(true)
 		setUIOwner(p.owner)
 		defer setUIOwner("")
 		job()
-	})
-	return ran
+	}) {
+		return false
+	}
+	return ran.Load()
 }
 
 // Configure sets the plugin up to run as cfg says, keeping its state:
@@ -713,7 +726,7 @@ func (p *Plugin) takeEdits() {
 func (p *Plugin) run(k int) {
 	p.outChanges.clear()
 	p.data.frames = int32(k)
-	if r := result(callN(p.processFn, p.procArgs[:])); r != resultOK {
+	if r := result(callN(p.processFn.Load(), p.procArgs[:])); r != resultOK {
 		// It made no sound: what its buffers hold is the block before.
 		if r == resultCrashed {
 			p.crashed.Store(true)
@@ -758,22 +771,24 @@ func (p *Plugin) Value(id uint32) float64 {
 // Values returns every parameter's value now, by ID, from 0 to 1, as
 // the controller has them.
 func (p *Plugin) Values() map[uint32]float64 {
-	out := make(map[uint32]float64, len(p.edits.slots))
+	asked := make(map[uint32]float64, len(p.edits.slots))
 	ran := p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
 		for i := range p.edits.slots {
 			id := p.edits.slots[i].id
-			out[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
+			asked[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
 		}
 	})
-	if !ran || p.Gone() {
-		// It can't be asked, or crashed as it was, and what it gave then is no value. A song keeps these, so they
-		// are what it was last known to hold.
-		for i := range p.edits.slots {
-			out[p.edits.slots[i].id] = math.Float64frombits(p.values[i].Load())
-		}
+	if ran && !p.Gone() {
+		return asked
+	}
+	// It can't be asked, or crashed as it was, and what it gave then is no value. A song keeps these, so they are what
+	// it was last known to hold, in a map of their own, as a job given up on may still be writing that one.
+	out := make(map[uint32]float64, len(p.edits.slots))
+	for i := range p.edits.slots {
+		out[p.edits.slots[i].id] = math.Float64frombits(p.values[i].Load())
 	}
 	return out
 }
@@ -827,6 +842,13 @@ func (p *Plugin) onTick() {
 	if p.Gone() {
 		return
 	}
+	// What it holds now, as a preset of its own may have changed all of it, for when it can't be asked.
+	if p.restarts.Load()&restartParamValues != 0 {
+		p.restarts.And(^int32(restartParamValues))
+		if p.ctrl != 0 {
+			p.readValues()
+		}
+	}
 	if p.active.Load() {
 		p.readTail()
 	}
@@ -843,7 +865,7 @@ func (p *Plugin) onTick() {
 // Params returns the plugin's parameters.
 func (p *Plugin) Params() []Param {
 	var out []Param
-	p.whileOpen(func() {
+	if !p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
@@ -858,7 +880,9 @@ func (p *Plugin) Params() []Param {
 				Automatable: info.flags&paramCanAutomate != 0, ReadOnly: info.flags&paramReadOnly != 0,
 				Hidden: info.flags&paramHidden != 0})
 		}
-	})
+	}) {
+		return nil
+	}
 	return out
 }
 
@@ -866,11 +890,13 @@ func (p *Plugin) Params() []Param {
 // writes it to show, as "-3.0 dB"; empty where it writes none.
 func (p *Plugin) Text(id uint32, v float64) string {
 	var s [128]uint16
-	p.whileOpen(func() {
+	if !p.whileOpen(func() {
 		if p.ctrl != 0 {
 			callFloatArg(p.ctrl, mGetParamStringByValue, uintptr(id), v, uintptr(unsafe.Pointer(&s[0])))
 		}
-	})
+	}) {
+		return ""
+	}
 	return utf16String(s[:])
 }
 
@@ -978,7 +1004,7 @@ func (p *Plugin) SetState(b []byte) error {
 			err = fmt.Errorf("vst3: %s: setState failed (%d)", p.Class.Name, r)
 			return
 		}
-		if p.ctrl == 0 {
+		if p.ctrl == 0 || p.Gone() {
 			return
 		}
 		if !p.single {
@@ -992,6 +1018,9 @@ func (p *Plugin) SetState(b []byte) error {
 		}
 		p.readValues()
 	}) {
+		return ErrClosed
+	}
+	if err == nil && p.Gone() {
 		return ErrClosed
 	}
 	return err
@@ -1102,3 +1131,6 @@ func keepGone(p *Plugin) {
 	defer goneMu.Unlock()
 	goneKept = append(goneKept, p)
 }
+
+// maxBusChannels is the most channels a bus is made with, whatever a plugin says.
+const maxBusChannels = 64

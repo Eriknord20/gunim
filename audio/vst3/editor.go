@@ -93,11 +93,20 @@ func (p *Plugin) createView() uintptr {
 	return v
 }
 
+// viewSize asks the view v its size. What a crash left part written is no size.
+func viewSize(v uintptr) viewRect {
+	var r viewRect
+	if result(call(v, mGetSize, uintptr(unsafe.Pointer(&r)))) == resultCrashed {
+		return viewRect{}
+	}
+	return r
+}
+
 // EditorSize returns the size the plugin's editor opens at, in pixels,
 // without opening it, or its size now where it is open; ok is false
 // where it has no editor here.
 func (p *Plugin) EditorSize() (w, h int, ok bool) {
-	p.whileOpen(func() {
+	if !p.whileOpen(func() {
 		if p.ed != nil {
 			s := p.ed.win.scale()
 			w, h, ok = toPixels(p.ed.w, s), toPixels(p.ed.h, s), true
@@ -110,14 +119,15 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 		if v == 0 {
 			return
 		}
-		var r viewRect
-		call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+		r := viewSize(v)
 		release(v)
 		w, h = r.size()
 		ok = w > 0 && h > 0
 		s := (*window)(nil).scale()
 		w, h = toPixels(w, s), toPixels(h, s)
-	})
+	}) {
+		return 0, 0, false
+	}
 	return w, h, ok
 }
 
@@ -128,7 +138,7 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 // open, or else one made for the question.
 func (p *Plugin) EditorResizable() bool {
 	var ok bool
-	p.whileOpen(func() {
+	if !p.whileOpen(func() {
 		if p.ed != nil {
 			ok = p.ed.resizable
 			return
@@ -142,7 +152,9 @@ func (p *Plugin) EditorResizable() bool {
 		}
 		ok = result(call(v, mCanResize)) == resultOK
 		release(v)
-	})
+	}) {
+		return false
+	}
 	return ok
 }
 
@@ -196,7 +208,9 @@ func (p *Plugin) EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, er
 // EmbedEditor opened it.
 func (p *Plugin) EditorEmbedded() bool {
 	embedded := false
-	onUI(func() { embedded = p.ed != nil && p.ed.win.child })
+	if !ranOnUI(func() { embedded = p.ed != nil && p.ed.win.child }) {
+		return false
+	}
 	return embedded
 }
 
@@ -205,7 +219,7 @@ func (p *Plugin) EditorEmbedded() bool {
 // takes r's size as near as it can; one that cannot keeps its own. It
 // returns the size the editor has.
 func (p *Plugin) PlaceEditor(r image.Rectangle) (w, h int) {
-	onUI(func() {
+	if !ranOnUI(func() {
 		e := p.ed
 		if e == nil || !e.win.child {
 			return
@@ -220,7 +234,9 @@ func (p *Plugin) PlaceEditor(r image.Rectangle) (w, h int) {
 			e.win.place(r.Min.X, r.Min.Y)
 		}
 		w, h = toPixels(e.w, s), toPixels(e.h, s)
-	})
+	}) {
+		return 0, 0
+	}
 	return w, h
 }
 
@@ -249,8 +265,7 @@ func (p *Plugin) attachEditor(title string, parent uintptr, sized func(w, h int)
 	if v == 0 {
 		return fmt.Errorf("vst3: %s: %w", p.Class.Name, plug.ErrNoEditor)
 	}
-	var r viewRect
-	call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+	r := viewSize(v)
 	w, h := r.size()
 	if w <= 0 || h <= 0 {
 		w, h = 640, 480

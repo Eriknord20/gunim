@@ -36,6 +36,8 @@ type fakePlugin struct {
 	state    []byte
 	tells    bool
 	rewrites bool
+	// onState and onValue, where set, run as it gives its state and a value: a test holds it there.
+	onState, onValue func()
 	// fails says its process fails, writing nothing.
 	fails   bool
 	latency int
@@ -195,6 +197,9 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 		newCallback(func(this, stream uintptr) uintptr {
 			touch(this)
 			f := fakeOf(this)
+			if f.onState != nil {
+				f.onState()
+			}
 			f.mu.Lock()
 			st := append([]byte(nil), f.state...)
 			f.mu.Unlock()
@@ -359,7 +364,12 @@ var fakeCtrlKind = &kind{iids: []uid{iidEditController}, other: fakeOther, make:
 		// getParamNormalized return doubles, of parameters it has none of.
 		newCallback(none),
 		newCallback(none),
-		newCallback(none),
+		newCallback(func(this, id uintptr) uintptr {
+			if f := fakeOf(this); f.onValue != nil {
+				f.onValue()
+			}
+			return none(this)
+		}),
 		newFloatCallback(func(this, id uintptr, v float64) uintptr {
 			touch(this)
 			return ok()

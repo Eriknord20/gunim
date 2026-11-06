@@ -19,6 +19,9 @@ func moduleDead(uintptr) bool { return false }
 // ownFn has nothing to note here: see crashcall_windows_amd64.go.
 func ownFn(uintptr, string) {}
 
+// forgetOwned has nothing to forget here: see crashcall_windows_amd64.go.
+func forgetOwned(string) {}
+
 // setUIOwner has nothing to note here: see crashcall_windows_amd64.go.
 func setUIOwner(string) {}
 

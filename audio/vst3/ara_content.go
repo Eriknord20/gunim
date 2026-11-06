@@ -31,7 +31,7 @@ func (d *Document) algorithmCount() int {
 // shows them, or nil where it offers none.
 func (d *Document) Algorithms() []Algorithm {
 	var out []Algorithm
-	onUI(func() {
+	if !ranOnUI(func() {
 		for i := range d.algorithmCount() {
 			r := readAt(d.dc.call(dcGetProcessingAlgorithmProperties, uintptr(i)), algorithmFields...)
 			if !r.has(2) {
@@ -40,7 +40,9 @@ func (d *Document) Algorithms() []Algorithm {
 			}
 			out = append(out, Algorithm{ID: r.str(1), Name: r.str(2)})
 		}
-	})
+	}) {
+		return nil
+	}
 	return out
 }
 
@@ -49,7 +51,7 @@ func (d *Document) Algorithms() []Algorithm {
 // analysis ends, it may be a default of the plugin's.
 func (d *Document) AlgorithmOf(src *AudioSource) int {
 	out := -1
-	onUI(func() {
+	if !ranOnUI(func() {
 		n := d.algorithmCount()
 		if n == 0 || src == nil || src.removed {
 			return
@@ -57,7 +59,9 @@ func (d *Document) AlgorithmOf(src *AudioSource) int {
 		if i := int(int32(uint32(d.dc.call(dcGetProcessingAlgorithmForAudioSource, src.ref)))); i >= 0 && i < n {
 			out = i
 		}
-	})
+	}) {
+		return -1
+	}
 	return out
 }
 
@@ -180,7 +184,7 @@ func (d *Document) objectContent(o *object3, calls contentCalls, kinds []Content
 	}
 	c := ObjectContent{Grades: map[ContentType]Grade{}}
 	var err error
-	onUI(func() {
+	if !ranOnUI(func() {
 		if d.closed {
 			err = ErrClosed
 			return
@@ -198,7 +202,9 @@ func (d *Document) objectContent(o *object3, calls contentCalls, kinds []Content
 				return
 			}
 		}
-	})
+	}) {
+		return ObjectContent{}, ErrStuck
+	}
 	if err != nil {
 		return ObjectContent{}, err
 	}

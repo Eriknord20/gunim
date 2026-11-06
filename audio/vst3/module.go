@@ -266,6 +266,10 @@ func (m *Module) create(id, iid uid) uintptr {
 		uintptr(unsafe.Pointer(&obj)))) != resultOK {
 		return 0
 	}
+	if obj == 0 {
+		// It said it made one.
+		return 0
+	}
 	ownFn(method(obj, 0), m.Path)
 	return obj
 }
@@ -284,6 +288,7 @@ func (m *Module) Close() error {
 		m.lib = library{}
 	})
 	forgetARAFactories(m)
+	forgetOwned(m.Path)
 	return err
 }
 

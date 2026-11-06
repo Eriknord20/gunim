@@ -469,6 +469,9 @@ func (a *plugged) State() []byte {
 		}
 		return a.given
 	}
+	if p.Gone() || uiGaveUp.Load() {
+		return a.given
+	}
 	if a.echo != nil && bytes.Equal(st, a.echo) {
 		return a.given
 	}

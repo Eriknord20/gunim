@@ -37,8 +37,36 @@ var (
 // waiting on a lock the crash left held, and a song is still to be saved.
 var uiStuckWait = 5 * time.Second
 
-// uiGaveUp says a wait on the plugins' thread ran out after a crash: nothing is given it from then on.
+// uiGaveUp says a wait on the plugins' thread ran out after a crash: nothing is given it until it is free again, which may
+// be soon, as all it took was a plugin being slow when another crashed.
 var uiGaveUp atomic.Bool
+
+// PluginsStuck reports whether the plugins' thread isn't answering, after a plugin's crash. Until it is free again, no
+// plugin can be asked anything: each gives what it last gave, so what is changed in one meanwhile isn't kept. It plays on.
+// It is safe to call from any goroutine.
+func PluginsStuck() bool { return uiGaveUp.Load() }
+
+// clearWhenFree clears uiGaveUp once the thread gets to work given it now, so once what held it has let go.
+func clearWhenFree() {
+	work := func() { uiGaveUp.Store(false) }
+	for {
+		uiMu.RLock()
+		sent := false
+		if uiRunning {
+			select {
+			case uiWork <- work:
+				wake()
+				sent = true
+			default:
+			}
+		}
+		uiMu.RUnlock()
+		if sent {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // waitUI waits for done, without bound until a plugin crashes and then for uiStuckWait, and reports whether it closed.
 func waitUI(done <-chan struct{}) bool {
@@ -53,7 +81,9 @@ func waitUI(done <-chan struct{}) bool {
 	case <-done:
 		return true
 	case <-t.C:
-		uiGaveUp.Store(true)
+		if uiGaveUp.CompareAndSwap(false, true) {
+			go clearWhenFree()
+		}
 		return false
 	}
 }

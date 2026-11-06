@@ -246,9 +246,11 @@ var (
 	deadSpans atomic.Pointer[[]span]
 	// testGate, set by a test once deadSpans is set, says what is dead in their place.
 	testGate func(fn uintptr) bool
+	// testFault, set by a test, says what to call in place of fn.
+	testFault atomic.Pointer[func(fn uintptr) uintptr]
 
 	crashesMu sync.Mutex
-	crashList []crashRecord
+	crashList []Crash
 	owned     []ownedSpan
 
 	crashOnce sync.Once
@@ -259,14 +261,6 @@ var (
 	uiThread atomic.Uint32
 	uiOwner  atomic.Pointer[string]
 )
-
-// crashRecord is a Crash, its fault found only as it is read: finding it takes the loader's lock, which a thread stuck
-// in the plugin may hold, and a crash is noted on the thread it happened on.
-type crashRecord struct {
-	Crash
-	at    uintptr
-	found bool
-}
 
 // crashSignal closes as the first plugin crashes.
 func crashSignal() <-chan struct{} { return crashed }
@@ -294,11 +288,23 @@ func ownFn(fn uintptr, owner string) {
 	if lo >= imageLo && lo < imageHi || isSystem(path) {
 		return
 	}
+	s := ownedSpan{span{lo, hi}, owner}
 	crashesMu.Lock()
 	defer crashesMu.Unlock()
-	if !slices.Contains(owned, ownedSpan{span{lo, hi}, owner}) {
-		owned = append(owned, ownedSpan{span{lo, hi}, owner})
+	if path == "" {
+		// Code it made is its alone: what held this memory before has let it go.
+		owned = slices.DeleteFunc(owned, func(o ownedSpan) bool { return o.span == s.span && o.owner != owner })
 	}
+	if !slices.Contains(owned, s) {
+		owned = append(owned, s)
+	}
+}
+
+// forgetOwned forgets what the module of the file owner held, as it unloads.
+func forgetOwned(owner string) {
+	crashesMu.Lock()
+	defer crashesMu.Unlock()
+	owned = slices.DeleteFunc(owned, func(o ownedSpan) bool { return o.owner == owner })
 }
 
 // isSystem reports whether the file at path is one of the system's.
@@ -333,6 +339,9 @@ func nativeCall(fn uintptr, args ...uintptr) (r1, r2 uintptr) {
 	if moduleDead(fn) {
 		return crashedResult, 0
 	}
+	if f := testFault.Load(); f != nil {
+		fn = (*f)(fn)
+	}
 	w := wrapper.Load()
 	if w == 0 {
 		r1, r2, _ = syscall.SyscallN(fn, args...)
@@ -349,29 +358,33 @@ func nativeCall(fn uintptr, args ...uintptr) (r1, r2 uintptr) {
 	return r1, r2
 }
 
-// ownerOf is the file of the module that owns fn, where that is known with no call to the system. crashesMu is held.
-func ownerOf(fn uintptr) string {
+// ownersOf are the files of the modules that own fn, more than one where they share a library, known with no call to the
+// system. crashesMu is held.
+func ownersOf(fn uintptr) []string {
+	var out []string
 	for _, o := range owned {
-		if fn >= o.lo && fn < o.hi {
-			return o.owner
+		if fn >= o.lo && fn < o.hi && !slices.Contains(out, o.owner) {
+			out = append(out, o.owner)
 		}
 	}
-	return ""
+	return out
 }
 
-// noteCrash notes that the module that owns fn crashed: code at the address at. It runs on the thread that crashed,
-// perhaps the audio's, once for a module. All of that module goes dead first, so another thread calls it no more.
+// noteCrash notes that the module that owns fn crashed: code at the address at. Where modules share the library fn is in,
+// all of them did: a fault there may leave what they share wrong and its locks held, and which one's object it was isn't
+// known here. All of each goes dead first, so another thread calls it no more. It runs on the thread that crashed, perhaps
+// the audio's, once for a module.
 func noteCrash(fn, at uintptr, code uint32) {
 	crashesMu.Lock()
-	owner := ownerOf(fn)
+	owners := ownersOf(fn)
 	crashesMu.Unlock()
 	// Not known: only now ask the system, with no lock held of ours.
 	var lo, hi uintptr
 	path := ""
-	if owner == "" {
+	if len(owners) == 0 {
 		lo, hi, path = moduleOf(fn)
 		if u := uiOwner.Load(); u != nil && windows.GetCurrentThreadId() == uiThread.Load() {
-			owner = *u
+			owners = []string{*u}
 		}
 	}
 	crashesMu.Lock()
@@ -386,7 +399,7 @@ func noteCrash(fn, at uintptr, code uint32) {
 		list = slices.Clone(*l)
 	}
 	for _, o := range owned {
-		if o.owner == owner && owner != "" {
+		if slices.Contains(owners, o.owner) {
 			list = append(list, o.span)
 		}
 	}
@@ -399,10 +412,31 @@ func noteCrash(fn, at uintptr, code uint32) {
 		list = append(list, span{lo, hi})
 	}
 	deadSpans.Store(&list)
-	if owner == "" && !isSystem(path) {
-		owner = path
+	if len(owners) == 0 {
+		if isSystem(path) {
+			path = ""
+		}
+		owners = []string{path}
 	}
-	crashList = append(crashList, crashRecord{Crash: Crash{Module: owner, Code: code, Offset: at}, at: at})
+	first := len(crashList)
+	for _, o := range owners {
+		crashList = append(crashList, Crash{Module: o, Code: code, Offset: at})
+	}
+	// Finding the fault's file takes the loader's lock, which a thread held in the plugin may hold.
+	go findFault(first, len(crashList), at)
+}
+
+// findFault notes which file the fault at the address at was in, of the crashes from first up to end.
+func findFault(first, end int, at uintptr) {
+	lo, _, f := moduleOf(at)
+	if f == "" {
+		return
+	}
+	crashesMu.Lock()
+	defer crashesMu.Unlock()
+	for i := first; i < end; i++ {
+		crashList[i].Fault, crashList[i].Offset = f, at-lo
+	}
 }
 
 // moduleOf is the memory the module holding at has, and its file. Memory no module holds, as code a plugin made, is
@@ -429,42 +463,12 @@ func moduleOf(at uintptr) (lo, hi uintptr, path string) {
 	return at, at + 1, ""
 }
 
-// Crashes returns the plugins' crashes the program has lived through, the oldest first. It is safe to call from any
-// goroutine.
+// Crashes returns the plugins' crashes the program has lived through, the oldest first. Where modules share a library, a
+// crash in it is one for each. A crash's Fault comes a moment after it. It is safe to call from any goroutine.
 func Crashes() []Crash {
 	crashesMu.Lock()
-	todo := -1
-	for i := range crashList {
-		if !crashList[i].found {
-			todo = i
-			break
-		}
-	}
-	crashesMu.Unlock()
-	for todo >= 0 {
-		crashesMu.Lock()
-		at := crashList[todo].at
-		crashesMu.Unlock()
-		lo, _, f := moduleOf(at)
-		crashesMu.Lock()
-		c := &crashList[todo]
-		c.found = true
-		if f != "" {
-			c.Fault, c.Offset = f, at-lo
-		}
-		todo++
-		if todo >= len(crashList) {
-			todo = -1
-		}
-		crashesMu.Unlock()
-	}
-	crashesMu.Lock()
 	defer crashesMu.Unlock()
-	out := make([]Crash, len(crashList))
-	for i := range crashList {
-		out[i] = crashList[i].Crash
-	}
-	return out
+	return slices.Clone(crashList)
 }
 
 // EndNow ends the program at once, with code, as one should that lived through a plugin's crash, once it has saved what
