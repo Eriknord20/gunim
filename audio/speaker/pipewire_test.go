@@ -636,3 +636,24 @@ func TestWherePipeWireDoesNotPlayTheSystemsOtherSoundDoes(t *testing.T) {
 		t.Error("nothing else opened")
 	}
 }
+
+func TestArmingOnTheSystemsSoundLeavesPipeWirePlaying(t *testing.T) {
+	withPipeWireFirst(t)
+	f := usePipeWire(t)
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.Set(Options{Rate: 48000, Record: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.opens != 1 {
+		t.Errorf("opened %d times", f.opens)
+	}
+	if f.cfg.Record {
+		t.Error("it records what no one reads")
+	}
+}

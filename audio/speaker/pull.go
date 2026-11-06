@@ -265,7 +265,12 @@ func (r *ringOutput) feed() {
 		if r.paused.Load() {
 			continue
 		}
+		began := time.Now()
 		for {
+			if now := time.Now(); now.Sub(began) > feedBreathe {
+				began = now
+				rt.Breathe()
+			}
 			want := r.target.Load() - q.len()
 			if want <= 0 {
 				r.primed.Store(true)
