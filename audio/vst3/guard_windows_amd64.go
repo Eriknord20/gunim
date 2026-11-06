@@ -65,7 +65,9 @@ func installGuard() error {
 		add := windows.NewLazySystemDLL("kernel32.dll").NewProc("AddVectoredContinueHandler")
 		if r, _, err := add.Call(1, continueGuardPC()); r == 0 {
 			guardErr = err
+			return
 		}
+		guardErr = makeWrapper()
 	})
 	return guardErr
 }

@@ -200,6 +200,10 @@ type Plugin struct {
 	closed atomic.Bool
 	// active says the plugin is set up to process, as New leaves it.
 	active atomic.Bool
+	// crashed says the plugin crashed as it processed, and processFn is the
+	// function that does that, whose module going dead takes the plugin with it.
+	crashed   atomic.Bool
+	processFn uintptr
 	// ed is the editor, open, on the plugins' thread.
 	ed         *editor
 	editorOpen atomic.Bool
@@ -233,6 +237,10 @@ func start(c Class, cfg Config, build func(p *Plugin) error) (*Plugin, error) {
 	}
 	if cfg.Channels > 2 {
 		return nil, fmt.Errorf("vst3: %d channels, of the 1 or 2 a plugin runs in", cfg.Channels)
+	}
+	// A plugin's crash in a call is not to end the program, from its first call on.
+	if err := installGuard(); err != nil {
+		return nil, fmt.Errorf("vst3: keeping a plugin's faults from ending the program: %w", err)
 	}
 	p := &Plugin{Class: c, cfg: cfg, edits: newParamBox(nil), outputs: newParamBox(nil)}
 	var err error
@@ -272,6 +280,7 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 	if p.proc == 0 {
 		return fmt.Errorf("vst3: %s: no audio processor", p.Class.Name)
 	}
+	p.processFn = method(p.proc, mProcess)
 	// The controller: the component itself, or one of its own class.
 	if ctrl := query(p.comp, iidEditController); ctrl != 0 {
 		p.ctrl, p.single = ctrl, true
@@ -308,7 +317,7 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 	if p.ctrl != 0 {
 		// A slot for each parameter, each way, made now, so that
 		// processing makes none.
-		n := int(i32(call(p.ctrl, mGetParameterCount)))
+		n := max(int(i32(call(p.ctrl, mGetParameterCount))), 0)
 		ids = make([]uint32, 0, n)
 		for i := range n {
 			var info paramInfo
@@ -496,6 +505,10 @@ func (p *Plugin) SetActive(on bool) error {
 	return err
 }
 
+// Gone reports whether the plugin crashed, or another of its module did: it is then called no more, and plays silence. Its
+// latency stays what it was, so what it plays into stays in time. It is safe to call from any goroutine.
+func (p *Plugin) Gone() bool { return p.crashed.Load() || moduleDead(p.processFn) }
+
 // ErrClosed is the error of a plugin, or an ARA document, closed.
 var ErrClosed = errors.New("vst3: closed")
 
@@ -506,7 +519,7 @@ var ErrClosed = errors.New("vst3: closed")
 func (p *Plugin) whileOpen(job func()) bool {
 	ran := false
 	onUI(func() {
-		if p.closed.Load() {
+		if p.closed.Load() || p.Gone() {
 			return
 		}
 		ran = true
@@ -593,7 +606,7 @@ func (p *Plugin) Reset() {
 // audio's goroutine, as VST3 lets processing be stopped and started
 // there: the notes sounding end in the next block, and the pedals lift.
 func (p *Plugin) resetNow() {
-	if p.closed.Load() || !p.active.Load() {
+	if p.closed.Load() || !p.active.Load() || p.Gone() {
 		return
 	}
 	call(p.proc, mSetProcessing, 0)
@@ -610,6 +623,10 @@ func (p *Plugin) SetPosition(frame int64) { p.ctx.projectTime = frame }
 // sidechain keys on the sound it changes.
 func (p *Plugin) Process(frames []float32) {
 	if p.closed.Load() || !p.active.Load() {
+		return
+	}
+	if p.Gone() {
+		clear(frames)
 		return
 	}
 	n := len(frames) / 2
@@ -665,9 +682,13 @@ func (p *Plugin) takeEdits() {
 func (p *Plugin) run(k int) {
 	p.outChanges.clear()
 	p.data.frames = int32(k)
-	if result(callN(method(p.proc, mProcess), p.procArgs[:])) != resultOK {
+	if r := result(callN(p.processFn, p.procArgs[:])); r != resultOK {
 		// It made no sound: what its buffers hold is the block before.
-		p.failures.Add(1)
+		if r == resultCrashed {
+			p.crashed.Store(true)
+		} else {
+			p.failures.Add(1)
+		}
 		for i := range p.outs {
 			for _, ch := range p.outs[i].chans {
 				clear(ch[:k])
@@ -726,7 +747,7 @@ func (p *Plugin) Values() map[uint32]float64 {
 // alongside Process, nor alongside Close: the atomic closed flag does
 // not make that safe.
 func (p *Plugin) Flush() {
-	if p.closed.Load() || !p.active.Load() {
+	if p.closed.Load() || !p.active.Load() || p.Gone() {
 		return
 	}
 	if !p.edits.waits() {
@@ -765,6 +786,9 @@ func (p *Plugin) restart(flags int32) {
 // onTick passes the processor's changes to the controller, and asks the
 // plugin its tail, on the plugins' thread.
 func (p *Plugin) onTick() {
+	if p.Gone() {
+		return
+	}
 	if p.active.Load() {
 		p.readTail()
 	}
@@ -946,6 +970,11 @@ func (p *Plugin) Close() {
 		return
 	}
 	untick(p)
+	if p.Gone() {
+		// It is called no more, not even to let it go, and what it was handed
+		// stays, as threads it started may still read it.
+		return
+	}
 	if p.ara != nil {
 		p.ara.unbind()
 	}

@@ -25,7 +25,7 @@ import (
 // It makes nothing, and takes no lock.
 func (p *Plugin) ProcessBlock(b *plug.Block) {
 	k := min(b.Frames, p.cfg.Block)
-	if p.closed.Load() || !p.active.Load() || k <= 0 {
+	if p.closed.Load() || !p.active.Load() || k <= 0 || p.Gone() {
 		silence(b, 0)
 		return
 	}
@@ -458,6 +458,10 @@ func (a *plugged) State() []byte {
 	if p == nil {
 		return a.state
 	}
+	if p.Gone() {
+		// It can't be asked: what it last gave is what is kept.
+		return a.given
+	}
 	st, err := p.State()
 	if err != nil {
 		a.err = err
@@ -475,7 +479,7 @@ func (a *plugged) Changed() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	p := a.playing.Load()
-	if p == nil {
+	if p == nil || p.Gone() {
 		return false
 	}
 	st, err := p.State()
@@ -515,6 +519,11 @@ func (a *plugged) SetState(b []byte) error {
 		b = a.initial
 	}
 	if len(b) == 0 || bytes.Equal(b, a.given) {
+		return nil
+	}
+	if p.Gone() {
+		// It can't take it: the song keeps it for when the plugin next plays.
+		a.given, a.echo = bytes.Clone(b), nil
 		return nil
 	}
 	if err := p.SetState(b); err != nil {

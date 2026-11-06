@@ -1,10 +1,6 @@
 package vst3
 
-import (
-	"syscall"
-
-	"golang.org/x/sys/windows"
-)
+import "golang.org/x/sys/windows"
 
 // library is a DLL loaded.
 type library struct {
@@ -20,8 +16,10 @@ func openLibrary(path string) (library, error) {
 	}
 	l := library{h: h}
 	if entry, err := windows.GetProcAddress(h, "InitDll"); err == nil {
-		if r, _, _ := syscall.SyscallN(entry); r&0xff == 0 {
-			_ = windows.FreeLibrary(h)
+		if r, _ := nativeCall(entry); pointerOf(r)&0xff == 0 {
+			if !moduleDead(entry) {
+				_ = windows.FreeLibrary(h)
+			}
 			return library{}, errEntry
 		}
 	}
@@ -30,19 +28,23 @@ func openLibrary(path string) (library, error) {
 
 func (l library) symbol(name string) (uintptr, error) { return windows.GetProcAddress(l.h, name) }
 
-// close runs the module's exit, ExitDll, and unloads it.
+// close runs the module's exit, ExitDll, and unloads it. A module that
+// crashed stays, as unloading runs its code, and threads it started may run on.
 func (l library) close() error {
-	if l.h == 0 {
+	if l.h == 0 || moduleDead(uintptr(l.h)) {
 		return nil
 	}
 	if exit, err := windows.GetProcAddress(l.h, "ExitDll"); err == nil {
-		_, _, _ = syscall.SyscallN(exit)
+		_, _ = nativeCall(exit)
+	}
+	if moduleDead(uintptr(l.h)) {
+		return nil
 	}
 	return windows.FreeLibrary(l.h)
 }
 
 // callFunc calls the function fn with no arguments.
 func callFunc(fn uintptr) uintptr {
-	r, _, _ := syscall.SyscallN(fn)
-	return r
+	r, _ := nativeCall(fn)
+	return pointerOf(r)
 }
