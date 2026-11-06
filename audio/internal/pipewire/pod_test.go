@@ -25,13 +25,15 @@ var formatPod48k = []byte{
 }
 
 func TestFormatPodMatchesSPA(t *testing.T) {
-	if got := formatPod(48000); !bytes.Equal(got, formatPod48k) {
-		t.Fatalf("formatPod(48000) =\n%v\nwant\n%v", got, formatPod48k)
+	if got := formatPod(48000, stereoPositions); !bytes.Equal(got, formatPod48k) {
+		t.Fatalf("formatPod(48000, stereoPositions) =\n%v\nwant\n%v", got, formatPod48k)
 	}
 	// Another rate changes the rate's word alone.
 	want := bytes.Clone(formatPod48k)
 	binary.LittleEndian.PutUint32(want[104:], 44100)
-	if got := formatPod(44100); !bytes.Equal(got, want) {
-		t.Fatalf("formatPod(44100) =\n%v\nwant\n%v", got, want)
+	if got := formatPod(44100, stereoPositions); !bytes.Equal(got, want) {
+		t.Fatalf("formatPod(44100, stereoPositions) =\n%v\nwant\n%v", got, want)
 	}
 }
+
+var stereoPositions = []uint32{channelFL, channelFR}

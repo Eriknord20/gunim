@@ -59,8 +59,11 @@ got:
 
 	// n is what the stream asks for, else the fallback, as far as the
 	// buffer holds.
-	MOVL	20(R13), R15
-	SHRQ	$3, R15
+	MOVL	20(R13), AX
+	SHRQ	$2, AX
+	XORQ	DX, DX
+	DIVQ	rtState_outChans(BX)
+	MOVQ	AX, R15
 	MOVQ	24(R12), AX
 	TESTQ	AX, AX
 	JNE	asked
@@ -101,15 +104,29 @@ copy:
 	JAE	zero
 	LEAQ	(BP)(R8*1), R9
 	ANDQ	R11, R9
-	MOVQ	(R10)(R9*8), R9
-	MOVQ	R9, (R14)(R8*8)
+	IMULQ	rtState_outChans(BX), R9
+	MOVQ	rtState_outChans(BX), DI
+
+word:
+	MOVL	(R10)(R9*4), AX
+	MOVL	AX, (R14)
+	ADDQ	$4, R14
+	INCQ	R9
+	DECQ	DI
+	JNE	word
 	INCQ	R8
 	JMP	copy
 
 zero:
 	CMPQ	R8, R15
 	JAE	filled
-	MOVQ	$0, (R14)(R8*8)
+	MOVQ	rtState_outChans(BX), DI
+
+zeroword:
+	MOVL	$0, (R14)
+	ADDQ	$4, R14
+	DECQ	DI
+	JNE	zeroword
 	INCQ	R8
 	JMP	zero
 
@@ -121,9 +138,12 @@ filled:
 	MOVQ	32(R13), AX
 	MOVL	$0, 0(AX)
 	MOVQ	R15, DX
-	SHLQ	$3, DX
+	IMULQ	rtState_outChans(BX), DX
+	SHLQ	$2, DX
 	MOVL	DX, 4(AX)
-	MOVL	$8, 8(AX)
+	MOVQ	rtState_outChans(BX), DX
+	SHLQ	$2, DX
+	MOVL	DX, 8(AX)
 	MOVQ	R15, 16(R12)
 
 	MOVQ	rtState_outStream(BX), DI
@@ -215,7 +235,11 @@ inside:
 
 fits:
 	ADDQ	CX, SI
-	SHRQ	$3, DX
+	MOVQ	DX, AX
+	SHRQ	$2, AX
+	XORQ	DX, DX
+	DIVQ	rtState_inChans(BX)
+	MOVQ	AX, DX
 	ADDQ	DX, R15
 
 	// As many as the ring has room for; the rest are lost.
@@ -241,10 +265,18 @@ room:
 incopy:
 	CMPQ	R8, CX
 	JAE	incopied
-	MOVQ	(SI)(R8*8), DX
-	LEAQ	(R9)(R8*1), DI
-	ANDQ	R11, DI
-	MOVQ	DX, (R10)(DI*8)
+	LEAQ	(R9)(R8*1), DX
+	ANDQ	R11, DX
+	IMULQ	rtState_inChans(BX), DX
+	MOVQ	rtState_inChans(BX), DI
+
+inword:
+	MOVL	(SI), AX
+	ADDQ	$4, SI
+	MOVL	AX, (R10)(DX*4)
+	INCQ	DX
+	DECQ	DI
+	JNE	inword
 	INCQ	R8
 	JMP	incopy
 

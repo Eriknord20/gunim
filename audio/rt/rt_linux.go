@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -237,4 +238,12 @@ func lowerAll() int {
 func doze() {
 	ts := unix.Timespec{Nsec: 20_000}
 	_ = unix.Nanosleep(&ts, nil)
+}
+
+// nap sleeps by the system's own call, with the thread keeping its P, so it
+// wakes by the system's clock and not when Go's scheduler gets to it. A signal
+// ends it at once, so it keeps nothing in Go waiting.
+func nap(d time.Duration) {
+	ts := unix.NsecToTimespec(d.Nanoseconds())
+	_, _, _ = unix.RawSyscall(unix.SYS_NANOSLEEP, uintptr(unsafe.Pointer(&ts)), 0, 0)
 }

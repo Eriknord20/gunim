@@ -63,7 +63,9 @@ got:
 	// n is what the stream asks for, else the fallback, as far as the
 	// buffer holds.
 	MOVWU	20(R21), R23
-	LSR	$3, R23, R23
+	LSR	$2, R23, R23
+	MOVD	rtState_outChans(R19), R0
+	UDIV	R0, R23, R23
 	MOVD	24(R20), R0
 	CBNZ	R0, asked
 	MOVD	rtState_fallback(R19), R0
@@ -105,15 +107,29 @@ copy:
 	BHS	zero
 	ADD	R24, R6, R7
 	AND	R4, R7, R7
-	MOVD	(R3)(R7<<3), R8
-	MOVD	R8, (R22)(R6<<3)
+	MOVD	rtState_outChans(R19), R10
+	MUL	R10, R7, R7
+
+word:
+	MOVWU	(R3)(R7<<2), R8
+	MOVW	R8, (R22)
+	ADD	$4, R22, R22
+	ADD	$1, R7, R7
+	SUB	$1, R10, R10
+	CBNZ	R10, word
 	ADD	$1, R6, R6
 	B	copy
 
 zero:
 	CMP	R23, R6
 	BHS	filled
-	MOVD	ZR, (R22)(R6<<3)
+	MOVD	rtState_outChans(R19), R10
+
+zeroword:
+	MOVW	ZR, (R22)
+	ADD	$4, R22, R22
+	SUB	$1, R10, R10
+	CBNZ	R10, zeroword
 	ADD	$1, R6, R6
 	B	zero
 
@@ -125,9 +141,11 @@ filled:
 	MOVD	R23, rtState_took(R19)
 	MOVD	32(R21), R0
 	MOVW	ZR, 0(R0)
-	LSL	$3, R23, R1
+	MOVD	rtState_outChans(R19), R2
+	MUL	R2, R23, R1
+	LSL	$2, R1, R1
 	MOVW	R1, 4(R0)
-	MOVD	$8, R1
+	LSL	$2, R2, R1
 	MOVW	R1, 8(R0)
 	MOVD	R23, 16(R20)
 
@@ -215,7 +233,9 @@ next:
 	CMP	R3, R2
 	CSEL	HI, R3, R2, R2
 	ADD	R1, R5, R5
-	LSR	$3, R2, R2
+	LSR	$2, R2, R2
+	MOVD	rtState_inChans(R19), R0
+	UDIV	R0, R2, R2
 	ADD	R2, R23, R23
 
 	// As many as the ring has room for; the rest are lost.
@@ -238,10 +258,18 @@ next:
 incopy:
 	CMP	R9, R10
 	BHS	incopied
-	MOVD	(R5)(R10<<3), R11
 	ADD	R6, R10, R12
 	AND	R4, R12, R12
-	MOVD	R11, (R3)(R12<<3)
+	MOVD	rtState_inChans(R19), R7
+	MUL	R7, R12, R12
+
+inword:
+	MOVWU	(R5), R11
+	ADD	$4, R5, R5
+	MOVW	R11, (R3)(R12<<2)
+	ADD	$1, R12, R12
+	SUB	$1, R7, R7
+	CBNZ	R7, inword
 	ADD	$1, R10, R10
 	B	incopy
 

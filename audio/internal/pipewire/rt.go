@@ -50,9 +50,9 @@ type logEntry struct {
 // Go pointers: the rings are Go memory, held by the Client, so the
 // collector neither frees nor moves them while the streams run.
 //
-// The rings hold frames of two float32s, interleaved, read and written
-// as one 64-bit word each. Counters count frames ever, so a frame's
-// place is its count masked.
+// The rings hold frames of outChans and inChans float32s, interleaved,
+// read and written a sample at a time. Counters count frames ever, so a
+// frame's place is its count masked, times its channels.
 type rtState struct {
 	// dequeue, queue and getTime are pw_stream_dequeue_buffer,
 	// pw_stream_queue_buffer and pw_stream_get_time_n.
@@ -64,6 +64,9 @@ type rtState struct {
 	fallback uint64
 	// on is 1 while the output plays; 0 plays silence and takes nothing.
 	on uint64
+	// outChans and inChans are how many channels a frame of each stream
+	// holds: the same in its ring and in PipeWire's buffers.
+	outChans, inChans uint64
 	// outBuf is the output ring's first frame, outMask its size in
 	// frames less one. outW counts the frames Go wrote to it, outR those
 	// the process function took.

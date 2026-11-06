@@ -95,15 +95,6 @@ func alsaFind(name string) (alsaCard, bool) {
 	return alsaCard{}, false
 }
 
-// numbered names n channels.
-func numbered(word string, n int) []string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = fmt.Sprintf("%s %d", word, i+1)
-	}
-	return out
-}
-
 // alsaChannelCount asks a device how many channels it has, with no wait
 // and no reservation: listing a card's channels takes it from no one. Where
 // another program holds it, a USB card says through /proc, and any other

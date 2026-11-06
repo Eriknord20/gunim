@@ -121,6 +121,13 @@ const PipeWire = "PipeWire"
 // and PulseAudio are asked to let go of it for as long as it is open.
 const ALSAPrefix = "ALSA: "
 
+// PipeWirePrefix starts the name [Drivers] lists a device PipeWire plays on
+// under, on Linux, as "PipeWire: M4 Analog Surround 4.0". Package
+// audio/speaker plays through it as through [PipeWire], with all the
+// device's inputs and outputs, one for one, as the desktop goes on sharing
+// it.
+const PipeWirePrefix = "PipeWire: "
+
 // Config says how to open a driver.
 type Config struct {
 	// Name is the driver's name, from [Drivers].

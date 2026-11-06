@@ -34,10 +34,12 @@ type Client struct {
 	// while PipeWire reads them.
 	events [2][10]uintptr
 	// out and in are the rings' samples, held here while the streams
-	// write and read them through st.
-	out, in []float32
-	size    uint64
-	info    Info
+	// write and read them through st, and outCh and inCh how many channels
+	// a frame of each holds.
+	out, in     []float32
+	outCh, inCh int
+	size        uint64
+	info        Info
 	// What Poll last read, and Read: the cycles read.
 	polled struct{ short, empty, lost, outStates, inStates uint64 }
 	failed string
@@ -75,17 +77,25 @@ func Open(cfg Config) (*Client, error) {
 		quantum = 256
 	}
 	quantum = min(quantum, maxQuantum)
-	cl := &Client{a: a, st: new(rtState), log: cfg.Log,
-		info: Info{Library: a.version, Rate: rate, Quantum: quantum, Recording: cfg.Record}}
+	outPos, inPos := cfg.OutPositions, cfg.InPositions
+	if len(outPos) == 0 {
+		outPos = []uint32{channelFL, channelFR}
+	}
+	if len(inPos) == 0 {
+		inPos = []uint32{channelFL, channelFR}
+	}
+	cl := &Client{a: a, st: new(rtState), log: cfg.Log, outCh: len(outPos), inCh: len(inPos),
+		info: Info{Library: a.version, Rate: rate, Quantum: quantum, Recording: cfg.Record, OutChannels: len(outPos), InChannels: len(inPos)}}
 	hold := max(cfg.Hold, 0)
 	cl.size = 1 << bits.Len64(uint64(int64(hold)*int64(rate)/int64(time.Second)+2*maxQuantum+4096-1))
-	cl.out = make([]float32, int(cl.size)*Channels)
+	cl.out = make([]float32, int(cl.size)*cl.outCh)
 	st := cl.st
 	st.dequeue, st.queue, st.getTime = a.dequeue, a.queue, a.getTime
 	st.fallback, st.on = uint64(quantum), 1
+	st.outChans, st.inChans = uint64(cl.outCh), uint64(cl.inCh)
 	st.outBuf, st.outMask = uintptr(unsafe.Pointer(&cl.out[0])), cl.size-1
 	if cfg.Record {
-		cl.in = make([]float32, int(cl.size)*Channels)
+		cl.in = make([]float32, int(cl.size)*cl.inCh)
 		st.inBuf, st.inMask = uintptr(unsafe.Pointer(&cl.in[0])), cl.size-1
 	}
 	st.inState = uint64(StateUnconnected)
@@ -101,7 +111,7 @@ func Open(cfg Config) (*Client, error) {
 		a.loopDestroy(cl.loop)
 		return nil, errors.New("pipewire: starting the thread loop failed")
 	}
-	cl.locked(func() { err = cl.connect(name, rate, quantum, cfg.Record) })
+	cl.locked(func() { err = cl.connect(name, rate, quantum, cfg, outPos, inPos) })
 	if err == nil {
 		err = cl.wait()
 	}
@@ -120,17 +130,25 @@ func (cl *Client) logf(format string, args ...any) {
 
 // connect makes the streams and connects them. It runs with the loop
 // locked.
-func (cl *Client) connect(name string, rate, quantum int, record bool) error {
+func (cl *Client) connect(name string, rate, quantum int, cfg Config, outPos, inPos []uint32) error {
 	a, st := cl.a, cl.st
-	pod := formatPod(rate)
-	params := [1]unsafe.Pointer{unsafe.Pointer(&pod[0])}
-	defer runtime.KeepAlive(pod)
-	open := func(k int, category, media string, state, process uintptr, dir uint32) (uintptr, error) {
+	record := cfg.Record
+	open := func(k int, category, media string, state, process uintptr, dir uint32, target string, positions []uint32) (uintptr, error) {
+		pod := formatPod(rate, positions)
+		params := [1]unsafe.Pointer{unsafe.Pointer(&pod[0])}
+		defer runtime.KeepAlive(pod)
 		ev := &cl.events[k]
 		ev[2], ev[8] = state, process
+		extra := ""
+		if target != "" {
+			// The device's own channels, one for one, nothing mixed. A device
+			// gone takes the stream with it: the session manager moving it to
+			// the default device would mix its channels onto the speakers.
+			extra = " target.object=" + quote(target) + " stream.dont-remix=true node.dont-reconnect=true"
+		}
 		props := a.propsNewString(fmt.Sprintf("media.type=Audio media.category=%s media.name=%s "+
-			"node.name=%s application.name=%s node.latency=\"%d/%d\"",
-			category, media, quote(name), quote(name), quantum, rate))
+			"node.name=%s application.name=%s node.latency=\"%d/%d\"%s",
+			category, media, quote(name), quote(name), quantum, rate, extra))
 		if props == 0 {
 			return 0, errors.New("pipewire: making the stream's properties failed")
 		}
@@ -146,11 +164,11 @@ func (cl *Client) connect(name string, rate, quantum int, record bool) error {
 		return s, nil
 	}
 	var err error
-	st.outStream, err = open(0, "Playback", "playback", procs.outState, procs.process, directionOutput)
+	st.outStream, err = open(0, "Playback", "playback", procs.outState, procs.process, directionOutput, cfg.Output, outPos)
 	if err != nil || !record {
 		return err
 	}
-	st.inStream, err = open(1, "Capture", "recording", procs.inState, procs.capture, directionInput)
+	st.inStream, err = open(1, "Capture", "recording", procs.inState, procs.capture, directionInput, cfg.Input, inPos)
 	return err
 }
 
@@ -206,16 +224,17 @@ func (cl *Client) locked(f func()) {
 // Info says how the client plays.
 func (cl *Client) Info() Info { return cl.info }
 
-// Write adds frames, of Channels interleaved samples, to the ring the
+// Write adds frames, of the output's channels interleaved, to the ring the
 // output plays from, as many as it has room for, and returns how many.
 func (cl *Client) Write(frames []float32) int {
 	st := cl.st
 	w := atomic.LoadUint64(&st.outW)
-	n := min(uint64(len(frames)/Channels), cl.size-(w-atomic.LoadUint64(&st.outR)))
+	ch := uint64(cl.outCh)
+	n := min(uint64(len(frames))/ch, cl.size-(w-atomic.LoadUint64(&st.outR)))
 	at := w & st.outMask
 	first := min(n, cl.size-at)
-	copy(cl.out[at*Channels:], frames[:first*Channels])
-	copy(cl.out, frames[first*Channels:n*Channels])
+	copy(cl.out[at*ch:], frames[:first*ch])
+	copy(cl.out, frames[first*ch:n*ch])
 	atomic.StoreUint64(&st.outW, w+n)
 	return int(n)
 }
@@ -343,7 +362,7 @@ func (cl *Client) HeardAt(ns int64) (frame int64, ok bool) {
 }
 
 // Read takes what the input recorded in the oldest cycle not yet read,
-// as many frames as dst holds, of Channels interleaved samples. It
+// as many frames as dst holds, of the input's channels interleaved. It
 // returns how many, and at, the frame written that was heard as the
 // first of them reached the input, as HeardAt counts it. ok is false
 // where nothing waits. Where Read falls behind by logSize cycles, those
@@ -351,7 +370,8 @@ func (cl *Client) HeardAt(ns int64) (frame int64, ok bool) {
 // cycle is dropped: nothing places it on the output's time line.
 func (cl *Client) Read(dst []float32) (n int, at int64, ok bool) {
 	st := cl.st
-	if cl.in == nil || len(dst) < Channels {
+	ch := uint64(cl.inCh)
+	if cl.in == nil || uint64(len(dst)) < ch {
 		return 0, 0, false
 	}
 	for {
@@ -381,11 +401,11 @@ func (cl *Client) Read(dst []float32) (n int, at int64, ok bool) {
 			atomic.StoreUint64(&st.inR, r)
 			continue
 		}
-		m := min(in0+k-r, uint64(len(dst)/Channels))
+		m := min(in0+k-r, uint64(len(dst))/ch)
 		at := r & st.inMask
 		first := min(m, cl.size-at)
-		copy(dst, cl.in[at*Channels:(at+first)*Channels])
-		copy(dst[first*Channels:], cl.in[:(m-first)*Channels])
+		copy(dst, cl.in[at*ch:(at+first)*ch])
+		copy(dst[first*ch:], cl.in[:(m-first)*ch])
 		atomic.StoreUint64(&st.inR, r+m)
 		if r+m == in0+k {
 			cl.seen++

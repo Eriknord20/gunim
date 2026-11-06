@@ -3,6 +3,9 @@
 package driver
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/marrasen/gunim/audio/internal/audiounit"
 	"github.com/marrasen/gunim/audio/internal/jack"
 	"github.com/marrasen/gunim/audio/internal/pipewire"
@@ -19,6 +22,11 @@ func Drivers() ([]Driver, error) {
 	}
 	if pipewire.Available() {
 		list = append(list, Driver{Name: PipeWire})
+		if ds, err := pipewire.Devices(); err == nil {
+			for _, d := range ds {
+				list = append(list, Driver{Name: PipeWirePrefix + d.Name})
+			}
+		}
 	}
 	if audiounit.Available() {
 		list = append(list, Driver{Name: CoreAudio})
@@ -45,5 +53,26 @@ func Channels(name string) (inputs, outputs []string, err error) {
 	case CoreAudio:
 		return audiounit.Ports()
 	}
+	if d, ok := strings.CutPrefix(name, PipeWirePrefix); ok {
+		ds, err := pipewire.Devices()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, x := range ds {
+			if x.Name == d {
+				return numbered("Input", len(x.InPositions)), numbered("Output", len(x.OutPositions)), nil
+			}
+		}
+		return nil, nil, fmt.Errorf("pipewire: there is no device %q now", d)
+	}
 	return alsaChannels(name)
+}
+
+// numbered names n channels.
+func numbered(word string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s %d", word, i+1)
+	}
+	return out
 }

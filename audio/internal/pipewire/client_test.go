@@ -5,11 +5,13 @@ package pipewire
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func openFake(t *testing.T, f *fakeServer, cfg Config) *Client {
@@ -312,7 +314,7 @@ func TestOpenAsksForTheStream(t *testing.T) {
 	cl := openFake(t, f, Config{Name: `My "app"`, Rate: 44100, Quantum: 512, Record: true})
 	out, in := f.stream(t, directionOutput), f.stream(t, directionInput)
 	for _, p := range []*fakePW{out, in} {
-		if !bytes.Equal(p.params, formatPod(44100)) {
+		if !bytes.Equal(p.params, formatPod(44100, stereoPositions)) {
 			t.Fatalf("format %v", p.params)
 		}
 		if p.flags != flagAutoconnect|flagMapBuffers|flagRTProcess {
@@ -484,5 +486,151 @@ func TestAtLeast(t *testing.T) {
 func TestQuote(t *testing.T) {
 	if got := quote("a \"b\" \\c\n"); got != `"a \"b\" \\c "` {
 		t.Fatalf("quote = %s", got)
+	}
+}
+
+// framesOf returns n frames of four channels, each frame's channels telling
+// which frame and channel it is.
+func framesOf(at, n, ch int) []float32 {
+	b := make([]float32, ch*n)
+	for i := range n {
+		for c := range ch {
+			b[ch*i+c] = float32(1000*(at+i) + c + 1)
+		}
+	}
+	return b
+}
+
+var fourPositions = []uint32{channelFL, channelFR, 12, 13}
+
+func TestOutputsOfAnyChannelsPlayFrameByFrame(t *testing.T) {
+	for _, ch := range []int{1, 3, 4, 6, 18} {
+		positions := make([]uint32, ch)
+		for i := range positions {
+			positions[i] = channelAux0 + uint32(i)
+		}
+		f := newFakeServer()
+		cl := openFake(t, f, Config{OutPositions: positions})
+		if got := cl.Info().OutChannels; got != ch {
+			t.Fatalf("%d channels: Info says %d", ch, got)
+		}
+		cl.Write(framesOf(0, 100, ch))
+		p := f.stream(t, directionOutput)
+		// Room for 64 frames in the buffer, of ch channels, and a guard.
+		b := &fakeBuffer{samples: make([]float32, 64*ch+1)}
+		b.data.maxSize = uint32(64 * ch * 4)
+		b.data.data = uintptr(unsafe.Pointer(&b.samples[0]))
+		b.data.chunk = uintptr(unsafe.Pointer(&b.chunk))
+		b.buf.nDatas = 1
+		b.buf.datas = uintptr(unsafe.Pointer(&b.data))
+		b.pw.buffer = uintptr(unsafe.Pointer(&b.buf))
+		b.pw.requested = 40
+		if q := f.run(p, at48k(0), b); q != 1 {
+			t.Fatalf("%d channels: queued %d", ch, q)
+		}
+		if b.chunk.stride != int32(4*ch) || b.chunk.size != uint32(40*4*ch) || b.pw.size != 40 {
+			t.Fatalf("%d channels: chunk %+v, size %d", ch, b.chunk, b.pw.size)
+		}
+		if got, want := b.samples[:40*ch], framesOf(0, 40, ch); !slices.Equal(got, want) {
+			t.Fatalf("%d channels: played %v, want %v", ch, got[:ch*2], want[:ch*2])
+		}
+		if cl.Taken() != 40 {
+			t.Fatalf("%d channels: took %d", ch, cl.Taken())
+		}
+		// The ring run dry, the rest of a buffer is silent, whole frames.
+		b.pw.requested = 64
+		if q := f.run(p, at48k(1), b); q != 1 {
+			t.Fatalf("%d channels: queued %d", ch, q)
+		}
+		if got, want := b.samples[:60*ch], framesOf(40, 60, ch)[:60*ch]; !slices.Equal(got[:60*ch], want) {
+			t.Fatalf("%d channels: the ring's end played %v", ch, got[:ch])
+		}
+		for _, v := range b.samples[60*ch : 64*ch] {
+			if v != 0 {
+				t.Fatalf("%d channels: past the ring's end, %v", ch, v)
+			}
+		}
+		if b.samples[64*ch] != 0 {
+			t.Fatalf("%d channels: it wrote past the buffer", ch)
+		}
+	}
+}
+
+func TestABufferTooSmallForWhatItAsksPlaysWholeFrames(t *testing.T) {
+	f := newFakeServer()
+	cl := openFake(t, f, Config{OutPositions: []uint32{channelFL, channelFR, 12}})
+	cl.Write(framesOf(0, 100, 3))
+	p := f.stream(t, directionOutput)
+	b := &fakeBuffer{samples: make([]float32, 3*10+2+1)}
+	b.data.maxSize = uint32((3*10 + 2) * 4) // ten frames, and part of another
+	b.data.data = uintptr(unsafe.Pointer(&b.samples[0]))
+	b.data.chunk = uintptr(unsafe.Pointer(&b.chunk))
+	b.buf.nDatas = 1
+	b.buf.datas = uintptr(unsafe.Pointer(&b.data))
+	b.pw.buffer = uintptr(unsafe.Pointer(&b.buf))
+	b.pw.requested = 64
+	f.run(p, at48k(0), b)
+	if b.pw.size != 10 || b.samples[30] != 0 || b.samples[32] != 0 {
+		t.Fatalf("size %d, samples past it %v", b.pw.size, b.samples[30:])
+	}
+}
+
+func TestInputsOfAnyChannelsRecordFrameByFrame(t *testing.T) {
+	for _, ch := range []int{1, 3, 4, 6} {
+		positions := make([]uint32, ch)
+		for i := range positions {
+			positions[i] = channelAux0 + uint32(i)
+		}
+		f := newFakeServer()
+		cl := openFake(t, f, Config{Record: true, InPositions: positions})
+		// The input's stamps stand on the output's time line.
+		cl.Write(make([]float32, 2*100))
+		f.play(t, 10, at48k(0))
+		p := f.stream(t, directionInput)
+		fb := &fakeBuffer{samples: make([]float32, (20+7)*ch)}
+		fb.data.maxSize = uint32((20 + 7) * ch * 4)
+		fb.data.data = uintptr(unsafe.Pointer(&fb.samples[0]))
+		fb.data.chunk = uintptr(unsafe.Pointer(&fb.chunk))
+		fb.buf.nDatas = 1
+		fb.buf.datas = uintptr(unsafe.Pointer(&fb.data))
+		fb.pw.buffer = uintptr(unsafe.Pointer(&fb.buf))
+		fb.chunk.offset = uint32(7 * ch * 4)
+		fb.chunk.size = uint32(20 * ch * 4)
+		copy(fb.samples[7*ch:], framesOf(0, 20, ch))
+		if q := f.run(p, at48k(0), fb); q != 1 {
+			t.Fatalf("%d channels: queued %d", ch, q)
+		}
+		dst := make([]float32, 64*ch)
+		n, _, ok := cl.Read(dst)
+		if !ok || n != 20 {
+			t.Fatalf("%d channels: read %d, %v", ch, n, ok)
+		}
+		if got, want := dst[:20*ch], framesOf(0, 20, ch); !slices.Equal(got, want) {
+			t.Fatalf("%d channels: read %v, want %v", ch, got[:2*ch], want[:2*ch])
+		}
+	}
+}
+
+func TestADeviceNamedIsTargetedAndNotRemixed(t *testing.T) {
+	f := newFakeServer()
+	cl := openFake(t, f, Config{Record: true, Output: "the.sink", Input: "the.source", OutPositions: fourPositions, InPositions: fourPositions})
+	_ = cl
+	out, in := f.stream(t, directionOutput), f.stream(t, directionInput)
+	if !out.has(`target.object="the.sink"`) || !out.has("stream.dont-remix=true") {
+		t.Errorf("the output's properties: %s", out.props)
+	}
+	if !in.has(`target.object="the.source"`) || !in.has("stream.dont-remix=true") {
+		t.Errorf("the input's properties: %s", in.props)
+	}
+	if !bytes.Equal(out.params, formatPod(48000, fourPositions)) {
+		t.Errorf("the output offers %v", out.params)
+	}
+}
+
+func TestTheDefaultDeviceIsNotTargeted(t *testing.T) {
+	f := newFakeServer()
+	openFake(t, f, Config{})
+	if out := f.stream(t, directionOutput); out.has("target.object") || out.has("stream.dont-remix") {
+		t.Errorf("the output's properties: %s", out.props)
 	}
 }
