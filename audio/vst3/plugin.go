@@ -247,11 +247,7 @@ func start(c Class, cfg Config, build func(p *Plugin) error) (*Plugin, error) {
 	}
 	p := &Plugin{Class: c, cfg: cfg, edits: newParamBox(nil), outputs: newParamBox(nil)}
 	var err error
-	if !ranOnUI(func() { err = build(p) }) {
-		// What it made stays, as the job may yet run on.
-		keepGone(p)
-		return nil, ErrStuck
-	}
+	onUI(func() { err = build(p) })
 	if err != nil {
 		p.Close()
 		return nil, err
@@ -526,10 +522,6 @@ func (p *Plugin) SetActive(on bool) error {
 	return err
 }
 
-// ErrStuck is the error of what needs the plugins' thread, where it isn't answering after a plugin's crash: held by the
-// plugin that crashed or by another, perhaps only for a moment. See [PluginsStuck].
-var ErrStuck = errors.New("vst3: the plugins' thread isn't answering, since a plugin crashed")
-
 // Gone reports whether the plugin crashed, or another of its module did: it is then called no more, and plays silence. Its
 // latency stays what it was, so what it plays into stays in time. It is safe to call from any goroutine.
 func (p *Plugin) Gone() bool { return p.crashed.Load() || moduleDead(p.processFn.Load()) }
@@ -542,22 +534,22 @@ var ErrClosed = errors.New("vst3: closed")
 // go on that thread too, after it marks the plugin closed, so a job that
 // runs finds them all there.
 //
-// A job the wait for ran out on, after a plugin's crash, may still run, or still be running, though this reports it didn't.
-// So a caller reads what a job wrote only where this reports it ran.
+// A plugin gone needs nothing of the thread, so asking it waits on nothing, whatever the crash left the thread doing.
 func (p *Plugin) whileOpen(job func()) bool {
-	var ran atomic.Bool
-	if !ranOnUI(func() {
+	if p.Gone() {
+		return false
+	}
+	ran := false
+	onUI(func() {
 		if p.closed.Load() || p.Gone() {
 			return
 		}
-		ran.Store(true)
+		ran = true
 		setUIOwner(p.owner)
 		defer setUIOwner("")
 		job()
-	}) {
-		return false
-	}
-	return ran.Load()
+	})
+	return ran
 }
 
 // Configure sets the plugin up to run as cfg says, keeping its state:
@@ -597,7 +589,7 @@ func (p *Plugin) Configure(cfg Config) error {
 // Latency is how many frames late the plugin's sound comes out.
 func (p *Plugin) Latency() int {
 	// One gone is asked nothing, and this runs on every step of the engine's.
-	if p.restarts.Load()&restartLatency != 0 && !p.Gone() && !uiGaveUp.Load() {
+	if p.restarts.Load()&restartLatency != 0 && !p.Gone() {
 		p.whileOpen(func() {
 			p.restarts.And(^int32(restartLatency))
 			p.readLatency()
@@ -771,24 +763,22 @@ func (p *Plugin) Value(id uint32) float64 {
 // Values returns every parameter's value now, by ID, from 0 to 1, as
 // the controller has them.
 func (p *Plugin) Values() map[uint32]float64 {
-	asked := make(map[uint32]float64, len(p.edits.slots))
+	out := make(map[uint32]float64, len(p.edits.slots))
 	ran := p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
 		for i := range p.edits.slots {
 			id := p.edits.slots[i].id
-			asked[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
+			out[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
 		}
 	})
-	if ran && !p.Gone() {
-		return asked
-	}
-	// It can't be asked, or crashed as it was, and what it gave then is no value. A song keeps these, so they are what
-	// it was last known to hold, in a map of their own, as a job given up on may still be writing that one.
-	out := make(map[uint32]float64, len(p.edits.slots))
-	for i := range p.edits.slots {
-		out[p.edits.slots[i].id] = math.Float64frombits(p.values[i].Load())
+	if !ran || p.Gone() {
+		// It can't be asked, or crashed as it was, and what it gave then is no value. A song keeps these, so they are
+		// what it was last known to hold.
+		for i := range p.edits.slots {
+			out[p.edits.slots[i].id] = math.Float64frombits(p.values[i].Load())
+		}
 	}
 	return out
 }
@@ -842,22 +832,22 @@ func (p *Plugin) onTick() {
 	if p.Gone() {
 		return
 	}
-	// What it holds now, as a preset of its own may have changed all of it, for when it can't be asked.
+	if p.active.Load() {
+		p.readTail()
+	}
+	if p.outputs.look() {
+		for i := range p.outputs.slots {
+			if id, v, ok := p.outputs.take(i); ok {
+				callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
+			}
+		}
+	}
+	// What it holds now, as a preset of its own may have changed all of it, for when it can't be asked. It comes after
+	// what the processor sent, or what the controller hasn't heard yet would read as the value.
 	if p.restarts.Load()&restartParamValues != 0 {
 		p.restarts.And(^int32(restartParamValues))
 		if p.ctrl != 0 {
 			p.readValues()
-		}
-	}
-	if p.active.Load() {
-		p.readTail()
-	}
-	if !p.outputs.look() {
-		return
-	}
-	for i := range p.outputs.slots {
-		if id, v, ok := p.outputs.take(i); ok {
-			callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
 		}
 	}
 }
@@ -865,7 +855,7 @@ func (p *Plugin) onTick() {
 // Params returns the plugin's parameters.
 func (p *Plugin) Params() []Param {
 	var out []Param
-	if !p.whileOpen(func() {
+	p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
@@ -880,9 +870,7 @@ func (p *Plugin) Params() []Param {
 				Automatable: info.flags&paramCanAutomate != 0, ReadOnly: info.flags&paramReadOnly != 0,
 				Hidden: info.flags&paramHidden != 0})
 		}
-	}) {
-		return nil
-	}
+	})
 	return out
 }
 
@@ -890,13 +878,11 @@ func (p *Plugin) Params() []Param {
 // writes it to show, as "-3.0 dB"; empty where it writes none.
 func (p *Plugin) Text(id uint32, v float64) string {
 	var s [128]uint16
-	if !p.whileOpen(func() {
+	p.whileOpen(func() {
 		if p.ctrl != 0 {
 			callFloatArg(p.ctrl, mGetParamStringByValue, uintptr(id), v, uintptr(unsafe.Pointer(&s[0])))
 		}
-	}) {
-		return ""
-	}
+	})
 	return utf16String(s[:])
 }
 
@@ -1041,7 +1027,7 @@ func (p *Plugin) Close() {
 		return
 	}
 	untick(p)
-	if p.Gone() || uiGaveUp.Load() {
+	if p.Gone() {
 		// It is called no more, not even to let it go, and what it was handed
 		// stays, as threads it started may still read it.
 		keepGone(p)
@@ -1050,7 +1036,7 @@ func (p *Plugin) Close() {
 	if p.ara != nil {
 		p.ara.unbind()
 	}
-	if !ranOnUI(func() {
+	onUI(func() {
 		if p.ed != nil {
 			p.ed.close()
 		}
@@ -1075,7 +1061,8 @@ func (p *Plugin) Close() {
 			call(p.comp, mTerminate)
 			release(p.comp)
 		}
-	}) || p.Gone() {
+	})
+	if p.Gone() {
 		keepGone(p)
 		return
 	}

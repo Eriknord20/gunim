@@ -253,17 +253,11 @@ var (
 	crashList []Crash
 	owned     []ownedSpan
 
-	crashOnce sync.Once
-	crashed   = make(chan struct{})
-
 	// uiThread is the plugins' thread, and uiOwner the file of the module it is calling, where a call to something
 	// not known as that module's is still its.
 	uiThread atomic.Uint32
 	uiOwner  atomic.Pointer[string]
 )
-
-// crashSignal closes as the first plugin crashes.
-func crashSignal() <-chan struct{} { return crashed }
 
 // noteUIThread notes that this thread is the plugins'.
 func noteUIThread() { uiThread.Store(windows.GetCurrentThreadId()) }
@@ -297,6 +291,19 @@ func ownFn(fn uintptr, owner string) {
 	}
 	if !slices.Contains(owned, s) {
 		owned = append(owned, s)
+	}
+	// A library that crashed before this module came: this one can't play either, and is named.
+	if l := deadSpans.Load(); l != nil && slices.Contains(*l, s.span) {
+		list := slices.Clone(*l)
+		for _, o := range owned {
+			if o.owner == owner && !sharedWith(o.span, []string{owner}) {
+				list = append(list, o.span)
+			}
+		}
+		deadSpans.Store(&list)
+		if !slices.ContainsFunc(crashList, func(c Crash) bool { return c.Module == owner }) {
+			crashList = append(crashList, Crash{Module: owner})
+		}
 	}
 }
 
@@ -358,25 +365,38 @@ func nativeCall(fn uintptr, args ...uintptr) (r1, r2 uintptr) {
 	return r1, r2
 }
 
-// ownersOf are the files of the modules that own fn, more than one where they share a library, known with no call to the
+// ownersOf are the files of the modules that own at, more than one where they share a library, known with no call to the
 // system. crashesMu is held.
-func ownersOf(fn uintptr) []string {
+func ownersOf(at uintptr) []string {
 	var out []string
 	for _, o := range owned {
-		if fn >= o.lo && fn < o.hi && !slices.Contains(out, o.owner) {
+		if at >= o.lo && at < o.hi && !slices.Contains(out, o.owner) {
 			out = append(out, o.owner)
 		}
 	}
 	return out
 }
 
-// noteCrash notes that the module that owns fn crashed: code at the address at. Where modules share the library fn is in,
-// all of them did: a fault there may leave what they share wrong and its locks held, and which one's object it was isn't
-// known here. All of each goes dead first, so another thread calls it no more. It runs on the thread that crashed, perhaps
-// the audio's, once for a module.
+// sharedWith reports whether a module but those of owners holds s. crashesMu is held.
+func sharedWith(s span, owners []string) bool {
+	return slices.ContainsFunc(owned, func(o ownedSpan) bool { return o.span == s && !slices.Contains(owners, o.owner) })
+}
+
+// noteCrash notes that the module that owns fn crashed: code at the address at. What it holds goes dead first, so another
+// thread calls it no more, but for a library it shares with a healthy module, which stays, as the fault wasn't in it.
+//
+// Where the call or the fault was in a shared library, all that share it crashed: what they share may be wrong and its
+// locks held, and which one's it was isn't known here. Each is named.
+//
+// It runs on the thread that crashed, perhaps the audio's, once for a module.
 func noteCrash(fn, at uintptr, code uint32) {
 	crashesMu.Lock()
 	owners := ownersOf(fn)
+	for _, o := range ownersOf(at) {
+		if !slices.Contains(owners, o) {
+			owners = append(owners, o)
+		}
+	}
 	crashesMu.Unlock()
 	// Not known: only now ask the system, with no lock held of ours.
 	var lo, hi uintptr
@@ -389,7 +409,6 @@ func noteCrash(fn, at uintptr, code uint32) {
 	}
 	crashesMu.Lock()
 	defer crashesMu.Unlock()
-	defer crashOnce.Do(func() { close(crashed) })
 	if moduleDead(fn) {
 		// Two threads crashed in it at once.
 		return
@@ -399,7 +418,7 @@ func noteCrash(fn, at uintptr, code uint32) {
 		list = slices.Clone(*l)
 	}
 	for _, o := range owned {
-		if slices.Contains(owners, o.owner) {
+		if slices.Contains(owners, o.owner) && !sharedWith(o.span, owners) {
 			list = append(list, o.span)
 		}
 	}

@@ -25,8 +25,5 @@ func forgetOwned(string) {}
 // setUIOwner has nothing to note here: see crashcall_windows_amd64.go.
 func setUIOwner(string) {}
 
-// crashSignal closes never here: see crashcall_windows_amd64.go.
-func crashSignal() <-chan struct{} { return nil }
-
 // EndNow ends the program at once, with code.
 func EndNow(code uint32) { os.Exit(int(code)) }

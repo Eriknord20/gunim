@@ -344,12 +344,16 @@ func runCrashCase(t *testing.T, name string) {
 			t.Fatalf("a healthy call gave %#x", r)
 		}
 		fmt.Println("lived")
-	case "stuck":
-		runStuckCase(t)
-	case "slowstate":
-		runSlowStateCase(t)
-	case "slowvalues":
-		runSlowValuesCase(t)
+	case "gonefree":
+		runGoneFreeCase(t)
+	case "sharedown":
+		runSharedOwnFaultCase(t)
+	case "sharedfault":
+		runSharedFaultCase(t)
+	case "sharedafter":
+		runSharedAfterCase(t)
+	case "valueback":
+		runValueBackCase(t)
 	case "setstate":
 		runSetStateCase(t)
 	case "shared":
@@ -464,7 +468,7 @@ func TestEndNow(t *testing.T) {
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "stuck", "slowstate", "slowvalues", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "sharedown", "sharedfault", "sharedafter", "valueback", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
@@ -480,8 +484,8 @@ func TestCrashesInACall(t *testing.T) {
 	}
 }
 
-// slowPlugin is a plugin of a fake, started.
-func slowPlugin(t *testing.T) (*fakePlugin, *plugged, *Plugin) {
+// startedFake is a plugin of a fake, started.
+func startedFake(t *testing.T) (*fakePlugin, *plugged, *Plugin) {
 	t.Helper()
 	f := fakeSynth()
 	f.latency, f.state = 64, []byte("kept")
@@ -510,80 +514,9 @@ func withParams(p *Plugin, n int) {
 	})
 }
 
-// runSlowStateCase has a healthy plugin slow in getState as another crashes. The wait runs out: that must not count as a
-// state given, and the plugin's state must not become an empty one. Once the plugin lets go, all works again.
-func runSlowStateCase(t *testing.T) {
-	uiStuckWait = 200 * time.Millisecond
-	f, a, _ := slowPlugin(t)
-	given := a.State()
-	callN(native(t, faultCode), nil)
-	hold := make(chan struct{})
-	f.onState = func() { <-hold }
-	got := a.State()
-	if !bytes.Equal(got, given) {
-		t.Fatalf("it gave %q, for %q", got, given)
-	}
-	if !PluginsStuck() {
-		t.Fatal("it doesn't say the thread is stuck")
-	}
-	if err := a.Err(); err != nil {
-		t.Fatalf("it says %v", err)
-	}
-	if a.Changed() {
-		t.Fatal("the song is told of a change")
-	}
-	close(hold)
-	for range 500 {
-		if !PluginsStuck() {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if PluginsStuck() {
-		t.Fatal("it stays stuck with the thread free")
-	}
-	f.mu.Lock()
-	f.state = []byte("new")
-	f.mu.Unlock()
-	if !a.Changed() {
-		t.Fatal("what changes after isn't seen")
-	}
-	if got := a.State(); bytes.Equal(got, given) || !bytes.Contains(got, []byte("new")) {
-		t.Fatalf("it gives %q", got)
-	}
-	fmt.Println("lived")
-}
-
-// runSlowValuesCase has a healthy plugin slow part way through its values as another crashes: what comes back is all of
-// them, as last known, in a map nothing goes on writing.
-func runSlowValuesCase(t *testing.T) {
-	uiStuckWait = 200 * time.Millisecond
-	f, _, p := slowPlugin(t)
-	withParams(p, 3000)
-	callN(native(t, faultCode), nil)
-	var n atomic.Int64
-	f.onValue = func() {
-		if n.Add(1) == 10 {
-			time.Sleep(400 * time.Millisecond)
-		}
-	}
-	got := p.Values()
-	if len(got) != 3000 {
-		t.Fatalf("%d of 3000 values", len(got))
-	}
-	for end := time.Now().Add(600 * time.Millisecond); time.Now().Before(end); {
-		for id, v := range got {
-			if v != 0.25 {
-				t.Fatalf("value %d is %v", id, v)
-			}
-		}
-	}
-	fmt.Println("lived")
-}
-
 // runSetStateCase has a plugin crash as its controller is told a state: its values stay what they were.
 func runSetStateCase(t *testing.T) {
-	_, _, p := slowPlugin(t)
+	_, _, p := startedFake(t)
 	withParams(p, 3)
 	st, err := p.State()
 	if err != nil {
@@ -708,7 +641,7 @@ func runLoaderLockCase(t *testing.T) {
 
 // runPartBusCase has a plugin write nonsense for a bus, then fault. What it wrote is no bus: nothing is made of it.
 func runPartBusCase(t *testing.T) {
-	_, _, first := slowPlugin(t)
+	_, _, first := startedFake(t)
 	busInfoFn := method(first.comp, mGetBusInfo)
 	stub := native(t, cat(
 		[]byte{0x48, 0x8B, 0x44, 0x24, 0x28},                   // mov rax,[rsp+0x28]: the bus's info
@@ -737,7 +670,6 @@ func runPartBusCase(t *testing.T) {
 
 // runRealPlaceCase is runEveryPlaceCase with a real fault through the wrapper at each place.
 func runRealPlaceCase(t *testing.T) {
-	uiStuckWait = 500 * time.Millisecond
 	if err := installGuard(); err != nil {
 		t.Fatal(err)
 	}
@@ -781,65 +713,183 @@ func runRealPlaceCase(t *testing.T) {
 	fmt.Printf("lived, %d places\n", places)
 }
 
-// runStuckCase holds the plugins' thread for good, as a call of a plugin's waiting on a lock a crash left held does. Until
-// a crash a wait has no bound, as loading a plugin takes long. After one, what waits comes back, a song's state is what
-// it last was, and closing doesn't wait.
-func runStuckCase(t *testing.T) {
-	uiStuckWait = 200 * time.Millisecond
-	f := fakeSynth()
-	f.latency, f.state = 64, []byte("kept")
-	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
-	a := cl.newPlugin()
-	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
-	p := a.Plugin()
-	if p == nil {
-		t.Fatalf("it didn't start: %v", a.Err())
-	}
+// runGoneFreeCase holds the plugins' thread for good, as a call of a plugin's waiting on a lock its crash left held does.
+// What a host asks of the plugin that crashed needs nothing of the thread, so it comes back. A waiting call to a live
+// plugin wouldn't: that is known, and accepted.
+func runGoneFreeCase(t *testing.T) {
+	_, a, p := startedFake(t)
 	given := a.State()
-	hold := make(chan struct{})
-	onUIAsync := make(chan struct{})
-	go func() {
-		onUI(func() {
-			close(onUIAsync)
-			<-hold
-		})
-	}()
-	<-onUIAsync
-	waited := make(chan bool, 1)
-	go func() { waited <- ranOnUI(func() {}) }()
-	select {
-	case <-waited:
-		t.Fatal("a wait came back with no crash")
-	case <-time.After(300 * time.Millisecond):
+	p.processFn.Store(native(t, faultCode))
+	out := [][]float32{make([]float32, 64), make([]float32, 64)}
+	a.proc.Process(&plug.Block{Frames: 64, Out: out})
+	if !p.Gone() {
+		t.Fatal("it plays on")
 	}
-	if r := callN(native(t, faultCode), nil); r != crashedResult {
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	go onUI(func() {
+		close(started)
+		<-hold
+	})
+	<-started
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if a.Changed() {
+			t.Error("the song is told of a change")
+		}
+		if !bytes.Equal(a.State(), given) {
+			t.Error("what it gives isn't what it last gave")
+		}
+		if _, err := p.State(); err == nil {
+			t.Error("its state read")
+		}
+		p.Values()
+		p.Params()
+		p.Text(1, 0.5)
+		p.Set(1, 0.5)
+		_ = a.SetState(stateOf("undone"))
+		_ = a.proc.Latency()
+		a.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("it waits on the thread")
+	}
+	fmt.Println("lived")
+}
+
+// stateOf is a plugin's state of a component's part comp.
+func stateOf(comp string) []byte {
+	out := []byte(stateMagic)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(comp)))
+	out = append(out, comp...)
+	return binary.LittleEndian.AppendUint32(out, 0)
+}
+
+// sharedLibrary has modules share the library holding helper.
+func sharedLibrary(helper uintptr, owners ...string) {
+	lo, hi, _ := moduleOf(helper)
+	crashesMu.Lock()
+	defer crashesMu.Unlock()
+	for _, o := range owners {
+		owned = append(owned, ownedSpan{span{lo, hi}, o})
+	}
+}
+
+// runSharedOwnFaultCase has a module crash in its own code: a library it shares stays, as does the module it shares it
+// with, which played no part.
+func runSharedOwnFaultCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	libA, libB, helper := native(t, faultCode), native(t, []byte{0xC3}), native(t, []byte{0xB8, 5, 0, 0, 0, 0xC3})
+	ownFn(libA, a)
+	ownFn(libB, b)
+	sharedLibrary(helper, a, b)
+	if r := callN(libA, nil); r != crashedResult {
 		t.Fatalf("the call gave %#x", r)
 	}
-	select {
-	case ran := <-waited:
-		if ran {
-			t.Fatal("it says the thread ran it")
+	if !moduleDead(libA) {
+		t.Error("the module that crashed lives on")
+	}
+	if moduleDead(libB) || moduleDead(helper) {
+		t.Error("what played no part went dead")
+	}
+	if r := callN(helper, nil); r != 5 {
+		t.Errorf("a call into the library gave %#x", r)
+	}
+	if cs := Crashes(); len(cs) != 1 || cs[0].Module != a {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runSharedFaultCase has a module's own function fault within a library it shares: all that share it are named, and dead.
+func runSharedFaultCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	helper := native(t, faultCode)
+	libA, libB := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(helper)), []byte{0xFF, 0xE0})), native(t, []byte{0xC3}) // mov rax,helper; jmp rax
+	ownFn(libA, a)
+	ownFn(libB, b)
+	sharedLibrary(helper, a, b)
+	if r := callN(libA, nil); r != crashedResult {
+		t.Fatalf("the call gave %#x", r)
+	}
+	if !moduleDead(libA) || !moduleDead(libB) || !moduleDead(helper) {
+		t.Error("something that shares it lives on")
+	}
+	if cs := Crashes(); len(cs) != 2 || cs[0].Module == cs[1].Module {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runSharedAfterCase has a module come after the library it uses has crashed: it can't play, and it is named.
+func runSharedAfterCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	helper := native(t, faultCode)
+	ownFn(helper, a)
+	callN(helper, nil)
+	libB := native(t, []byte{0xC3})
+	ownFn(libB, b)
+	ownFn(helper, b)
+	if !moduleDead(libB) {
+		t.Error("the module that came after lives on")
+	}
+	if cs := Crashes(); len(cs) != 2 || cs[1].Module != b {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runValueBackCase has a parameter moved away and back as the plugin says its values changed. What the processor sent
+// reaches the controller before values are read: no crash here, as this is any plugin's way.
+func runValueBackCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, p := startedFake(t)
+	withParams(p, 1)
+	untick(p)
+	held := native(t, make([]byte, 16))
+	getStub := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(held)), []byte{0xF2, 0x0F, 0x10, 0x00, 0xC3}))             // mov rax,held; movsd xmm0,[rax]; ret
+	setStub := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(held)), []byte{0xF2, 0x0F, 0x11, 0x10, 0x31, 0xC0, 0xC3})) // mov rax,held; movsd [rax],xmm2; xor eax,eax; ret
+	get, set := method(p.ctrl, mGetParamNormalized), method(p.ctrl, mSetParamNormalized)
+	r := func(fn uintptr) uintptr {
+		switch fn {
+		case get:
+			return getStub
+		case set:
+			return setStub
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the wait goes on after a crash")
+		return fn
 	}
-	start := time.Now()
-	if !bytes.Equal(a.State(), given) || a.Changed() {
-		t.Error("a plugin that can't be asked isn't what it last gave")
+	testFault.Store(&r)
+	block := func(v float64) int {
+		out := [][]float32{make([]float32, 64), make([]float32, 64)}
+		in := [][]float32{make([]float32, 64), make([]float32, 64)}
+		p.ProcessBlock(&plug.Block{Frames: 64, In: in, Out: out, Changes: []plug.Change{{ID: 1, Value: v}}})
+		return p.inChanges.n
 	}
-	if err := a.Err(); err != nil {
-		t.Errorf("it says %v", err)
+	block(0)
+	onUI(p.onTick)
+	p.restart(restartParamValues)
+	block(1)
+	onUI(p.onTick)
+	if got := p.Value(1); got != 1 {
+		t.Errorf("the value is %v, for 1", got)
 	}
-	if a.proc.Latency() != 64 {
-		t.Errorf("its latency is %d", a.proc.Latency())
-	}
-	if _, err := cl.open(Config{Rate: 48000, Block: 64}); !errors.Is(err, ErrStuck) {
-		t.Errorf("starting another says %v", err)
-	}
-	a.Close()
-	stopUI()
-	if time.Since(start) > 5*time.Second {
-		t.Errorf("that took %v", time.Since(start))
+	if sent := block(0); sent != 1 {
+		t.Errorf("going back sent %d changes", sent)
 	}
 	fmt.Println("lived")
 }
@@ -992,7 +1042,7 @@ func TestAFactoryThatMakesNothingGivesNothing(t *testing.T) {
 // A plugin that says all its values changed has them read again, for when it can't be asked.
 func TestValuesAreReadAgainAsAPluginSaysTheyChanged(t *testing.T) {
 	t.Parallel()
-	f, _, p := slowPlugin(t)
+	f, _, p := startedFake(t)
 	withParams(p, 3)
 	var read atomic.Int64
 	f.onValue = func() { read.Add(1) }

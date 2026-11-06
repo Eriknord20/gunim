@@ -5,7 +5,6 @@ package vst3
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -32,73 +31,11 @@ var (
 	tickers   = map[any]func(){}
 )
 
-// uiStuckWait is how long a wait on the plugins' thread may go on once a plugin has crashed. Until then a wait has no
-// bound, as loading a plugin can take a minute. After a crash the thread may be held for good, by a call of the plugin's
-// waiting on a lock the crash left held, and a song is still to be saved.
-var uiStuckWait = 5 * time.Second
-
-// uiGaveUp says a wait on the plugins' thread ran out after a crash: nothing is given it until it is free again, which may
-// be soon, as all it took was a plugin being slow when another crashed.
-var uiGaveUp atomic.Bool
-
-// PluginsStuck reports whether the plugins' thread isn't answering, after a plugin's crash. Until it is free again, no
-// plugin can be asked anything: each gives what it last gave, so what is changed in one meanwhile isn't kept. It plays on.
-// It is safe to call from any goroutine.
-func PluginsStuck() bool { return uiGaveUp.Load() }
-
-// clearWhenFree clears uiGaveUp once the thread gets to work given it now, so once what held it has let go.
-func clearWhenFree() {
-	work := func() { uiGaveUp.Store(false) }
-	for {
-		uiMu.RLock()
-		sent := false
-		if uiRunning {
-			select {
-			case uiWork <- work:
-				wake()
-				sent = true
-			default:
-			}
-		}
-		uiMu.RUnlock()
-		if sent {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// waitUI waits for done, without bound until a plugin crashes and then for uiStuckWait, and reports whether it closed.
-func waitUI(done <-chan struct{}) bool {
-	select {
-	case <-done:
-		return true
-	case <-crashSignal():
-	}
-	t := time.NewTimer(uiStuckWait)
-	defer t.Stop()
-	select {
-	case <-done:
-		return true
-	case <-t.C:
-		if uiGaveUp.CompareAndSwap(false, true) {
-			go clearWhenFree()
-		}
-		return false
-	}
-}
-
 // onUI runs f on the plugins' thread, starting it where none runs, and
-// waits for it. A caller that reads what f gives goes by ranOnUI.
-func onUI(f func()) { ranOnUI(f) }
-
-// ranOnUI is onUI, and reports whether f ran. It didn't where the thread is stuck after a plugin's crash.
-func ranOnUI(f func()) bool {
-	if uiGaveUp.Load() {
-		return false
-	}
+// waits for it.
+func onUI(f func()) {
 	if onMain(f) {
-		return true
+		return
 	}
 	uiMu.RLock()
 	for !uiRunning {
@@ -108,33 +45,12 @@ func ranOnUI(f func()) bool {
 	}
 	defer uiMu.RUnlock()
 	done := make(chan struct{})
-	var abandoned atomic.Bool
-	work := func() {
+	uiWork <- func() {
 		defer close(done)
-		if !abandoned.Load() {
-			f()
-		}
-	}
-	select {
-	case uiWork <- work:
-	default:
-		// Full, so it is behind: as long a wait as for the work itself.
-		sent := make(chan struct{})
-		go func() {
-			uiWork <- work
-			close(sent)
-		}()
-		if !waitUI(sent) {
-			abandoned.Store(true)
-			return false
-		}
+		f()
 	}
 	wake()
-	if !waitUI(done) {
-		abandoned.Store(true)
-		return false
-	}
-	return true
+	<-done
 }
 
 // tick has f run on the plugins' thread every few milliseconds, under
@@ -184,18 +100,13 @@ func startUI() {
 func stopUI() {
 	uiMu.Lock()
 	defer uiMu.Unlock()
-	if !uiRunning || uiGaveUp.Load() {
+	if !uiRunning {
 		return
 	}
-	select {
-	case uiWork <- quitUI:
-	default:
-		return
-	}
+	uiWork <- quitUI
 	wake()
-	if waitUI(uiExited) {
-		uiRunning = false
-	}
+	<-uiExited
+	uiRunning = false
 }
 
 // uiLoop runs the thread, locked, which ends with it.

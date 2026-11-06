@@ -36,8 +36,8 @@ type fakePlugin struct {
 	state    []byte
 	tells    bool
 	rewrites bool
-	// onState and onValue, where set, run as it gives its state and a value: a test holds it there.
-	onState, onValue func()
+	// onValue, where set, runs as it gives a value.
+	onValue func()
 	// fails says its process fails, writing nothing.
 	fails   bool
 	latency int
@@ -197,9 +197,6 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 		newCallback(func(this, stream uintptr) uintptr {
 			touch(this)
 			f := fakeOf(this)
-			if f.onState != nil {
-				f.onState()
-			}
 			f.mu.Lock()
 			st := append([]byte(nil), f.state...)
 			f.mu.Unlock()

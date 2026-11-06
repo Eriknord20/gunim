@@ -458,18 +458,15 @@ func (a *plugged) State() []byte {
 	if p == nil {
 		return a.state
 	}
-	if p.Gone() || uiGaveUp.Load() {
+	if p.Gone() {
 		// It can't be asked: what it last gave is what is kept.
 		return a.given
 	}
 	st, err := p.State()
 	if err != nil {
-		if !p.Gone() && !uiGaveUp.Load() {
+		if !p.Gone() {
 			a.err = err
 		}
-		return a.given
-	}
-	if p.Gone() || uiGaveUp.Load() {
 		return a.given
 	}
 	if a.echo != nil && bytes.Equal(st, a.echo) {
@@ -484,12 +481,12 @@ func (a *plugged) Changed() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	p := a.playing.Load()
-	if p == nil || p.Gone() || uiGaveUp.Load() {
+	if p == nil || p.Gone() {
 		return false
 	}
 	st, err := p.State()
 	if err != nil {
-		if !p.Gone() && !uiGaveUp.Load() {
+		if !p.Gone() {
 			a.err = err
 		}
 		return false
@@ -533,11 +530,11 @@ func (a *plugged) SetState(b []byte) error {
 		a.given, a.echo = bytes.Clone(b), nil
 		return nil
 	}
-	if p.Gone() || uiGaveUp.Load() {
+	if p.Gone() {
 		return keep()
 	}
 	if err := p.SetState(b); err != nil {
-		if p.Gone() || uiGaveUp.Load() {
+		if p.Gone() {
 			return keep()
 		}
 		return err
@@ -687,7 +684,7 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 	defer a.mu.Unlock()
 	if p := a.playing.Load(); p != nil {
 		// One gone stays silent, whatever the setup.
-		if err := p.Configure(cfg); err != nil && !p.Gone() && !uiGaveUp.Load() {
+		if err := p.Configure(cfg); err != nil && !p.Gone() {
 			a.err = err
 		}
 		return

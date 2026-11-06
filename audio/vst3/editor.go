@@ -106,7 +106,7 @@ func viewSize(v uintptr) viewRect {
 // without opening it, or its size now where it is open; ok is false
 // where it has no editor here.
 func (p *Plugin) EditorSize() (w, h int, ok bool) {
-	if !p.whileOpen(func() {
+	p.whileOpen(func() {
 		if p.ed != nil {
 			s := p.ed.win.scale()
 			w, h, ok = toPixels(p.ed.w, s), toPixels(p.ed.h, s), true
@@ -125,9 +125,7 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 		ok = w > 0 && h > 0
 		s := (*window)(nil).scale()
 		w, h = toPixels(w, s), toPixels(h, s)
-	}) {
-		return 0, 0, false
-	}
+	})
 	return w, h, ok
 }
 
@@ -138,7 +136,7 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 // open, or else one made for the question.
 func (p *Plugin) EditorResizable() bool {
 	var ok bool
-	if !p.whileOpen(func() {
+	p.whileOpen(func() {
 		if p.ed != nil {
 			ok = p.ed.resizable
 			return
@@ -152,9 +150,7 @@ func (p *Plugin) EditorResizable() bool {
 		}
 		ok = result(call(v, mCanResize)) == resultOK
 		release(v)
-	}) {
-		return false
-	}
+	})
 	return ok
 }
 
@@ -208,9 +204,7 @@ func (p *Plugin) EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, er
 // EmbedEditor opened it.
 func (p *Plugin) EditorEmbedded() bool {
 	embedded := false
-	if !ranOnUI(func() { embedded = p.ed != nil && p.ed.win.child }) {
-		return false
-	}
+	onUI(func() { embedded = p.ed != nil && p.ed.win.child })
 	return embedded
 }
 
@@ -219,7 +213,7 @@ func (p *Plugin) EditorEmbedded() bool {
 // takes r's size as near as it can; one that cannot keeps its own. It
 // returns the size the editor has.
 func (p *Plugin) PlaceEditor(r image.Rectangle) (w, h int) {
-	if !ranOnUI(func() {
+	onUI(func() {
 		e := p.ed
 		if e == nil || !e.win.child {
 			return
@@ -234,9 +228,7 @@ func (p *Plugin) PlaceEditor(r image.Rectangle) (w, h int) {
 			e.win.place(r.Min.X, r.Min.Y)
 		}
 		w, h = toPixels(e.w, s), toPixels(e.h, s)
-	}) {
-		return 0, 0
-	}
+	})
 	return w, h
 }
 

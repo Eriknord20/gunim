@@ -134,9 +134,7 @@ func Open(path string) (*Module, error) {
 		return nil, err
 	}
 	var m *Module
-	if !ranOnUI(func() { m, err = loadModule(path, bin) }) {
-		return nil, ErrStuck
-	}
+	onUI(func() { m, err = loadModule(path, bin) })
 	return m, err
 }
 

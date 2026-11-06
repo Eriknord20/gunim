@@ -146,7 +146,7 @@ func (x *Extension) SetRegions(regions ...*PlaybackRegion) error {
 		return errNoRole
 	}
 	var err error
-	if !ranOnUI(func() {
+	onUI(func() {
 		p := x.p
 		if x.d.closed || p.closed.Load() {
 			err = ErrClosed
@@ -172,18 +172,14 @@ func (x *Extension) SetRegions(regions ...*PlaybackRegion) error {
 		if was {
 			err = p.activate()
 		}
-	}) {
-		return ErrStuck
-	}
+	})
 	return err
 }
 
 // Regions returns the regions the playback renderer renders.
 func (x *Extension) Regions() []*PlaybackRegion {
 	var out []*PlaybackRegion
-	if !ranOnUI(func() { out = slices.Clone(x.regions) }) {
-		return nil
-	}
+	onUI(func() { out = slices.Clone(x.regions) })
 	return out
 }
 
@@ -209,7 +205,7 @@ func (x *Extension) SetEditorRegions(regions []*PlaybackRegion, sequences []*Reg
 	if x.er.table == 0 {
 		return errNoRole
 	}
-	if !ranOnUI(func() {
+	onUI(func() {
 		for _, r := range slices.Clone(x.editorRegions) {
 			if !slices.Contains(regions, r) {
 				x.er.call(1, r.ref)
@@ -232,9 +228,7 @@ func (x *Extension) SetEditorRegions(regions []*PlaybackRegion, sequences []*Reg
 		}
 		x.editorRegions = slices.DeleteFunc(slices.Clone(regions), func(r *PlaybackRegion) bool { return r == nil || r.removed })
 		x.editorSequences = slices.DeleteFunc(slices.Clone(sequences), func(s *RegionSequence) bool { return s == nil || s.removed })
-	}) {
-		return ErrStuck
-	}
+	})
 	return nil
 }
 
@@ -251,7 +245,7 @@ func (x *Extension) Select(s Selection) error {
 	if x.ev.table == 0 {
 		return errNoRole
 	}
-	if !ranOnUI(func() {
+	onUI(func() {
 		sel := newStruct(fPtr, fPtr, fPtr, fPtr, fPtr, fPtr)
 		var regions []uintptr
 		for _, r := range s.Regions {
@@ -281,9 +275,7 @@ func (x *Extension) Select(s Selection) error {
 		}
 		x.ev.call(0, sel.addr())
 		runtime.KeepAlive(sel)
-	}) {
-		return ErrStuck
-	}
+	})
 	return nil
 }
 
@@ -293,7 +285,7 @@ func (x *Extension) Hide(sequences ...*RegionSequence) error {
 	if x.ev.table == 0 {
 		return errNoRole
 	}
-	if !ranOnUI(func() {
+	onUI(func() {
 		var refs []uintptr
 		for _, q := range sequences {
 			if q != nil && !q.removed {
@@ -310,9 +302,7 @@ func (x *Extension) Hide(sequences ...*RegionSequence) error {
 			at = uintptr(unsafe.Pointer(&refs[0]))
 		}
 		x.ev.call(1, uintptr(len(refs)), at)
-	}) {
-		return ErrStuck
-	}
+	})
 	return nil
 }
 

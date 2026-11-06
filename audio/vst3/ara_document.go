@@ -335,7 +335,7 @@ func (f *ARAFactory) NewDocument(name string, host ARAHost) (*Document, error) {
 	}
 	d.inst = inst
 	var err error
-	if !ranOnUI(func() {
+	onUI(func() {
 		f.open()
 		props := newStruct(fPtr, fPtr)
 		props.putString(1, name)
@@ -355,9 +355,7 @@ func (f *ARAFactory) NewDocument(name string, host ARAHost) (*Document, error) {
 		if err != nil {
 			f.close()
 		}
-	}) {
-		return nil, ErrStuck
-	}
+	})
 	if err != nil {
 		dropHandle(d.h)
 		return nil, err
@@ -374,7 +372,7 @@ func (d *Document) Factory() *ARAFactory { return d.f }
 // runs on. It returns the first error of e's.
 func (d *Document) Edit(fn func(e *Edit)) error {
 	e := &Edit{d: d}
-	if !ranOnUI(func() {
+	onUI(func() {
 		if d.closed {
 			e.err = ErrClosed
 			return
@@ -383,9 +381,7 @@ func (d *Document) Edit(fn func(e *Edit)) error {
 		fn(e)
 		d.dc.call(dcEndEditing)
 		e.resume()
-	}) {
-		return ErrStuck
-	}
+	})
 	return e.err
 }
 
@@ -840,7 +836,7 @@ func (d *Document) Store(f *StoreFilter) ([]byte, error) {
 	defer dropHandle(h)
 	var ok bool
 	var err error
-	if !ranOnUI(func() {
+	onUI(func() {
 		if d.closed {
 			err = ErrClosed
 			return
@@ -870,9 +866,7 @@ func (d *Document) Store(f *StoreFilter) ([]byte, error) {
 		}
 		ok = d.dc.call(dcStoreObjectsToArchive, h, filter)&0xffffffff != 0
 		runtime.KeepAlive(fs)
-	}) {
-		return nil, ErrStuck
-	}
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -909,7 +903,7 @@ func (d *Document) tell(u Update) {
 // or still to come, for any kind of content the factory analyzes.
 func (d *Document) Analysing(src *AudioSource) bool {
 	var out bool
-	if !ranOnUI(func() {
+	onUI(func() {
 		if d.closed || src == nil || src.removed {
 			return
 		}
@@ -919,9 +913,7 @@ func (d *Document) Analysing(src *AudioSource) bool {
 				return
 			}
 		}
-	}) {
-		return false
-	}
+	})
 	return out
 }
 
@@ -948,14 +940,12 @@ func (d *Document) Analyse(src *AudioSource) {
 // HeadAndTail returns how long before its start and after its end the
 // region sounds, in seconds.
 func (d *Document) HeadAndTail(r *PlaybackRegion) (head, tail float64) {
-	if !ranOnUI(func() {
+	onUI(func() {
 		if d.closed || r == nil || r.removed {
 			return
 		}
 		d.dc.call(dcGetPlaybackRegionHeadAndTailTime, r.ref, uintptr(unsafe.Pointer(&head)), uintptr(unsafe.Pointer(&tail)))
-	}) {
-		return 0, 0
-	}
+	})
 	return head, tail
 }
 
