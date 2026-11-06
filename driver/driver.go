@@ -153,6 +153,9 @@ type Options struct {
 	// Icons are the window's icon at several sizes, for the title bar
 	// and the taskbar to pick from. None leaves the system's own.
 	Icons []image.Image
+	// Class is what the window is to the desktop on Linux: X11's WM_CLASS.
+	// Empty goes by the title.
+	Class string
 	// Hidden opens the window hidden, for a popup's window made ahead
 	// of time, which a [Recycler] shows once there is a popup for it.
 	Hidden bool

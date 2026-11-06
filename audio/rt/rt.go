@@ -34,6 +34,14 @@ func Enter() (leave func()) {
 	}
 }
 
+// Refused reports whether the last thread to [Enter] asked for the system's
+// audio priority where it could have had it, and was refused: on Linux, where
+// neither the user's limits allow it nor RealtimeKit gives it. The sound then
+// plays at normal priority, and may drop out under load, so an application can
+// say so. Threads held back on purpose, to keep a processor free or after one
+// ran too long, don't count.
+func Refused() bool { return wasNotGiven() }
+
 // Breathe has the thread truly sleep, for as short as the system can. A
 // thread that spins between its work, waiting for more, calls it every so
 // often: on Linux the system limits how long a real-time thread may run

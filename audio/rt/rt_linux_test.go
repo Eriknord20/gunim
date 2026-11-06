@@ -175,6 +175,39 @@ func TestSleepSleeps(t *testing.T) {
 	}
 }
 
+func TestAThreadRefusedSaysSo(t *testing.T) {
+	kitMu.Lock()
+	noKit = true
+	kitMu.Unlock()
+	t.Cleanup(func() {
+		kitMu.Lock()
+		noKit = false
+		kitMu.Unlock()
+		wasRefused.Store(false)
+	})
+	leave := Enter()
+	defer leave()
+	if p := policy(t); p != unix.SCHED_NORMAL {
+		t.Skip("the user's limits give real-time scheduling here")
+	}
+	if !Refused() {
+		t.Error("it doesn't say it was refused")
+	}
+}
+
+func TestAThreadHeldBackOnPurposeIsNotRefused(t *testing.T) {
+	rested(t)
+	wasRefused.Store(false)
+	mu.Lock()
+	tripped = time.Now()
+	mu.Unlock()
+	leave := Enter()
+	defer leave()
+	if Refused() {
+		t.Error("resting after a thread ran too long counts as refused")
+	}
+}
+
 func TestLimitRTTimeIsWithinWhatRealtimeKitAsks(t *testing.T) {
 	if err := limitRTTime(); err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -75,6 +76,11 @@ func init() {
 	}()
 }
 
+// wasRefused says the last thread to ask for real-time scheduling was refused.
+var wasRefused atomic.Bool
+
+func wasNotGiven() bool { return wasRefused.Load() }
+
 // raise asks for real-time scheduling for the calling thread, and
 // returns what gives it up.
 func raise() func() {
@@ -97,11 +103,13 @@ func raise() func() {
 		return func() {}
 	}
 	if !setFIFO(tid) && !askKit(tid) {
+		wasRefused.Store(true)
 		mu.Lock()
 		delete(raised, tid)
 		mu.Unlock()
 		return func() {}
 	}
+	wasRefused.Store(false)
 	mu.Lock()
 	raised[tid] = 1
 	mu.Unlock()
