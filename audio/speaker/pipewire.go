@@ -2,6 +2,7 @@ package speaker
 
 import (
 	"errors"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,10 @@ var openPipeWire = func(c pipewire.Config) (pwDevice, error) {
 	return d, nil
 }
 
+// pipeWireFirst plays through PipeWire where Options names no driver, on
+// Linux; a test turns it off.
+var pipeWireFirst = runtime.GOOS == "linux"
+
 // errPWPanel is what ControlPanel returns while PipeWire plays.
 var errPWPanel = errors.New("speaker: PipeWire has no control panel: choose the device in the system's " +
 	"sound settings, or in pavucontrol")
@@ -52,9 +57,12 @@ var pwChannels = []string{"left", "right"}
 // pump, reads the mixer ahead into the ring, and hands what the input
 // recorded to package audio/capture.
 type pwOutput struct {
-	s   *Speaker
-	dev pwDevice
-	hz  int
+	s *Speaker
+	// byName says Options.Driver named PipeWire: State tells it as the
+	// driver. Where it plays as the system's own sound, State tells none.
+	byName bool
+	dev    pwDevice
+	hz     int
 	// base is the mixer frame the ring's first frame is: the pump alone
 	// reads the mixer, so frame i of the ring is the mixer's base+i.
 	base atomic.Int64
@@ -88,7 +96,7 @@ type pwOutput struct {
 // default output at the rate Options asks, and recording the default
 // input where Options.Record says. It asks for cycles of Options.Buffer
 // frames, or a quarter of the latency, as Core Audio does.
-func openPWOutput(s *Speaker, o Options) (*pwOutput, error) {
+func openPWOutput(s *Speaker, o Options, byName bool) (*pwOutput, error) {
 	ahead := time.Duration(s.ahead.Load() + s.margin.Load())
 	quantum := auBuffer(o, ahead, o.rate())
 	dev, err := openPipeWire(pipewire.Config{Name: o.Name, Rate: o.rate(), Quantum: quantum, Record: o.Record,
@@ -97,7 +105,7 @@ func openPWOutput(s *Speaker, o Options) (*pwOutput, error) {
 		return nil, err
 	}
 	info := dev.Info()
-	p := &pwOutput{s: s, dev: dev, hz: info.Rate, quit: make(chan struct{}), done: make(chan struct{})}
+	p := &pwOutput{s: s, dev: dev, byName: byName, hz: info.Rate, quit: make(chan struct{}), done: make(chan struct{})}
 	p.quantum.Store(int64(info.Quantum))
 	s.logf("PipeWire: libpipewire %s at %d Hz, asking %d frames a cycle, recording %v",
 		info.Library, info.Rate, info.Quantum, info.Recording)
@@ -266,7 +274,9 @@ func (p *pwOutput) latency() time.Duration {
 
 func (p *pwOutput) fill(st *State) {
 	q, d := int(p.quantum.Load()), int(p.delay.Load())
-	st.Driver = driver.PipeWire
+	if p.byName {
+		st.Driver = driver.PipeWire
+	}
 	if r := int(p.deviceRate.Load()); r > 0 && r != p.hz {
 		st.DeviceRate = r
 	}

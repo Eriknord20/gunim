@@ -87,7 +87,9 @@ type Options struct {
 	// to open, or JACK's server shut down: [State] tells why. On macOS
 	// the system's own sound is Core Audio's HAL output unit, as
 	// [driver.CoreAudio] plays, on Windows WASAPI, as [driver.WASAPI]
-	// plays, and oto where either fails to open.
+	// plays, and oto where either fails to open. On Linux it is PipeWire,
+	// as [driver.PipeWire] plays, and the first sound card directly where
+	// PipeWire doesn't play.
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
@@ -385,6 +387,8 @@ func (s *Speaker) open() (output, error) {
 		out, err = openWasapi(s, s.o, false)
 	case s.o.Driver == "" && coreAudioFirst:
 		out, err = openAUOutput(s, s.o, false)
+	case s.o.Driver == "" && pipeWireFirst:
+		out, err = openPWOutput(s, s.o, false)
 	case s.o.Driver != "":
 		out, err = s.openDriver()
 	default:
@@ -398,19 +402,24 @@ func (s *Speaker) open() (output, error) {
 		}
 		s.problem = err
 		s.logf("%v; playing through the system's sound", err)
+		// A named driver gone, a sound server shares the card. What opens
+		// below takes it from everything else on the computer.
+		if pipeWireFirst && s.o.Driver != "" && s.o.Driver != driver.PipeWire {
+			if pw, perr := openPWOutput(s, s.o, false); perr == nil {
+				s.m.SetRate(pw.rate())
+				pw.start(ahead)
+				return pw, nil
+			}
+		}
 	}
-	oto, err := openSystemSound(s, s.o)
+	sys, err := openSystemSound(s, s.o)
 	if err != nil {
 		return nil, err
 	}
-	s.m.SetRate(oto.rate())
-	oto.start(ahead)
-	return oto, nil
+	s.m.SetRate(sys.rate())
+	sys.start(ahead)
+	return sys, nil
 }
-
-// openSystemSound opens the system's own sound by oto, where no driver
-// plays; a test puts a function of its own here.
-var openSystemSound = func(s *Speaker, o Options) (startedOutput, error) { return openOto(s, o) }
 
 // A startedOutput is an output that starts once the speaker holds it.
 type startedOutput interface {
@@ -425,7 +434,7 @@ func (s *Speaker) openDriver() (startedOutput, error) {
 	case driver.JACK:
 		return openJackOutput(s, s.o)
 	case driver.PipeWire:
-		return openPWOutput(s, s.o)
+		return openPWOutput(s, s.o, true)
 	case driver.CoreAudio:
 		return openAUOutput(s, s.o, true)
 	case driver.WASAPI:
@@ -658,7 +667,7 @@ func (s *Speaker) Set(o Options) error {
 	drives := named || driverFirst()
 	if o.Driver != prev.Driver || rate ||
 		(named && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
-		(!named && coreAudioFirst && o.Buffer != prev.Buffer) ||
+		(!named && (coreAudioFirst || pipeWireFirst) && o.Buffer != prev.Buffer) ||
 		(drives && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}

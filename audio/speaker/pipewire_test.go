@@ -523,3 +523,116 @@ func TestPipeWireGrowsNoLeadFromAnOpening(t *testing.T) {
 		}
 	})
 }
+
+// The tests of the other outputs name none, and must not reach the
+// computer's own PipeWire.
+func init() { pipeWireFirst = false }
+
+// withPipeWireFirst has PipeWire play where no driver is named, as on
+// Linux.
+func withPipeWireFirst(t *testing.T) {
+	t.Helper()
+	wasAA, wasCA, wasWA := aaudioFirst, coreAudioFirst, wasapiFirst
+	aaudioFirst, coreAudioFirst, wasapiFirst, pipeWireFirst = false, false, false, true
+	t.Cleanup(func() { aaudioFirst, coreAudioFirst, wasapiFirst, pipeWireFirst = wasAA, wasCA, wasWA, false })
+}
+
+func TestPipeWirePlaysWhereNoDriverIsNamed(t *testing.T) {
+	withPipeWireFirst(t)
+	usePipeWire(t)
+	was := openSystemSound
+	t.Cleanup(func() { openSystemSound = was })
+	openSystemSound = func(*Speaker, Options) (startedOutput, error) {
+		t.Error("the system's other sound opened")
+		return nil, errors.New("no")
+	}
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	st := s.State()
+	if st.Driver != "" {
+		t.Errorf("as the system's own sound it tells the driver %q", st.Driver)
+	}
+	if st.Info == nil || st.Info.Driver != driver.PipeWire {
+		t.Errorf("it plays through %+v", st.Info)
+	}
+}
+
+func TestPipeWireNamedTellsItsName(t *testing.T) {
+	usePipeWire(t)
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: driver.PipeWire})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if d := s.State().Driver; d != driver.PipeWire {
+		t.Errorf("it tells %q", d)
+	}
+}
+
+func TestANamedDriverThatFailsFallsBackOnPipeWire(t *testing.T) {
+	withPipeWireFirst(t)
+	usePipeWire(t)
+	was := openSystemSound
+	t.Cleanup(func() { openSystemSound = was })
+	openSystemSound = func(*Speaker, Options) (startedOutput, error) {
+		t.Error("what takes the card from everything else opened, though PipeWire plays")
+		return nil, errors.New("no")
+	}
+	wasPull := openPull
+	t.Cleanup(func() { openPull = wasPull })
+	openPull = func(driver.Config) (pullDevice, error) { return nil, errors.New("unplugged") }
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: driver.ALSAPrefix + "M4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	st := s.State()
+	if st.Problem == nil {
+		t.Error("it told of no problem")
+	}
+	if st.Info == nil || st.Info.Driver != driver.PipeWire {
+		t.Errorf("it plays through %+v", st.Info)
+	}
+}
+
+func TestChangingTheBufferReachesPipeWireAsTheSystemsSound(t *testing.T) {
+	withPipeWireFirst(t)
+	f := usePipeWire(t)
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Buffer: 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.Set(Options{Rate: 48000, Buffer: 64}); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cfg.Quantum != 64 {
+		t.Errorf("the quantum is %d", f.cfg.Quantum)
+	}
+}
+
+func TestWherePipeWireDoesNotPlayTheSystemsOtherSoundDoes(t *testing.T) {
+	withPipeWireFirst(t)
+	f := usePipeWire(t)
+	f.failed = errors.New("no server")
+	was := openSystemSound
+	t.Cleanup(func() { openSystemSound = was })
+	opened := false
+	openSystemSound = func(_ *Speaker, o Options) (startedOutput, error) {
+		opened = true
+		return &stillOut{hz: o.rate()}, nil
+	}
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if !opened {
+		t.Error("nothing else opened")
+	}
+}

@@ -1,3 +1,5 @@
+//go:build !linux || android || !(amd64 || arm64)
+
 package speaker
 
 import (
@@ -26,6 +28,10 @@ type otoOutput struct {
 	// buf is Read's frames; the player reads on one goroutine.
 	buf []float32
 }
+
+// openSystemSound opens the system's own sound by oto, where no driver
+// plays; a test puts a function of its own here.
+var openSystemSound = func(s *Speaker, o Options) (startedOutput, error) { return openOto(s, o) }
 
 func openOto(s *Speaker, o Options) (*otoOutput, error) {
 	ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
