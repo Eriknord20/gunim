@@ -9,8 +9,10 @@
 // Enter locks the goroutine to its thread. On Windows the thread then
 // joins the Multimedia Class Scheduler Service's "Pro Audio" task, at
 // high priority, so the system runs it before the rest of the work on
-// the computer. Elsewhere the thread runs at the priority it has: Enter
-// changes no privileges.
+// the computer. On Linux it asks for real-time scheduling, from the
+// system where the user's limits allow it, otherwise from RealtimeKit,
+// which most desktops run. Elsewhere, or where neither gives it, the
+// thread runs at the priority it has: Enter changes no privileges.
 package rt
 
 import "runtime"
@@ -28,3 +30,9 @@ func Enter() (leave func()) {
 		runtime.UnlockOSThread()
 	}
 }
+
+// Breathe has the thread truly sleep, for as short as the system can. A
+// thread that spins between its work, waiting for more, calls it every so
+// often: on Linux the system limits how long a real-time thread may run
+// without sleeping, and a yield doesn't count.
+func Breathe() { doze() }
