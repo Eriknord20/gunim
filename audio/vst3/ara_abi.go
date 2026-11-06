@@ -228,7 +228,7 @@ func (t fnTable) addr() uintptr { return uintptr(unsafe.Pointer(&t[0])) }
 func cfn(fn uintptr, args ...uintptr) uintptr {
 	var all [maxCallArgs]uintptr
 	n := copy(all[:], args)
-	return callN(fn, all[:n])
+	return pointerOf(callN(fn, all[:n]))
 }
 
 // iface is one of the plugin's tables of functions, with the object
@@ -248,7 +248,7 @@ func (f iface) call(i int, args ...uintptr) uintptr {
 	var all [maxCallArgs]uintptr
 	all[0] = f.ref
 	n := 1 + copy(all[1:], args)
-	return callN(fn, all[:n])
+	return pointerOf(callN(fn, all[:n]))
 }
 
 // Handles: the host's objects as the plugin holds them, numbers of the

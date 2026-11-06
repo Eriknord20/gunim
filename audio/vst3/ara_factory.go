@@ -95,7 +95,7 @@ func (m *Module) ARAFactory(c Class) (*ARAFactory, error) {
 			if obj == 0 {
 				continue
 			}
-			p := call(obj, mARAGetFactory)
+			p := pointerOf(call(obj, mARAGetFactory))
 			// The factory lives as long as the module; the object that
 			// gave it may go.
 			f, err = araFactoryAt(p, c, m)
