@@ -223,6 +223,16 @@ type Event struct {
 	// says the host counts none, as for a note played live, and the
 	// instrument counts for itself.
 	Turn int64
+	// KeyTurn is a NoteOn's place among the notes of its lane on its
+	// key, the MIDI note Pitch rounds to, counted as Turn is, for an
+	// instrument that takes turns on each key, as a sampler's round
+	// robin. Zero says the host counts none.
+	KeyTurn int64
+	// Mod is a NoteOn's mod wheel as the note starts in the music, from
+	// 0 to 1, for an instrument that picks a sound by it. A chased note
+	// gives the same value as one played from its start. An Expression
+	// of Mod carries it on from there.
+	Mod float64
 	// Length is a NoteOn's frames from its frame to its NoteOff's, as
 	// the music has it, for an instrument that shapes a note by how
 	// long it lasts, as a riser that reaches its top as the note ends.
@@ -413,10 +423,12 @@ type Upcoming struct {
 	Note int32
 	// Group is the lane it plays in, as an [Event]'s.
 	Group int32
-	// Pitch, Velocity, Turn and Length are its NoteOn's.
+	// Pitch, Velocity, Turn, KeyTurn, Mod and Length are its NoteOn's.
 	Pitch    float64
 	Velocity float64
 	Turn     int64
+	KeyTurn  int64
+	Mod      float64
 	Length   int
 }
 

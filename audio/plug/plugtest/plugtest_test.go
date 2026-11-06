@@ -515,6 +515,16 @@ func TestAnnounceTellsANotesTurn(t *testing.T) {
 	}
 }
 
+// TestAnnounceTellsANotesKeyTurnAndMod checks that the news Announce
+// makes of a note carries the KeyTurn and Mod its NoteOn does.
+func TestAnnounceTellsANotesKeyTurnAndMod(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, KeyTurn: 3, Mod: 0.25})
+	if len(ahead) != 1 || ahead[0].KeyTurn != 3 || ahead[0].Mod != 0.25 {
+		t.Fatalf("Announce gave %+v, want news of note 1 with key turn 3 and mod 0.25", ahead)
+	}
+}
+
 // TestAnnounceTellsHowLongANoteLasts checks that the news Announce makes
 // of a note carries the Length its NoteOn does, as a host's news does.
 func TestAnnounceTellsHowLongANoteLasts(t *testing.T) {
