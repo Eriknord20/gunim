@@ -145,17 +145,18 @@ func ownHandlerCode(t *testing.T) uintptr {
 	return withTable(t, code, cat([]byte{1 | 1<<3, 4, 1, 0, 4, 4<<4 | 2, 0, 0}, le32(handlerAt)))
 }
 
-// throwCode does as MSVC's throw does with an exception no frame of the plugin catches: it raises one it says can't go on.
-func throwCode(t *testing.T) uintptr {
+// throwCode does as a throw does with an exception no frame of the plugin catches: MSVC's raises one it says can't go on,
+// GCC's one of its own code, which it doesn't.
+func throwCode(t *testing.T, code uint32, flags byte) uintptr {
 	t.Helper()
 	raise, err := windows.GetProcAddress(windows.Handle(windows.NewLazySystemDLL("kernel32.dll").Handle()), "RaiseException")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return withTable(t, cat(
-		[]byte{0x48, 0x83, 0xEC, 0x28},             // sub rsp,0x28
-		[]byte{0xB9, 0x63, 0x73, 0x6D, 0xE0},       // mov ecx,0xE06D7363
-		[]byte{0xBA, 1, 0, 0, 0},                   // mov edx,1: EXCEPTION_NONCONTINUABLE
+		[]byte{0x48, 0x83, 0xEC, 0x28}, // sub rsp,0x28
+		[]byte{0xB9}, le32(code),       // mov ecx,code
+		[]byte{0xBA, flags, 0, 0, 0},               // mov edx,flags
 		[]byte{0x4D, 0x31, 0xC0, 0x4D, 0x31, 0xC9}, // xor r8,r8; xor r9,r9
 		[]byte{0x48, 0xB8}, imm64(uint64(raise)),   // mov rax,raise
 		[]byte{0xFF, 0xD0},                   // call rax
@@ -260,10 +261,18 @@ func runCrashCase(t *testing.T, name string) {
 		}
 		fmt.Println("lived")
 	case "throw":
-		if r := callN(throwCode(t), nil); r != crashedResult {
+		if r := callN(throwCode(t, 0xE06D7363, 1), nil); r != crashedResult {
 			t.Fatalf("the call gave %#x", r)
 		}
 		if cs := Crashes(); len(cs) != 1 || cs[0].Code != 0xE06D7363 {
+			t.Fatalf("crashes: %+v", cs)
+		}
+		fmt.Println("lived")
+	case "throwgcc":
+		if r := callN(throwCode(t, 0x20474343, 0), nil); r != crashedResult {
+			t.Fatalf("the call gave %#x", r)
+		}
+		if cs := Crashes(); len(cs) != 1 || cs[0].Code != 0x20474343 {
 			t.Fatalf("crashes: %+v", cs)
 		}
 		fmt.Println("lived")
@@ -351,7 +360,7 @@ func TestCrashCase(t *testing.T) {
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
