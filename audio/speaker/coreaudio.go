@@ -132,7 +132,7 @@ func auBuffer(o Options, ahead time.Duration, rate int) int {
 var coreAudioFirst = runtime.GOOS == "darwin"
 
 // driverFirst says a driver plays where Options names none.
-func driverFirst() bool { return aaudioFirst || wasapiFirst || coreAudioFirst || pipeWireFirst }
+func driverFirst() bool { return aaudioFirst || wasapiFirst || coreAudioFirst }
 
 // openAUOutput opens Core Audio's default output, playing on the
 // channels Options.Outputs names, and the default input where

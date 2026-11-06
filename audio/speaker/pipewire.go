@@ -45,6 +45,10 @@ var openPipeWire = func(c pipewire.Config) (pwDevice, error) {
 // Linux; a test turns it off.
 var pipeWireFirst = runtime.GOOS == "linux"
 
+// feedBreathe is how long a thread that keeps a ring filled goes without a
+// sleep, at the most, though the ring never fills.
+const feedBreathe = 20 * time.Millisecond
+
 // errPWPanel is what ControlPanel returns while PipeWire plays.
 var errPWPanel = errors.New("speaker: PipeWire has no control panel: choose the device in the system's " +
 	"sound settings, or in pavucontrol")
@@ -99,7 +103,9 @@ type pwOutput struct {
 func openPWOutput(s *Speaker, o Options, byName bool) (*pwOutput, error) {
 	ahead := time.Duration(s.ahead.Load() + s.margin.Load())
 	quantum := auBuffer(o, ahead, o.rate())
-	dev, err := openPipeWire(pipewire.Config{Name: o.Name, Rate: o.rate(), Quantum: quantum, Record: o.Record,
+	// As the system's own sound it plays alone: package audio/capture
+	// records the system's inputs.
+	dev, err := openPipeWire(pipewire.Config{Name: o.Name, Rate: o.rate(), Quantum: quantum, Record: o.Record && byName,
 		Hold: MaxLatency, Log: s.logf})
 	if err != nil {
 		return nil, err
@@ -178,7 +184,14 @@ func (p *pwOutput) pump() {
 // feed reads the mixer into the ring, as far as its target.
 func (p *pwOutput) feed(buf []float32, most int) {
 	target := p.target()
+	began := time.Now()
 	for {
+		// A song too heavy for the ring never reaches its target, and the
+		// system limits how long a real-time thread may run without a sleep.
+		if now := time.Now(); now.Sub(began) > feedBreathe {
+			began = now
+			rt.Breathe()
+		}
 		want := target - p.dev.Queued()
 		if want <= 0 {
 			p.primed.Store(true)
