@@ -346,6 +346,8 @@ func runCrashCase(t *testing.T, name string) {
 		fmt.Println("lived")
 	case "gonefree":
 		runGoneFreeCase(t)
+	case "preparegone":
+		runPrepareGoneCase(t)
 	case "sharedown":
 		runSharedOwnFaultCase(t)
 	case "sharedfault":
@@ -468,7 +470,7 @@ func TestEndNow(t *testing.T) {
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "sharedown", "sharedfault", "sharedafter", "valueback", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "preparegone", "sharedown", "sharedfault", "sharedafter", "valueback", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
@@ -756,6 +758,40 @@ func runGoneFreeCase(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("it waits on the thread")
+	}
+	fmt.Println("lived")
+}
+
+// runPrepareGoneCase has a plugin crash as it takes its song's state: the song's state stays the song's.
+func runPrepareGoneCase(t *testing.T) {
+	_, _, first := startedFake(t)
+	setState := method(first.comp, mSetState)
+	var tripped atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == setState {
+			tripped.Store(true)
+		}
+		return tripped.Load()
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	f := fakeSynth()
+	f.state = []byte("default")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	song := stateOf("song")
+	if err := a.SetState(song); err != nil {
+		t.Fatal(err)
+	}
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	if !tripped.Load() {
+		t.Fatal("the case isn't reaching the call")
+	}
+	if err := a.Err(); err != nil {
+		t.Errorf("it says %v", err)
+	}
+	if a.Changed() || !bytes.Equal(a.State(), song) {
+		t.Errorf("it gives %q", a.State())
 	}
 	fmt.Println("lived")
 }

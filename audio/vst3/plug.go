@@ -698,10 +698,14 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 		a.initial, a.given, a.echo = st, st, st
 	}
 	if len(a.state) > 0 {
-		if err := p.SetState(a.state); err != nil {
-			a.err = err
-		} else {
+		switch err := p.SetState(a.state); {
+		case err == nil:
 			a.settle(p, a.state)
+		case p.Gone():
+			// It crashed as it took it: the song's state stays the song's.
+			a.given, a.echo = a.state, nil
+		default:
+			a.err = err
 		}
 	}
 	a.state = nil
