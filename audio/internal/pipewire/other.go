@@ -46,3 +46,12 @@ func (*Client) Err() error { return nil }
 
 // Close stops the client.
 func (*Client) Close() error { return nil }
+
+// A Device is a device PipeWire plays or records on: none here.
+type Device struct {
+	Name, Output, Input       string
+	OutPositions, InPositions []uint32
+}
+
+// Devices lists none here.
+func Devices() ([]Device, error) { return nil, ErrUnsupported }

@@ -103,7 +103,8 @@ func (d fakePWDevice) Info() pipewire.Info {
 	d.f.mu.Lock()
 	defer d.f.mu.Unlock()
 	c := d.f.cfg
-	return pipewire.Info{Library: "fake", Rate: c.Rate, Quantum: c.Quantum, Recording: c.Record}
+	return pipewire.Info{Library: "fake", Rate: c.Rate, Quantum: c.Quantum, Recording: c.Record,
+		OutChannels: max(len(c.OutPositions), 2), InChannels: max(len(c.InPositions), 2)}
 }
 
 func (d fakePWDevice) Write(frames []float32) int {
@@ -261,7 +262,7 @@ func TestPipeWireHeldAndLatencyFollowTheDelay(t *testing.T) {
 	f.mu.Unlock()
 	f.cycle(256)
 	waitFor(t, "the new delay", func() bool { return s.State().Info.Latency == 256+9600 })
-	if got, want := p.target(), int64(256)+audio.FramesAt(2*pumpTick, 48000); got != want {
+	if got, want := p.target(), int64(2*256); got != want {
 		t.Errorf("target %d on Bluetooth, want the floor %d", got, want)
 	}
 	if got, want := s.Latency(), audio.DurationAt(p.target()+256+9600, 48000); got != want {
@@ -528,6 +529,10 @@ func TestPipeWireGrowsNoLeadFromAnOpening(t *testing.T) {
 // computer's own PipeWire.
 func init() { pipeWireFirst = false }
 
+// The tests run in testing/synctest bubbles, and the pump's real sleep isn't
+// one a bubble can wait out.
+func init() { pwSleep = time.Sleep }
+
 // withPipeWireFirst has PipeWire play where no driver is named, as on
 // Linux.
 func withPipeWireFirst(t *testing.T) {
@@ -655,5 +660,147 @@ func TestArmingOnTheSystemsSoundLeavesPipeWirePlaying(t *testing.T) {
 	}
 	if f.cfg.Record {
 		t.Error("it records what no one reads")
+	}
+}
+
+// useM4 lists a device of four outputs and inputs, and returns its name.
+func useM4(t *testing.T) string {
+	t.Helper()
+	was := pwDevices
+	t.Cleanup(func() { pwDevices = was })
+	four := []uint32{3, 4, 12, 13}
+	pwDevices = func() ([]pipewire.Device, error) {
+		return []pipewire.Device{
+			{Name: "Built-in", Output: "builtin", OutPositions: []uint32{3, 4}},
+			{Name: "M4", Output: "m4.out", Input: "m4.in", OutPositions: four, InPositions: four},
+		}, nil
+	}
+	return driver.PipeWirePrefix + "M4"
+}
+
+func TestADeviceOfPipeWireOpensAllItsChannels(t *testing.T) {
+	f := usePipeWire(t)
+	name := useM4(t)
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: name, Record: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f.mu.Lock()
+	c := f.cfg
+	f.mu.Unlock()
+	if c.Output != "m4.out" || c.Input != "m4.in" || len(c.OutPositions) != 4 || len(c.InPositions) != 4 || !c.Record {
+		t.Errorf("it opened %+v", c)
+	}
+	st := s.State()
+	if st.Driver != name || st.Info == nil || st.Info.Driver != name {
+		t.Fatalf("state %+v", st)
+	}
+	if st.Info.Outputs != 4 || st.Info.Inputs != 4 || st.Info.Recorded != 4 || st.Info.OutputNames[3] != "Output 4" || st.Info.InputNames[3] != "Input 4" {
+		t.Errorf("info %+v", st.Info)
+	}
+}
+
+func TestADeviceGoneFallsBackAndSaysSo(t *testing.T) {
+	usePipeWire(t)
+	useM4(t)
+	was := openSystemSound
+	t.Cleanup(func() { openSystemSound = was })
+	openSystemSound = func(_ *Speaker, o Options) (startedOutput, error) { return &stillOut{hz: o.rate()}, nil }
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: driver.PipeWirePrefix + "Gone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if st := s.State(); st.Problem == nil {
+		t.Errorf("state %+v", st)
+	}
+}
+
+func TestADeviceGoneFallsBackOnPipeWiresDefaultNotACard(t *testing.T) {
+	withPipeWireFirst(t)
+	f := usePipeWire(t)
+	useM4(t)
+	was := openSystemSound
+	t.Cleanup(func() { openSystemSound = was })
+	openSystemSound = func(*Speaker, Options) (startedOutput, error) {
+		t.Error("what takes a card from the desktop opened, though PipeWire plays")
+		return nil, errors.New("no")
+	}
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: driver.PipeWirePrefix + "Unplugged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	st := s.State()
+	if st.Problem == nil || st.Info == nil || st.Info.Driver != driver.PipeWire {
+		t.Errorf("state %+v", st)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cfg.Output != "" {
+		t.Errorf("it opened on %q", f.cfg.Output)
+	}
+}
+
+func TestTheRingKeepsACycleInHandOrASpareOfALongOne(t *testing.T) {
+	p := &pwOutput{s: &Speaker{}, hz: 48000}
+	for _, c := range []struct{ q, want int64 }{{64, 128}, {256, 512}, {1024, 1024 + 288}} {
+		p.quantum.Store(c.q)
+		if got := p.target(); got != c.want {
+			t.Errorf("a cycle of %d keeps %d, want %d", c.q, got, c.want)
+		}
+	}
+}
+
+func TestThePumpNeverSpins(t *testing.T) {
+	p := &pwOutput{hz: 48000}
+	if d := p.tick(); d < pwTickLeast {
+		t.Errorf("with no cycle yet it waits %v", d)
+	}
+	p.quantum.Store(64)
+	if d := p.tick(); d != audio.DurationAt(64, 48000)/4 {
+		t.Errorf("at 64 it waits %v", d)
+	}
+	p.quantum.Store(8192)
+	if d := p.tick(); d != pumpTick {
+		t.Errorf("at 8192 it waits %v", d)
+	}
+}
+
+func TestSpreadPutsChannelsWhereTheyPlay(t *testing.T) {
+	mix := []float32{1, 2, 3, 4} // two frames of a pair
+	out := make([]float32, 8)
+	spread(out, mix, 2, 4, pwLayout(nil, 4))
+	if want := []float32{1, 2, 0, 0, 3, 4, 0, 0}; !slices.Equal(out, want) {
+		t.Errorf("the first two: %v", out)
+	}
+	out = make([]float32, 8)
+	spread(out, mix, 2, 4, pwLayout([]int{3, 2}, 4))
+	if want := []float32{0, 0, 2, 1, 0, 0, 4, 3}; !slices.Equal(out, want) {
+		t.Errorf("those named: %v", out)
+	}
+	out = make([]float32, 8)
+	spread(out, mix, 2, 4, pwLayout([]int{1, 9}, 4))
+	if want := []float32{0, 1, 0, 0, 0, 3, 0, 0}; !slices.Equal(out, want) {
+		t.Errorf("one the device lacks: %v", out)
+	}
+	out = make([]float32, 8)
+	spread(out, mix, 2, 4, pwLayout([]int{2}, 4))
+	if want := []float32{0, 0, 1.5, 0, 0, 0, 3.5, 0}; !slices.Equal(out, want) {
+		t.Errorf("one output named: %v", out)
+	}
+	mono := make([]float32, 2)
+	spread(mono, mix, 2, 1, pwLayout(nil, 1))
+	if want := []float32{1.5, 3.5}; !slices.Equal(mono, want) {
+		t.Errorf("one output: %v", mono)
+	}
+}
+
+func TestSpreadAllocatesNothing(t *testing.T) {
+	mix, out := make([]float32, 128), make([]float32, 256)
+	played := pwLayout(nil, 4)
+	if n := testing.AllocsPerRun(100, func() { spread(out, mix, 2, 4, played) }); n != 0 {
+		t.Errorf("it allocates %v times", n)
 	}
 }

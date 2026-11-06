@@ -66,6 +66,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -405,7 +406,9 @@ func (s *Speaker) open() (output, error) {
 		// A named driver gone, a sound server shares the card. What opens
 		// below takes it from everything else on the computer.
 		if pipeWireFirst && s.o.Driver != "" && s.o.Driver != driver.PipeWire {
-			if pw, perr := openPWOutput(s, s.o, false); perr == nil {
+			def := s.o
+			def.Driver = ""
+			if pw, perr := openPWOutput(s, def, false); perr == nil {
 				s.m.SetRate(pw.rate())
 				pw.start(ahead)
 				return pw, nil
@@ -430,6 +433,9 @@ type startedOutput interface {
 // openDriver opens the driver s.o names: JACK, PipeWire, Core Audio,
 // WASAPI, or an ASIO driver.
 func (s *Speaker) openDriver() (startedOutput, error) {
+	if strings.HasPrefix(s.o.Driver, driver.PipeWirePrefix) {
+		return openPWOutput(s, s.o, true)
+	}
 	switch s.o.Driver {
 	case driver.JACK:
 		return openJackOutput(s, s.o)

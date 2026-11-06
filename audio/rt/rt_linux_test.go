@@ -165,6 +165,16 @@ func TestBreathingKeepsASpinningThreadWithinTheLimit(t *testing.T) {
 	}
 }
 
+func TestSleepSleeps(t *testing.T) {
+	leave := Enter()
+	defer leave()
+	t0 := time.Now()
+	Sleep(2 * time.Millisecond)
+	if d := time.Since(t0); d < time.Millisecond || d > time.Second {
+		t.Errorf("it slept %v", d)
+	}
+}
+
 func TestLimitRTTimeIsWithinWhatRealtimeKitAsks(t *testing.T) {
 	if err := limitRTTime(); err != nil {
 		t.Fatal(err)

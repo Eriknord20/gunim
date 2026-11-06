@@ -42,8 +42,8 @@ var ErrUnsupported = errors.New("pipewire: PipeWire plays on Linux, on amd64 and
 // when the server shut down.
 var ErrStopped = errors.New("pipewire: the stream stopped")
 
-// Channels is how many channels a frame holds, played and recorded:
-// left and right.
+// Channels is how many channels a frame holds, played and recorded, where
+// a Config names none: left and right.
 const Channels = 2
 
 // Config says how to open a client.
@@ -63,6 +63,15 @@ type Config struct {
 	// how far ahead [Client.Write] may fill it. The ring the input
 	// records into holds as much.
 	Hold time.Duration
+	// Output and Input are the node names of the devices to play on and
+	// record from, as [Devices] lists them. Empty is the default device,
+	// which PipeWire converts to; and named, PipeWire passes the channels
+	// as they are, one for one.
+	Output, Input string
+	// OutPositions and InPositions name each channel of the streams, by
+	// the numbers of SPA's enum spa_audio_channel, as [Device] tells them.
+	// Empty is left and right.
+	OutPositions, InPositions []uint32
 	// Log, where set, hears what the client does.
 	Log func(format string, args ...any)
 }
@@ -76,6 +85,9 @@ type Info struct {
 	Rate, Quantum int
 	// Recording says the client records from the default input.
 	Recording bool
+	// OutChannels and InChannels are how many channels a frame holds,
+	// played and recorded.
+	OutChannels, InChannels int
 }
 
 // State is a stream's state, as PipeWire's enum pw_stream_state counts

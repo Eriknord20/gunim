@@ -15,7 +15,10 @@
 // thread runs at the priority it has: Enter changes no privileges.
 package rt
 
-import "runtime"
+import (
+	"runtime"
+	"time"
+)
 
 // Enter locks the calling goroutine to its thread and raises the
 // thread to the system's audio priority, where it has one. It returns
@@ -36,3 +39,10 @@ func Enter() (leave func()) {
 // often: on Linux the system limits how long a real-time thread may run
 // without sleeping, and a yield doesn't count.
 func Breathe() { doze() }
+
+// Sleep has the thread sleep for about d, or less, as a signal may end it.
+// Where a thread is real-time, this is what wakes it on time: waiting on a
+// timer of Go's, it wakes only as the scheduler gets to it. Go still preempts
+// a goroutine that runs on for long, and with every P busy, it then waits its
+// turn. It is for a thread locked by [Enter].
+func Sleep(d time.Duration) { nap(d) }

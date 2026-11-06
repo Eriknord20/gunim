@@ -2,8 +2,10 @@ package speaker
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,8 +55,33 @@ const feedBreathe = 20 * time.Millisecond
 var errPWPanel = errors.New("speaker: PipeWire has no control panel: choose the device in the system's " +
 	"sound settings, or in pavucontrol")
 
-// pwChannels names the channels PipeWire's streams play and record.
+// pwChannels names the channels PipeWire's streams play and record, on the
+// default device.
 var pwChannels = []string{"left", "right"}
+
+// pwDevices lists the devices PipeWire plays on; a test puts a function of
+// its own here.
+var pwDevices = pipewire.Devices
+
+// pwLayout returns the device's channel each channel of the sound plays on,
+// as Options.Outputs names them, or its first two, or its one; -1 where one
+// plays nowhere.
+func pwLayout(want []int, outs int) []int {
+	if len(want) == 0 {
+		if outs == 1 {
+			return []int{0}
+		}
+		return []int{0, 1}
+	}
+	played := make([]int, len(want))
+	for i, o := range want {
+		played[i] = -1
+		if o >= 0 && o < outs && !slices.Contains(played[:i], o) {
+			played[i] = o
+		}
+	}
+	return played
+}
 
 // pwOutput plays through a PipeWire server. PipeWire takes each cycle
 // from a ring on its own real-time thread, with no Go; a goroutine, the
@@ -65,8 +92,21 @@ type pwOutput struct {
 	// byName says Options.Driver named PipeWire: State tells it as the
 	// driver. Where it plays as the system's own sound, State tells none.
 	byName bool
-	dev    pwDevice
-	hz     int
+	// driverName is the driver's name: PipeWire's, or a device's.
+	driverName string
+	dev        pwDevice
+	hz         int
+	// chans is how many channels the mix fills, the pair first, played
+	// says which of the device's devChans each plays on, -1 for none, and
+	// wide holds a frame's channels on their way to it. The device's inNames
+	// are its inputs' names.
+	chans, devChans int
+	played          []int
+	wide            bool
+	outNames        []string
+	inNames         []string
+	// written counts the frames the pump put in the ring: its alone.
+	written int64
 	// base is the mixer frame the ring's first frame is: the pump alone
 	// reads the mixer, so frame i of the ring is the mixer's base+i.
 	base atomic.Int64
@@ -98,20 +138,46 @@ type pwOutput struct {
 
 // openPWOutput opens a client of the PipeWire server, playing to the
 // default output at the rate Options asks, and recording the default
-// input where Options.Record says. It asks for cycles of Options.Buffer
-// frames, or a quarter of the latency, as Core Audio does.
+// input where Options.Record says; or where Options.Driver names a device,
+// on that, all its channels, recording all its inputs. It asks for cycles
+// of Options.Buffer frames, or a quarter of the latency, as Core Audio does.
 func openPWOutput(s *Speaker, o Options, byName bool) (*pwOutput, error) {
 	ahead := time.Duration(s.ahead.Load() + s.margin.Load())
 	quantum := auBuffer(o, ahead, o.rate())
 	// As the system's own sound it plays alone: package audio/capture
 	// records the system's inputs.
-	dev, err := openPipeWire(pipewire.Config{Name: o.Name, Rate: o.rate(), Quantum: quantum, Record: o.Record && byName,
-		Hold: MaxLatency, Log: s.logf})
+	c := pipewire.Config{Name: o.Name, Rate: o.rate(), Quantum: quantum, Record: o.Record && byName,
+		Hold: MaxLatency, Log: s.logf}
+	name := driver.PipeWire
+	if d, ok := strings.CutPrefix(o.Driver, driver.PipeWirePrefix); ok {
+		ds, err := pwDevices()
+		if err != nil {
+			return nil, err
+		}
+		i := slices.IndexFunc(ds, func(x pipewire.Device) bool { return x.Name == d })
+		if i < 0 {
+			return nil, fmt.Errorf("speaker: PipeWire has no device %q now", d)
+		}
+		name = o.Driver
+		c.Output, c.OutPositions = ds[i].Output, ds[i].OutPositions
+		c.Input, c.InPositions = ds[i].Input, ds[i].InPositions
+		c.Record = c.Record && c.Input != ""
+	}
+	dev, err := openPipeWire(c)
 	if err != nil {
 		return nil, err
 	}
 	info := dev.Info()
-	p := &pwOutput{s: s, dev: dev, byName: byName, hz: info.Rate, quit: make(chan struct{}), done: make(chan struct{})}
+	p := &pwOutput{s: s, dev: dev, byName: byName, driverName: name, hz: info.Rate, chans: 2, devChans: max(info.OutChannels, 2),
+		outNames: pwChannels, inNames: pwChannels, quit: make(chan struct{}), done: make(chan struct{})}
+	if c.Output != "" {
+		p.devChans = max(info.OutChannels, 1)
+		p.outNames = numberedChannels("Output", p.devChans)
+		p.inNames = numberedChannels("Input", max(info.InChannels, 1))
+		p.played = pwLayout(o.Outputs, p.devChans)
+		p.chans = max(len(p.played), 2)
+		p.wide = true
+	}
 	p.quantum.Store(int64(info.Quantum))
 	s.logf("PipeWire: libpipewire %s at %d Hz, asking %d frames a cycle, recording %v",
 		info.Library, info.Rate, info.Quantum, info.Recording)
@@ -124,7 +190,7 @@ func (p *pwOutput) start(ahead time.Duration) {
 	p.base.Store(p.s.m.Mixed())
 	p.cycledAt = time.Now()
 	if info := p.dev.Info(); info.Recording {
-		tap := duplex.NewTap(driver.PipeWire, p.hz, info.Quantum, info.Quantum, pwChannels)
+		tap := duplex.NewTap(p.driverName, p.hz, info.Quantum, info.Quantum, p.inNames)
 		p.tap.Store(tap)
 		duplex.Publish(tap)
 	}
@@ -136,10 +202,11 @@ func (p *pwOutput) start(ahead time.Duration) {
 func (p *pwOutput) device() int64 { return p.quantum.Load() + p.delay.Load() }
 
 // target returns how many frames the ring is kept at: what Latency
-// leaves after the device's own, and a cycle and two of the pump's
-// ticks at least; and past that, the margin dry spells grew.
+// leaves after the device's own, and at least a cycle to be taken and
+// one more in hand for a block that is late, or pwSpare of a long one; and past that, the margin dry spells grew.
 func (p *pwOutput) target() int64 {
-	least := p.quantum.Load() + audio.FramesAt(2*pumpTick, p.hz)
+	q := p.quantum.Load()
+	least := q + min(q, audio.FramesAt(pwSpare, p.hz))
 	return max(audio.FramesAt(time.Duration(p.ahead.Load()), p.hz)-p.device(), least) +
 		audio.FramesAt(time.Duration(p.s.margin.Load()), p.hz)
 }
@@ -157,23 +224,23 @@ func (p *pwOutput) pump() {
 	defer close(p.done)
 	leave := rt.Enter()
 	defer leave()
-	t := time.NewTicker(pumpTick)
-	defer t.Stop()
 	most := max(1, int(audio.FramesAt(chunk, p.hz)))
-	buf := make([]float32, pipewire.Channels*most)
+	f := newPWFeed(p, most)
 	var in []float32
 	if p.dev.Info().Recording {
-		in = make([]float32, pipewire.Channels*8192)
+		in = make([]float32, len(p.inNames)*8192)
 	}
 	for {
 		select {
 		case <-p.quit:
 			return
-		case <-t.C:
+		default:
 		}
+		// A timer of Go's would wake it as the scheduler got to it.
+		pwSleep(p.tick())
 		p.hear()
 		if !p.paused.Load() {
-			p.feed(buf, most)
+			p.feed(f)
 		}
 		if in != nil {
 			p.record(in)
@@ -181,8 +248,47 @@ func (p *pwOutput) pump() {
 	}
 }
 
+// pwFeed is the pump's room for what it reads from the mixer.
+type pwFeed struct {
+	// most is the most frames it reads at a time; main holds the mixer's
+	// pair; aux what Options.Aux fills past it; mix the two together; and
+	// out a frame's channels as the device has them.
+	most           int
+	main, aux, mix []float32
+	out            []float32
+}
+
+func newPWFeed(p *pwOutput, most int) *pwFeed {
+	f := &pwFeed{most: most, main: make([]float32, 2*most)}
+	if p.chans > 2 {
+		f.aux = make([]float32, (p.chans-2)*most)
+		f.mix = make([]float32, p.chans*most)
+	}
+	if p.wide {
+		f.out = make([]float32, p.devChans*most)
+	}
+	return f
+}
+
+// pwSpare is the most the ring keeps in hand beyond a cycle, to ride out a
+// block that is late: a cycle of a short one, this much of a long one.
+const pwSpare = 6 * time.Millisecond
+
+// pwTickLeast is the least the pump waits between looks at the ring, as a
+// cycle not yet told of reads as none.
+const pwTickLeast = 100 * time.Microsecond
+
+// pwSleep is how the pump waits; a test puts a function of its own here.
+var pwSleep = rt.Sleep
+
+// tick returns how long the pump waits between looks at the ring: a quarter
+// of a cycle, a millisecond at the most.
+func (p *pwOutput) tick() time.Duration {
+	return max(min(pumpTick, audio.DurationAt(p.quantum.Load(), p.hz)/4), pwTickLeast)
+}
+
 // feed reads the mixer into the ring, as far as its target.
-func (p *pwOutput) feed(buf []float32, most int) {
+func (p *pwOutput) feed(f *pwFeed) {
 	target := p.target()
 	began := time.Now()
 	for {
@@ -197,13 +303,51 @@ func (p *pwOutput) feed(buf []float32, most int) {
 			p.primed.Store(true)
 			return
 		}
-		n := min(want, int64(most), p.dev.Room())
+		n := min(want, int64(f.most), p.dev.Room())
 		if n <= 0 {
 			return
 		}
-		frames := buf[:pipewire.Channels*n]
-		p.s.pull(frames)
-		p.dev.Write(frames)
+		main := f.main[:2*n]
+		p.s.pull(main)
+		mix := main
+		if p.chans > 2 {
+			a := f.aux[:int64(p.chans-2)*n]
+			p.s.pullAux(a, p.chans-2, p.base.Load()+p.written)
+			mix = f.mix[:int64(p.chans)*n]
+			interleave(mix, main, a, p.chans)
+		}
+		p.written += n
+		if !p.wide {
+			p.dev.Write(mix)
+			continue
+		}
+		out := f.out[:int64(p.devChans)*n]
+		spread(out, mix, p.chans, p.devChans, p.played)
+		p.dev.Write(out)
+	}
+}
+
+// spread writes mix, frames of chans channels, into out, of a device's
+// devChans: each channel to the one played says, the rest silent. One output
+// alone hears the pair averaged.
+func spread(out, mix []float32, chans, devChans int, played []int) {
+	frames := len(mix) / chans
+	clear(out[:frames*devChans])
+	if len(played) == 1 {
+		if o := played[0]; o >= 0 {
+			for i := range frames {
+				out[i*devChans+o] = (mix[2*i] + mix[2*i+1]) / 2
+			}
+		}
+		return
+	}
+	for c, o := range played {
+		if o < 0 {
+			continue
+		}
+		for i := range frames {
+			out[i*devChans+o] = mix[i*chans+c]
+		}
 	}
 }
 
@@ -220,7 +364,7 @@ func (p *pwOutput) record(in []float32) {
 		if tap == nil || !tap.Attached() {
 			continue
 		}
-		tap.Deliver(in[:n*pipewire.Channels], pipewire.Channels, p.base.Load()+at)
+		tap.Deliver(in[:n*len(p.inNames)], len(p.inNames), p.base.Load()+at)
 	}
 }
 
@@ -281,6 +425,15 @@ func (p *pwOutput) held() int64 { return p.dev.Held() }
 
 func (p *pwOutput) setAhead(d time.Duration) { p.ahead.Store(int64(d)) }
 
+// numberedChannels names n channels.
+func numberedChannels(word string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s %d", word, i+1)
+	}
+	return out
+}
+
 func (p *pwOutput) latency() time.Duration {
 	return audio.DurationAt(p.target()+p.device(), p.hz)
 }
@@ -288,16 +441,20 @@ func (p *pwOutput) latency() time.Duration {
 func (p *pwOutput) fill(st *State) {
 	q, d := int(p.quantum.Load()), int(p.delay.Load())
 	if p.byName {
-		st.Driver = driver.PipeWire
+		st.Driver = p.driverName
 	}
 	if r := int(p.deviceRate.Load()); r > 0 && r != p.hz {
 		st.DeviceRate = r
 	}
-	info := &driver.Info{Driver: driver.PipeWire, Rate: p.hz, Buffer: q, MinBuffer: q, MaxBuffer: q,
+	played := p.played
+	if played == nil {
+		played = []int{0, 1}
+	}
+	info := &driver.Info{Driver: p.driverName, Rate: p.hz, Buffer: q, MinBuffer: q, MaxBuffer: q,
 		PreferredBuffer: q, Latency: q + d, Bits: 32, Float: true,
-		Outputs: len(pwChannels), OutputNames: slices.Clone(pwChannels), Played: []int{0, 1}}
+		Outputs: len(p.outNames), OutputNames: slices.Clone(p.outNames), Played: slices.Clone(played)}
 	if p.dev.Info().Recording {
-		info.Inputs, info.Recorded, info.InputNames, info.InputLatency = len(pwChannels), len(pwChannels), slices.Clone(pwChannels), q
+		info.Inputs, info.Recorded, info.InputNames, info.InputLatency = len(p.inNames), len(p.inNames), slices.Clone(p.inNames), q
 	}
 	st.Info = info
 }
