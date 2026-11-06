@@ -161,9 +161,12 @@ func wrapperCode(restore uintptr) (code, unwindInfo []byte, end int) {
 		0xA8, 0x06, // test al,6: unwinding
 		0x75, 0, // jnz pass
 		0x8B, 0x01, // mov eax,[rcx]: its code
+		0x3D, 0x43, 0x43, 0x47, 0x20, // cmp eax,0x20474343: a C++ throw of GCC's, of no severity at all
+		0x74, 0x08, // je take
 		0xC1, 0xE8, 0x1E, // shr eax,30
 		0x83, 0xF8, 0x03, // cmp eax,3: an error, not a warning or a note, as a debugger's
 		0x75, 0, // jne pass
+		// take:
 		0x48, 0x8B, 0x41, 0x10, // mov rax,[rcx+0x10]: where it was
 		0x48, 0x89, 0x42, frameFault, // mov [rdx+frameFault],rax
 		0x8B, 0x01, // mov eax,[rcx]
@@ -184,7 +187,7 @@ func wrapperCode(restore uintptr) (code, unwindInfo []byte, end int) {
 		[]byte{0xCC},       // int3
 	)
 	body[6] = byte(len(body) - 7)
-	body[16] = byte(len(body) - 17)
+	body[23] = byte(len(body) - 24)
 	code = cat(code, body, []byte{0xB8, 1, 0, 0, 0, 0xC3}) // pass: mov eax,1; ret: ExceptionContinueSearch
 
 	unwindInfo = cat([]byte{1 | 1<<3, byte(len(pro)), byte(len(unwind) / 2), 0}, unwind, le32(uint32(routine)))
