@@ -431,7 +431,9 @@ func createContextEGL(window *Window, ctxconfig *ctxconfig, fbconfig *fbconfig) 
 
 	setAttrib(_EGL_NONE, _EGL_NONE)
 
+	done := creatingContext(share != 0)
 	window.context.platform.egl.handle = egl.CreateContext(egl.display, config, share, &attribs[0])
+	done()
 
 	if window.context.platform.egl.handle == _EGL_NO_CONTEXT {
 		return fmt.Errorf("glfw: egl: failed to create context: %s: %w", getEGLErrorString(egl.GetError()), VersionUnavailable)
