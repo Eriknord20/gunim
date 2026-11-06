@@ -36,8 +36,6 @@ type fakePlugin struct {
 	state    []byte
 	tells    bool
 	rewrites bool
-	// onValue, where set, runs as it gives a value.
-	onValue func()
 	// fails says its process fails, writing nothing.
 	fails   bool
 	latency int
@@ -361,12 +359,7 @@ var fakeCtrlKind = &kind{iids: []uid{iidEditController}, other: fakeOther, make:
 		// getParamNormalized return doubles, of parameters it has none of.
 		newCallback(none),
 		newCallback(none),
-		newCallback(func(this, id uintptr) uintptr {
-			if f := fakeOf(this); f.onValue != nil {
-				f.onValue()
-			}
-			return none(this)
-		}),
+		newCallback(none),
 		newFloatCallback(func(this, id uintptr, v float64) uintptr {
 			touch(this)
 			return ok()

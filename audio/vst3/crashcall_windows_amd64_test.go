@@ -354,8 +354,6 @@ func runCrashCase(t *testing.T, name string) {
 		runSharedFaultCase(t)
 	case "sharedafter":
 		runSharedAfterCase(t)
-	case "valueback":
-		runValueBackCase(t)
 	case "setstate":
 		runSetStateCase(t)
 	case "shared":
@@ -470,7 +468,7 @@ func TestEndNow(t *testing.T) {
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "preparegone", "sharedown", "sharedfault", "sharedafter", "valueback", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "preparegone", "sharedown", "sharedfault", "sharedafter", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
@@ -887,49 +885,6 @@ func runSharedAfterCase(t *testing.T) {
 	fmt.Println("lived")
 }
 
-// runValueBackCase has a parameter moved away and back as the plugin says its values changed. What the processor sent
-// reaches the controller before values are read: no crash here, as this is any plugin's way.
-func runValueBackCase(t *testing.T) {
-	if err := installGuard(); err != nil {
-		t.Fatal(err)
-	}
-	_, _, p := startedFake(t)
-	withParams(p, 1)
-	untick(p)
-	held := native(t, make([]byte, 16))
-	getStub := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(held)), []byte{0xF2, 0x0F, 0x10, 0x00, 0xC3}))             // mov rax,held; movsd xmm0,[rax]; ret
-	setStub := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(held)), []byte{0xF2, 0x0F, 0x11, 0x10, 0x31, 0xC0, 0xC3})) // mov rax,held; movsd [rax],xmm2; xor eax,eax; ret
-	get, set := method(p.ctrl, mGetParamNormalized), method(p.ctrl, mSetParamNormalized)
-	r := func(fn uintptr) uintptr {
-		switch fn {
-		case get:
-			return getStub
-		case set:
-			return setStub
-		}
-		return fn
-	}
-	testFault.Store(&r)
-	block := func(v float64) int {
-		out := [][]float32{make([]float32, 64), make([]float32, 64)}
-		in := [][]float32{make([]float32, 64), make([]float32, 64)}
-		p.ProcessBlock(&plug.Block{Frames: 64, In: in, Out: out, Changes: []plug.Change{{ID: 1, Value: v}}})
-		return p.inChanges.n
-	}
-	block(0)
-	onUI(p.onTick)
-	p.restart(restartParamValues)
-	block(1)
-	onUI(p.onTick)
-	if got := p.Value(1); got != 1 {
-		t.Errorf("the value is %v, for 1", got)
-	}
-	if sent := block(0); sent != 1 {
-		t.Errorf("going back sent %d changes", sent)
-	}
-	fmt.Println("lived")
-}
-
 // runCtrlStateCase has a plugin crash in its controller's getState, its component having given its state. Part of a state
 // is no state: what it last gave stays, and the song is told of no change.
 func runCtrlStateCase(t *testing.T) {
@@ -1073,25 +1028,6 @@ func TestAFactoryThatMakesNothingGivesNothing(t *testing.T) {
 	}
 	runtime.KeepAlive(table)
 	runtime.KeepAlive(obj)
-}
-
-// A plugin that says all its values changed has them read again, for when it can't be asked.
-func TestValuesAreReadAgainAsAPluginSaysTheyChanged(t *testing.T) {
-	t.Parallel()
-	f, _, p := startedFake(t)
-	withParams(p, 3)
-	var read atomic.Int64
-	f.onValue = func() { read.Add(1) }
-	p.restart(restartParamValues)
-	for range 500 {
-		if read.Load() >= 3 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if read.Load() < 3 {
-		t.Fatalf("%d values read", read.Load())
-	}
 }
 
 // Values of a plugin that can't be asked are what it was last known to hold, not nothing, as a song would keep nothing.

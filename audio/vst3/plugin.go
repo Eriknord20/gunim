@@ -835,19 +835,12 @@ func (p *Plugin) onTick() {
 	if p.active.Load() {
 		p.readTail()
 	}
-	if p.outputs.look() {
-		for i := range p.outputs.slots {
-			if id, v, ok := p.outputs.take(i); ok {
-				callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
-			}
-		}
+	if !p.outputs.look() {
+		return
 	}
-	// What it holds now, as a preset of its own may have changed all of it, for when it can't be asked. It comes after
-	// what the processor sent, or what the controller hasn't heard yet would read as the value.
-	if p.restarts.Load()&restartParamValues != 0 {
-		p.restarts.And(^int32(restartParamValues))
-		if p.ctrl != 0 {
-			p.readValues()
+	for i := range p.outputs.slots {
+		if id, v, ok := p.outputs.take(i); ok {
+			callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v)
 		}
 	}
 }
