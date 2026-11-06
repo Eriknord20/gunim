@@ -1175,7 +1175,7 @@ func (w *Window) render() {
 			if w.pres != nil {
 				w.pres.close()
 			}
-			r.Release()
+			releaseRenderer(r)
 			_ = (*glfw.Window)(nil).MakeContextCurrent()
 		}()
 	}
@@ -1293,7 +1293,11 @@ func (w *Window) render() {
 				}
 				r.WindowFBO = fbo
 			}
+			// See ContextCreation: a frame's buffers go while no window's
+			// context is being made.
+			glfw.ContextCreation.RLock()
 			r.DrawRects(f.ops, f.damage, fbW, fbH, scale)
+			buffersDone(r.GL)
 			if !r.Stretched.Empty() {
 				again = frame{ops: f.ops}
 				sharpen = time.After(time.Until(r.SharpAt))
@@ -1575,19 +1579,35 @@ func (w *Window) startGL() (*render.Renderer, error) {
 	if err = ctx.LoadFunctions(); err != nil {
 		return nil, fmt.Errorf("desktop: %w", err)
 	}
+	glfw.ContextCreation.RLock()
 	r, err := render.New(ctx, w.d.isES, &w.d.shared)
+	buffersDone(ctx)
 	if err != nil {
 		return nil, err
 	}
 	r.SetText(w.textRendering, w.transparent)
 	if w.ctx != nil {
 		if w.pres, err = w.startPresenter(ctx); err != nil {
-			r.Release()
+			releaseRenderer(r)
 			return nil, err
 		}
 		r.FlipWindow = true
 	}
 	return r, nil
+}
+
+// buffersDone lets go of glfw.ContextCreation, once g's queued calls have run.
+func buffersDone(g gl.Context) {
+	g.GetError()
+	glfw.ContextCreation.RUnlock()
+}
+
+// releaseRenderer lets r go, its buffers with it, while no window's context
+// is being made.
+func releaseRenderer(r *render.Renderer) {
+	glfw.ContextCreation.RLock()
+	r.Release()
+	buffersDone(r.GL)
 }
 
 // fail records an error for the next Present to return.
