@@ -80,16 +80,26 @@ var frameKind = &kind{
 // show it.
 func (p *Plugin) createView() uintptr {
 	name := []byte("editor\x00")
-	v := call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0])))
+	v := pointerOf(call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0]))))
 	if v == 0 {
 		return 0
 	}
+	ownFn(method(v, 0), p.owner)
 	pt := []byte(platformType + "\x00")
 	if result(call(v, mIsPlatformTypeSupported, uintptr(unsafe.Pointer(&pt[0])))) != resultOK {
 		release(v)
 		return 0
 	}
 	return v
+}
+
+// viewSize asks the view v its size. What a crash left part written is no size.
+func viewSize(v uintptr) viewRect {
+	var r viewRect
+	if result(call(v, mGetSize, uintptr(unsafe.Pointer(&r)))) == resultCrashed {
+		return viewRect{}
+	}
+	return r
 }
 
 // EditorSize returns the size the plugin's editor opens at, in pixels,
@@ -109,8 +119,7 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 		if v == 0 {
 			return
 		}
-		var r viewRect
-		call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+		r := viewSize(v)
 		release(v)
 		w, h = r.size()
 		ok = w > 0 && h > 0
@@ -248,8 +257,7 @@ func (p *Plugin) attachEditor(title string, parent uintptr, sized func(w, h int)
 	if v == 0 {
 		return fmt.Errorf("vst3: %s: %w", p.Class.Name, plug.ErrNoEditor)
 	}
-	var r viewRect
-	call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+	r := viewSize(v)
 	w, h := r.size()
 	if w <= 0 || h <= 0 {
 		w, h = 640, 480

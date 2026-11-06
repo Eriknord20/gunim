@@ -209,7 +209,7 @@ func (k *keyboard) learn(p *Plugin) {
 		release(mm)
 	}
 	if ne := query(p.ctrl, iidNoteExpression); ne != 0 {
-		n := int(i32(call(ne, mGetNoteExpressionCount, 0, 0)))
+		n := max(int(i32(call(ne, mGetNoteExpressionCount, 0, 0))), 0)
 		for i := range n {
 			var info noteExpressionInfo
 			if result(call(ne, mGetNoteExpressionInfo, 0, 0, uintptr(i), uintptr(unsafe.Pointer(&info)))) == resultOK &&

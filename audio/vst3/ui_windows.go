@@ -112,6 +112,7 @@ var editorClass *uint16
 
 // uiRun runs the plugins' thread: a loop of its windows' messages.
 func uiRun(ready chan struct{}) {
+	noteUIThread()
 	instance, _, _ = getModuleHandle.Call(0)
 	cls := register("gunimVST3Work")
 	editorClass = register("gunimVST3Editor")

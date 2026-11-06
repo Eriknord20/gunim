@@ -1,6 +1,7 @@
 package vst3
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -67,7 +68,10 @@ func installGuard() error {
 			guardErr = err
 			return
 		}
-		guardErr = makeWrapper()
+		// Without the wrapper a plugin's crash ends the program, as it always did, and plugins play as ever.
+		if err := makeWrapper(); err != nil {
+			log.Printf("vst3: a plugin's crash will end the program, as making what catches it failed: %v", err)
+		}
 	})
 	return guardErr
 }

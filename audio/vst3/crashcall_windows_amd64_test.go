@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -60,13 +62,14 @@ func trashCode(t *testing.T) uintptr {
 		}
 	}
 	code = cat(code,
-		[]byte{0xC7, 0x04, 0x24, 0xC0, 0x9F, 0, 0},    // mov dword [rsp],0x9FC0: flush to zero, denormals as zero
-		[]byte{0x0F, 0xAE, 0x14, 0x24},                // ldmxcsr [rsp]
-		[]byte{0xC7, 0x04, 0x24, 0x7F, 0x00, 0, 0},    // mov dword [rsp],0x7F: x87 at single precision
-		[]byte{0xD9, 0x2C, 0x24},                      // fldcw [rsp]
-		[]byte{0xFD},                                  // std
+		[]byte{0xC7, 0x04, 0x24, 0xC0, 0x9F, 0, 0}, // mov dword [rsp],0x9FC0: flush to zero, denormals as zero
+		[]byte{0x0F, 0xAE, 0x14, 0x24},             // ldmxcsr [rsp]
+		[]byte{0xC7, 0x04, 0x24, 0x7F, 0x00, 0, 0}, // mov dword [rsp],0x7F: x87 at single precision
+		[]byte{0xD9, 0x2C, 0x24},                   // fldcw [rsp]
+		[]byte{0xD9, 0xE8, 0xD9, 0xE8, 0xD9, 0xE8}, // fld1, three times: the x87's stack
+		[]byte{0xFD}, // std
 		[]byte{0x48, 0x8B, 0x04, 0x25, 0x5C, 0, 0, 0}, // mov rax,[0x5c]
-		[]byte{0xCC},                                  // int3: it never gets here
+		[]byte{0xCC}, // int3: it never gets here
 	)
 	return withTable(t, code, []byte{1, 4, 1, 0, 4, 8<<4 | 2, 0, 0}) // sub rsp,0x48: UWOP_ALLOC_SMALL
 }
@@ -112,17 +115,21 @@ func keepCode(t *testing.T, w, fn uintptr) uintptr {
 		code = cat(code, []byte{0x4D, 0x39, 0xD3, 0x74, 0x04, 0x48, 0x83, 0xC8, 0x04}) // cmp r11,r10; je +4; or rax,4
 	}
 	code = cat(code,
-		[]byte{0x0F, 0xAE, 0x5C, 0x24, 0x30},       // stmxcsr [rsp+0x30]
-		[]byte{0xD9, 0x7C, 0x24, 0x34},             // fnstcw [rsp+0x34]
-		[]byte{0x44, 0x8B, 0x54, 0x24, 0x28},       // mov r10d,[rsp+0x28]
-		[]byte{0x44, 0x39, 0x54, 0x24, 0x30},       // cmp [rsp+0x30],r10d
-		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x08}, // je +4; or rax,8
-		[]byte{0x44, 0x0F, 0xB7, 0x54, 0x24, 0x2C}, // movzx r10d,word [rsp+0x2C]
-		[]byte{0x66, 0x44, 0x39, 0x54, 0x24, 0x34}, // cmp [rsp+0x34],r10w
-		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x10}, // je +4; or rax,16
-		[]byte{0xFC},                         // cld
-		[]byte{0x0F, 0xAE, 0x54, 0x24, 0x28}, // ldmxcsr [rsp+0x28]
-		[]byte{0xD9, 0x6C, 0x24, 0x2C},       // fldcw [rsp+0x2C]
+		[]byte{0x0F, 0xAE, 0x5C, 0x24, 0x30},             // stmxcsr [rsp+0x30]
+		[]byte{0xD9, 0x7C, 0x24, 0x34},                   // fnstcw [rsp+0x34]
+		[]byte{0x44, 0x8B, 0x54, 0x24, 0x28},             // mov r10d,[rsp+0x28]
+		[]byte{0x44, 0x39, 0x54, 0x24, 0x30},             // cmp [rsp+0x30],r10d
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x08},       // je +4; or rax,8
+		[]byte{0x44, 0x0F, 0xB7, 0x54, 0x24, 0x2C},       // movzx r10d,word [rsp+0x2C]
+		[]byte{0x66, 0x44, 0x39, 0x54, 0x24, 0x34},       // cmp [rsp+0x34],r10w
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x10},       // je +4; or rax,16
+		[]byte{0xDD, 0x7C, 0x24, 0x38},                   // fnstsw [rsp+0x38]
+		[]byte{0x66, 0xF7, 0x44, 0x24, 0x38, 0x00, 0x38}, // test word [rsp+0x38],0x3800: its top
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x20},       // je +4; or rax,32
+		[]byte{0xDB, 0xE3},                               // fninit
+		[]byte{0xFC},                                     // cld
+		[]byte{0x0F, 0xAE, 0x54, 0x24, 0x28},             // ldmxcsr [rsp+0x28]
+		[]byte{0xD9, 0x6C, 0x24, 0x2C},                   // fldcw [rsp+0x2C]
 		epilogue())
 	return native(t, code)
 }
@@ -207,7 +214,14 @@ func runCrashCase(t *testing.T, name string) {
 		if r := callN(stub, nil); r != crashedResult {
 			t.Fatalf("the call gave %#x", r)
 		}
-		cs := Crashes()
+		// Found a moment after, as it takes the loader's lock.
+		var cs []Crash
+		for range 200 {
+			if cs = Crashes(); len(cs) == 1 && cs[0].Fault != "" {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		if len(cs) != 1 || !strings.Contains(strings.ToLower(cs[0].Fault), "ntdll") {
 			t.Fatalf("crashes: %+v", cs)
 		}
@@ -222,9 +236,10 @@ func runCrashCase(t *testing.T, name string) {
 			[]byte{0x48, 0x31, 0xDB}, []byte{0x66, 0x0F, 0xEF, 0xF6}, // xor rbx,rbx; pxor xmm6,xmm6
 			[]byte{0xC7, 0x44, 0x24, 0x08, 0xC0, 0x9F, 0, 0}, []byte{0x0F, 0xAE, 0x54, 0x24, 0x08}, // mov dword [rsp+8],0x9FC0; ldmxcsr [rsp+8]
 			[]byte{0xC7, 0x44, 0x24, 0x08, 0x7F, 0, 0, 0}, []byte{0xD9, 0x6C, 0x24, 0x08}, // mov dword [rsp+8],0x7F; fldcw [rsp+8]
+			[]byte{0xD9, 0xE8}, // fld1
 			[]byte{0xFD, 0xC3}, // std; ret
 		))
-		if r, _, _ := syscall.SyscallN(keepCode(t, changes, 0)); r != 1|2|4|8|16 {
+		if r, _, _ := syscall.SyscallN(keepCode(t, changes, 0)); r != 1|2|4|8|16|32 {
 			t.Fatalf("the check saw %#x of the changes", r)
 		}
 		leaf := native(t, []byte{0x31, 0xC0, 0xC3})
@@ -232,7 +247,7 @@ func runCrashCase(t *testing.T, name string) {
 			t.Fatalf("a plain call changed %#x", r)
 		}
 		if r, _, _ := syscall.SyscallN(keepCode(t, w, trashCode(t))); r != 0 {
-			t.Fatalf("a crash changed %#x (1 the direction, 2 an integer register, 4 an XMM one, 8 MXCSR, 16 the x87's word)", r)
+			t.Fatalf("a crash changed %#x (1 the direction, 2 an integer register, 4 an XMM one, 8 MXCSR, 16 the x87's word, 32 its stack)", r)
 		}
 		fmt.Println("lived")
 	case "own":
@@ -276,6 +291,88 @@ func runCrashCase(t *testing.T, name string) {
 			t.Fatalf("crashes: %+v", cs)
 		}
 		fmt.Println("lived")
+	case "helper":
+		// A library of the plugin's, or code it made: the module the host loaded goes with it, under its name.
+		const file = `C:\Plugins\Soraboy.vst3`
+		lib, helper := native(t, []byte{0xC3}), native(t, faultCode)
+		ownFn(lib, file)
+		ownFn(helper, file)
+		other := native(t, []byte{0xC3})
+		if r := callN(helper, nil); r != crashedResult {
+			t.Fatalf("the call gave %#x", r)
+		}
+		if !moduleDead(lib) || !moduleDead(helper) {
+			t.Fatal("the module lives on, by the address called")
+		}
+		if moduleDead(other) {
+			t.Fatal("a module of no relation went too")
+		}
+		if cs := Crashes(); len(cs) != 1 || cs[0].Module != file {
+			t.Fatalf("crashes: %+v", cs)
+		}
+		fmt.Println("lived")
+	case "unowned":
+		// Code no one said is the module's, called from the plugins' thread for it, is still told of by its name.
+		const file = `C:\Plugins\Soraboy.vst3`
+		at := native(t, faultCode)
+		onUI(func() {
+			setUIOwner(file)
+			defer setUIOwner("")
+			callN(at, nil)
+		})
+		if cs := Crashes(); len(cs) != 1 || cs[0].Module != file {
+			t.Fatalf("crashes: %+v", cs)
+		}
+		fmt.Println("lived")
+	case "freed":
+		// A call to memory given back: what is dead is that alone, not everything below it.
+		at := native(t, faultCode)
+		healthy := native(t, []byte{0xB8, 5, 0, 0, 0, 0xC3})
+		if err := windows.VirtualFree(at, 0, windows.MEM_RELEASE); err != nil {
+			t.Fatal(err)
+		}
+		if lo, hi, _ := moduleOf(at); lo != at || hi != at+1 {
+			t.Fatalf("free memory is taken as %#x to %#x", lo, hi)
+		}
+		if r := callN(at, nil); r != crashedResult {
+			t.Fatalf("the call gave %#x", r)
+		}
+		if moduleDead(healthy) || moduleDead(imageLo) || moduleDead(1) {
+			t.Fatal("memory of no relation went dead")
+		}
+		if r := callN(healthy, nil); r != 5 {
+			t.Fatalf("a healthy call gave %#x", r)
+		}
+		fmt.Println("lived")
+	case "gonefree":
+		runGoneFreeCase(t)
+	case "preparegone":
+		runPrepareGoneCase(t)
+	case "sharedown":
+		runSharedOwnFaultCase(t)
+	case "sharedfault":
+		runSharedFaultCase(t)
+	case "sharedafter":
+		runSharedAfterCase(t)
+	case "setstate":
+		runSetStateCase(t)
+	case "shared":
+		runSharedCase(t)
+	case "reused":
+		runReusedCase(t)
+	case "loaderlock":
+		runLoaderLockCase(t)
+	case "partbus":
+		runPartBusCase(t)
+	case "realplace":
+		runRealPlaceCase(t)
+	case "ctrlstate":
+		runCtrlStateCase(t)
+	case "endnow":
+		EndNow(3)
+		t.Fatal("it went on")
+	case "everyplace":
+		runEveryPlaceCase(t)
 	case "thread":
 		// On a thread Go doesn't own, as an audio driver's.
 		at := native(t, faultCode)
@@ -357,10 +454,21 @@ func TestCrashCase(t *testing.T) {
 	runCrashCase(t, name)
 }
 
+// EndNow ends the program at once, with the code asked for, running no code of the modules loaded.
+func TestEndNow(t *testing.T) {
+	t.Parallel()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.timeout=60s")
+	cmd.Env = append(os.Environ(), crashCaseEnv+"=endnow")
+	var ex *exec.ExitError
+	if err := cmd.Run(); !errors.As(err, &ex) || ex.ExitCode() != 3 {
+		t.Fatalf("it ended with %v", err)
+	}
+}
+
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "gonefree", "preparegone", "sharedown", "sharedfault", "sharedafter", "setstate", "shared", "reused", "loaderlock", "partbus", "ctrlstate", "everyplace", "realplace", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
@@ -373,6 +481,564 @@ func TestCrashesInACall(t *testing.T) {
 				t.Fatalf("its output lacks the end:\n%s", out)
 			}
 		})
+	}
+}
+
+// startedFake is a plugin of a fake, started.
+func startedFake(t *testing.T) (*fakePlugin, *plugged, *Plugin) {
+	t.Helper()
+	f := fakeSynth()
+	f.latency, f.state = 64, []byte("kept")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	p := a.Plugin()
+	if p == nil {
+		t.Fatalf("it didn't start: %v", a.Err())
+	}
+	return f, a, p
+}
+
+// withParams has p, of no parameters so far, have n, each at 0.25. It runs where the ticker can't see it half done.
+func withParams(p *Plugin, n int) {
+	ids := make([]uint32, n)
+	for i := range ids {
+		ids[i] = uint32(i + 1)
+	}
+	onUI(func() {
+		p.edits, p.outputs = newParamBox(ids), newParamBox(ids)
+		p.values = make([]atomic.Uint64, n)
+		for i := range p.values {
+			p.values[i].Store(math.Float64bits(0.25))
+		}
+	})
+}
+
+// runSetStateCase has a plugin crash as its controller is told a state: its values stay what they were.
+func runSetStateCase(t *testing.T) {
+	_, _, p := startedFake(t)
+	withParams(p, 3)
+	st, err := p.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.single = false
+	tripAt := method(p.ctrl, mSetComponentState)
+	var tripped atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == tripAt {
+			tripped.Store(true)
+		}
+		return tripped.Load()
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	if err := p.SetState(st); err == nil {
+		t.Error("it says the state took")
+	}
+	if !tripped.Load() {
+		t.Fatal("the case isn't reaching the call")
+	}
+	if got := p.Values(); len(got) != 3 || got[1] != 0.25 {
+		t.Fatalf("its values are %v", got)
+	}
+	fmt.Println("lived")
+}
+
+// runSharedCase has modules share a library, and it crash: each goes dead and each is named, as which one's object it was
+// isn't known.
+func runSharedCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	libA, libB, helper := native(t, []byte{0xC3}), native(t, []byte{0xC3}), native(t, faultCode)
+	ownFn(libA, a)
+	ownFn(libB, b)
+	// A library, so not one held by one alone: as moduleOf would give it for one loaded.
+	crashesMu.Lock()
+	lo, hi, _ := moduleOf(helper)
+	owned = append(owned, ownedSpan{span{lo, hi}, a}, ownedSpan{span{lo, hi}, b})
+	crashesMu.Unlock()
+	if r := callN(helper, nil); r != crashedResult {
+		t.Fatalf("the call gave %#x", r)
+	}
+	if !moduleDead(libA) || !moduleDead(libB) {
+		t.Fatal("a module that shares it lives on")
+	}
+	cs := Crashes()
+	if len(cs) != 2 || cs[0].Module != a || cs[1].Module != b {
+		t.Fatalf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runReusedCase has memory one module's code was in given back and made anew by another's: the crash is the second's. And
+// a module that unloads takes what it held with it.
+func runReusedCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	at := native(t, faultCode)
+	ownFn(at, a)
+	ownFn(at, b)
+	gone := native(t, []byte{0xC3})
+	ownFn(gone, `C:\P\C.vst3`)
+	forgetOwned(`C:\P\C.vst3`)
+	crashesMu.Lock()
+	left := len(ownersOf(gone))
+	crashesMu.Unlock()
+	if left != 0 {
+		t.Fatal("what a module held stays after it unloads")
+	}
+	callN(at, nil)
+	if cs := Crashes(); len(cs) != 1 || cs[0].Module != b {
+		t.Fatalf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runLoaderLockCase holds the loader's lock on another thread, as a thread held in a plugin may: reading the crashes and
+// a crash itself of a module known wait on nothing.
+func runLoaderLockCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const file = `C:\P\A.vst3`
+	at := native(t, faultCode)
+	ownFn(at, file)
+	lock := windows.NewLazySystemDLL("ntdll.dll").NewProc("LdrLockLoaderLock")
+	if err := lock.Find(); err != nil {
+		t.Fatal(err)
+	}
+	held := make(chan struct{})
+	go func() {
+		runtime.LockOSThread()
+		var cookie uintptr
+		_, _, _ = lock.Call(0, 0, uintptr(unsafe.Pointer(&cookie)))
+		close(held)
+		select {}
+	}()
+	<-held
+	done := make(chan []Crash, 1)
+	go func() {
+		callN(at, nil)
+		done <- Crashes()
+	}()
+	select {
+	case cs := <-done:
+		if len(cs) != 1 || cs[0].Module != file {
+			t.Fatalf("crashes: %+v", cs)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("it waits on the loader's lock")
+	}
+	fmt.Println("lived")
+	// The loader's lock stays held, so this process ends without running its modules' exits.
+	EndNow(0)
+}
+
+// runPartBusCase has a plugin write nonsense for a bus, then fault. What it wrote is no bus: nothing is made of it.
+func runPartBusCase(t *testing.T) {
+	_, _, first := startedFake(t)
+	busInfoFn := method(first.comp, mGetBusInfo)
+	stub := native(t, cat(
+		[]byte{0x48, 0x8B, 0x44, 0x24, 0x28},                   // mov rax,[rsp+0x28]: the bus's info
+		[]byte{0x48, 0xC7, 0x00, 0xFF, 0xFF, 0xFF, 0xFF},       // mov qword [rax],-1
+		[]byte{0x48, 0xC7, 0x40, 0x08, 0xFF, 0xFF, 0xFF, 0x7F}, // mov qword [rax+8],0x7FFFFFFF
+		[]byte{0x48, 0xC7, 0x40, 0x10, 0xFF, 0xFF, 0xFF, 0x7F}, // mov qword [rax+16],0x7FFFFFFF
+		faultCode,
+	))
+	first.Close()
+	f := func(fn uintptr) uintptr {
+		if fn == busInfoFn {
+			return stub
+		}
+		return fn
+	}
+	testFault.Store(&f)
+	g := fakeSynth()
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return g.open(t, cfg) }, class: g.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	if len(Crashes()) != 1 {
+		t.Fatalf("crashes: %+v", Crashes())
+	}
+	fmt.Println("lived")
+}
+
+// runRealPlaceCase is runEveryPlaceCase with a real fault through the wrapper at each place.
+func runRealPlaceCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	fault := native(t, faultCode)
+	var left atomic.Int64
+	var tripped, doFault atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == fault {
+			return false
+		}
+		if tripped.Load() {
+			return true
+		}
+		if left.Add(-1) < 0 {
+			doFault.Store(true)
+		}
+		return false
+	}
+	redirect := func(fn uintptr) uintptr {
+		if doFault.CompareAndSwap(true, false) {
+			tripped.Store(true)
+			return fault
+		}
+		return fn
+	}
+	testFault.Store(&redirect)
+	empty := []span{}
+	deadSpans.Store(&empty)
+	var places int64
+	for tripped.Store(true); tripped.Load(); places++ {
+		left.Store(places)
+		tripped.Store(false)
+		doFault.Store(false)
+		f := fakeSynth()
+		f.latency, f.state, f.events, f.tuning = 64, []byte("kept"), true, true
+		exercise(t, f)
+	}
+	if places < 50 {
+		t.Fatalf("only %d places", places)
+	}
+	fmt.Printf("lived, %d places\n", places)
+}
+
+// runGoneFreeCase holds the plugins' thread for good, as a call of a plugin's waiting on a lock its crash left held does.
+// What a host asks of the plugin that crashed needs nothing of the thread, so it comes back. A waiting call to a live
+// plugin wouldn't: that is known, and accepted.
+func runGoneFreeCase(t *testing.T) {
+	_, a, p := startedFake(t)
+	given := a.State()
+	p.processFn.Store(native(t, faultCode))
+	out := [][]float32{make([]float32, 64), make([]float32, 64)}
+	a.proc.Process(&plug.Block{Frames: 64, Out: out})
+	if !p.Gone() {
+		t.Fatal("it plays on")
+	}
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	go onUI(func() {
+		close(started)
+		<-hold
+	})
+	<-started
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if a.Changed() {
+			t.Error("the song is told of a change")
+		}
+		if !bytes.Equal(a.State(), given) {
+			t.Error("what it gives isn't what it last gave")
+		}
+		if _, err := p.State(); err == nil {
+			t.Error("its state read")
+		}
+		p.Values()
+		p.Params()
+		p.Text(1, 0.5)
+		p.Set(1, 0.5)
+		_ = a.SetState(stateOf("undone"))
+		_ = a.proc.Latency()
+		a.Close()
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("it waits on the thread")
+	}
+	fmt.Println("lived")
+}
+
+// runPrepareGoneCase has a plugin crash as it takes its song's state: the song's state stays the song's.
+func runPrepareGoneCase(t *testing.T) {
+	_, _, first := startedFake(t)
+	setState := method(first.comp, mSetState)
+	var tripped atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == setState {
+			tripped.Store(true)
+		}
+		return tripped.Load()
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	f := fakeSynth()
+	f.state = []byte("default")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	song := stateOf("song")
+	if err := a.SetState(song); err != nil {
+		t.Fatal(err)
+	}
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	if !tripped.Load() {
+		t.Fatal("the case isn't reaching the call")
+	}
+	if err := a.Err(); err != nil {
+		t.Errorf("it says %v", err)
+	}
+	if a.Changed() || !bytes.Equal(a.State(), song) {
+		t.Errorf("it gives %q", a.State())
+	}
+	fmt.Println("lived")
+}
+
+// stateOf is a plugin's state of a component's part comp.
+func stateOf(comp string) []byte {
+	out := []byte(stateMagic)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(comp)))
+	out = append(out, comp...)
+	return binary.LittleEndian.AppendUint32(out, 0)
+}
+
+// sharedLibrary has modules share the library holding helper.
+func sharedLibrary(helper uintptr, owners ...string) {
+	lo, hi, _ := moduleOf(helper)
+	crashesMu.Lock()
+	defer crashesMu.Unlock()
+	for _, o := range owners {
+		owned = append(owned, ownedSpan{span{lo, hi}, o})
+	}
+}
+
+// runSharedOwnFaultCase has a module crash in its own code: a library it shares stays, as does the module it shares it
+// with, which played no part.
+func runSharedOwnFaultCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	libA, libB, helper := native(t, faultCode), native(t, []byte{0xC3}), native(t, []byte{0xB8, 5, 0, 0, 0, 0xC3})
+	ownFn(libA, a)
+	ownFn(libB, b)
+	sharedLibrary(helper, a, b)
+	if r := callN(libA, nil); r != crashedResult {
+		t.Fatalf("the call gave %#x", r)
+	}
+	if !moduleDead(libA) {
+		t.Error("the module that crashed lives on")
+	}
+	if moduleDead(libB) || moduleDead(helper) {
+		t.Error("what played no part went dead")
+	}
+	if r := callN(helper, nil); r != 5 {
+		t.Errorf("a call into the library gave %#x", r)
+	}
+	if cs := Crashes(); len(cs) != 1 || cs[0].Module != a {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runSharedFaultCase has a module's own function fault within a library it shares: all that share it are named, and dead.
+func runSharedFaultCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	helper := native(t, faultCode)
+	libA, libB := native(t, cat([]byte{0x48, 0xB8}, imm64(uint64(helper)), []byte{0xFF, 0xE0})), native(t, []byte{0xC3}) // mov rax,helper; jmp rax
+	ownFn(libA, a)
+	ownFn(libB, b)
+	sharedLibrary(helper, a, b)
+	if r := callN(libA, nil); r != crashedResult {
+		t.Fatalf("the call gave %#x", r)
+	}
+	if !moduleDead(libA) || !moduleDead(libB) || !moduleDead(helper) {
+		t.Error("something that shares it lives on")
+	}
+	if cs := Crashes(); len(cs) != 2 || cs[0].Module == cs[1].Module {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runSharedAfterCase has a module come after the library it uses has crashed: it can't play, and it is named.
+func runSharedAfterCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	const a, b = `C:\P\A.vst3`, `C:\P\B.vst3`
+	helper := native(t, faultCode)
+	ownFn(helper, a)
+	callN(helper, nil)
+	libB := native(t, []byte{0xC3})
+	ownFn(libB, b)
+	ownFn(helper, b)
+	if !moduleDead(libB) {
+		t.Error("the module that came after lives on")
+	}
+	if cs := Crashes(); len(cs) != 2 || cs[1].Module != b {
+		t.Errorf("crashes: %+v", cs)
+	}
+	fmt.Println("lived")
+}
+
+// runCtrlStateCase has a plugin crash in its controller's getState, its component having given its state. Part of a state
+// is no state: what it last gave stays, and the song is told of no change.
+func runCtrlStateCase(t *testing.T) {
+	f := fakeSynth()
+	f.state = []byte("kept")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	p := a.Plugin()
+	if p == nil {
+		t.Fatalf("it didn't start: %v", a.Err())
+	}
+	given := a.State()
+	p.single = false
+	ctrlState := method(p.ctrl, mCtrlGetState)
+	var tripped atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == ctrlState {
+			tripped.Store(true)
+		}
+		return tripped.Load()
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	if a.Changed() {
+		t.Error("the song is told of a change")
+	}
+	if !tripped.Load() {
+		t.Fatal("the case isn't reaching the call")
+	}
+	if !bytes.Equal(a.State(), given) {
+		t.Error("what it gives isn't what it last gave")
+	}
+	if err := a.Err(); err != nil {
+		t.Errorf("it says %v", err)
+	}
+	fmt.Println("lived")
+}
+
+// runEveryPlaceCase has every call into a plugin in turn be the one that crashes, as the gate gives a crash and a call
+// not made alike, from its first call on through starting it and calling all it has. Nothing else may go wrong: a panic
+// or a fault ends this process, and that is the failure.
+func runEveryPlaceCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	var left atomic.Int64
+	var tripped atomic.Bool
+	testGate = func(uintptr) bool {
+		if tripped.Load() {
+			return true
+		}
+		if left.Add(-1) < 0 {
+			tripped.Store(true)
+			return true
+		}
+		return false
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	var places int64
+	for tripped.Store(true); tripped.Load(); places++ {
+		left.Store(places)
+		tripped.Store(false)
+		f := fakeSynth()
+		f.latency, f.state, f.events, f.tuning = 64, []byte("kept"), true, true
+		exercise(t, f)
+	}
+	if places < 50 {
+		t.Fatalf("only %d places: the case isn't reaching the calls", places)
+	}
+	fmt.Printf("lived, %d places\n", places)
+}
+
+// exercise starts a plugin of f and calls everything it has.
+func exercise(t *testing.T, f *fakePlugin) {
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	out := [][]float32{make([]float32, 64), make([]float32, 64)}
+	in := [][]float32{make([]float32, 64), make([]float32, 64)}
+	b := &plug.Block{Frames: 64, In: in, Out: out, Events: []plug.Event{{Kind: plug.NoteOn, Note: 60, Velocity: 1}}}
+	a.proc.Process(b)
+	_ = a.State()
+	_ = a.Changed()
+	_ = a.Err()
+	_ = a.SetState(a.State())
+	_ = a.proc.Latency()
+	_ = a.proc.Tail()
+	a.proc.Reset()
+	a.proc.Report(1)
+	a.proc.Prepare(plug.Setup{Rate: 44100, MaxBlock: 32, Channels: 1})
+	_ = a.OpenEditor("x")
+	_ = a.EditorEmbedded()
+	if p := a.Plugin(); p != nil {
+		p.Buses()
+		p.Notes()
+		_ = p.Latency()
+		_ = p.Tail()
+		p.Reset()
+		p.resetNow()
+		p.SetPosition(10)
+		p.Process(make([]float32, 64))
+		p.Flush()
+		p.Failures()
+		p.Value(1)
+		p.Values()
+		p.Edits()
+		p.Editing()
+		p.Params()
+		p.Text(1, 0.5)
+		p.Set(1, 0.5)
+		_, _ = p.State()
+		_ = p.SetState([]byte("gVS3\x00\x00\x00\x00\x00\x00\x00\x00"))
+		p.Bypass()
+		p.Prime(time.Millisecond)
+		_, _, _ = p.EditorSize()
+		p.EditorResizable()
+		_ = p.OpenEditor("x")
+		p.EditorOpen()
+		p.PlaceEditor(image.Rect(0, 0, 10, 10))
+		p.CloseEditor()
+		_ = p.SetActive(false)
+		_ = p.SetActive(true)
+		_ = p.Configure(Config{Rate: 48000, Block: 64, Channels: 2})
+		p.Gone()
+	}
+	a.Close()
+}
+
+// A factory may say it made an object and leave none: that is no object, and no crash.
+func TestAFactoryThatMakesNothingGivesNothing(t *testing.T) {
+	t.Parallel()
+	code := native(t, []byte{0x31, 0xC0, 0xC3}) // xor eax,eax; ret: all's well, the object left as it was
+	table := make([]uintptr, 16)
+	table[mCreateInstance] = code
+	obj := []uintptr{uintptr(unsafe.Pointer(&table[0]))}
+	m := &Module{Path: `C:\P\x.vst3`, factory: uintptr(unsafe.Pointer(&obj[0]))}
+	if got := m.create(uid{}, uid{}); got != 0 {
+		t.Fatalf("it gave %#x", got)
+	}
+	runtime.KeepAlive(table)
+	runtime.KeepAlive(obj)
+}
+
+// Values of a plugin that can't be asked are what it was last known to hold, not nothing, as a song would keep nothing.
+func TestValuesOfAPluginGoneAreAsLastKnown(t *testing.T) {
+	t.Parallel()
+	p := &Plugin{edits: newParamBox([]uint32{7})}
+	p.values = make([]atomic.Uint64, 1)
+	p.values[0].Store(math.Float64bits(0.25))
+	p.crashed.Store(true)
+	if got := p.Values(); len(got) != 1 || got[7] != 0.25 {
+		t.Fatalf("it gives %v", got)
 	}
 }
 
@@ -435,7 +1101,7 @@ func TestAPluginThatCrashesGoesSilent(t *testing.T) {
 		if p == nil {
 			t.Fatalf("it didn't start: %v", a.Err())
 		}
-		p.processFn = fault
+		p.processFn.Store(fault)
 		return f, a, p
 	}
 	f, a, p := made()

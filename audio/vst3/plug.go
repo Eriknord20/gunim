@@ -464,7 +464,9 @@ func (a *plugged) State() []byte {
 	}
 	st, err := p.State()
 	if err != nil {
-		a.err = err
+		if !p.Gone() {
+			a.err = err
+		}
 		return a.given
 	}
 	if a.echo != nil && bytes.Equal(st, a.echo) {
@@ -484,7 +486,9 @@ func (a *plugged) Changed() bool {
 	}
 	st, err := p.State()
 	if err != nil {
-		a.err = err
+		if !p.Gone() {
+			a.err = err
+		}
 		return false
 	}
 	return a.echo == nil || !bytes.Equal(st, a.echo)
@@ -521,12 +525,18 @@ func (a *plugged) SetState(b []byte) error {
 	if len(b) == 0 || bytes.Equal(b, a.given) {
 		return nil
 	}
-	if p.Gone() {
+	keep := func() error {
 		// It can't take it: the song keeps it for when the plugin next plays.
 		a.given, a.echo = bytes.Clone(b), nil
 		return nil
 	}
+	if p.Gone() {
+		return keep()
+	}
 	if err := p.SetState(b); err != nil {
+		if p.Gone() {
+			return keep()
+		}
 		return err
 	}
 	a.settle(p, b)
@@ -673,7 +683,8 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if p := a.playing.Load(); p != nil {
-		if err := p.Configure(cfg); err != nil {
+		// One gone stays silent, whatever the setup.
+		if err := p.Configure(cfg); err != nil && !p.Gone() {
 			a.err = err
 		}
 		return
@@ -687,10 +698,14 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 		a.initial, a.given, a.echo = st, st, st
 	}
 	if len(a.state) > 0 {
-		if err := p.SetState(a.state); err != nil {
-			a.err = err
-		} else {
+		switch err := p.SetState(a.state); {
+		case err == nil:
 			a.settle(p, a.state)
+		case p.Gone():
+			// It crashed as it took it: the song's state stays the song's.
+			a.given, a.echo = a.state, nil
+		default:
+			a.err = err
 		}
 	}
 	a.state = nil

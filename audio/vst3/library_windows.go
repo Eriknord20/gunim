@@ -26,6 +26,9 @@ func openLibrary(path string) (library, error) {
 	return l, nil
 }
 
+// base is where the library is, for what a crash in it takes with it.
+func (l library) base() uintptr { return uintptr(l.h) }
+
 func (l library) symbol(name string) (uintptr, error) { return windows.GetProcAddress(l.h, name) }
 
 // close runs the module's exit, ExitDll, and unloads it. A module that

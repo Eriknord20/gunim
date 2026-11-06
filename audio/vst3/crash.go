@@ -9,7 +9,8 @@ package vst3
 
 // A Crash is a plugin's module that crashed during a call into it.
 type Crash struct {
-	// Module is the file of the module called, or "" where it is none.
+	// Module is the file of the module the host loaded that it belongs to, or else of what was called, or "" where it is
+	// none.
 	Module string
 	// Code is the exception's code, as 0xC0000005 for an access violation.
 	Code uint32
