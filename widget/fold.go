@@ -17,8 +17,19 @@ var FoldMotion = theme.Spring("motion.fold", anim.Spring{Response: 0.3, Damping:
 // and fading, so what lies below glides up and down rather than jumps, and
 // it sounds the open or the close cue. A fold shut takes no room and no
 // pointer, and its child keeps its state.
+//
+// Axis folds it sideways instead, so what lies after it glides along a
+// row. Comes makes it grow in as it joins the tree and shrink out as it
+// leaves, for something added and taken away rather than kept.
 type Fold struct {
 	anim.Group
+	// Axis is the way the fold runs: down, the zero value of a fold made
+	// by NewFold, or across with Horizontal.
+	Axis Axis
+	// Comes grows the fold in as it is inserted and shrinks it out as it
+	// is removed.
+	Comes bool
+
 	child gunim.Node
 	open  *anim.Float
 	shut  bool
@@ -29,7 +40,7 @@ type Fold struct {
 
 // NewFold returns a fold of child, open or shut as open says, at once.
 func NewFold(child gunim.Node, open bool) *Fold {
-	f := &Fold{child: child, open: anim.NewFloat(0), shut: !open}
+	f := &Fold{Axis: Vertical, child: child, open: anim.NewFloat(0), shut: !open}
 	if open {
 		f.open.Jump(1)
 	}
@@ -64,11 +75,36 @@ func (f *Fold) SetOpen(open bool, u *gunim.UI) {
 // Children implements [gunim.Composite].
 func (f *Fold) Children() []gunim.Node { return []gunim.Node{f.child} }
 
-// Layout implements [gunim.Node]: as wide as the child, and as tall as
-// it is open.
+// Transition implements [gunim.Transitioner]: a fold that Comes grows in
+// and shrinks out. Any other joins and leaves at once.
+func (f *Fold) Transition(p gunim.Presence, fr gunim.Frame) bool {
+	if !f.Comes {
+		return true
+	}
+	switch p {
+	case gunim.Entering:
+		f.shut = false
+		f.open.Animate(1, FoldMotion.Get(fr.Theme))
+	case gunim.Exiting:
+		f.shut = true
+		f.open.Animate(0, FoldMotion.Get(fr.Theme))
+	case gunim.Present:
+	}
+	return !f.open.Active()
+}
+
+// Layout implements [gunim.Node]: down, as wide as the child and as tall
+// as it is open; across, as tall as the child and as wide as it is open.
 func (f *Fold) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	f.laid = true
 	k := kids.At(0)
+	if f.Axis == Horizontal {
+		s := k.Layout(gunim.Constraints{Max: c.Max})
+		k.Place(geom.Point{})
+		t := min(max(f.open.Value(), 0), 1)
+		f.box = c.Constrain(geom.Sz(s.W*t, s.H))
+		return f.box
+	}
 	s := k.Layout(gunim.Constraints{Min: geom.Sz(c.Min.W, 0), Max: geom.Sz(c.Max.W, 0)})
 	k.Place(geom.Point{})
 	t := min(max(f.open.Value(), 0), 1)
@@ -79,6 +115,9 @@ func (f *Fold) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) g
 // Covers implements [gunim.Shaped]: only what shows of the child takes
 // the pointer.
 func (f *Fold) Covers(p geom.Point) bool {
+	if f.Axis == Horizontal {
+		return f.box.W > 0.5 && p.X >= 0 && p.X < f.box.W
+	}
 	return f.box.H > 0.5 && p.Y >= 0 && p.Y < f.box.H
 }
 
@@ -92,6 +131,6 @@ func (f *Fold) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.
 		kids.At(0).Paint(p)
 		return
 	}
-	defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: t, Clip: true})()
+	defer p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: t * t, Clip: true})()
 	kids.At(0).Paint(p)
 }

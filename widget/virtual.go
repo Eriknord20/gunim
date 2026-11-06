@@ -355,6 +355,12 @@ func (l *VirtualList) drawnAt(y float32) (key Key, top, h float32, ok bool) {
 	return key, top, h, ok
 }
 
+// RowRect returns where key's row is drawn in the list's space, moving as
+// the row moves and the list scrolls, for something drawn with the row
+// such as a selection gliding between rows. False says the list cannot
+// tell yet, as before the layout after a change of keys.
+func (l *VirtualList) RowRect(key Key) (top, height float32, ok bool) { return l.drawn(key) }
+
 // drawn returns where key's row is drawn, its top in the view and its height. A row not built is where the list
 // would put it, and false says the list cannot tell yet, as before the layout after a change of keys.
 func (l *VirtualList) drawn(key Key) (top, h float32, ok bool) {

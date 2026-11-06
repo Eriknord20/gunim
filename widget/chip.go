@@ -22,6 +22,13 @@ var (
 	// ChipLead colours a chip's lead, the part before its label, such as
 	// the field a filter is on.
 	ChipLead = theme.Color("chip.lead", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
+	// ChipCap fills a key of a chip that shows keys, and ChipCapEdge is the heavier edge along its foot.
+	ChipCap     = theme.Color("chip.cap", color.NRGBA{R: 0x3a, G: 0x40, B: 0x4f, A: 0xff})
+	ChipCapEdge = theme.Color("chip.cap.edge", color.NRGBA{R: 0x15, G: 0x18, B: 0x1f, A: 0xff})
+	// ChipCapPad is the room each side of a key's name, ChipCapGap the room between keys, and ChipCapRadius a key's corners.
+	ChipCapPad    = theme.Length("chip.cap.pad", 7)
+	ChipCapGap    = theme.Length("chip.cap.gap", 3)
+	ChipCapRadius = theme.Length("chip.cap.radius", 4)
 )
 
 // Chip is a small rounded label with a cross that removes it, such as
@@ -39,6 +46,12 @@ type Chip struct {
 	Label string
 	// Icon shows at the start of the chip, before the lead and the label, in the label's colour.
 	Icon *icon.Icon
+	// Keys, when set, draws the chip as a row of keys on a keyboard, one for each name, in place of the lead, the
+	// label and the fill. The room for the cross is kept whether it shows or not, so nothing moves as it fades. The
+	// label is still its name for a screen reader.
+	Keys []string
+	// Outline draws the keys as outlines alone, for keys offered and not yet taken.
+	Outline bool
 	// OnRemove runs on the UI goroutine when the cross is clicked, or Delete or Backspace is pressed; a non-nil
 	// result is sent to the application as the chip's intent.
 	OnRemove func(u *gunim.UI) gunim.Intent
@@ -50,11 +63,37 @@ type Chip struct {
 	size   geom.Size
 	crossX float32
 	click  Clicker
+	// cross is how far the cross has faded in, and laid that the chip has been laid out.
+	cross *anim.Float
+	laid  bool
+	// caps are the keys' names, shaped, and capsW how wide they all are.
+	caps  []shapedText
+	capsW float32
 }
 
 // NewChip returns a chip showing lead and label.
 func NewChip(lead, label string) *Chip {
-	return &Chip{Control: newControl(), Lead: lead, Label: label}
+	c := &Chip{Control: newControl(), Lead: lead, Label: label, cross: anim.NewFloat(1)}
+	c.Add(c.cross)
+	return c
+}
+
+// SetCross shows or hides the cross and sends no intent, for a row of chips that keeps quiet until it is wanted. The
+// text stays where it is, and the chip's end glides out to make room as the cross fades in. Delete and Backspace still
+// remove it. Once the chip is laid out it glides; before that, or with a nil u, it jumps.
+func (c *Chip) SetCross(show bool, u *gunim.UI) {
+	to := float32(0)
+	if show {
+		to = 1
+	}
+	if !c.laid || u == nil {
+		c.cross.Jump(to)
+		return
+	}
+	if c.cross.Target() != to {
+		c.cross.Animate(to, Quick.Get(u.Theme()))
+		u.Invalidate()
+	}
 }
 
 // Layout implements [gunim.Node].
@@ -62,6 +101,21 @@ func (c *Chip) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children) geo
 	th := f.Theme
 	h := ChipHeight.Get(th)
 	size := TextSize.Get(th) * 0.9
+	c.laid = true
+	c.follow(th)
+	if len(c.Keys) > 0 {
+		if len(c.caps) != len(c.Keys) {
+			c.caps = make([]shapedText, len(c.Keys))
+		}
+		pad, gap := ChipCapPad.Get(th), ChipCapGap.Get(th)
+		c.capsW = gap * float32(len(c.Keys)-1)
+		for i, k := range c.Keys {
+			c.capsW += c.caps[i].shape(faceIn(Font, th), k, size).Advance + 2*pad
+		}
+		c.size = cs.Constrain(geom.Sz(c.capsW+h, h))
+		c.crossX = c.size.W - h/2
+		return c.size
+	}
 	w := h / 2
 	if c.Icon != nil {
 		w += IconSize.Get(th) + IconGap.Get(th)
@@ -70,9 +124,9 @@ func (c *Chip) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children) geo
 		w += c.leadText.shape(faceIn(BoldFont, th), c.Lead, size).Advance + 6
 	}
 	w += c.labelText.shape(faceIn(Font, th), c.Label, size).Advance
-	c.size = cs.Constrain(geom.Sz(w+h, h))
+	shown := min(max(c.cross.Value(), 0), 1)
+	c.size = cs.Constrain(geom.Sz(w+h/2+shown*h/2, h))
 	c.crossX = c.size.W - h/2
-	c.follow(th)
 	return c.size
 }
 
@@ -81,8 +135,13 @@ func (c *Chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	defer c.faint(p, box)()
 	th := f.Theme
 	c.size, c.crossX = box, box.W-box.H/2
-	// The text has the room up to the cross, which takes a square at the end.
-	end := box.W - box.H
+	if len(c.Keys) > 0 {
+		c.paintKeys(p, th, box)
+		return
+	}
+	// The text has the room up to the cross, which takes a square at the end, and takes less of it as it fades.
+	shown := min(max(c.cross.Value(), 0), 1)
+	end := box.W - box.H/2 - shown*box.H/2
 	fill := anim.Mix(anim.ColorCodec, ChipFill.Get(th), ChipHover.Get(th), c.hover.Value())
 	p.RRect(geom.Rect{Max: box.Point()}, box.H/2, paint.Solid(fill))
 	x := box.H / 2
@@ -103,8 +162,46 @@ func (c *Chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	}
 	// The ring goes round the cross, which is what the keys act on.
 	r := box.H / 2.6
-	c.paintRing(p, geom.Rc(c.crossX-r, box.H/2-r, 2*r, 2*r), r, th)
-	paintCross(p, th, geom.Pt(c.crossX, box.H/2), box.H/3, Ink.Get(th))
+	if shown > 0.01 {
+		c.paintRing(p, geom.Rc(c.crossX-r, box.H/2-r, 2*r, 2*r), r, th)
+		ink := Ink.Get(th)
+		ink.A = uint8(float32(ink.A) * shown)
+		paintCross(p, th, geom.Pt(c.crossX, box.H/2), box.H/3, ink)
+	}
+}
+
+// paintKeys draws the chip as keys on a keyboard, then the cross after them on a soft round that warms under the pointer.
+func (c *Chip) paintKeys(p *paint.Painter, th *theme.Live, box geom.Size) {
+	pad, gap, radius := ChipCapPad.Get(th), ChipCapGap.Get(th), ChipCapRadius.Get(th)
+	x := float32(0)
+	for i := range c.caps {
+		if i >= len(c.Keys) {
+			break
+		}
+		run := c.caps[i].run
+		w := run.Advance + 2*pad
+		if c.Outline {
+			p.RRectStroke(geom.Rc(x+0.5, 0.5, w-1, box.H-2.5), radius, paint.Fill{}, paint.Stroke{Width: 1, Color: ChipCap.Get(th)})
+		} else {
+			p.RRect(geom.Rc(x, 0, w, box.H), radius, paint.Solid(ChipCapEdge.Get(th)))
+			p.RRect(geom.Rc(x, 0, w, box.H-1.5), radius, paint.Solid(ChipCap.Get(th)))
+		}
+		run.Paint(p, geom.Pt(x+pad, (box.H-1.5-run.Height())/2), Ink.Get(th))
+		x += w + gap
+	}
+	shown := min(max(c.cross.Value(), 0), 1)
+	if shown < 0.01 {
+		return
+	}
+	r := box.H / 2.6
+	round := ChipHover.Get(th)
+	round.A = uint8(float32(round.A) * min(max(c.hover.Value(), 0), 1))
+	at := geom.Pt(c.crossX, box.H/2)
+	p.RRect(geom.Rc(at.X-r, at.Y-r, 2*r, 2*r), r, paint.Solid(round))
+	c.paintRing(p, geom.Rc(at.X-r, at.Y-r, 2*r, 2*r), r, th)
+	ink := Ink.Get(th)
+	ink.A = uint8(float32(ink.A) * shown)
+	paintCross(p, th, at, box.H*0.42, ink)
 }
 
 // paintCross draws icon.X centred on at, with strokes size long and as thick as an icon's.
@@ -153,7 +250,7 @@ func (c *Chip) Handle(e input.Event, u *gunim.UI) bool {
 
 // onCross is the chip's one target, the cross: 0 for pos on it, and -1 elsewhere.
 func (c *Chip) onCross(pos geom.Point) int {
-	if pos.X < c.crossX-c.size.H/2 {
+	if pos.X < c.crossX-c.size.H/2 || c.cross.Target() == 0 {
 		return -1
 	}
 	return over(pos, c.size)
