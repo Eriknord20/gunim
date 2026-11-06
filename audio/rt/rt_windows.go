@@ -41,3 +41,5 @@ func raise() func() {
 		}
 	}
 }
+
+func doze() {}
