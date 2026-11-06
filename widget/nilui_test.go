@@ -17,6 +17,7 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"AddressBar.SetPath":   func() { NewAddressBar().SetPath("/a/b", []Crumb{{Name: "a"}}, u) },
 		"CodeEditor.SetText":   func() { NewCodeEditor().SetText("x := 1", u) },
 		"CodeEditor.SetMarks":  func() { NewCodeEditor().SetMarks(nil, u) },
+		"Chip.SetCross":        func() { NewChip("", "a").SetCross(false, u) },
 		"Checkbox.SetChecked":  func() { NewCheckbox("c").SetChecked(true, u) },
 		"Slider.SetValue":      func() { NewSlider(0, 10).SetValue(5, u) },
 		"Tabs.SetSelected":     func() { NewTabs([]string{"a", "b"}, newSpot(1, 1), newSpot(1, 1)).SetSelected(1, u) },
