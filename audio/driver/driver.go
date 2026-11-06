@@ -24,9 +24,10 @@
 // On Linux, [Drivers] lists JACK too, under the name [JACK], where a
 // JACK server answers, or PipeWire's. Package audio/speaker plays and
 // records through it as through a driver, and [Channels] lists the
-// system's ports JACK connects to. On macOS it lists [CoreAudio], the
-// default devices, played and recorded the same way. [Open] opens ASIO
-// drivers alone.
+// system's ports JACK connects to, and each sound card, as [ALSAPrefix]
+// and its name, which [Open] opens directly, past any sound server. On
+// macOS it lists [CoreAudio], the default devices, played and recorded the
+// same way. Elsewhere [Open] opens ASIO drivers alone.
 //
 // A process plays through one driver at a time:
 //

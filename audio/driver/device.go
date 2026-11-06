@@ -35,6 +35,10 @@ type Info struct {
 	Inputs, Recorded int
 	InputNames       []string
 	InputLatency     int
+	// TellsOverrun says the driver itself tells of each buffer it lost,
+	// through [Config.Overrun], with buffers in hand to play on through
+	// one that is late. A late buffer is no lost sound on such a driver.
+	TellsOverrun bool
 }
 
 // fitBuffer returns the buffer size nearest want that a driver allows:

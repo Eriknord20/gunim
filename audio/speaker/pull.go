@@ -184,7 +184,7 @@ func (r *ringOutput) mix(frames []float32) {
 		interleave(frames, m, a, r.chans)
 	}
 	r.drawn.Add(int64(n))
-	if nanotime()-t0 > r.period {
+	if !r.info.TellsOverrun && nanotime()-t0 > r.period {
 		// Not a dry read: the ring that grows on those is not there.
 		r.s.dropouts.Add(1)
 	}
