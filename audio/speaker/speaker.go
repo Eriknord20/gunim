@@ -515,6 +515,12 @@ func (g *settling) count(s *Speaker, short, cycles int64, now time.Time) {
 	}
 }
 
+// Reopen asks for the output to be opened again as the options say, in a moment,
+// on a goroutine of the speaker's: as where a driver that failed to open, so the
+// system's sound played in its place, has come back. [Speaker.Changed] tells
+// of it, as it does of any output opened again.
+func (s *Speaker) Reopen() { s.askReset() }
+
 // askReset asks the watch to open the output again.
 func (s *Speaker) askReset() {
 	select {

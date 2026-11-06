@@ -323,6 +323,10 @@ type WindowOptions struct {
 	// Icons are the window's icon at several sizes, for the title bar
 	// and the taskbar. None leaves the system's own.
 	Icons []image.Image
+	// Class is what the window is to the desktop on Linux: X11's WM_CLASS,
+	// which a menu entry's StartupWMClass names, so the taskbar groups an
+	// application's windows under it. Empty goes by the window's title.
+	Class string
 	// AskToClose, when set, is sent to the application when the user
 	// asks to close the window, in place of closing it. The application
 	// closes the window with [Client.Close] once it has decided, such as
@@ -413,7 +417,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	}
 	do := driver.Options{
 		Title: o.Title, Size: o.Size, Monitor: o.Monitor,
-		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Owned: o.Owned && o.Parent != nil,
+		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Class: o.Class, Owned: o.Owned && o.Parent != nil,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Corner: o.Corner, Text: o.Text, Place: o.Place,
 		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
 	}

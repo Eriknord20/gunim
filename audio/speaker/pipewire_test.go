@@ -804,3 +804,38 @@ func TestSpreadAllocatesNothing(t *testing.T) {
 		t.Errorf("it allocates %v times", n)
 	}
 }
+
+func TestReopenTakesADriverBackOnceItIsThere(t *testing.T) {
+	withPipeWireFirst(t)
+	f := usePipeWire(t)
+	name := useM4(t)
+	there := false
+	was := pwDevices
+	four := []uint32{3, 4, 12, 13}
+	pwDevices = func() ([]pipewire.Device, error) {
+		if !there {
+			return nil, nil
+		}
+		return []pipewire.Device{{Name: "M4", Output: "m4.out", OutPositions: four}}, nil
+	}
+	t.Cleanup(func() { pwDevices = was })
+	s, err := Open(audio.NewMixer(), Options{Rate: 48000, Driver: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if st := s.State(); st.Driver != "" || st.Problem == nil {
+		t.Fatalf("with the device away: %+v", st)
+	}
+	there = true
+	s.Reopen()
+	waitFor(t, "the device", func() bool { return s.State().Driver == name })
+	if st := s.State(); st.Problem != nil {
+		t.Errorf("the problem stands: %v", st.Problem)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cfg.Output != "m4.out" {
+		t.Errorf("it opened on %q", f.cfg.Output)
+	}
+}

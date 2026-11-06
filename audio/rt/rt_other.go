@@ -10,3 +10,5 @@ func raise() func() { return func() {} }
 func doze() {}
 
 func nap(d time.Duration) { time.Sleep(d) }
+
+func wasNotGiven() bool { return false }

@@ -511,6 +511,11 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			return nil, err
 		}
 	}
+	for _, hint := range []glfw.Hint{glfw.X11ClassName, glfw.X11InstanceName} {
+		if err := glfw.WindowHintString(hint, o.Class); err != nil {
+			return nil, err
+		}
+	}
 
 	size := o.Size
 	if size.W <= 0 || size.H <= 0 {
