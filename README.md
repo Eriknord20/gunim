@@ -247,7 +247,8 @@ Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings
 and curves, in the colours of a dark studio.
 
-`audio/speaker` plays through a fork of oto,
+`audio/speaker` plays through gunim's own WASAPI, Core Audio, AAudio,
+PipeWire and ALSA code. Where those don't play, it falls back on a fork of oto,
 [marrasen/oto](https://github.com/marrasen/oto), which keeps a
 Bluetooth headset on Android from crackling and says how long the
 device takes to play what it is handed, so visuals keep time with the
@@ -910,7 +911,7 @@ path data.
 | `gunim` | `Node`, the presence lifecycle, the window and its frame loop, and its zoom with Ctrl and +, - and 0 or the wheel |
 | `gunim/anim` | `Animated[T]`, springs, tweens, easings |
 | `gunim/audio` | A mixer, voices with animated volume and pan, clips, decoders for WAV, MP3, Ogg Vorbis and FLAC, and an analyzer for visuals |
-| `gunim/audio/speaker` | Plays a mixer through the speakers, with oto |
+| `gunim/audio/speaker` | Plays a mixer through the speakers |
 | `gunim/audio/capture` | Records the computer's inputs, stamped in the speaker's frames, and measures the round trip |
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |

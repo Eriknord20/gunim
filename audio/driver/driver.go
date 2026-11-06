@@ -115,6 +115,12 @@ const WASAPI = "WASAPI"
 // driver's inputs are.
 const PipeWire = "PipeWire"
 
+// ALSAPrefix starts the name [Drivers] lists a sound card under on Linux,
+// as "ALSA: M4". Opened by that name, the card is the program's alone:
+// all its inputs and outputs, at buffers as short as it allows. PipeWire
+// and PulseAudio are asked to let go of it for as long as it is open.
+const ALSAPrefix = "ALSA: "
+
 // Config says how to open a driver.
 type Config struct {
 	// Name is the driver's name, from [Drivers].

@@ -15,12 +15,6 @@ import (
 	"github.com/marrasen/gunim/audio/rt"
 )
 
-// ALSAPrefix starts the name [Drivers] lists a sound card under on Linux,
-// as "ALSA: M4". Opened by that name, the card is the program's alone:
-// all its inputs and outputs, at buffers as short as it allows. PipeWire
-// and PulseAudio are asked to let go of it for as long as it is open.
-const ALSAPrefix = "ALSA: "
-
 const (
 	// alsaPeriods is how many buffers the card holds. As one ends, the next
 	// plays and one behind it stands ready, and a third is filled.
