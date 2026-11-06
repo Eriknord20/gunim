@@ -22,9 +22,6 @@ func ownFn(uintptr, string) {}
 // setUIOwner has nothing to note here: see crashcall_windows_amd64.go.
 func setUIOwner(string) {}
 
-// noteUIThread has nothing to note here: see crashcall_windows_amd64.go.
-func noteUIThread() {}
-
 // crashSignal closes never here: see crashcall_windows_amd64.go.
 func crashSignal() <-chan struct{} { return nil }
 
