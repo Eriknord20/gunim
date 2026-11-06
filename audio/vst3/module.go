@@ -134,7 +134,9 @@ func Open(path string) (*Module, error) {
 		return nil, err
 	}
 	var m *Module
-	onUI(func() { m, err = loadModule(path, bin) })
+	if !ranOnUI(func() { m, err = loadModule(path, bin) }) {
+		return nil, ErrStuck
+	}
 	return m, err
 }
 
@@ -145,10 +147,13 @@ func loadModule(path, bin string) (*Module, error) {
 	if err := installGuard(); err != nil {
 		return nil, fmt.Errorf("vst3: keeping a plugin's faults from ending the program: %w", err)
 	}
+	setUIOwner(path)
+	defer setUIOwner("")
 	lib, err := openLibrary(bin)
 	if err != nil {
 		return nil, fmt.Errorf("vst3: %s: %w", path, err)
 	}
+	ownFn(lib.base(), path)
 	m := &Module{Path: path, lib: lib}
 	getFactory, err := lib.symbol("GetPluginFactory")
 	if err != nil {
@@ -261,6 +266,7 @@ func (m *Module) create(id, iid uid) uintptr {
 		uintptr(unsafe.Pointer(&obj)))) != resultOK {
 		return 0
 	}
+	ownFn(method(obj, 0), m.Path)
 	return obj
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"image"
 	"math"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -60,13 +62,14 @@ func trashCode(t *testing.T) uintptr {
 		}
 	}
 	code = cat(code,
-		[]byte{0xC7, 0x04, 0x24, 0xC0, 0x9F, 0, 0},    // mov dword [rsp],0x9FC0: flush to zero, denormals as zero
-		[]byte{0x0F, 0xAE, 0x14, 0x24},                // ldmxcsr [rsp]
-		[]byte{0xC7, 0x04, 0x24, 0x7F, 0x00, 0, 0},    // mov dword [rsp],0x7F: x87 at single precision
-		[]byte{0xD9, 0x2C, 0x24},                      // fldcw [rsp]
-		[]byte{0xFD},                                  // std
+		[]byte{0xC7, 0x04, 0x24, 0xC0, 0x9F, 0, 0}, // mov dword [rsp],0x9FC0: flush to zero, denormals as zero
+		[]byte{0x0F, 0xAE, 0x14, 0x24},             // ldmxcsr [rsp]
+		[]byte{0xC7, 0x04, 0x24, 0x7F, 0x00, 0, 0}, // mov dword [rsp],0x7F: x87 at single precision
+		[]byte{0xD9, 0x2C, 0x24},                   // fldcw [rsp]
+		[]byte{0xD9, 0xE8, 0xD9, 0xE8, 0xD9, 0xE8}, // fld1, three times: the x87's stack
+		[]byte{0xFD}, // std
 		[]byte{0x48, 0x8B, 0x04, 0x25, 0x5C, 0, 0, 0}, // mov rax,[0x5c]
-		[]byte{0xCC},                                  // int3: it never gets here
+		[]byte{0xCC}, // int3: it never gets here
 	)
 	return withTable(t, code, []byte{1, 4, 1, 0, 4, 8<<4 | 2, 0, 0}) // sub rsp,0x48: UWOP_ALLOC_SMALL
 }
@@ -112,17 +115,21 @@ func keepCode(t *testing.T, w, fn uintptr) uintptr {
 		code = cat(code, []byte{0x4D, 0x39, 0xD3, 0x74, 0x04, 0x48, 0x83, 0xC8, 0x04}) // cmp r11,r10; je +4; or rax,4
 	}
 	code = cat(code,
-		[]byte{0x0F, 0xAE, 0x5C, 0x24, 0x30},       // stmxcsr [rsp+0x30]
-		[]byte{0xD9, 0x7C, 0x24, 0x34},             // fnstcw [rsp+0x34]
-		[]byte{0x44, 0x8B, 0x54, 0x24, 0x28},       // mov r10d,[rsp+0x28]
-		[]byte{0x44, 0x39, 0x54, 0x24, 0x30},       // cmp [rsp+0x30],r10d
-		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x08}, // je +4; or rax,8
-		[]byte{0x44, 0x0F, 0xB7, 0x54, 0x24, 0x2C}, // movzx r10d,word [rsp+0x2C]
-		[]byte{0x66, 0x44, 0x39, 0x54, 0x24, 0x34}, // cmp [rsp+0x34],r10w
-		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x10}, // je +4; or rax,16
-		[]byte{0xFC},                         // cld
-		[]byte{0x0F, 0xAE, 0x54, 0x24, 0x28}, // ldmxcsr [rsp+0x28]
-		[]byte{0xD9, 0x6C, 0x24, 0x2C},       // fldcw [rsp+0x2C]
+		[]byte{0x0F, 0xAE, 0x5C, 0x24, 0x30},             // stmxcsr [rsp+0x30]
+		[]byte{0xD9, 0x7C, 0x24, 0x34},                   // fnstcw [rsp+0x34]
+		[]byte{0x44, 0x8B, 0x54, 0x24, 0x28},             // mov r10d,[rsp+0x28]
+		[]byte{0x44, 0x39, 0x54, 0x24, 0x30},             // cmp [rsp+0x30],r10d
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x08},       // je +4; or rax,8
+		[]byte{0x44, 0x0F, 0xB7, 0x54, 0x24, 0x2C},       // movzx r10d,word [rsp+0x2C]
+		[]byte{0x66, 0x44, 0x39, 0x54, 0x24, 0x34},       // cmp [rsp+0x34],r10w
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x10},       // je +4; or rax,16
+		[]byte{0xDD, 0x7C, 0x24, 0x38},                   // fnstsw [rsp+0x38]
+		[]byte{0x66, 0xF7, 0x44, 0x24, 0x38, 0x00, 0x38}, // test word [rsp+0x38],0x3800: its top
+		[]byte{0x74, 0x04, 0x48, 0x83, 0xC8, 0x20},       // je +4; or rax,32
+		[]byte{0xDB, 0xE3},                               // fninit
+		[]byte{0xFC},                                     // cld
+		[]byte{0x0F, 0xAE, 0x54, 0x24, 0x28},             // ldmxcsr [rsp+0x28]
+		[]byte{0xD9, 0x6C, 0x24, 0x2C},                   // fldcw [rsp+0x2C]
 		epilogue())
 	return native(t, code)
 }
@@ -222,9 +229,10 @@ func runCrashCase(t *testing.T, name string) {
 			[]byte{0x48, 0x31, 0xDB}, []byte{0x66, 0x0F, 0xEF, 0xF6}, // xor rbx,rbx; pxor xmm6,xmm6
 			[]byte{0xC7, 0x44, 0x24, 0x08, 0xC0, 0x9F, 0, 0}, []byte{0x0F, 0xAE, 0x54, 0x24, 0x08}, // mov dword [rsp+8],0x9FC0; ldmxcsr [rsp+8]
 			[]byte{0xC7, 0x44, 0x24, 0x08, 0x7F, 0, 0, 0}, []byte{0xD9, 0x6C, 0x24, 0x08}, // mov dword [rsp+8],0x7F; fldcw [rsp+8]
+			[]byte{0xD9, 0xE8}, // fld1
 			[]byte{0xFD, 0xC3}, // std; ret
 		))
-		if r, _, _ := syscall.SyscallN(keepCode(t, changes, 0)); r != 1|2|4|8|16 {
+		if r, _, _ := syscall.SyscallN(keepCode(t, changes, 0)); r != 1|2|4|8|16|32 {
 			t.Fatalf("the check saw %#x of the changes", r)
 		}
 		leaf := native(t, []byte{0x31, 0xC0, 0xC3})
@@ -232,7 +240,7 @@ func runCrashCase(t *testing.T, name string) {
 			t.Fatalf("a plain call changed %#x", r)
 		}
 		if r, _, _ := syscall.SyscallN(keepCode(t, w, trashCode(t))); r != 0 {
-			t.Fatalf("a crash changed %#x (1 the direction, 2 an integer register, 4 an XMM one, 8 MXCSR, 16 the x87's word)", r)
+			t.Fatalf("a crash changed %#x (1 the direction, 2 an integer register, 4 an XMM one, 8 MXCSR, 16 the x87's word, 32 its stack)", r)
 		}
 		fmt.Println("lived")
 	case "own":
@@ -276,6 +284,68 @@ func runCrashCase(t *testing.T, name string) {
 			t.Fatalf("crashes: %+v", cs)
 		}
 		fmt.Println("lived")
+	case "helper":
+		// A library of the plugin's, or code it made: the module the host loaded goes with it, under its name.
+		const file = `C:\Plugins\Soraboy.vst3`
+		lib, helper := native(t, []byte{0xC3}), native(t, faultCode)
+		ownFn(lib, file)
+		ownFn(helper, file)
+		other := native(t, []byte{0xC3})
+		if r := callN(helper, nil); r != crashedResult {
+			t.Fatalf("the call gave %#x", r)
+		}
+		if !moduleDead(lib) || !moduleDead(helper) {
+			t.Fatal("the module lives on, by the address called")
+		}
+		if moduleDead(other) {
+			t.Fatal("a module of no relation went too")
+		}
+		if cs := Crashes(); len(cs) != 1 || cs[0].Module != file {
+			t.Fatalf("crashes: %+v", cs)
+		}
+		fmt.Println("lived")
+	case "unowned":
+		// Code no one said is the module's, called from the plugins' thread for it, is still told of by its name.
+		const file = `C:\Plugins\Soraboy.vst3`
+		at := native(t, faultCode)
+		onUI(func() {
+			setUIOwner(file)
+			defer setUIOwner("")
+			callN(at, nil)
+		})
+		if cs := Crashes(); len(cs) != 1 || cs[0].Module != file {
+			t.Fatalf("crashes: %+v", cs)
+		}
+		fmt.Println("lived")
+	case "freed":
+		// A call to memory given back: what is dead is that alone, not everything below it.
+		at := native(t, faultCode)
+		healthy := native(t, []byte{0xB8, 5, 0, 0, 0, 0xC3})
+		if err := windows.VirtualFree(at, 0, windows.MEM_RELEASE); err != nil {
+			t.Fatal(err)
+		}
+		if lo, hi, _ := moduleOf(at); lo != at || hi != at+1 {
+			t.Fatalf("free memory is taken as %#x to %#x", lo, hi)
+		}
+		if r := callN(at, nil); r != crashedResult {
+			t.Fatalf("the call gave %#x", r)
+		}
+		if moduleDead(healthy) || moduleDead(imageLo) || moduleDead(1) {
+			t.Fatal("memory of no relation went dead")
+		}
+		if r := callN(healthy, nil); r != 5 {
+			t.Fatalf("a healthy call gave %#x", r)
+		}
+		fmt.Println("lived")
+	case "stuck":
+		runStuckCase(t)
+	case "ctrlstate":
+		runCtrlStateCase(t)
+	case "endnow":
+		EndNow(3)
+		t.Fatal("it went on")
+	case "everyplace":
+		runEveryPlaceCase(t)
 	case "thread":
 		// On a thread Go doesn't own, as an audio driver's.
 		at := native(t, faultCode)
@@ -357,10 +427,21 @@ func TestCrashCase(t *testing.T) {
 	runCrashCase(t, name)
 }
 
+// EndNow ends the program at once, with the code asked for, running no code of the modules loaded.
+func TestEndNow(t *testing.T) {
+	t.Parallel()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.timeout=60s")
+	cmd.Env = append(os.Environ(), crashCaseEnv+"=endnow")
+	var ex *exec.ExitError
+	if err := cmd.Run(); !errors.As(err, &ex) || ex.ExitCode() != 3 {
+		t.Fatalf("it ended with %v", err)
+	}
+}
+
 // A plugin's crash during a call into it comes back as a call that failed, in each way a plugin can get there.
 func TestCrashesInACall(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "thread", "busy"} {
+	for _, name := range []string{"crash", "system", "registers", "own", "vectored", "throw", "throwgcc", "helper", "unowned", "freed", "stuck", "ctrlstate", "everyplace", "thread", "busy"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCrashCase$", "-test.v", "-test.timeout=120s")
@@ -373,6 +454,211 @@ func TestCrashesInACall(t *testing.T) {
 				t.Fatalf("its output lacks the end:\n%s", out)
 			}
 		})
+	}
+}
+
+// runStuckCase holds the plugins' thread for good, as a call of a plugin's waiting on a lock a crash left held does. Until
+// a crash a wait has no bound, as loading a plugin takes long. After one, what waits comes back, a song's state is what
+// it last was, and closing doesn't wait.
+func runStuckCase(t *testing.T) {
+	uiStuckWait = 200 * time.Millisecond
+	f := fakeSynth()
+	f.latency, f.state = 64, []byte("kept")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	p := a.Plugin()
+	if p == nil {
+		t.Fatalf("it didn't start: %v", a.Err())
+	}
+	given := a.State()
+	hold := make(chan struct{})
+	onUIAsync := make(chan struct{})
+	go func() {
+		onUI(func() {
+			close(onUIAsync)
+			<-hold
+		})
+	}()
+	<-onUIAsync
+	waited := make(chan bool, 1)
+	go func() { waited <- ranOnUI(func() {}) }()
+	select {
+	case <-waited:
+		t.Fatal("a wait came back with no crash")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if r := callN(native(t, faultCode), nil); r != crashedResult {
+		t.Fatalf("the call gave %#x", r)
+	}
+	select {
+	case ran := <-waited:
+		if ran {
+			t.Fatal("it says the thread ran it")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the wait goes on after a crash")
+	}
+	start := time.Now()
+	if !bytes.Equal(a.State(), given) || a.Changed() {
+		t.Error("a plugin that can't be asked isn't what it last gave")
+	}
+	if err := a.Err(); err != nil {
+		t.Errorf("it says %v", err)
+	}
+	if a.proc.Latency() != 64 {
+		t.Errorf("its latency is %d", a.proc.Latency())
+	}
+	if _, err := cl.open(Config{Rate: 48000, Block: 64}); !errors.Is(err, ErrStuck) {
+		t.Errorf("starting another says %v", err)
+	}
+	a.Close()
+	stopUI()
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("that took %v", time.Since(start))
+	}
+	fmt.Println("lived")
+}
+
+// runCtrlStateCase has a plugin crash in its controller's getState, its component having given its state. Part of a state
+// is no state: what it last gave stays, and the song is told of no change.
+func runCtrlStateCase(t *testing.T) {
+	f := fakeSynth()
+	f.state = []byte("kept")
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	p := a.Plugin()
+	if p == nil {
+		t.Fatalf("it didn't start: %v", a.Err())
+	}
+	given := a.State()
+	p.single = false
+	ctrlState := method(p.ctrl, mCtrlGetState)
+	var tripped atomic.Bool
+	testGate = func(fn uintptr) bool {
+		if fn == ctrlState {
+			tripped.Store(true)
+		}
+		return tripped.Load()
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	if a.Changed() {
+		t.Error("the song is told of a change")
+	}
+	if !tripped.Load() {
+		t.Fatal("the case isn't reaching the call")
+	}
+	if !bytes.Equal(a.State(), given) {
+		t.Error("what it gives isn't what it last gave")
+	}
+	if err := a.Err(); err != nil {
+		t.Errorf("it says %v", err)
+	}
+	fmt.Println("lived")
+}
+
+// runEveryPlaceCase has every call into a plugin in turn be the one that crashes, as the gate gives a crash and a call
+// not made alike, from its first call on through starting it and calling all it has. Nothing else may go wrong: a panic
+// or a fault ends this process, and that is the failure.
+func runEveryPlaceCase(t *testing.T) {
+	if err := installGuard(); err != nil {
+		t.Fatal(err)
+	}
+	var left atomic.Int64
+	var tripped atomic.Bool
+	testGate = func(uintptr) bool {
+		if tripped.Load() {
+			return true
+		}
+		if left.Add(-1) < 0 {
+			tripped.Store(true)
+			return true
+		}
+		return false
+	}
+	empty := []span{}
+	deadSpans.Store(&empty)
+	var places int64
+	for tripped.Store(true); tripped.Load(); places++ {
+		left.Store(places)
+		tripped.Store(false)
+		f := fakeSynth()
+		f.latency, f.state, f.events, f.tuning = 64, []byte("kept"), true, true
+		exercise(t, f)
+	}
+	if places < 50 {
+		t.Fatalf("only %d places: the case isn't reaching the calls", places)
+	}
+	fmt.Printf("lived, %d places\n", places)
+}
+
+// exercise starts a plugin of f and calls everything it has.
+func exercise(t *testing.T, f *fakePlugin) {
+	cl := &plugClass{open: func(cfg Config) (*Plugin, error) { return f.open(t, cfg) }, class: f.class()}
+	a := cl.newPlugin()
+	a.proc.Prepare(plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 2})
+	out := [][]float32{make([]float32, 64), make([]float32, 64)}
+	in := [][]float32{make([]float32, 64), make([]float32, 64)}
+	b := &plug.Block{Frames: 64, In: in, Out: out, Events: []plug.Event{{Kind: plug.NoteOn, Note: 60, Velocity: 1}}}
+	a.proc.Process(b)
+	_ = a.State()
+	_ = a.Changed()
+	_ = a.Err()
+	_ = a.SetState(a.State())
+	_ = a.proc.Latency()
+	_ = a.proc.Tail()
+	a.proc.Reset()
+	a.proc.Report(1)
+	a.proc.Prepare(plug.Setup{Rate: 44100, MaxBlock: 32, Channels: 1})
+	_ = a.OpenEditor("x")
+	_ = a.EditorEmbedded()
+	if p := a.Plugin(); p != nil {
+		p.Buses()
+		p.Notes()
+		_ = p.Latency()
+		_ = p.Tail()
+		p.Reset()
+		p.resetNow()
+		p.SetPosition(10)
+		p.Process(make([]float32, 64))
+		p.Flush()
+		p.Failures()
+		p.Value(1)
+		p.Values()
+		p.Edits()
+		p.Editing()
+		p.Params()
+		p.Text(1, 0.5)
+		p.Set(1, 0.5)
+		_, _ = p.State()
+		_ = p.SetState([]byte("gVS3\x00\x00\x00\x00\x00\x00\x00\x00"))
+		p.Bypass()
+		p.Prime(time.Millisecond)
+		_, _, _ = p.EditorSize()
+		p.EditorResizable()
+		_ = p.OpenEditor("x")
+		p.EditorOpen()
+		p.PlaceEditor(image.Rect(0, 0, 10, 10))
+		p.CloseEditor()
+		_ = p.SetActive(false)
+		_ = p.SetActive(true)
+		_ = p.Configure(Config{Rate: 48000, Block: 64, Channels: 2})
+		p.Gone()
+	}
+	a.Close()
+}
+
+// Values of a plugin that can't be asked are what it was last known to hold, not nothing, as a song would keep nothing.
+func TestValuesOfAPluginGoneAreAsLastKnown(t *testing.T) {
+	t.Parallel()
+	p := &Plugin{edits: newParamBox([]uint32{7})}
+	p.values = make([]atomic.Uint64, 1)
+	p.values[0].Store(math.Float64bits(0.25))
+	p.crashed.Store(true)
+	if got := p.Values(); len(got) != 1 || got[7] != 0.25 {
+		t.Fatalf("it gives %v", got)
 	}
 }
 

@@ -5,6 +5,7 @@ package vst3
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,11 +32,43 @@ var (
 	tickers   = map[any]func(){}
 )
 
+// uiStuckWait is how long a wait on the plugins' thread may go on once a plugin has crashed. Until then a wait has no
+// bound, as loading a plugin can take a minute. After a crash the thread may be held for good, by a call of the plugin's
+// waiting on a lock the crash left held, and a song is still to be saved.
+var uiStuckWait = 5 * time.Second
+
+// uiGaveUp says a wait on the plugins' thread ran out after a crash: nothing is given it from then on.
+var uiGaveUp atomic.Bool
+
+// waitUI waits for done, without bound until a plugin crashes and then for uiStuckWait, and reports whether it closed.
+func waitUI(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-crashSignal():
+	}
+	t := time.NewTimer(uiStuckWait)
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-t.C:
+		uiGaveUp.Store(true)
+		return false
+	}
+}
+
 // onUI runs f on the plugins' thread, starting it where none runs, and
-// waits for it.
-func onUI(f func()) {
+// waits for it. A caller that reads what f gives goes by ranOnUI.
+func onUI(f func()) { ranOnUI(f) }
+
+// ranOnUI is onUI, and reports whether f ran. It didn't where the thread is stuck after a plugin's crash.
+func ranOnUI(f func()) bool {
+	if uiGaveUp.Load() {
+		return false
+	}
 	if onMain(f) {
-		return
+		return true
 	}
 	uiMu.RLock()
 	for !uiRunning {
@@ -45,12 +78,33 @@ func onUI(f func()) {
 	}
 	defer uiMu.RUnlock()
 	done := make(chan struct{})
-	uiWork <- func() {
+	var abandoned atomic.Bool
+	work := func() {
 		defer close(done)
-		f()
+		if !abandoned.Load() {
+			f()
+		}
+	}
+	select {
+	case uiWork <- work:
+	default:
+		// Full, so it is behind: as long a wait as for the work itself.
+		sent := make(chan struct{})
+		go func() {
+			uiWork <- work
+			close(sent)
+		}()
+		if !waitUI(sent) {
+			abandoned.Store(true)
+			return false
+		}
 	}
 	wake()
-	<-done
+	if !waitUI(done) {
+		abandoned.Store(true)
+		return false
+	}
+	return true
 }
 
 // tick has f run on the plugins' thread every few milliseconds, under
@@ -100,13 +154,18 @@ func startUI() {
 func stopUI() {
 	uiMu.Lock()
 	defer uiMu.Unlock()
-	if !uiRunning {
+	if !uiRunning || uiGaveUp.Load() {
 		return
 	}
-	uiWork <- quitUI
+	select {
+	case uiWork <- quitUI:
+	default:
+		return
+	}
 	wake()
-	<-uiExited
-	uiRunning = false
+	if waitUI(uiExited) {
+		uiRunning = false
+	}
 }
 
 // uiLoop runs the thread, locked, which ends with it.

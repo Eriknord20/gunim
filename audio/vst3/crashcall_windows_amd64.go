@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -49,6 +50,9 @@ const (
 // crashMark is what the wrapper returns from a crash, in RAX. It also gives the fault's address in XMM0 and the
 // exception's code as the last error, which the system's call hands on.
 const crashMark = 0x6B5C5A7D1E3F9A41
+
+// memFree is the state of memory no one holds, as VirtualQuery gives it.
+const memFree = 0x10000
 
 var (
 	// wrapper is the wrapper's entry, 0 before it is made, or where it could not be.
@@ -136,8 +140,8 @@ func wrapperCode(restore uintptr) (code, unwindInfo []byte, end int) {
 	land := cat([]byte{
 		// cld
 		0xFC,
-		// fnclex
-		0xDB, 0xE2,
+		// fninit: the x87's stack empties, its control word comes next
+		0xDB, 0xE3,
 		// fldcw [rsp+frameX87]
 		0xD9, 0x6C, 0x24, frameX87,
 		// ldmxcsr [rsp+frameMXCSR]
@@ -231,18 +235,89 @@ func makeWrapper() error {
 // span is memory a module holds.
 type span struct{ lo, hi uintptr }
 
+// ownedSpan is memory the module the host loaded from the file owner holds, or a library of its.
+type ownedSpan struct {
+	span
+	owner string
+}
+
 var (
 	// deadSpans are the modules that crashed. A call reads them with no lock.
 	deadSpans atomic.Pointer[[]span]
+	// testGate, set by a test once deadSpans is set, says what is dead in their place.
+	testGate func(fn uintptr) bool
+
 	crashesMu sync.Mutex
-	crashList []Crash
+	crashList []crashRecord
+	owned     []ownedSpan
+
+	crashOnce sync.Once
+	crashed   = make(chan struct{})
+
+	// uiThread is the plugins' thread, and uiOwner the file of the module it is calling, where a call to something
+	// not known as that module's is still its.
+	uiThread atomic.Uint32
+	uiOwner  atomic.Pointer[string]
 )
+
+// crashRecord is a Crash, its fault found only as it is read: finding it takes the loader's lock, which a thread stuck
+// in the plugin may hold, and a crash is noted on the thread it happened on.
+type crashRecord struct {
+	Crash
+	at    uintptr
+	found bool
+}
+
+// crashSignal closes as the first plugin crashes.
+func crashSignal() <-chan struct{} { return crashed }
+
+// noteUIThread notes that this thread is the plugins'.
+func noteUIThread() { uiThread.Store(windows.GetCurrentThreadId()) }
+
+// setUIOwner says the plugins' thread now calls the module of the file owner, or none for "".
+func setUIOwner(owner string) {
+	if owner == "" {
+		uiOwner.Store(nil)
+		return
+	}
+	uiOwner.Store(&owner)
+}
+
+// ownFn notes that what fn is in belongs to the module of the file owner: a library it loaded, or code it made, as what
+// a host calls may be in either. A crash in any of it is then a crash of that module, for all of it, under its name. It
+// runs as an object is made, not as it plays. The program's own image and the system's are nobody's.
+func ownFn(fn uintptr, owner string) {
+	if owner == "" || fn == 0 {
+		return
+	}
+	lo, hi, path := moduleOf(fn)
+	if lo >= imageLo && lo < imageHi || isSystem(path) {
+		return
+	}
+	crashesMu.Lock()
+	defer crashesMu.Unlock()
+	if !slices.Contains(owned, ownedSpan{span{lo, hi}, owner}) {
+		owned = append(owned, ownedSpan{span{lo, hi}, owner})
+	}
+}
+
+// isSystem reports whether the file at path is one of the system's.
+func isSystem(path string) bool {
+	dir, err := windows.GetSystemDirectory()
+	if err != nil || path == "" {
+		return false
+	}
+	return len(path) > len(dir) && strings.EqualFold(path[:len(dir)], dir)
+}
 
 // moduleDead reports whether fn is in a module that crashed.
 func moduleDead(fn uintptr) bool {
 	l := deadSpans.Load()
 	if l == nil {
 		return false
+	}
+	if testGate != nil {
+		return testGate(fn)
 	}
 	for _, s := range *l {
 		if fn >= s.lo && fn < s.hi {
@@ -274,30 +349,60 @@ func nativeCall(fn uintptr, args ...uintptr) (r1, r2 uintptr) {
 	return r1, r2
 }
 
-// noteCrash notes that the module of fn crashed: code at the address at. It may run on the audio's thread, but only once
-// for a module.
+// ownerOf is the file of the module that owns fn, where that is known with no call to the system. crashesMu is held.
+func ownerOf(fn uintptr) string {
+	for _, o := range owned {
+		if fn >= o.lo && fn < o.hi {
+			return o.owner
+		}
+	}
+	return ""
+}
+
+// noteCrash notes that the module that owns fn crashed: code at the address at. It runs on the thread that crashed,
+// perhaps the audio's, once for a module. All of that module goes dead first, so another thread calls it no more.
 func noteCrash(fn, at uintptr, code uint32) {
 	crashesMu.Lock()
+	owner := ownerOf(fn)
+	crashesMu.Unlock()
+	// Not known: only now ask the system, with no lock held of ours.
+	var lo, hi uintptr
+	path := ""
+	if owner == "" {
+		lo, hi, path = moduleOf(fn)
+		if u := uiOwner.Load(); u != nil && windows.GetCurrentThreadId() == uiThread.Load() {
+			owner = *u
+		}
+	}
+	crashesMu.Lock()
 	defer crashesMu.Unlock()
+	defer crashOnce.Do(func() { close(crashed) })
 	if moduleDead(fn) {
 		// Two threads crashed in it at once.
 		return
 	}
-	lo, hi, path := moduleOf(fn)
-	// Go's image holds what a test stands in for a plugin. It never goes dead whole.
-	if lo < imageLo || lo >= imageHi {
-		var list []span
-		if l := deadSpans.Load(); l != nil {
-			list = slices.Clone(*l)
+	var list []span
+	if l := deadSpans.Load(); l != nil {
+		list = slices.Clone(*l)
+	}
+	for _, o := range owned {
+		if o.owner == owner && owner != "" {
+			list = append(list, o.span)
 		}
+	}
+	switch {
+	case hi == 0:
+	case lo >= imageLo && lo < imageHi || isSystem(path):
+		// Only what was called: Go's image holds what a test stands in for a plugin, and the system's is nobody's.
+		list = append(list, span{fn, fn + 1})
+	default:
 		list = append(list, span{lo, hi})
-		deadSpans.Store(&list)
 	}
-	c := Crash{Module: path, Code: code, Offset: at}
-	if flo, _, f := moduleOf(at); f != "" {
-		c.Fault, c.Offset = f, at-flo
+	deadSpans.Store(&list)
+	if owner == "" && !isSystem(path) {
+		owner = path
 	}
-	crashList = append(crashList, c)
+	crashList = append(crashList, crashRecord{Crash: Crash{Module: owner, Code: code, Offset: at}, at: at})
 }
 
 // moduleOf is the memory the module holding at has, and its file. Memory no module holds, as code a plugin made, is
@@ -317,9 +422,10 @@ func moduleOf(at uintptr) (lo, hi uintptr, path string) {
 		}
 	}
 	var m windows.MemoryBasicInformation
-	if windows.VirtualQuery(at, &m, unsafe.Sizeof(m)) == nil {
+	if windows.VirtualQuery(at, &m, unsafe.Sizeof(m)) == nil && m.State != memFree && m.AllocationBase != 0 {
 		return m.AllocationBase, m.BaseAddress + m.RegionSize, ""
 	}
+	// Free memory is nobody's, so it stands for itself alone.
 	return at, at + 1, ""
 }
 
@@ -327,8 +433,38 @@ func moduleOf(at uintptr) (lo, hi uintptr, path string) {
 // goroutine.
 func Crashes() []Crash {
 	crashesMu.Lock()
+	todo := -1
+	for i := range crashList {
+		if !crashList[i].found {
+			todo = i
+			break
+		}
+	}
+	crashesMu.Unlock()
+	for todo >= 0 {
+		crashesMu.Lock()
+		at := crashList[todo].at
+		crashesMu.Unlock()
+		lo, _, f := moduleOf(at)
+		crashesMu.Lock()
+		c := &crashList[todo]
+		c.found = true
+		if f != "" {
+			c.Fault, c.Offset = f, at-lo
+		}
+		todo++
+		if todo >= len(crashList) {
+			todo = -1
+		}
+		crashesMu.Unlock()
+	}
+	crashesMu.Lock()
 	defer crashesMu.Unlock()
-	return slices.Clone(crashList)
+	out := make([]Crash, len(crashList))
+	for i := range crashList {
+		out[i] = crashList[i].Crash
+	}
+	return out
 }
 
 // EndNow ends the program at once, with code, as one should that lived through a plugin's crash, once it has saved what

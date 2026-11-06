@@ -16,5 +16,17 @@ func Crashes() []Crash { return nil }
 // moduleDead reports none here: see crashcall_windows_amd64.go.
 func moduleDead(uintptr) bool { return false }
 
+// ownFn has nothing to note here: see crashcall_windows_amd64.go.
+func ownFn(uintptr, string) {}
+
+// setUIOwner has nothing to note here: see crashcall_windows_amd64.go.
+func setUIOwner(string) {}
+
+// noteUIThread has nothing to note here: see crashcall_windows_amd64.go.
+func noteUIThread() {}
+
+// crashSignal closes never here: see crashcall_windows_amd64.go.
+func crashSignal() <-chan struct{} { return nil }
+
 // EndNow ends the program at once, with code.
 func EndNow(code uint32) { os.Exit(int(code)) }

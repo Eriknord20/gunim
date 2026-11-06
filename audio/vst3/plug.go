@@ -458,13 +458,15 @@ func (a *plugged) State() []byte {
 	if p == nil {
 		return a.state
 	}
-	if p.Gone() {
+	if p.Gone() || uiGaveUp.Load() {
 		// It can't be asked: what it last gave is what is kept.
 		return a.given
 	}
 	st, err := p.State()
 	if err != nil {
-		a.err = err
+		if !p.Gone() && !uiGaveUp.Load() {
+			a.err = err
+		}
 		return a.given
 	}
 	if a.echo != nil && bytes.Equal(st, a.echo) {
@@ -479,12 +481,14 @@ func (a *plugged) Changed() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	p := a.playing.Load()
-	if p == nil || p.Gone() {
+	if p == nil || p.Gone() || uiGaveUp.Load() {
 		return false
 	}
 	st, err := p.State()
 	if err != nil {
-		a.err = err
+		if !p.Gone() && !uiGaveUp.Load() {
+			a.err = err
+		}
 		return false
 	}
 	return a.echo == nil || !bytes.Equal(st, a.echo)
@@ -521,12 +525,18 @@ func (a *plugged) SetState(b []byte) error {
 	if len(b) == 0 || bytes.Equal(b, a.given) {
 		return nil
 	}
-	if p.Gone() {
+	keep := func() error {
 		// It can't take it: the song keeps it for when the plugin next plays.
 		a.given, a.echo = bytes.Clone(b), nil
 		return nil
 	}
+	if p.Gone() || uiGaveUp.Load() {
+		return keep()
+	}
 	if err := p.SetState(b); err != nil {
+		if p.Gone() || uiGaveUp.Load() {
+			return keep()
+		}
 		return err
 	}
 	a.settle(p, b)
@@ -673,7 +683,8 @@ func (pr *plugProc) Prepare(s plug.Setup) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if p := a.playing.Load(); p != nil {
-		if err := p.Configure(cfg); err != nil {
+		// One gone stays silent, whatever the setup.
+		if err := p.Configure(cfg); err != nil && !p.Gone() && !uiGaveUp.Load() {
 			a.err = err
 		}
 		return

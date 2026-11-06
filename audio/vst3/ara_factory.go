@@ -86,7 +86,7 @@ var (
 func (m *Module) ARAFactory(c Class) (*ARAFactory, error) {
 	var f *ARAFactory
 	var err error
-	onUI(func() {
+	if !ranOnUI(func() {
 		for _, k := range m.Classes {
 			if k.Category != araMainFactoryClass || k.Name != c.Name {
 				continue
@@ -103,7 +103,9 @@ func (m *Module) ARAFactory(c Class) (*ARAFactory, error) {
 			return
 		}
 		err = fmt.Errorf("%w: %s", ErrNoARA, c.Name)
-	})
+	}) {
+		return nil, ErrStuck
+	}
 	return f, err
 }
 

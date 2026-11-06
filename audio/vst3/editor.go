@@ -80,10 +80,11 @@ var frameKind = &kind{
 // show it.
 func (p *Plugin) createView() uintptr {
 	name := []byte("editor\x00")
-	v := call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0])))
+	v := pointerOf(call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0]))))
 	if v == 0 {
 		return 0
 	}
+	ownFn(method(v, 0), p.owner)
 	pt := []byte(platformType + "\x00")
 	if result(call(v, mIsPlatformTypeSupported, uintptr(unsafe.Pointer(&pt[0])))) != resultOK {
 		release(v)
