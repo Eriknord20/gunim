@@ -154,9 +154,9 @@ func throwCode(t *testing.T, code uint32, flags byte) uintptr {
 		t.Fatal(err)
 	}
 	return withTable(t, cat(
-		[]byte{0x48, 0x83, 0xEC, 0x28},             // sub rsp,0x28
-		[]byte{0xB9}, le32(code), // mov ecx,code
-		[]byte{0xBA, flags, 0, 0, 0}, // mov edx,flags
+		[]byte{0x48, 0x83, 0xEC, 0x28}, // sub rsp,0x28
+		[]byte{0xB9}, le32(code),       // mov ecx,code
+		[]byte{0xBA, flags, 0, 0, 0},               // mov edx,flags
 		[]byte{0x4D, 0x31, 0xC0, 0x4D, 0x31, 0xC9}, // xor r8,r8; xor r9,r9
 		[]byte{0x48, 0xB8}, imm64(uint64(raise)),   // mov rax,raise
 		[]byte{0xFF, 0xD0},                   // call rax
