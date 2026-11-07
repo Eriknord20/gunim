@@ -33,9 +33,8 @@ screen. A frame steps, lays out and paints the tree, and then the renderer draws
 
 ### Draw less: count the quads
 
-The renderer draws every op that touches the frame's damage, and that includes carried ops. Damage is one
-rectangle. Two moving parts far apart, such as a playhead at the top and a meter at the bottom, make it nearly the
-whole window. So what shows must be cheap to draw, not only cheap to paint.
+The renderer draws every op that touches the frame's damage, and that includes carried ops. Damage is up to 12 rectangles, and fewer where they'd
+cover much of the window. Moving parts in more places than that merge into boxes round them, up to the whole window. So what shows must be cheap to draw, not only cheap to paint.
 
 - **Every `RRect`, stroke and glyph run is a quad.** Aim for a few thousand in a view. Tens of thousands is a bug,
   whatever the profile says about paint time.

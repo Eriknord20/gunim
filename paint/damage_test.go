@@ -47,6 +47,34 @@ func TestDamageFarApartIsTwoRects(t *testing.T) {
 	}
 }
 
+// A window of views each with a part that moves as a song plays, apart
+// from each other, redraws those parts, not the window round them.
+func TestDamageOfEightViewsMovingIsEightRects(t *testing.T) {
+	at := []geom.Rect{
+		geom.Rc(40, 300, 6, 400), geom.Rc(400, 100, 2, 800), geom.Rc(700, 600, 30, 300), geom.Rc(1000, 80, 200, 20),
+		geom.Rc(1100, 500, 20, 20), geom.Rc(1400, 700, 120, 200), geom.Rc(1700, 300, 200, 18), geom.Rc(1950, 950, 40, 40),
+	}
+	paint := func(f Fill) func(p *Painter) {
+		return func(p *Painter) {
+			p.RRect(geom.Rc(0, 0, 2000, 1000), 0, dark)
+			for _, r := range at {
+				p.RRect(r, 0, f)
+			}
+		}
+	}
+	rs := damageOf(paint(dark), paint(light))
+	if len(rs) != len(at) {
+		t.Fatalf("damage %v, want the %d rects that changed", rs, len(at))
+	}
+	var area float32
+	for _, r := range rs {
+		area += r.Size().W * r.Size().H
+	}
+	if area > 2000*1000/10 {
+		t.Fatalf("damage %v covers %.0f%% of the window", rs, 100*area/(2000*1000))
+	}
+}
+
 func TestDamageNearTogetherIsOneRect(t *testing.T) {
 	paint := func(f Fill) func(p *Painter) {
 		return func(p *Painter) {
@@ -184,5 +212,41 @@ func TestDamageHoldsWhileTheNextFramePaints(t *testing.T) {
 	frame(1500)
 	if !slices.Equal(handed, want) {
 		t.Fatalf("damage handed on changed from %v to %v once the next frame painted", want, handed)
+	}
+}
+
+// tiles paints n far-apart squares of side a changing.
+func tiles(n int, a float32) func(f Fill) func(p *Painter) {
+	return func(f Fill) func(p *Painter) {
+		return func(p *Painter) {
+			p.RRect(geom.Rc(0, 0, 4000, 4000), 0, dark)
+			for i := range n {
+				p.RRect(geom.Rc(float32(i%4)*1000+100, float32(i/4)*1000+100, a, a), 0, f)
+			}
+		}
+	}
+}
+
+// Up to the most, small scattered parts stay apart; past it, they merge.
+func TestDamageKeepsTwelveAndMergesAThirteenth(t *testing.T) {
+	if MaxDamageRects != 12 {
+		t.Fatalf("the most is %d", MaxDamageRects)
+	}
+	on := tiles(12, 40)
+	if rs := damageOf(on(dark), on(light)); len(rs) != 12 {
+		t.Errorf("12 small parts gave %d rects: %v", len(rs), rs)
+	}
+	on = tiles(13, 40)
+	if rs := damageOf(on(dark), on(light)); len(rs) != 12 {
+		t.Errorf("13 small parts gave %d rects, want 12: %v", len(rs), rs)
+	}
+}
+
+// Many that are large for their number merge to a few: each pass walks the ops,
+// which only small parts repay.
+func TestManyLargeDamageRectsMergeToAFew(t *testing.T) {
+	on := tiles(12, 700)
+	if rs := damageOf(on(dark), on(light)); len(rs) > fewDamageRects {
+		t.Errorf("12 large parts gave %d rects: %v", len(rs), rs)
 	}
 }
