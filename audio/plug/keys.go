@@ -127,6 +127,7 @@ func (t *KeyTrace) event(e Event) {
 			t.down[key/64] &^= 1 << (key % 64)
 		}
 	case Expression, Pedal:
+	case PastStart, PastNote:
 	}
 }
 

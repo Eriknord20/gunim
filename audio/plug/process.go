@@ -215,6 +215,10 @@ type Event struct {
 	// Value is an Expression's new value, as Expr counts it, or a
 	// Pedal's, from 0, up, to 1, down, with half pedal between.
 	Value float64
+	// Into is how many frames of a NoteOn's note have passed, above zero
+	// for a note chased, or how many frames ago a PastNote's note
+	// started.
+	Into int
 	// Turn is a NoteOn's place among the notes of its lane, counted
 	// from 1 at the start of the music, for an instrument that changes
 	// note by note in turn, as a voice singing its vowels in turn. A
@@ -239,8 +243,24 @@ type Event struct {
 	// Zero says the host knows none, as for a note played live. It is
 	// news, not a promise: an edit, a stop or a jump may end the note
 	// sooner, and its NoteOff still comes, as for every note. The
-	// NoteOff is what ends it.
+	// NoteOff is what ends it. A chased note's Length is what is left of
+	// it, and a loop's end cuts it. A PastNote's is its frames from its
+	// start to where it let go, the pedal's hold included, and zero
+	// where the pedal holds it still.
 	Length int
+	// Whole is a NoteOn's or a PastNote's frames from start to end as
+	// the music writes them, for an instrument that picks a sound by a
+	// note's length: chased or not, and whatever a loop's end cuts.
+	// Zero says the host knows none, as for a note played live.
+	Whole int
+	// Legato says another note of the group was down as a NoteOn's or a
+	// PastNote's note started in the music. The host sets it for a
+	// plugin with [Descriptor.Past], however playing reaches the note.
+	Legato bool
+	// Ring says a PastNote may still be heard at this frame, so the
+	// plugin sounds it from where it stands. Clear, the note only sets
+	// what a later note reads, as a key switch does.
+	Ring bool
 }
 
 // EventKind is what an [Event] does.
@@ -260,6 +280,16 @@ const (
 	// Pedal moves the sustain pedal of Group to Value. While it is down,
 	// the group's notes let go ring on until it lifts.
 	Pedal
+	// PastStart opens a recall of Group's earlier notes, for a plugin
+	// with [Descriptor.Past]: it forgets what earlier notes set. The
+	// host sends it as playing starts, jumps or wraps, or an edit lands.
+	PastStart
+	// PastNote tells of a note of Group that started earlier in the
+	// music and takes no NoteOn. It carries a NoteOn's fields, and its
+	// Note is the note's alone while the pedal holds it. The recall's
+	// PastNotes and chased NoteOns come at one frame, after the
+	// PastStart, in the order the notes started in the music.
+	PastNote
 )
 
 // ExprKind is an expression a note changes by as it sounds.
@@ -423,13 +453,16 @@ type Upcoming struct {
 	Note int32
 	// Group is the lane it plays in, as an [Event]'s.
 	Group int32
-	// Pitch, Velocity, Turn, KeyTurn, Mod and Length are its NoteOn's.
+	// Pitch, Velocity, Turn, KeyTurn, Mod, Length, Whole and Legato are
+	// its NoteOn's.
 	Pitch    float64
 	Velocity float64
 	Turn     int64
 	KeyTurn  int64
 	Mod      float64
 	Length   int
+	Whole    int
+	Legato   bool
 }
 
 // UpcomingKind is what an [Upcoming] tells.

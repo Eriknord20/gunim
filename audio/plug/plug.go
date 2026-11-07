@@ -66,6 +66,14 @@ type Descriptor struct {
 	// the note comes within LookAhead, in [Block.Upcoming]. Zero asks
 	// for none. It needs Notes.
 	LookAhead time.Duration
+	// Past asks to hear of the music's earlier notes where playing
+	// starts, jumps or wraps, or an edit lands, with [PastStart] and
+	// [PastNote] in [Block.Events], for an instrument whose sound hangs
+	// on notes gone by: a key switch, or a one shot ringing on. Each
+	// pitch's latest earlier note comes, and every note the instrument's
+	// [Processor.Tail] may still hold. A host leaves these events out
+	// for any other plugin. It needs Notes.
+	Past bool
 	// ChordAhead is how long before a chord starts the plugin asks to
 	// hear of it, for an instrument that plays to the chords under its
 	// notes: a sub on the chord's bass, unison on its tones, a riser
@@ -585,6 +593,9 @@ func check(d *Descriptor) error {
 	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead || d.ChordAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration from zero to %v", d.ID,
 			d.ChordAhead, MaxChordAhead)
+	}
+	if d.Past && !d.Notes {
+		return fmt.Errorf("%s asks for past notes, which takes Notes", d.ID)
 	}
 	if d.Generator() && len(d.ControlOut) == 0 {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)
