@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -381,5 +382,42 @@ func TestSlideSelectedRowsSlidesWhatTheProgramSelects(t *testing.T) {
 	g.SetSelectedRows([][2]int{{3, 4}}, 3, u)
 	if g.gliding() {
 		t.Fatal("SetSelectedRows slid the selection")
+	}
+}
+
+// The selection, sliding, goes with the Animations slider: twice as long
+// at 2, and landing at once at 0, on every frame between.
+func TestTheSelectionSlideGoesWithTheAnimationScale(t *testing.T) {
+	g, w, run, clickRow := multiGrid(t)
+	g.Glide = true
+	clickRow(5, 0)
+	run(60)
+	framesFrom := func(row int) int {
+		t.Helper()
+		w.Input(input.KeyPress{Key: input.KeyDown})
+		for n := 1; n < 600; n++ {
+			run(1)
+			// The spring may pass the row a little, and no more.
+			if at := g.glideAt[0]; at < float64(row) || at > float64(row)+1.2 {
+				t.Fatalf("at frame %d the slide from %d is at %v", n, row, at)
+			}
+			if !g.gliding() {
+				return n
+			}
+		}
+		t.Fatal("the slide never settled")
+		return 0
+	}
+	normal := framesFrom(5)
+	anim.SetScale(2)
+	t.Cleanup(func() { anim.SetScale(1) })
+	if slow := framesFrom(6); slow < normal*3/2 {
+		t.Errorf("at scale 2 the slide took %d frames, from %d", slow, normal)
+	}
+	anim.SetScale(0)
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	run(1)
+	if g.gliding() {
+		t.Errorf("at scale 0 the selection still slides, at %v", g.glideAt)
 	}
 }

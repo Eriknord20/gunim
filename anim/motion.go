@@ -87,6 +87,28 @@ func (sp Spring) Follow(x, v, to float64, dt time.Duration) (at, speed float64) 
 	return to + x, v
 }
 
+// FollowScaled is Follow for something drawn moving, as a selection
+// sliding or a view gliding, under the scale [SetScale] sets: stretched
+// or shrunk with it, and at 0 landing at once. Follow itself keeps real
+// time, for a value that measures something.
+func (sp Spring) FollowScaled(x, v, to float64, dt time.Duration) (at, speed float64) {
+	s := Scale()
+	if s == 0 {
+		return to, 0
+	}
+	if s == 1 {
+		return sp.Follow(x, v, to, dt)
+	}
+	// As Animated does: a long frame counts as maxStep at most, in steps
+	// no longer than that.
+	dt = scaledStep(min(dt, maxStep), s)
+	for dt > maxStep {
+		x, v = sp.Follow(x, v, to, maxStep)
+		dt -= maxStep
+	}
+	return sp.Follow(x, v, to, dt)
+}
+
 // An Ease reshapes linear progress in 0..1 into eased progress.
 type Ease func(t float32) float32
 
