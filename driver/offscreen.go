@@ -518,6 +518,8 @@ func (w *OffscreenWindow) Placement() (Placement, bool) {
 	return Placement{
 		Bounds:    geom.Rect{Min: w.origin, Max: w.origin.Add(size)},
 		Maximized: w.frame != nil && w.frame.IsMaximized,
+		// The pretend screen is in device pixels.
+		CoordsPerLogical: w.scale,
 	}, true
 }
 

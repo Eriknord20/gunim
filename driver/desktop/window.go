@@ -227,6 +227,9 @@ type Window struct {
 	// in screen coordinates as x, y, width, height. The latest is where
 	// the window goes back to; see noteNormal.
 	normals [][4]int
+	// normalScales are the screen coordinates per logical pixel the window had
+	// at each of normals, so that a place is told with the scale it was saved at.
+	normalScales []float32
 	// gone says the window has been destroyed, and final where it was
 	// as it was, kept says whether it could say. They are held by mu, for
 	// Placement asks of them from any goroutine.

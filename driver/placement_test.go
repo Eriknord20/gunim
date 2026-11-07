@@ -29,6 +29,73 @@ func TestFitPlacement(t *testing.T) {
 		ok       bool
 	}{
 		{
+			name:     "saved at 100%, opened where the monitor is at 200%: twice the size, as far from the corner in logical pixels",
+			in:       Placement{Bounds: geom.Rc(160, 90, 780, 660), CoordsPerLogical: 1},
+			monitors: []Monitor{{Primary: true, Scale: 2, CoordsPerLogical: 2, Bounds: geom.Rc(0, 0, 4096, 2560), WorkArea: geom.Rc(0, 64, 4096, 2496)}},
+			want:     Placement{Bounds: geom.Rc(320, 180, 1560, 1320), CoordsPerLogical: 2}, ok: true,
+		},
+		{
+			name: "saved at 200%, opened at 100%: half the size",
+			in:   Placement{Bounds: geom.Rc(320, 180, 1560, 1320), CoordsPerLogical: 2},
+			want: Placement{Bounds: geom.Rc(160, 90, 780, 660), CoordsPerLogical: 1}, ok: true,
+		},
+		{
+			name:     "saved at 100% on the right monitor, now at 200%: measured from that monitor's corner",
+			in:       Placement{Bounds: geom.Rc(2020, 100, 800, 600), CoordsPerLogical: 1},
+			monitors: twoMonitors[1:],
+			want:     Placement{Bounds: geom.Rc(2120, 200, 1600, 1200), CoordsPerLogical: 2}, ok: true,
+		},
+		{
+			name:     "grown past the far edge by the new scale, moved back onto the work area",
+			in:       Placement{Bounds: geom.Rc(1000, 500, 800, 500), CoordsPerLogical: 1},
+			monitors: []Monitor{{Primary: true, Scale: 1.5, CoordsPerLogical: 1.5, Bounds: geom.Rc(0, 0, 1920, 1080)}},
+			want:     Placement{Bounds: geom.Rc(720, 330, 1200, 750), CoordsPerLogical: 1.5}, ok: true,
+		},
+		{
+			name:     "one monitor, its coordinates halved with the scale: found where it now is, not centred",
+			in:       Placement{Bounds: geom.Rc(2500, 1500, 800, 400), CoordsPerLogical: 2},
+			monitors: []Monitor{{Primary: true, Scale: 1, Bounds: geom.Rc(0, 0, 1920, 1080)}},
+			want:     Placement{Bounds: geom.Rc(1250, 750, 400, 200), CoordsPerLogical: 1}, ok: true,
+		},
+		{
+			name: "two monitors, the screen's coordinates doubled: stays on the right monitor",
+			in:   Placement{Bounds: geom.Rc(2020, 100, 800, 600), CoordsPerLogical: 1},
+			monitors: []Monitor{{Primary: true, Scale: 2, CoordsPerLogical: 2, Bounds: geom.Rc(0, 0, 3840, 2160)},
+				{Scale: 2, CoordsPerLogical: 2, Bounds: geom.Rc(3840, 0, 3840, 2160)}},
+			want: Placement{Bounds: geom.Rc(4040, 200, 1600, 1200), CoordsPerLogical: 2}, ok: true,
+		},
+		{
+			name: "two monitors, the screen's coordinates halved: stays on the left monitor",
+			in:   Placement{Bounds: geom.Rc(3000, 100, 800, 600), CoordsPerLogical: 2},
+			monitors: []Monitor{{Primary: true, Scale: 1, Bounds: geom.Rc(0, 0, 1920, 1080)},
+				{Scale: 1, Bounds: geom.Rc(1920, 0, 1920, 1080)}},
+			want: Placement{Bounds: geom.Rc(1500, 50, 400, 300), CoordsPerLogical: 1}, ok: true,
+		},
+		{
+			name: "two monitors, the screen's coordinates halved: stays on the right monitor",
+			in:   Placement{Bounds: geom.Rc(4000, 100, 800, 600), CoordsPerLogical: 2},
+			monitors: []Monitor{{Primary: true, Scale: 1, Bounds: geom.Rc(0, 0, 1920, 1080)},
+				{Scale: 1, Bounds: geom.Rc(1920, 0, 1920, 1080)}},
+			want: Placement{Bounds: geom.Rc(2000, 50, 400, 300), CoordsPerLogical: 1}, ok: true,
+		},
+		{
+			name:     "a scale no system reports, as in a damaged file, is ignored",
+			in:       Placement{Bounds: geom.Rc(160, 90, 780, 660), CoordsPerLogical: 1e-30},
+			monitors: []Monitor{{Primary: true, Scale: 2, CoordsPerLogical: 2, Bounds: geom.Rc(0, 0, 4096, 2560)}},
+			want:     Placement{Bounds: geom.Rc(160, 90, 780, 660)}, ok: true,
+		},
+		{
+			name: "saved at its own scale, kept as it was",
+			in:   Placement{Bounds: geom.Rc(100, 100, 800, 600), CoordsPerLogical: 1},
+			want: Placement{Bounds: geom.Rc(100, 100, 800, 600), CoordsPerLogical: 1}, ok: true,
+		},
+		{
+			name:     "saved before the scale was kept: the bounds as they are",
+			in:       Placement{Bounds: geom.Rc(160, 90, 780, 660)},
+			monitors: []Monitor{{Primary: true, Scale: 2, CoordsPerLogical: 2, Bounds: geom.Rc(0, 0, 4096, 2560)}},
+			want:     Placement{Bounds: geom.Rc(160, 90, 780, 660)}, ok: true,
+		},
+		{
 			name: "kept where it was",
 			in:   Placement{Bounds: geom.Rc(100, 100, 800, 600)},
 			want: Placement{Bounds: geom.Rc(100, 100, 800, 600)}, ok: true,
