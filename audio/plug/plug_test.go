@@ -78,6 +78,7 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"control default out": {ID: "test.ctldef", Name: "X", New: newer,
 			ControlOut: []ControlPort{{Name: "LFO", Min: -1, Max: 1, Default: 2}}},
 		"look-ahead without notes": {ID: "test.ahead", Name: "X", New: newer, LookAhead: time.Second},
+		"past notes without notes": {ID: "test.past", Name: "X", New: newer, Past: true},
 		"look-ahead below zero": {ID: "test.behind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			LookAhead: -time.Millisecond},
 		"chords ahead without notes": {ID: "test.chords", Name: "X", New: newer, ChordAhead: time.Second},
