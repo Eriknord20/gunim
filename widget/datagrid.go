@@ -553,7 +553,7 @@ func (g *DataGrid) Focusable() bool { return true }
 func (g *DataGrid) Step(dt time.Duration) bool {
 	moving := false
 	if g.top != g.goal || g.vel != 0 {
-		g.top, g.vel = Quick.Get(g.th).Follow(g.top, g.vel, g.goal, dt)
+		g.top, g.vel = Quick.Get(g.th).FollowScaled(g.top, g.vel, g.goal, dt)
 		// Still once it is a hundredth of a pixel away and all but stopped.
 		px := float64(max(g.rowH, 1))
 		if math.Abs(g.top-g.goal)*px < 0.01 && math.Abs(g.vel)*px < 1 {
@@ -592,7 +592,7 @@ func (g *DataGrid) Step(dt time.Duration) bool {
 		still := true
 		for k := range 2 {
 			to := float64(g.glideTo[k])
-			g.glideAt[k], g.glideVel[k] = Quick.Get(g.th).Follow(g.glideAt[k], g.glideVel[k], to, dt)
+			g.glideAt[k], g.glideVel[k] = Quick.Get(g.th).FollowScaled(g.glideAt[k], g.glideVel[k], to, dt)
 			if math.Abs(g.glideAt[k]-to)*px < 0.01 && math.Abs(g.glideVel[k])*px < 1 {
 				g.glideAt[k], g.glideVel[k] = to, 0
 			} else {
