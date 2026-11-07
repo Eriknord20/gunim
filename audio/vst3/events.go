@@ -476,6 +476,7 @@ func (k *keyboard) play(p *Plugin, e *plug.Event) {
 		gi, ch := k.channel(e.Group)
 		k.move(p, gi, ch, mapPedal, f, min(max(e.Value, 0), 1))
 		k.release(gi)
+	case plug.PastStart, plug.PastNote:
 	}
 }
 

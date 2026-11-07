@@ -46,6 +46,7 @@ func (r *recorder) Process(b *plug.Block) {
 			case plug.NoteOff:
 				r.down--
 			case plug.Expression, plug.Pedal:
+			case plug.PastStart, plug.PastNote:
 			}
 		}
 		for _, ch := range b.Out {
