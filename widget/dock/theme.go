@@ -66,6 +66,9 @@ var (
 	// another window's bar.
 	DockHere  = theme.Choice("dock.drop.tab", "Dock here")
 	SplitHere = theme.Choice("dock.drop.split", "Split here")
+	// RestoreTip is the tooltip on the button that puts the panes back
+	// where one fills the window.
+	RestoreTip = theme.Choice("dock.restore.tip", "Restore the panes")
 	// ShareLeast is the least share of a split's room either side keeps,
 	// as a divider is dragged and as the layout sets it. Dragged, a
 	// side keeps this share or the 48 pixels a pane needs, whichever is

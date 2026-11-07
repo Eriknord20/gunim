@@ -362,3 +362,18 @@ func TestADockBarGlidesAfterATabLeftIt(t *testing.T) {
 		t.Fatal("a click on a dock's bar after a tab left it shows no glide")
 	}
 }
+
+// On a narrow bar with room to move the window, tabs keep their least
+// width before that room stays free.
+func TestNarrowBarTabsKeepTheirLeastWidth(t *testing.T) {
+	d := NewDock(0)
+	d.Caption, d.Corner = true, 560
+	l := NewLayout(true, "a", "b")
+	stage(t, d, l)
+	for _, id := range []string{"a", "b"} {
+		r, ok := d.TabRect(id)
+		if !ok || r.Size().W < TabLeast.Default()-1 {
+			t.Errorf("tab %s is %v wide, under the least", id, r.Size().W)
+		}
+	}
+}

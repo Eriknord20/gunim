@@ -8,6 +8,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
@@ -62,8 +63,26 @@ type Dock struct {
 	// the top right corner leaves free for the window's buttons.
 	Caption bool
 	Corner  float32
+	// Lead is the room a bar in the top left corner leaves free before
+	// its tabs, for what the application stands there, as a menu's
+	// button. TopPlain draws no fill behind the bars along the dock's
+	// top, which then stand in a title bar with a fill of its own.
+	Lead     float32
+	TopPlain bool
 	// Keys steps through the tabs and the panes from the keyboard.
 	Keys bool
+	// Maximize lets a double click on a tab fill the window with what it
+	// shows, and a second one, or the button at the end of its bar, put
+	// the panes back. So does ToggleMax. The layout does not change: only
+	// the dock shows less of it, the others sliding away and sliding
+	// back. Another pane asked for, or a change to what the window
+	// shows, puts them back too.
+	Maximize bool
+	// OnMax, when set, runs on the UI goroutine as what the window shows
+	// changes by maximizing, with the item that fills it, "" for none.
+	// An application drawing the views itself shows Shown again. A
+	// non-nil result is sent to the application as the dock's intent.
+	OnMax func(item string, u *gunim.UI) gunim.Intent
 	// MarkAlone marks the tab in front of the pane the keys work in
 	// where the window shows that pane alone too, not only among
 	// several. Changed once the dock shows, it shows from the next
@@ -73,15 +92,36 @@ type Dock struct {
 	// asks for; a non-nil result is sent to the application as the
 	// dock's intent. Without it the Change is sent itself.
 	OnChange func(c Change, u *gunim.UI) gunim.Intent
+	// OnPlusMenu, when set, runs as a bar's + is clicked with the second
+	// button, with the bar and where its + is in the bar's space, to open
+	// a menu of what a new tab can hold.
+	OnPlusMenu func(b *Bar, at geom.Rect, u *gunim.UI) gunim.Intent
+	// Takes says the bars take data other than a tab dragged over them,
+	// landing between the tabs; OnDrop runs with it, the bar's group and
+	// where, as it is let go there.
+	Takes  func(data any) bool
+	OnDrop func(group string, d Dropped, u *gunim.UI) gunim.Intent
 
-	win  int
-	l    Layout
-	laid bool
-	size geom.Size
+	win int
+	// whole is the layout the application gave, and l what the dock
+	// shows of it: the same, or with an item maxed, that item alone.
+	whole Layout
+	l     Layout
+	// maxed is the item filling the window, "" for none, and maxShown
+	// what the window showed as it was maxed; restore is the button that
+	// puts the panes back, at restoreAt, shown as far as restoreLit says.
+	maxed      string
+	maxShown   []string
+	restore    *widget.IconButton
+	restoreAt  geom.Rect
+	restoreLit *anim.Float
+	laid       bool
+	size       geom.Size
 	// groups, items and dividers are where the last layout put each
 	// group, each item shown, and each divider.
 	groups   []placedGroup
 	items    map[string]geom.Rect
+	finals   map[string]geom.Rect
 	dividers []placedDivider
 	// bars are the groups' bars, by group, and top the root group's
 	// with TitleBar.
@@ -190,35 +230,144 @@ type placedDivider struct {
 // minPane is the least room a pane keeps while a divider is dragged.
 const minPane = 48
 
+// restoreSize is how large the restore button is.
+const restoreSize float32 = 24
+
 // NewDock returns a dock showing window win of the layouts it is given.
 func NewDock(win int) *Dock {
-	d := &Dock{win: win, items: map[string]geom.Rect{}, bars: map[string]*Bar{}, nodes: map[string]gunim.Node{},
+	d := &Dock{win: win, items: map[string]geom.Rect{}, finals: map[string]geom.Rect{}, restoreLit: anim.NewFloat(0), bars: map[string]*Bar{}, nodes: map[string]gunim.Node{},
 		itemOf: map[gunim.Node]string{}, mounted: map[gunim.Node]bool{}, showing: map[string]*fadeIn{}, fronts: map[string]string{},
 		shares: map[string]*anim.Float{}, splits: map[string]splitWas{}, closing: map[string]*closingSide{}, drop: anim.NewRect(geom.Rect{}), dropLit: anim.NewFloat(0)}
-	d.Add(d.drop, d.dropLit)
+	d.Add(d.drop, d.dropLit, d.restoreLit)
 	return d
 }
 
 // Win returns the window the dock shows.
 func (d *Dock) Win() int { return d.win }
 
+// SetWin has the dock show window win of its layout, for an application
+// whose window learns its number once it shows.
+func (d *Dock) SetWin(win int, u *gunim.UI) {
+	if d.win == win {
+		return
+	}
+	d.win = win
+	for _, b := range d.allBars() {
+		b.Win = win
+	}
+	if d.top != nil {
+		d.top.Win = win
+	}
+	d.show(u)
+}
+
 // Arrangement returns the layout as the dock shows it, with what the
 // user changed here and the application has not sent back yet.
-func (d *Dock) Arrangement() Layout { return d.l.Clone() }
+func (d *Dock) Arrangement() Layout { return d.whole.Clone() }
 
 // SetLayout shows l, which the dock keeps a copy of. Once laid out, the
 // views and the dividers glide to their new places; before, or with a
 // nil u, they jump.
 func (d *Dock) SetLayout(l Layout, u *gunim.UI) {
-	d.l = l.Clone()
+	d.whole = l.Clone()
 	// Whole, as one read from a file may not be: a split of two nodes,
 	// a group with a tab in front.
-	d.l.Mend(nil)
+	d.whole.Mend(nil)
+	d.show(u)
+}
+
+// show has the dock show its layout, as far as an item maxed leaves it.
+func (d *Dock) show(u *gunim.UI) {
+	was := d.maxed
+	if d.maxed != "" && !d.keepMax() {
+		d.maxed, d.maxShown = "", nil
+	}
+	d.l = d.whole
+	if d.maxed != "" {
+		d.l = d.whole.Clone()
+		g := d.l.GroupOf(d.maxed)
+		n := d.l.Node(d.maxed)
+		d.l.Window(d.win).Root = &Node{ID: g.ID, Kind: Group, Front: d.maxed, Kids: []*Node{n}}
+	}
 	d.sync(u)
+	if d.maxed != was {
+		d.maxChanged(u)
+	}
+}
+
+// maxable reports whether id can fill the window: a tab here beside
+// another pane.
+func (d *Dock) maxable(id string) bool {
+	win, ok := d.whole.Where(id)
+	return ok && win == d.win && d.whole.GroupOf(id) != nil && len(d.whole.Shown(d.win)) >= 2
+}
+
+// keepMax reports whether the item maxed still fills the window: it
+// stands here beside another pane, and the window would show what it
+// did as it was maxed.
+func (d *Dock) keepMax() bool {
+	return d.maxable(d.maxed) && slices.Equal(d.whole.Shown(d.win), d.maxShown)
+}
+
+// Maxed returns the item that fills the window, "" for none.
+func (d *Dock) Maxed() string { return d.maxed }
+
+// ToggleMax has item fill the window, in front of its group, or puts the
+// panes back where it fills it already. An item that cannot, standing
+// alone or elsewhere, stays as it is.
+func (d *Dock) ToggleMax(item string, u *gunim.UI) {
+	shown := false
+	switch {
+	case d.maxed == item:
+		d.maxed, d.maxShown = "", nil
+	case !d.maxable(item):
+		return
+	default:
+		if !d.whole.Shows(item) {
+			d.whole = d.whole.Clone()
+			d.whole.Show(item)
+			shown = true
+		}
+		d.maxed, d.maxShown = item, d.whole.Shown(d.win)
+		d.active = item
+	}
+	d.show(u)
+	if shown && u != nil {
+		d.change(Show{ID: item}, d, u)
+	}
+	d.maxChanged(u)
+}
+
+// maxChanged shows or hides the restore button, and says what fills the
+// window.
+func (d *Dock) maxChanged(u *gunim.UI) {
+	if d.maxed != "" && d.restore == nil {
+		d.restore = widget.NewIconButton(icon.Minimize2, RestoreTip.Default())
+		d.restore.OnClick = func(u *gunim.UI) gunim.Intent {
+			d.ToggleMax(d.maxed, u)
+			return nil
+		}
+	}
+	if d.restore != nil && u != nil {
+		d.restore.Tooltip = RestoreTip.Get(u.Theme())
+	}
+	on := float32(0)
+	if d.maxed != "" {
+		on = 1
+	}
+	if !d.laid || u == nil {
+		d.restoreLit.Jump(on)
+	} else {
+		d.restoreLit.Animate(on, widget.Quick.Get(u.Theme()))
+	}
+	if d.OnMax != nil && u != nil {
+		send(u, d, d.OnMax(d.maxed, u))
+	}
+	u.Invalidate()
 }
 
 // Refresh reads the tabs' faces again, as when a title changed.
-func (d *Dock) Refresh(u *gunim.UI) { d.sync(u) }
+func (d *Dock) Refresh(u *gunim.UI) { d.show(u) }
 
 // TopBar returns the bar of the group at the window's root, for the
 // application to put in its title bar, with TitleBar set.
@@ -235,6 +384,26 @@ func (d *Dock) TopBar() *Bar {
 func (d *Dock) Rect(item string) (geom.Rect, bool) {
 	r, ok := d.items[item]
 	return r, ok
+}
+
+// FinalRect returns where item comes to rest, in the dock's space: where
+// Rect says, once what is sliding has stopped. A view that must not
+// resize on the way, as a terminal must not, keeps this size, and is
+// cut to Rect.
+func (d *Dock) FinalRect(item string) (geom.Rect, bool) {
+	r, ok := d.finals[item]
+	return r, ok
+}
+
+// BarAt returns the room of the bar at p, in the dock's space, as the
+// last layout put it; false where no bar is there.
+func (d *Dock) BarAt(p geom.Point) (geom.Rect, bool) {
+	for _, g := range d.groups {
+		if g.bar != nil && g.top.Contains(p) {
+			return g.top, true
+		}
+	}
+	return geom.Rect{}, false
 }
 
 // TabRect returns where tab id stands on a bar the dock lays out, in
@@ -309,6 +478,13 @@ func (d *Dock) SetActive(item string, u *gunim.UI) {
 		return
 	}
 	d.active = item
+	if d.maxed != "" && item != d.maxed && item != "" {
+		if win, ok := d.whole.Where(item); ok && win == d.win {
+			// Asked for, it shows: the panes come back.
+			d.ToggleMax(d.maxed, u)
+			return
+		}
+	}
 	d.marks(u)
 	u.Invalidate()
 }
@@ -321,7 +497,16 @@ func (d *Dock) Children() []gunim.Node {
 			out = append(out, n)
 		}
 	}
-	return append(out, d.wantBars()...)
+	out = append(out, d.wantBars()...)
+	if d.restoreShows() {
+		out = append(out, d.restore)
+	}
+	return out
+}
+
+// restoreShows reports whether the restore button shows, or is fading.
+func (d *Dock) restoreShows() bool {
+	return d.restore != nil && (d.maxed != "" || d.restoreLit.Value() > 0.01 || d.restoreLit.Active())
 }
 
 // node returns item's view, from Content, or nil.
@@ -514,7 +699,7 @@ func (d *Dock) sync(u *gunim.UI) {
 		}
 	}
 	for it, n := range d.nodes {
-		if d.l.Node(it) == nil {
+		if d.whole.Node(it) == nil {
 			delete(d.nodes, it)
 			delete(d.itemOf, n)
 		}
@@ -648,19 +833,22 @@ func (d *Dock) change(c Change, from gunim.Node, u *gunim.UI) {
 // pick brings tab id to the front at once, before the application says
 // so, and has the keys work in it.
 func (d *Dock) pick(id string, from gunim.Node, u *gunim.UI) {
-	n := d.l.Node(id)
+	n := d.whole.Node(id)
 	if n == nil {
 		return
 	}
-	if !d.l.Shows(id) {
-		d.l = d.l.Clone()
-		d.l.Show(id)
-		d.change(Show{ID: id}, from, u)
+	if !d.whole.Shows(id) {
+		d.whole = d.whole.Clone()
+		d.whole.Show(id)
+		n = d.whole.Node(id)
 	}
 	if items := n.shown(nil); len(items) > 0 && !slices.Contains(items, d.active) {
 		d.active = items[0]
 	}
-	d.sync(u)
+	d.show(u)
+	// Once it shows, so what OnChange reads is what is shown; and for a
+	// tab in front already too, as the user picked its pane.
+	d.change(Show{ID: id}, from, u)
 	d.focus(u, true)
 }
 
@@ -764,6 +952,7 @@ func (d *Dock) Overhear(e input.Event, u *gunim.UI) {
 func (d *Dock) arrange(th *theme.Live, r geom.Rect) {
 	d.groups, d.dividers = d.groups[:0], d.dividers[:0]
 	clear(d.items)
+	clear(d.finals)
 	w := d.l.Window(d.win)
 	if w == nil || w.Root == nil {
 		return
@@ -814,6 +1003,41 @@ func (d *Dock) arrange(th *theme.Live, r geom.Rect) {
 		}
 	}
 	walk(w.Root, r, true)
+	d.rest(w.Root, r, gap, barH+space, true)
+}
+
+// rest notes where the items under n come to rest in r, on room each
+// group gives its tab in front after its bar, top.
+func (d *Dock) rest(n *Node, r geom.Rect, gap, top float32, root bool) {
+	switch n.Kind {
+	case Item:
+		d.finals[n.ID] = r
+	case Group:
+		if !root || !d.TitleBar {
+			r.Min.Y = min(r.Min.Y+top, r.Max.Y)
+		}
+		if f := n.front(); f != nil {
+			d.rest(f, r, gap, top, false)
+		}
+	case Row, Column:
+		share := shareOf(n.Share)
+		if s := d.shares[n.ID]; s != nil {
+			share = min(max(s.Target(), 0), 1)
+		}
+		if n.ID == d.held {
+			share = d.heldShare
+		}
+		a, b := r, r
+		if n.Kind == Row {
+			x := r.Min.X + max(r.Size().W-gap, 0)*share
+			a.Max.X, b.Min.X = x, x+gap
+		} else {
+			y := r.Min.Y + max(r.Size().H-gap, 0)*share
+			a.Max.Y, b.Min.Y = y, y+gap
+		}
+		d.rest(n.Kids[0], a, gap, top, false)
+		d.rest(n.Kids[1], b, gap, top, false)
+	}
 }
 
 // Layout implements [gunim.Node]: the dock fills its room, each view in
@@ -833,14 +1057,30 @@ func (d *Dock) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		}
 	}
 	for _, g := range d.groups {
-		if g.bar != nil {
-			g.bar.Caption, g.bar.Plus = d.Caption && g.top.Min.Y <= 0, d.Plus
-			g.bar.reserve = 0
-			if g.top.Min.Y <= 0 && g.top.Max.X >= size.W {
-				g.bar.reserve = d.Corner
-			}
-			wants = append(wants, want{g.bar, g.top})
+		if g.bar == nil {
+			continue
 		}
+		top := g.top.Min.Y <= 0
+		g.bar.Caption, g.bar.Plus = d.Caption && top, d.Plus
+		g.bar.Plain = d.TopPlain && top
+		g.bar.reserve, g.bar.lead = 0, 0
+		if top && g.top.Max.X >= size.W {
+			g.bar.reserve = d.Corner
+			if d.maxed != "" {
+				g.bar.reserve += d.restoreRoom(f.Theme)
+			}
+		}
+		if top && g.top.Min.X <= 0 {
+			g.bar.lead = d.Lead
+		}
+		wants = append(wants, want{g.bar, g.top})
+	}
+	if d.restoreShows() {
+		if d.maxed != "" {
+			s := restoreSize
+			d.restoreAt = geom.Rc(size.W-d.Corner-restoreSize-4, (BarHeight.Get(f.Theme)-s)/2, s, s)
+		}
+		wants = append(wants, want{d.restore, d.restoreAt})
 	}
 	got := map[gunim.Node]bool{}
 	clear(d.mounted)
@@ -874,6 +1114,9 @@ func (d *Dock) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	return size
 }
 
+// restoreRoom is the room the restore button takes on a bar.
+func (d *Dock) restoreRoom(*theme.Live) float32 { return restoreSize + 8 }
+
 // Step implements [gunim.Animator]: the fades, the splits' glides and
 // the sides that grow over a side gone.
 func (d *Dock) Step(dt time.Duration) bool {
@@ -903,7 +1146,7 @@ func (d *Dock) Step(dt time.Duration) bool {
 func (d *Dock) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	th := f.Theme
 	for k := range kids.All {
-		if _, bar := k.Node().(*Bar); bar {
+		if _, bar := k.Node().(*Bar); bar || k.Node() == gunim.Node(d.restore) {
 			continue
 		}
 		it := d.itemOf[k.Node()]
@@ -923,6 +1166,14 @@ func (d *Dock) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	for k := range kids.All {
 		if _, bar := k.Node().(*Bar); bar {
 			k.Paint(p)
+		}
+	}
+	for k := range kids.All {
+		if k.Node() == gunim.Node(d.restore) {
+			func() {
+				defer p.Layer(paint.LayerOpts{Bounds: d.restoreAt, Opacity: min(max(d.restoreLit.Value(), 0), 1)})()
+				k.Paint(p)
+			}()
 		}
 	}
 	for _, dv := range d.dividers {
@@ -963,6 +1214,9 @@ func (d *Dock) Covers(p geom.Point) bool {
 		if g.bar != nil && g.top.Contains(p) {
 			return true
 		}
+	}
+	if d.restoreShows() && d.restoreAt.Contains(p) {
+		return true
 	}
 	return d.dividerAt(p) >= 0
 }
@@ -1090,12 +1344,12 @@ func (d *Dock) dragDivider(p geom.Point, u *gunim.UI) {
 // resize sets split id's share at once, before the application says
 // so, and asks it to keep it.
 func (d *Dock) resize(id string, share float32, u *gunim.UI) {
-	d.l = d.l.Clone()
-	if !d.l.SetShare(id, share) {
+	d.whole = d.whole.Clone()
+	if !d.whole.SetShare(id, share) {
 		return
 	}
-	d.sync(u)
-	d.change(Resize{ID: id, Share: d.l.Node(id).Share}, d, u)
+	d.show(u)
+	d.change(Resize{ID: id, Share: d.whole.Node(id).Share}, d, u)
 }
 
 // DragEvent takes a tab dragged over the window: where it would land
@@ -1158,7 +1412,7 @@ func (d *Dock) light(at geom.Rect, on bool, u *gunim.UI) {
 // dropAt is where tab dr, dragged to p, would go, the room that lights
 // to say so, and whether it splits a pane; false for nowhere new.
 func (d *Dock) dropAt(p geom.Point, dr Drag, th *theme.Live) (to Target, at geom.Rect, split, ok bool) {
-	moved := d.l.Node(dr.ID)
+	moved := d.whole.Node(dr.ID)
 	if moved == nil {
 		return Target{}, geom.Rect{}, false, false
 	}

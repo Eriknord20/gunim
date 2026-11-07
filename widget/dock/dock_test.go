@@ -684,3 +684,283 @@ func TestLetGoPutsAHeldDividerBack(t *testing.T) {
 		t.Errorf("a share of 0.05 shows at %v, want a quarter", x)
 	}
 }
+
+// splitLayout is two panes side by side, a with a second tab c.
+func splitLayout() Layout {
+	l := NewLayout(true, "a", "c")
+	l.Add("b", Target{At: "a", Side: Right})
+	l.Show("a")
+	return l
+}
+
+// TestABarInTheTopLeftLeavesTheLeadFree: only that bar, whose room to
+// move the window starts after its tabs, as the others' does.
+func TestABarInTheTopLeftLeavesTheLeadFree(t *testing.T) {
+	d := NewDock(0)
+	d.Lead, d.Caption, d.TopPlain = 60, true, true
+	_, _, _ = stage(t, d, splitLayout())
+	left, ok := d.TabRect("a")
+	if !ok || left.Min.X < 60 {
+		t.Errorf("the left bar's first tab stands at %v, inside the lead of 60", left)
+	}
+	right, ok := d.TabRect("b")
+	if bar, _ := d.BarAt(right.Center()); !ok || right.Min.X-bar.Min.X > 10 {
+		t.Errorf("the right bar's first tab stands at %v in %v, not at its start", right, bar)
+	}
+	for _, g := range d.groups {
+		if !g.bar.Plain {
+			t.Errorf("bar %s along the top draws its fill", g.id)
+		}
+		for _, r := range g.bar.CaptionRects(g.top.Size()) {
+			if r.Min.X < g.bar.end {
+				t.Errorf("bar %s moves the window from %v, under its tabs, which end at %v", g.id, r.Min.X, g.bar.end)
+			}
+		}
+	}
+}
+
+// TestABarLowerDownDrawsItsFillAndTakesNoLead: only the top row stands
+// in the title bar.
+func TestABarLowerDownDrawsItsFillAndTakesNoLead(t *testing.T) {
+	d := NewDock(0)
+	d.Lead, d.TopPlain = 60, true
+	l := NewLayout(true, "a")
+	l.Add("b", Target{At: "a", Side: Bottom})
+	stage(t, d, l)
+	if r, _ := d.TabRect("b"); r.Min.X >= 60 {
+		t.Errorf("the lower bar's tab stands at %v, as if it had the lead", r)
+	}
+	if lower := d.groups[1]; lower.bar.Plain {
+		t.Errorf("the lower bar draws no fill")
+	}
+}
+
+// TestFinalRectStaysPutWhileASplitSlides: on every frame of a new split
+// sliding open, the views' rest stays where it ends, for a view that
+// must not resize on the way.
+func TestFinalRectStaysPutWhileASplitSlides(t *testing.T) {
+	d := NewDock(0)
+	l := NewLayout(true, "a")
+	w, run, _ := stage(t, d, l)
+	_ = w
+	next := l.Clone()
+	next.Add("b", Target{At: "a", Side: Right})
+	onUIDock(t, w, run, func(u *gunim.UI) { d.SetLayout(next, u) })
+	run(1)
+	final, ok := d.FinalRect("a")
+	if !ok || final.Size().W > 410 {
+		t.Fatalf("a comes to rest in %v, not its half", final)
+	}
+	moved := false
+	for range 90 {
+		r, _ := d.Rect("a")
+		if r.Size().W > final.Size().W+1 {
+			moved = true
+		}
+		if f, _ := d.FinalRect("a"); f != final {
+			t.Fatalf("a's rest went from %v to %v on the way", final, f)
+		}
+		run(1)
+	}
+	if !moved {
+		t.Error("a never took more than its half: nothing slid")
+	}
+	if r, _ := d.Rect("a"); r != final {
+		t.Errorf("a stopped at %v, not where it was to rest, %v", r, final)
+	}
+}
+
+// TestADoubleClickOnATabFillsTheWindowAndASecondPutsThePanesBack, moving
+// on every frame, the layout the application keeps as it was.
+func TestADoubleClickOnATabFillsTheWindowAndASecondPutsThePanesBack(t *testing.T) {
+	d := NewDock(0)
+	d.Maximize = true
+	var said []string
+	d.OnMax = func(it string, _ *gunim.UI) gunim.Intent {
+		said = append(said, it)
+		return nil
+	}
+	w, run, _ := stage(t, d, splitLayout())
+	at := tabAt(t, d, "a")
+	dbl := func() {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 2})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(1)
+	}
+	half, _ := d.Rect("a")
+	dbl()
+	if d.Maxed() != "a" || !slices.Equal(d.Shown(), []string{"a"}) {
+		t.Fatalf("maxed %q, showing %v", d.Maxed(), d.Shown())
+	}
+	last := float32(0)
+	for range 90 {
+		r, _ := d.Rect("a")
+		if r.Size().W < last-1 {
+			t.Fatalf("a shrank from %v to %v on its way to fill the window", last, r.Size().W)
+		}
+		last = r.Size().W
+		run(1)
+	}
+	if last <= half.Size().W+100 {
+		t.Errorf("a is %v wide, from %v: it does not fill the window", last, half.Size().W)
+	}
+	whole := d.Arrangement()
+	if got := whole.Shown(0); !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("the layout changed: it shows %v", got)
+	}
+	if !d.restoreShows() || d.restoreLit.Value() < 0.9 {
+		t.Errorf("the restore button shows %v", d.restoreLit.Value())
+	}
+	at = tabAt(t, d, "a")
+	dbl()
+	if d.Maxed() != "" || !slices.Equal(d.Shown(), []string{"a", "b"}) {
+		t.Errorf("after the second: maxed %q, showing %v", d.Maxed(), d.Shown())
+	}
+	run(90)
+	if r, _ := d.Rect("a"); r != half {
+		t.Errorf("a came back to %v, from %v", r, half)
+	}
+	if d.restoreShows() {
+		t.Error("the restore button stays after it faded")
+	}
+	if !slices.Equal(said, []string{"a", ""}) {
+		t.Errorf("OnMax said %q", said)
+	}
+}
+
+// The restore button stands clear of the corner and the tabs, and a click
+// on it puts the panes back.
+func TestTheRestoreButtonPutsThePanesBack(t *testing.T) {
+	d := NewDock(0)
+	d.Maximize, d.Corner = true, 100
+	w, run, _ := stage(t, d, splitLayout())
+	onUIDock(t, w, run, func(u *gunim.UI) { d.ToggleMax("b", u) })
+	run(30)
+	if d.restoreAt.Max.X > 800-100 {
+		t.Errorf("the button stands at %v, in the corner's room", d.restoreAt)
+	}
+	r, _ := d.TabRect("b")
+	if r.Max.X > d.restoreAt.Min.X {
+		t.Errorf("the tab at %v runs under the button at %v", r, d.restoreAt)
+	}
+	click(w, run, d.restoreAt.Center(), input.ButtonPrimary)
+	if d.Maxed() != "" {
+		t.Errorf("still maxed: %q", d.Maxed())
+	}
+}
+
+// TestThePanesComeBackAsTheWindowChanges: another pane asked for, or the
+// layout showing something else; a share changed elsewhere stays maxed.
+func TestThePanesComeBackAsTheWindowChanges(t *testing.T) {
+	d := NewDock(0)
+	w, run, _ := stage(t, d, splitLayout())
+	onUIDock(t, w, run, func(u *gunim.UI) {
+		d.ToggleMax("a", u)
+		d.SetActive("b", u)
+	})
+	if d.Maxed() != "" {
+		t.Errorf("another pane asked for: still maxed %q", d.Maxed())
+	}
+	onUIDock(t, w, run, func(u *gunim.UI) {
+		d.ToggleMax("a", u)
+		l := d.Arrangement()
+		l.Show("c")
+		d.SetLayout(l, u)
+	})
+	if d.Maxed() != "" {
+		t.Errorf("another tab in front: still maxed %q", d.Maxed())
+	}
+	onUIDock(t, w, run, func(u *gunim.UI) {
+		d.ToggleMax("b", u)
+		l := d.Arrangement()
+		l.SetShare(l.Parent(l.GroupOf("b").ID).ID, 0.3)
+		d.SetLayout(l, u)
+	})
+	if d.Maxed() != "b" {
+		t.Errorf("a share changed: no longer maxed")
+	}
+}
+
+// A pane alone has nothing to fill, and maximizing takes a nil UI.
+func TestALonePaneIsNotMaxedAndAMaxTakesANilUI(t *testing.T) {
+	d := NewDock(0)
+	d.SetLayout(NewLayout(true, "a"), nil)
+	d.ToggleMax("a", nil)
+	if d.Maxed() != "" {
+		t.Errorf("alone, it maxed")
+	}
+	d.SetLayout(splitLayout(), nil)
+	d.ToggleMax("c", nil)
+	if d.Maxed() != "c" || !slices.Equal(d.Shown(), []string{"c"}) {
+		t.Errorf("maxed %q, showing %v", d.Maxed(), d.Shown())
+	}
+	if whole := d.Arrangement(); !whole.Shows("c") {
+		t.Error("the tab maxed did not come to the front")
+	}
+	d.ToggleMax("c", nil)
+	if d.Maxed() != "" {
+		t.Errorf("still maxed %q", d.Maxed())
+	}
+}
+
+// TestSetWinShowsAnotherWindow: for a window that learns its number
+// once it shows.
+func TestSetWinShowsAnotherWindow(t *testing.T) {
+	d := NewDock(0)
+	l := NewLayout(true, "a")
+	id := l.AddWindow(false)
+	l.Add("b", Target{Win: id})
+	d.SetLayout(l, nil)
+	d.SetWin(id, nil)
+	if !slices.Equal(d.Shown(), []string{"b"}) {
+		t.Errorf("shows %v", d.Shown())
+	}
+}
+
+// A bar's plus menu and the other drags it takes go to its dock.
+func TestABarsPlusMenuAndOtherDragsGoToTheDock(t *testing.T) {
+	d := NewDock(0)
+	d.Plus = true
+	var from string
+	d.OnPlusMenu = func(b *Bar, _ geom.Rect, _ *gunim.UI) gunim.Intent {
+		from = b.GroupID()
+		return nil
+	}
+	d.Takes = func(data any) bool { return data == "pane" }
+	var landed string
+	d.OnDrop = func(group string, dr Dropped, _ *gunim.UI) gunim.Intent {
+		landed = group
+		return nil
+	}
+	l := NewLayout(true, "a")
+	w, run, _ := stage(t, d, l)
+	g := l.GroupOf("a").ID
+	b := d.bars[g]
+	click(w, run, b.PlusRect().Center(), input.ButtonSecondary)
+	if from != g {
+		t.Errorf("the + of group %q answered %q", g, from)
+	}
+	if !b.Takes("pane") || b.Takes("other") {
+		t.Error("the bar does not ask the dock what it takes")
+	}
+	onUIDock(t, w, run, func(u *gunim.UI) { b.OnDrop(Dropped{Data: "pane"}, u) })
+	if landed != g {
+		t.Errorf("landed on %q", landed)
+	}
+}
+
+// A click on the tab already in front says so, for the application to
+// give that pane the keyboard.
+func TestAClickOnTheTabInFrontIsSaid(t *testing.T) {
+	d := NewDock(0)
+	w, run, sent := stage(t, d, splitLayout())
+	sent()
+	click(w, run, tabAt(t, d, "b"), input.ButtonPrimary)
+	got := sent()
+	if len(got) != 1 || got[0] != gunim.Intent(Show{ID: "b"}) {
+		t.Fatalf("the click sent %#v", got)
+	}
+	if d.Active() != "b" {
+		t.Fatalf("the keys work in %q", d.Active())
+	}
+}
