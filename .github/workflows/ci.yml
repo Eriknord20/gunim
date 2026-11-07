@@ -114,6 +114,9 @@ jobs:
       - name: Test Core Audio
         run: go test -race ./audio/internal/audiounit/ ./audio/driver/
 
+      - name: Test opening files
+        run: go test -race -run 'TestShowingAFileThatIsGoneSaysSo|TestOnlyAWebPageOpensAsALink' ./driver/desktop/
+
       - name: Test Core Audio without cgo
         run: go test ./audio/internal/audiounit/ ./audio/driver/
         env:

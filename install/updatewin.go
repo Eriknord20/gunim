@@ -502,7 +502,7 @@ func openLink(c gunim.Client, addr string) {
 	if u, err := url.Parse(addr); err != nil || u.Scheme != "https" {
 		return
 	}
-	go func() { _ = c.Open(addr) }()
+	go func() { _ = c.OpenLink(addr) }()
 }
 
 // restarted is the run of the copy an update started in place of the
