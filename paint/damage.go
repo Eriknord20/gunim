@@ -3,9 +3,24 @@ package paint
 import "github.com/marrasen/gunim/geom"
 
 // MaxDamageRects is how many rectangles [Painter.DamageRects] returns
-// at most. Each costs the renderer a pass over the frame's ops, so a
-// few are worth it and many are not.
-const MaxDamageRects = 4
+// at most. Each costs the renderer a pass over the frame's ops, culled
+// a layer at a time, which costs far less than drawing what lies
+// between them. A window of many views each with a part that moves as
+// a song plays (a playhead, meters in three places, a lit step, a row
+// following) changes in that many places: with 4, they merged into a
+// box round most of the window. In Hej DAW! on a laptop at 125%, 12
+// redrew 6.5% of the window a frame where 4 redrew 37%, and drawing the
+// frame took half the time.
+const MaxDamageRects = 12
+
+const (
+	// fewDamageRects is how many rectangles need no more thought than their sum
+	// against the box round them.
+	fewDamageRects = 4
+	// manyDamageCover is how much of the box round them more than that may cover
+	// and still each be worth a pass.
+	manyDamageCover = 1.0 / 3
+)
 
 // damageSlack is how much area, in square logical pixels, two damaged
 // rectangles may waste when they merge into one: two parts of a meter a
@@ -47,9 +62,11 @@ func (d *damage) add(r geom.Rect) {
 	}
 }
 
-// rects returns d's rectangles, at most [MaxDamageRects]. Where they
-// cover most of the rectangle round them all, it returns that one:
-// a pass over the ops costs more than drawing the gaps between them.
+// rects returns d's rectangles, at most [MaxDamageRects]. Each is a pass over the
+// frame's ops, which small scattered parts repay many times over. Rectangles that
+// are large for how many they are don't: 12 covering half the window took twice as
+// long as the few round them, so those merge to [fewDamageRects]. And where they
+// cover most of the rectangle round them all, it returns that one.
 func (d *damage) rects() []geom.Rect {
 	for len(d.rs) > MaxDamageRects {
 		d.mergeCheapest()
@@ -57,16 +74,33 @@ func (d *damage) rects() []geom.Rect {
 	if len(d.rs) < 2 {
 		return d.rs
 	}
+	if len(d.rs) > fewDamageRects && d.covers() >= manyDamageCover {
+		for len(d.rs) > fewDamageRects {
+			d.mergeCheapest()
+		}
+	}
+	if d.covers() >= 0.6 {
+		var all geom.Rect
+		for _, r := range d.rs {
+			all = all.Union(r)
+		}
+		d.rs = append(d.rs[:0], all)
+	}
+	return d.rs
+}
+
+// covers is how much of the rectangle round d's rectangles they cover.
+func (d *damage) covers() float32 {
 	var all geom.Rect
 	var sum float32
 	for _, r := range d.rs {
 		all = all.Union(r)
 		sum += area(r)
 	}
-	if sum >= 0.6*area(all) {
-		d.rs = append(d.rs[:0], all)
+	if a := area(all); a > 0 {
+		return sum / a
 	}
-	return d.rs
+	return 0
 }
 
 // mergeCheapest merges the two rectangles of d whose union adds the

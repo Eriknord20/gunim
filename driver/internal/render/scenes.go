@@ -367,6 +367,11 @@ func (r *Renderer) sceneReady() bool {
 // scene draws a scene into its own target and queues it into the
 // frame, at its rectangle, as an image.
 func (r *Renderer) scene(op *paint.SceneOp) {
+	// Before anything else: drawing the scene is the costly part, and the frame
+	// comes here once for each of its damage rectangles.
+	if !r.cull.Empty() && r.outside(r.deviceRect(op.Transform, op.Rect)) {
+		return
+	}
 	t := op.Transform
 	size := op.Rect.Size()
 	// The scene draws at the size it shows, its transform's scale
