@@ -285,6 +285,8 @@ type Wrap struct {
 	// Gap is the space between children, and the theme's [Gap] when
 	// unset.
 	Gap theme.Token[float32]
+	// Justify packs each line at the start, or with JustifyEnd at the end. The rest read as the start.
+	Justify Justify
 	// Cross puts each child at the top of its line, or with CrossCenter or CrossEnd in its middle or at its bottom.
 	Cross Cross
 
@@ -311,7 +313,12 @@ func (w *Wrap) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	var at []geom.Point
 	var sizes []geom.Size
 	endLine := func() {
+		var spare float32
+		if w.Justify == JustifyEnd && start < len(at) {
+			spare = max(0, width-(x-gap))
+		}
 		for i := start; i < len(at); i++ {
+			at[i].X += spare
 			switch w.Cross {
 			case CrossCenter:
 				at[i].Y += (line - sizes[i].H) / 2

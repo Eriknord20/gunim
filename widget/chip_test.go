@@ -261,3 +261,29 @@ func TestAChipOfKeysHoldsStill(t *testing.T) {
 		t.Fatalf("it paints outside its box: %v", bad)
 	}
 }
+
+// Each line of a wrap packed at the end ends at its right edge, and a child too
+// wide for it stays in rather than running off to the left.
+func TestAWrapPackedAtTheEnd(t *testing.T) {
+	a, b, c, d := newSpot(150, 20), newSpot(100, 20), newSpot(150, 20), newSpot(500, 20)
+	wrap := NewWrap()
+	wrap.Gap = tableNoGap
+	wrap.Justify = JustifyEnd
+	w := gunimtest.New(t, geom.Sz(320, 200), nil)
+	gunim.RegisterView(w, "wrap", func(struct{}) gunim.Node { return wrap },
+		func(n gunim.Node, _ struct{}, u *gunim.UI) {
+			for _, k := range []gunim.Node{a, b, c, d} {
+				u.Insert(n, k)
+			}
+		})
+	if err := w.Client().Mount(gunim.Root, "wrap", "wrap", nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		w.Frame(time.Second / 60)
+	}
+	at(t, a, geom.Pt(70, 0))
+	at(t, b, geom.Pt(220, 0))
+	at(t, c, geom.Pt(170, 20))
+	at(t, d, geom.Pt(0, 40))
+}
