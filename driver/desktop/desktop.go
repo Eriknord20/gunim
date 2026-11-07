@@ -635,6 +635,7 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		// again for a monitor's scale as it showed noted those too.
 		w.applyBounds(bounds)
 		w.normals = append(w.normals[:0], bounds)
+		w.normalScales = append(w.normalScales[:0], w.coordsPerLogicalNow())
 	}
 	if place && placed.Maximized && !maximizeHidden {
 		_ = gw.Maximize()
