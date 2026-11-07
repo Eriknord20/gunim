@@ -832,7 +832,8 @@ func absFolder(folder string) string {
 // Open opens the file or folder at path with the program the system keeps
 // for it, as a double click in the system's file manager does. It returns
 // once the system has taken the request, and [driver.ErrNoLauncher] where
-// gunim cannot ask.
+// gunim cannot ask. That can take a moment, so call it off a loop that other
+// work waits on.
 func (c Client) Open(path string) error {
 	l, ok := c.w.dw.(driver.Launcher)
 	if !ok {
