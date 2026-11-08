@@ -3,8 +3,8 @@
 // numbers, 1 to 4, as the speaker says each is heard. Buttons shift the
 // picture earlier or later until the two feel together; the shift left
 // is how far the delay the speaker reports is off. Other buttons switch
-// between gunim's own driver, AAudio on Android and PipeWire on Linux,
-// and the system's sound through oto, and turn Options.Quick on and
+// between gunim's own driver named, as AAudio on Android or PipeWire on
+// Linux, and the system's own sound, and turn Options.Quick on and
 // off. Done logs a line that starts "SYNCCHECK", with the shift and what
 // the speaker reports. On Android the speaker's log is on, for the
 // delays AAudio and the Bluetooth route report.
@@ -41,11 +41,16 @@ import (
 const name = "gunim sync check"
 
 // native is the driver of gunim's own the check plays through first:
-// PipeWire on Linux, AAudio elsewhere, which plays through the system's
-// sound but on Android.
+// PipeWire on Linux, WASAPI on Windows, Core Audio on macOS and AAudio
+// on Android.
 var native = func() string {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return audiodriver.PipeWire
+	case "windows":
+		return audiodriver.WASAPI
+	case "darwin":
+		return audiodriver.CoreAudio
 	}
 	return audiodriver.AAudio
 }()
@@ -164,7 +169,7 @@ func (v *view) set() {
 // through names the driver playing.
 func through(st speaker.State) string {
 	if st.Driver == "" {
-		return "oto"
+		return "the system's sound"
 	}
 	return st.Driver
 }

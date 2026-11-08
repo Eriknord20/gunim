@@ -62,15 +62,15 @@ type Driver struct {
 const JACK = "JACK"
 
 // AAudio is the name package audio/speaker takes as Options.Driver to
-// play through AAudio, Android's own sound API, from Android 8.1, in
-// place of oto: in low-latency mode, with the device to itself where it
-// allows. With Options.Record set it records the phone's microphone
+// play through AAudio, Android's own sound API, from Android 8.1, by
+// gunim's own code: in low-latency mode, with the device to itself
+// where it allows. With Options.Record set it records the phone's microphone
 // too, or the headset's, for package audio/capture, stamped with the
 // mixer frame heard as each block came in, as a driver's inputs are;
 // the application needs the microphone permission first, which gunim's
-// App.Ask asks for. On another system, or an older Android, the
-// speakers play through the system's sound, as through a driver that
-// fails to open.
+// App.Ask asks for. Android 8.0 has no AAudio: there the speakers play
+// through oto. On another system the speakers play through the
+// system's own sound, as through a driver that fails to open.
 const AAudio = "AAudio"
 
 // CoreAudio is the name [Drivers] lists Core Audio under, on macOS:
@@ -87,8 +87,8 @@ const AAudio = "AAudio"
 const CoreAudio = "Core Audio"
 
 // WASAPI is the name package audio/speaker takes as Options.Driver to
-// play through WASAPI, Windows' own sound API, through gunim's own code
-// in place of oto: the default output, in shared mode, at the smallest
+// play through WASAPI, Windows' own sound API, through gunim's own code:
+// the default output, in shared mode, at the smallest
 // period the engine offers where Windows 10 or newer lets it. It plays
 // at the rate the device is set to in Windows' Sound settings, whatever
 // Options.Rate asks, so Windows converts nothing, and the mixer follows
@@ -102,8 +102,8 @@ const WASAPI = "WASAPI"
 
 // PipeWire is the name [Drivers] lists PipeWire under, on Linux, where
 // libpipewire 0.3.50 or newer loads and a PipeWire server listens:
-// package audio/speaker plays through it by gunim's own code, in place
-// of oto, where its Options.Driver names it. It plays to the default
+// package audio/speaker plays through it by gunim's own code where its
+// Options.Driver names it. It plays to the default
 // output at the rate Options.Rate asks, which PipeWire converts to the
 // device's where they differ, and asks for cycles as short as
 // Options.Buffer, or a quarter of the latency. PipeWire's real-time

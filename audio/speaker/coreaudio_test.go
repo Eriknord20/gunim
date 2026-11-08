@@ -673,34 +673,10 @@ func TestCoreAudioDefaultAsksTheRate(t *testing.T) {
 	}
 }
 
-// Where Core Audio fails to open as the system's own sound, the speaker
-// falls back to oto and says why.
-func TestCoreAudioDefaultFallsBackToOto(t *testing.T) {
-	coreAudioFirstOnly(t)
-	f := useAU(t, macInfo())
-	f.failed = audiounit.ErrNoOutput
-	errOto := errors.New("oto: here as a stand-in")
-	called := 0
-	wasOto := openSystemSound
-	openSystemSound = func(s *Speaker, o Options) (startedOutput, error) {
-		called++
-		if !errors.Is(s.problem, audiounit.ErrNoOutput) {
-			t.Errorf("falling back, the problem is %v", s.problem)
-		}
-		return nil, errOto
-	}
-	t.Cleanup(func() { openSystemSound = wasOto })
-	if _, err := Open(audio.NewMixer(), Options{}); !errors.Is(err, errOto) || called != 1 {
-		t.Fatalf("Open = %v, oto opened %d times", err, called)
-	}
-}
-
 // As the system's own sound on Windows and Android, which take neither
 // Buffer nor Direct, a change of either opens nothing again.
 func TestSetReopensForWhatTheDriverUses(t *testing.T) {
-	was := coreAudioFirst
-	coreAudioFirst = false
-	t.Cleanup(func() { coreAudioFirst = was })
+	noBackend(t)
 	called := 0
 	wasOto := openSystemSound
 	t.Cleanup(func() { openSystemSound = wasOto })
