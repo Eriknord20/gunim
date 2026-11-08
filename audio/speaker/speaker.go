@@ -1,10 +1,10 @@
 // Package speaker plays a [audio.Mixer] through the computer's
 // speakers: through PulseAudio or PipeWire, else ALSA, on Linux,
 // WASAPI on Windows, Core Audio on macOS and Oboe on Android before
-// 11; and on
+// 8.1; and on
 // Windows through an ASIO driver too, as package audio/driver plays;
 // and on Linux through JACK, where a JACK server answers, or
-// PipeWire's. On Android 11 and newer the speaker plays through
+// PipeWire's. On Android 8.1 and newer the speaker plays through
 // AAudio by gunim's own code, in low-latency mode, as [driver.AAudio]
 // does, with Options.Driver empty too, and records with
 // [Options].Record. On Windows the speaker plays through WASAPI by

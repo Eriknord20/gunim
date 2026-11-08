@@ -59,3 +59,12 @@ int gunim_aa_route(int device, int *r, int n);
 // places the device, in us, AudioTrack.getLatency in ms, and its buffer
 // in frames. It returns as gunim_aa_route does.
 int gunim_aa_probe(int quick, int *r, int n);
+
+// gunim_aa_watch asks Java to tell of audio devices coming and going,
+// and returns 1 where it does, or 0 where the Android driver is not
+// linked in or not ready.
+int gunim_aa_watch(void);
+
+// gunim_aa_changes writes how many times Java told of an output device,
+// and of an input device, coming or going.
+void gunim_aa_changes(int64_t *out, int64_t *in);

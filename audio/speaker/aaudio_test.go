@@ -62,6 +62,11 @@ type fakeAA struct {
 	// route is what Android tells of the outputs' device, nil for
 	// nothing, as where the Android driver is missing.
 	route atomic.Pointer[aaudio.Route]
+	// older plays an Android before 11, whose AAudio may not tell of a
+	// device gone: the speaker watches the devices itself, and outChanges
+	// and inChanges count the devices Android told of coming and going.
+	older                 bool
+	outChanges, inChanges atomic.Int64
 }
 
 type fakeOpen struct {
@@ -82,6 +87,10 @@ type fakeAAStream struct {
 	// anew moves its timestamps back, as a stream that counts anew.
 	frozen atomic.Bool
 	anew   atomic.Int64
+	// pos is the frames the device moved, which Position tells; stuck
+	// stops it while the callbacks run on.
+	pos   atomic.Int64
+	stuck atomic.Bool
 	// late is how long it takes to start its device after Start.
 	late   int64
 	closed chan struct{}
@@ -91,10 +100,15 @@ type fakeAAStream struct {
 
 func useFakeAA(t *testing.T, f *fakeAA) {
 	t.Helper()
-	was, clock := openAAStream, aaClock
+	was, clock, watch, changes := openAAStream, aaClock, aaWatchDevices, aaDeviceChanges
 	openAAStream = f.open
 	aaClock = func() int64 { return time.Now().UnixNano() }
-	t.Cleanup(func() { openAAStream, aaClock = was, clock })
+	aaWatchDevices, aaDeviceChanges = nil, nil
+	if f.older {
+		aaWatchDevices = func() bool { return true }
+		aaDeviceChanges = func() (out, in int64) { return f.outChanges.Load(), f.inChanges.Load() }
+	}
+	t.Cleanup(func() { openAAStream, aaClock, aaWatchDevices, aaDeviceChanges = was, clock, watch, changes })
 }
 
 func (f *fakeAA) open(c aaConfig) (aaStream, error) {
@@ -198,6 +212,9 @@ func (s *fakeAAStream) run() {
 		}
 		s.sh.Most.Store(int64(n))
 		s.sh.Frames.Add(int64(n))
+		if !s.stuck.Load() {
+			s.pos.Add(int64(n))
+		}
 	}
 }
 
@@ -240,6 +257,8 @@ func (s *fakeAAStream) Info() aaudio.Info {
 }
 
 func (s *fakeAAStream) XRuns() int64 { return 0 }
+
+func (s *fakeAAStream) Position() int64 { return s.pos.Load() }
 
 func (s *fakeAAStream) Route() aaudio.Route {
 	if r := s.f.route.Load(); r != nil {

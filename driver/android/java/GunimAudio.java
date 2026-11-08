@@ -2,22 +2,84 @@ package gunim.android;
 
 import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTimestamp;
 import android.media.AudioTrack;
+import android.os.Handler;
+import android.os.Looper;
 import java.lang.reflect.Method;
+import java.util.HashSet;
 
 /**
  * GunimAudio tells package audio/speaker of the device AAudio plays or
  * records on: its type, the delay Android's mixer reports for the output
  * it plays through, which on Bluetooth holds the headset's own, and which
- * device is the phone's own microphone.
+ * device is the phone's own microphone. Before Android 11 it tells too
+ * of devices coming and going, as AAudio may not.
  * Go calls it from a thread of its own, never AAudio's.
  */
 final class GunimAudio {
 	private GunimAudio() {}
+
+	// known holds the IDs of the devices Android lists, once watch
+	// began: Android tells of each device listed as the callback is
+	// registered, and only those it has not listed count as new.
+	private static HashSet<Integer> known;
+
+	/** devicesChanged tells Go of a device coming or going, an output, an input, or both. */
+	static native void devicesChanged(boolean out, boolean in);
+
+	/**
+	 * watch has Android tell Go of audio devices coming and going, on
+	 * the main thread, from now on. It returns false where the
+	 * application is not ready yet, and true once it watches.
+	 */
+	static synchronized boolean watch() {
+		if (known != null) {
+			return true;
+		}
+		Context app = Native.app;
+		if (app == null) {
+			return false;
+		}
+		AudioManager am = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+		known = new HashSet<>();
+		for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_ALL)) {
+			known.add(d.getId());
+		}
+		am.registerAudioDeviceCallback(new AudioDeviceCallback() {
+			@Override
+			public void onAudioDevicesAdded(AudioDeviceInfo[] devices) {
+				changed(devices, true);
+			}
+
+			@Override
+			public void onAudioDevicesRemoved(AudioDeviceInfo[] devices) {
+				changed(devices, false);
+			}
+		}, new Handler(Looper.getMainLooper()));
+		return true;
+	}
+
+	// changed tells Go of the devices added or removed that change what
+	// Android lists.
+	private static void changed(AudioDeviceInfo[] devices, boolean added) {
+		boolean out = false, in = false;
+		synchronized (GunimAudio.class) {
+			for (AudioDeviceInfo d : devices) {
+				if (added ? known.add(d.getId()) : known.remove(d.getId())) {
+					out |= d.isSink();
+					in |= d.isSource();
+				}
+			}
+		}
+		if (out || in) {
+			devicesChanged(out, in);
+		}
+	}
 
 	// outputLatency is AudioManager's hidden getOutputLatency, or null
 	// where it is missing.

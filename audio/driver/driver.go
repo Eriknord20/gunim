@@ -62,7 +62,7 @@ type Driver struct {
 const JACK = "JACK"
 
 // AAudio is the name package audio/speaker takes as Options.Driver to
-// play through AAudio, Android's own sound API, from Android 11, in
+// play through AAudio, Android's own sound API, from Android 8.1, in
 // place of oto: in low-latency mode, with the device to itself where it
 // allows. With Options.Record set it records the phone's microphone
 // too, or the headset's, for package audio/capture, stamped with the

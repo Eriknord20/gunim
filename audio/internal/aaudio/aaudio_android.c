@@ -168,6 +168,8 @@ int gunim_aa_timestamp(AAudioStream *s, int64_t *pos, int64_t *at, int64_t *now)
 // a program without it links all the same, and finds them NULL.
 extern int gunim_audio_route(int device, int *r, int n) __attribute__((weak));
 extern int gunim_audio_probe(int usage, int *r, int n) __attribute__((weak));
+extern int gunim_audio_watch(void) __attribute__((weak));
+extern void gunim_audio_changes(long long *out, long long *in) __attribute__((weak));
 
 int gunim_aa_route(int device, int *r, int n) {
 	return gunim_audio_route ? gunim_audio_route(device, r, n) : 0;
@@ -175,4 +177,15 @@ int gunim_aa_route(int device, int *r, int n) {
 
 int gunim_aa_probe(int quick, int *r, int n) {
 	return gunim_audio_probe ? gunim_audio_probe(quick ? AAUDIO_USAGE_GAME : AAUDIO_USAGE_MEDIA, r, n) : 0;
+}
+
+int gunim_aa_watch(void) { return gunim_audio_watch ? gunim_audio_watch() : 0; }
+
+void gunim_aa_changes(int64_t *out, int64_t *in) {
+	long long o = 0, i = 0;
+	if (gunim_audio_changes) {
+		gunim_audio_changes(&o, &i);
+	}
+	*out = o;
+	*in = i;
 }
