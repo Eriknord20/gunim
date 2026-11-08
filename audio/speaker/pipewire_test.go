@@ -353,6 +353,7 @@ func TestPipeWireStreamFailingOpensAgain(t *testing.T) {
 // A server that fails to open plays through the system's sound, and the
 // state says why.
 func TestPipeWireFailingFallsBack(t *testing.T) {
+	noBackend(t)
 	f := usePipeWire(t)
 	f.failed = errors.New("pipewire: no PipeWire server is running")
 	was := openSystemSound
@@ -702,6 +703,7 @@ func TestADeviceOfPipeWireOpensAllItsChannels(t *testing.T) {
 }
 
 func TestADeviceGoneFallsBackAndSaysSo(t *testing.T) {
+	noBackend(t)
 	usePipeWire(t)
 	useM4(t)
 	was := openSystemSound

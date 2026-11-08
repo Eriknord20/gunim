@@ -1,4 +1,4 @@
-//go:build !linux || android || !(amd64 || arm64)
+//go:build js || android
 
 package speaker
 
@@ -29,8 +29,9 @@ type otoOutput struct {
 	buf []float32
 }
 
-// openSystemSound opens the system's own sound by oto, where no driver
-// plays; a test puts a function of its own here.
+// openSystemSound opens the system's own sound by oto: in the browser,
+// and on Android 8.0, which has no AAudio. A test puts a function of
+// its own here.
 var openSystemSound = func(s *Speaker, o Options) (startedOutput, error) { return openOto(s, o) }
 
 func openOto(s *Speaker, o Options) (*otoOutput, error) {

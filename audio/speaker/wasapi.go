@@ -16,8 +16,8 @@ import (
 	"github.com/marrasen/gunim/audio/rt"
 )
 
-// wasapiFirst plays through WASAPI where Options names no driver, in
-// place of oto, on Windows.
+// wasapiFirst plays through WASAPI where Options names no driver, on
+// Windows; a test sets it elsewhere.
 var wasapiFirst = runtime.GOOS == "windows"
 
 // A wasDevice is a WASAPI device, as package audio/internal/wasapi opens

@@ -36,8 +36,8 @@
 // the speaker follows them.
 //
 // Through PipeWire, chosen as a driver named [driver.PipeWire], the
-// speaker plays to the default output by gunim's own code, in place of
-// oto, the same way: PipeWire's real-time thread takes each cycle from
+// speaker plays to the default output by gunim's own code, the same
+// way: PipeWire's real-time thread takes each cycle from
 // a ring and runs no Go. The speaker plays at the rate Options asks,
 // and PipeWire converts it to the device's. The sound follows the
 // default output as it changes, and the speaker counts the delay
@@ -73,6 +73,7 @@ import (
 
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/driver"
+	"github.com/marrasen/gunim/audio/internal/aaudio"
 )
 
 // Options says how to open the speakers.
@@ -85,12 +86,16 @@ type Options struct {
 	// PipeWire, which it lists on Linux likewise, [driver.AAudio] on Android,
 	// [driver.WASAPI] on Windows, or [driver.CoreAudio] on macOS. Empty
 	// plays through the system's own sound, as does a driver that fails
-	// to open, or JACK's server shut down: [State] tells why. On macOS
-	// the system's own sound is Core Audio's HAL output unit, as
-	// [driver.CoreAudio] plays, on Windows WASAPI, as [driver.WASAPI]
-	// plays, and oto where either fails to open. On Linux it is PipeWire,
-	// as [driver.PipeWire] plays, and the first sound card directly where
-	// PipeWire doesn't play.
+	// to open, or JACK's server shut down: [State] tells why. The
+	// system's own sound is gunim's own code: Core Audio's HAL output
+	// unit on macOS, as [driver.CoreAudio] plays, WASAPI on Windows, as
+	// [driver.WASAPI] plays, and AAudio on Android 8.1 and newer, as
+	// [driver.AAudio] plays. Where it fails to open, [Open] and
+	// [Speaker.Set] return the error. On Linux it is PipeWire, as
+	// [driver.PipeWire] plays, and the first sound card directly where
+	// PipeWire doesn't play. Linux plays sound on amd64 and arm64. The
+	// browser and Android 8.0, which has no AAudio, play through oto.
+	// Any other system has no sound: Open returns an error.
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
@@ -225,6 +230,11 @@ type Speaker struct {
 	mu      sync.Mutex
 	o       Options
 	problem error
+	// fails counts the opens of the output that failed in a row since
+	// it last played, and retry is when the watch tries again. A
+	// failed open leaves no output: out is nil while fails is set.
+	fails int
+	retry time.Time
 	// out is the output playing, nil while it changes.
 	out atomic.Pointer[outlet]
 	// ahead is how far ahead the mixer works, as Latency set it and dry
@@ -369,59 +379,113 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	return s, nil
 }
 
-// open opens the output s.o asks for, falling back to the system's own
-// sound, and sets the mixer to its rate. It runs with mu held, or
-// before s is shared.
+// open opens the output s.o asks for and sets the mixer to its rate.
+// A named driver that fails to open gives way to the system's own
+// sound. That is gunim's own backend where the system has one:
+// AAudio, WASAPI, Core Audio or PipeWire. Where that fails too, open
+// returns the error, except on Linux, which then opens the first sound
+// card, and on Android 8.0, which has no AAudio and plays through oto.
+// The browser and other systems with no backend of gunim's own go
+// straight to [openSystemSound]. It runs with mu held, or before s is
+// shared.
 func (s *Speaker) open() (output, error) {
 	s.problem = nil
 	s.reads.Store(0)
 	// Dry reads of the output closed tell nothing of the one opening.
 	s.dry.Store(0)
 	ahead := time.Duration(s.ahead.Load())
-	var out startedOutput
-	var err error
-	tried := true
-	switch {
-	case s.o.Driver == driver.AAudio || (s.o.Driver == "" && aaudioFirst):
-		out, err = openAAudio(s, s.o, s.o.Driver == driver.AAudio)
-	case s.o.Driver == "" && wasapiFirst:
-		out, err = openWasapi(s, s.o, false)
-	case s.o.Driver == "" && coreAudioFirst:
-		out, err = openAUOutput(s, s.o, false)
-	case s.o.Driver == "" && pipeWireFirst:
-		out, err = openPWOutput(s, s.o, false)
-	case s.o.Driver != "":
-		out, err = s.openDriver()
-	default:
-		tried = false
+	start := func(out startedOutput) (output, error) {
+		s.m.SetRate(out.rate())
+		out.start(ahead)
+		return out, nil
 	}
-	if tried {
+	named := s.o.Driver != "" && s.o.Driver != defaultDriver()
+	switch {
+	case named:
+		out, err := s.openDriver()
 		if err == nil {
-			s.m.SetRate(out.rate())
-			out.start(ahead)
-			return out, nil
+			return start(out)
 		}
 		s.problem = err
-		s.logf("%v; playing through the system's sound", err)
-		// A named driver gone, a sound server shares the card. What opens
-		// below takes it from everything else on the computer.
-		if pipeWireFirst && s.o.Driver != "" && s.o.Driver != driver.PipeWire {
-			def := s.o
-			def.Driver = ""
-			if pw, perr := openPWOutput(s, def, false); perr == nil {
-				s.m.SetRate(pw.rate())
-				pw.start(ahead)
-				return pw, nil
-			}
+		if defaultDriver() == "" {
+			s.logf("%v; playing through the system's sound", err)
+			return s.openSystem(start)
 		}
+		// A named driver gone, the system's own sound shares the
+		// device with everything else on the computer.
+		s.logf("%v; playing through %s", err, defaultDriver())
+	case defaultDriver() == "":
+		return s.openSystem(start)
 	}
+	def := s.o
+	if named {
+		def.Driver = ""
+	}
+	out, err := openDefault(s, def)
+	if err == nil {
+		return start(out)
+	}
+	if pipeWireFirst || errors.Is(err, aaudio.ErrUnsupported) {
+		if !named {
+			s.problem = err
+		}
+		s.logf("%v; playing through the system's sound", err)
+		return s.openSystem(start)
+	}
+	if named {
+		err = errors.Join(s.problem, err)
+	}
+	s.problem = err
+	s.logf("%v", err)
+	return nil, err
+}
+
+// openSystem opens [openSystemSound], and starts it by start.
+func (s *Speaker) openSystem(start func(startedOutput) (output, error)) (output, error) {
 	sys, err := openSystemSound(s, s.o)
 	if err != nil {
-		return nil, err
+		// What failed before the system's sound tells most.
+		return nil, errors.Join(s.problem, err)
 	}
-	s.m.SetRate(sys.rate())
-	sys.start(ahead)
-	return sys, nil
+	return start(sys)
+}
+
+// errNoDefault is openDefault's error where the system has no backend
+// of gunim's own.
+var errNoDefault = errors.New("speaker: no backend of gunim's own on this system")
+
+// defaultDriver names the backend that plays the system's own sound:
+// AAudio on Android, WASAPI on Windows, Core Audio on macOS, PipeWire on
+// Linux, and "" on any other system.
+func defaultDriver() string {
+	switch {
+	case aaudioFirst:
+		return driver.AAudio
+	case wasapiFirst:
+		return driver.WASAPI
+	case coreAudioFirst:
+		return driver.CoreAudio
+	case pipeWireFirst:
+		return driver.PipeWire
+	}
+	return ""
+}
+
+// openDefault opens the system's own backend, as o names it or as the
+// system's own sound where o names no driver.
+func openDefault(s *Speaker, o Options) (startedOutput, error) {
+	byName := o.Driver != ""
+	switch {
+	case aaudioFirst:
+		return openAAudio(s, o, byName)
+	case wasapiFirst:
+		return openWasapi(s, o, byName)
+	case coreAudioFirst:
+		return openAUOutput(s, o, byName)
+	case pipeWireFirst:
+		return openPWOutput(s, o, byName)
+	}
+	return nil, errNoDefault
 }
 
 // A startedOutput is an output that starts once the speaker holds it.
@@ -431,7 +495,7 @@ type startedOutput interface {
 }
 
 // openDriver opens the driver s.o names: JACK, PipeWire, Core Audio,
-// WASAPI, or an ASIO driver.
+// WASAPI, AAudio, or an ASIO driver.
 func (s *Speaker) openDriver() (startedOutput, error) {
 	if strings.HasPrefix(s.o.Driver, driver.PipeWirePrefix) {
 		return openPWOutput(s, s.o, true)
@@ -445,6 +509,8 @@ func (s *Speaker) openDriver() (startedOutput, error) {
 		return openAUOutput(s, s.o, true)
 	case driver.WASAPI:
 		return openWasapi(s, s.o, true)
+	case driver.AAudio:
+		return openAAudio(s, s.o, true)
 	}
 	return openRing(s, s.o)
 }
@@ -559,7 +625,7 @@ func (s *Speaker) Latency() time.Duration {
 }
 
 // watch grows the buffer while the sound runs dry, and opens the
-// output again as a driver asks.
+// output again as a driver asks, and where it failed to open.
 func (s *Speaker) watch() {
 	defer close(s.done)
 	const every = 250 * time.Millisecond
@@ -576,6 +642,7 @@ func (s *Speaker) watch() {
 			}
 			s.mu.Unlock()
 		case <-t.C:
+			s.retryOpen()
 			s.Anchor()
 			dry := s.dry.Swap(0)
 			if dry > 0 {
@@ -653,7 +720,8 @@ func (s *Speaker) SetLatency(d time.Duration) {
 // where the driver playing uses it, opens the output again, with a
 // moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
-// far ahead the mixer works from where it is.
+// far ahead the mixer works from where it is. Where the output failed
+// to open, Set opens it again, whatever changed.
 func (s *Speaker) Set(o Options) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -677,7 +745,8 @@ func (s *Speaker) Set(o Options) error {
 	}
 	named := o.Driver != ""
 	drives := named || driverFirst()
-	if o.Driver != prev.Driver || rate ||
+	// An output that failed to open tries again, whatever changed.
+	if s.fails > 0 || o.Driver != prev.Driver || rate ||
 		(named && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
 		(!named && (coreAudioFirst || pipeWireFirst) && o.Buffer != prev.Buffer) ||
 		(drives && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
@@ -712,8 +781,11 @@ func (s *Speaker) reopenLocked() error {
 	out, err := s.open()
 	if err != nil {
 		s.problem = err
+		s.fails++
+		s.retry = time.Now().Add(reopenDelay(s.fails))
 		return err
 	}
+	s.fails = 0
 	s.anchor.reset()
 	s.smu.Lock()
 	s.out.Store(&outlet{out})
@@ -731,6 +803,34 @@ func (s *Speaker) reopenLocked() error {
 	default:
 	}
 	return nil
+}
+
+// retryOpen opens the output again where it failed to open, as a
+// device that went away comes back, once the wait reopenDelay says is
+// over. A device stopped opens the output as it resumes instead.
+func (s *Speaker) retryOpen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fails == 0 || s.out.Load() != nil || time.Now().Before(s.retry) {
+		return
+	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		return
+	}
+	if err := s.reopenLocked(); err != nil {
+		s.logf("opening the output again: %v; trying again in %v", err, reopenDelay(s.fails))
+	}
+}
+
+// reopenDelay is how long the watch waits before it opens the output
+// again after fails opens in a row failed: a quarter of a second at
+// first, as a route settles, then twice as long each time, to every
+// 2 s, for a device gone a while.
+func reopenDelay(fails int) time.Duration {
+	return min(250*time.Millisecond<<min(max(fails-1, 0), 3), 2*time.Second)
 }
 
 // Changed returns a channel that receives as the output opens again:
@@ -941,14 +1041,16 @@ func (s *Speaker) stopLocked() error {
 // Suspend faded out, over [SuspendFade]. Where nothing sounded as it
 // suspended, a sound played as it resumes starts at once. An output
 // that was to open again while the device was stopped, as its device
-// changed, opens now.
+// changed, opens now, as does one that failed to open.
 func (s *Speaker) Resume() error {
 	err := s.restart()
-	if s.waiting.Swap(false) {
-		s.mu.Lock()
+	waiting := s.waiting.Swap(false)
+	s.mu.Lock()
+	// An output that failed to open tries again at once.
+	if waiting || (s.fails > 0 && s.out.Load() == nil) {
 		err = errors.Join(err, s.reopenLocked())
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	return err
 }
 

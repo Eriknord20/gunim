@@ -15,8 +15,9 @@ import (
 	"github.com/marrasen/gunim/audio/rt"
 )
 
-// aaudioFirst plays through AAudio where Options names no driver, in
-// place of oto, on the Androids it plays on: from Android 8.1.
+// aaudioFirst plays through AAudio where Options names no driver, on
+// Android. Android 8.0 has no AAudio, and plays through oto; a test
+// sets it elsewhere.
 var aaudioFirst = runtime.GOOS == "android"
 
 // micName names the AAudio input to package audio/capture.
