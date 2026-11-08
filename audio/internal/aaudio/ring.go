@@ -1,5 +1,5 @@
 // Package aaudio plays and records through AAudio, Android's own
-// sound API in C, from Android 11. Package audio/speaker plays through
+// sound API in C, from Android 8.1. Package audio/speaker plays through
 // it and hands its input to package audio/capture.
 //
 // AAudio asks for each buffer, and hands each one recorded, on a thread
@@ -19,8 +19,8 @@ import (
 )
 
 // ErrUnsupported is the error where AAudio is missing: on any system
-// but Android, and on Android before 11.
-var ErrUnsupported = errors.New("aaudio: AAudio plays on Android 11 and newer")
+// but Android, and on Android before 8.1.
+var ErrUnsupported = errors.New("aaudio: AAudio plays on Android 8.1 and newer")
 
 // ringHeader is a ring's counts and buffer. It mirrors gunim_ring in
 // aaudio_android.h, field for field, as both sides use it.

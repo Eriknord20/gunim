@@ -16,7 +16,7 @@ import (
 )
 
 // aaudioFirst plays through AAudio where Options names no driver, in
-// place of oto, on the Androids it plays on: from Android 11.
+// place of oto, on the Androids it plays on: from Android 8.1.
 var aaudioFirst = runtime.GOOS == "android"
 
 // micName names the AAudio input to package audio/capture.
@@ -32,6 +32,7 @@ type aaStream interface {
 	Shared() *aaudio.Shared
 	Info() aaudio.Info
 	XRuns() int64
+	Position() int64
 	Route() aaudio.Route
 	Probe() (aaudio.Probe, bool)
 }
@@ -54,6 +55,16 @@ var aaClock = nanotime
 // openAAStream opens an AAudio stream, where the system has AAudio;
 // nil elsewhere.
 var openAAStream func(c aaConfig) (aaStream, error)
+
+// aaWatchDevices and aaDeviceChanges are aaudio.WatchDevices and
+// aaudio.DeviceChanges where AAudio does not itself tell of a stream
+// whose device went away, before Android 11; nil where it does. There
+// the output reopens a stream as Android tells of devices coming and
+// going, and one whose device stands still.
+var (
+	aaWatchDevices  func() bool
+	aaDeviceChanges func() (out, in int64)
+)
 
 // aaRun is a stream open, and what the output's goroutine has seen of
 // it.
@@ -87,8 +98,9 @@ type aaRun struct {
 	// has: the output settles from then.
 	waitPast atomic.Int64
 	// dead says the feed found the stream failed, for the opener to
-	// open another.
-	dead atomic.Bool
+	// open another; moving says it is to open again as Android told of
+	// devices coming or going, a move rather than a failure.
+	dead, moving atomic.Bool
 	// bluetooth says the stream plays on a Bluetooth device, and mixer
 	// is the latency Android's mixer reports for its output, in frames,
 	// or 0 where it reports none, as the opener last asked.
@@ -101,6 +113,12 @@ type aaRun struct {
 	// mic is the device an input was asked to record on, as wantMic
 	// said when it opened.
 	mic int32
+	// pos is the frames the device had moved as the feed last saw them
+	// move, at posAt; resumed is when the stream last started again
+	// after a pause. Where the output watches for itself, a device that
+	// stands still for aaStill reopens the stream.
+	pos, posAt int64
+	resumed    atomic.Int64
 }
 
 // aaOutput plays through AAudio. AAudio's thread takes each buffer from
@@ -183,6 +201,16 @@ type aaOutput struct {
 	// row, and when it may try next.
 	fails, ifails int
 	next, inext   int64
+	// watching says Android tells the output of devices coming and
+	// going, as aaWatchDevices began, and outs and ins are the counts of
+	// those aaDeviceChanges last gave. outAt and inAt are when the feed
+	// last found an output, or an input, came or went, and quiet when
+	// the opener reopens what that moved, once Android has told of all
+	// of them, or 0 for none.
+	watching    atomic.Bool
+	outs, ins   atomic.Int64
+	outAt, inAt atomic.Int64
+	quiet       atomic.Int64
 }
 
 // The output's rings and timings.
@@ -231,6 +259,15 @@ const (
 	// aaMostCallback is the most frames a callback is counted to ask
 	// for at once, as a Bluetooth headset's large bursts do.
 	aaMostCallback = 16384
+	// aaStill is how long a stream's device may stand still, its
+	// position unmoved, before the stream is opened again, before
+	// Android 11. It is longer than aaStalled, as a Bluetooth headset
+	// may take a second to start.
+	aaStill = 2 * time.Second
+	// aaDeviceQuiet is how long the opener waits after Android last
+	// told of a device coming or going before it reopens the streams
+	// that moved: a headset connecting brings several at once.
+	aaDeviceQuiet = 300 * time.Millisecond
 )
 
 // none marks an origin unknown.
@@ -295,6 +332,7 @@ func (a *aaOutput) busy() func() {
 
 // openOut opens the output stream, stopped. It runs with mu held.
 func (a *aaOutput) openOut() error {
+	a.watchDevices()
 	st, err := a.openStream(aaConfig{rate: a.hz, chans: 2, quick: a.quick, data: a.q})
 	if err != nil {
 		a.problem.Store(&err)
@@ -314,6 +352,7 @@ func (a *aaOutput) openOut() error {
 	a.q.Drop()
 	run := &aaRun{st: st, sh: st.Shared(), info: info, start: a.q.Read(), opened: a.clock()}
 	run.moved.Store(run.opened)
+	run.posAt = run.opened
 	a.settle.Store(run.opened)
 	a.org.Store(none)
 	a.delay.Store(int64(info.Buffer))
@@ -329,6 +368,103 @@ func (a *aaOutput) openOut() error {
 		go a.probe(st)
 	}
 	return nil
+}
+
+// watchDevices asks Android to tell of devices coming and going, where
+// the output watches for itself and Android does not tell it yet. It
+// runs with mu held, as it calls into Java.
+func (a *aaOutput) watchDevices() {
+	if aaWatchDevices == nil || a.watching.Load() || !aaWatchDevices() {
+		return
+	}
+	out, in := aaDeviceChanges()
+	a.outs.Store(out)
+	a.ins.Store(in)
+	a.watching.Store(true)
+	a.s.logf("AAudio may not tell of a device gone on this Android: the speaker watches the devices itself")
+}
+
+// devicesChanged notes the devices Android told of coming or going
+// since it last looked, and has the opener reopen what that moved, once
+// aaDeviceQuiet passes with no more. It runs on the feed.
+func (a *aaOutput) devicesChanged(now int64) {
+	if !a.watching.Load() {
+		return
+	}
+	out, in := aaDeviceChanges()
+	moved := false
+	if out != a.outs.Load() {
+		a.outs.Store(out)
+		a.outAt.Store(now)
+		moved = true
+	}
+	if in != a.ins.Load() {
+		a.ins.Store(in)
+		a.inAt.Store(now)
+		moved = true
+	}
+	if moved {
+		a.s.logf("Android told of devices coming or going: %d outputs and %d inputs so far", out, in)
+		a.quiet.Store(now + int64(aaDeviceQuiet))
+		a.wakeOpener()
+	}
+}
+
+// moveFor says a stream opened at opened should open again, as Android
+// told of a device on its side coming or going at changed, 0 for never:
+// one on Android's pick of device, picked, follows any such change, as
+// Android may pick another now; one asked for a device follows only
+// where that device is gone, no longer listed. A stream opened less
+// than aaDeviceQuiet before the change opened on the devices as they
+// are now: AAudio may tell of a device gone, and the stream open again,
+// just before Java tells of it.
+func moveFor(opened, changed int64, picked, listed bool) bool {
+	return changed > 0 && opened+int64(aaDeviceQuiet) <= changed && (picked || !listed)
+}
+
+// moveStreams marks dead the streams the devices Android told of moved,
+// as moveFor says, once Android has been quiet aaDeviceQuiet, for
+// keepOpen to open them again. It runs on the opener, with mu held:
+// it may ask Java of a stream's device.
+func (a *aaOutput) moveStreams() {
+	q := a.quiet.Load()
+	if q == 0 || a.paused.Load() || a.clock() < q || !a.quiet.CompareAndSwap(q, 0) {
+		return
+	}
+	if run := a.run.Load(); run != nil && !run.dead.Load() && moveFor(run.opened, a.outAt.Load(), true, true) {
+		a.s.logf("Android told of an output device coming or going; opening the output again")
+		run.moving.Store(true)
+		run.dead.Store(true)
+	}
+	if run := a.irun.Load(); run != nil && !run.dead.Load() {
+		picked := run.mic == 0
+		listed := true
+		if !picked {
+			r := run.st.Route()
+			listed = !r.Known || r.Type != 0
+		}
+		if moveFor(run.opened, a.inAt.Load(), picked, listed) {
+			a.s.logf("Android told of an input device coming or going; opening the microphone again")
+			run.moving.Store(true)
+			run.dead.Store(true)
+		}
+	}
+}
+
+// stood says run's device has stood still for aaStill, its position
+// unmoved while the stream plays or records, and logs it. It runs on
+// the feed, where the output watches for itself.
+func (a *aaOutput) stood(run *aaRun, now int64) bool {
+	if p := run.st.Position(); p != run.pos {
+		run.pos, run.posAt = p, now
+		return false
+	}
+	since := now - max(run.posAt, run.resumed.Load())
+	if since <= int64(aaStill) {
+		return false
+	}
+	a.s.logf("AAudio's device has stood still for %v; opening the stream again", time.Duration(since))
+	return true
 }
 
 // route asks Android of the device run plays on, as it opens, which
@@ -532,6 +668,7 @@ func (a *aaOutput) openIn() error {
 	a.inDelay.Store(int64(info.Burst))
 	run := &aaRun{st: st, sh: st.Shared(), info: info, opened: a.clock(), mic: mic}
 	run.moved.Store(run.opened)
+	run.posAt = run.opened
 	a.irun.Store(run)
 	if a.s.debug {
 		a.s.logf("AAudio records at %d Hz, %d frames a burst, device %d of type %d, asked for device %d, "+
@@ -688,6 +825,11 @@ func (a *aaOutput) loop(buf []float32) {
 		if now-polled >= int64(aaPoll) {
 			polled = now
 			a.poll()
+			if a.watching.Load() {
+				a.devicesChanged(now)
+				a.still(&a.run, now)
+				a.still(&a.irun, now)
+			}
 		}
 		a.topUp(buf)
 		a.count(now)
@@ -727,10 +869,14 @@ func micRetry(fails int) time.Duration {
 
 // lived says how a stream that is closing ran: one that ran aaProven
 // clears the count of attempts that failed, and is opened again at
-// once; one that died sooner counts as an attempt that failed. It
-// returns when to try next.
+// once; one that died sooner counts as an attempt that failed. One
+// moving is opened again at once, the count kept. It returns when to
+// try next.
 func (a *aaOutput) lived(run *aaRun, fails *int, delay func(int) time.Duration) int64 {
 	now := a.clock()
+	if run.moving.Load() {
+		return now
+	}
 	if now-run.opened >= int64(aaProven) {
 		*fails = 0
 		return now
@@ -744,6 +890,15 @@ func (a *aaOutput) lived(run *aaRun, fails *int, delay func(int) time.Duration) 
 // a reader of the streams.
 func (a *aaOutput) watch(p *atomic.Pointer[aaRun], now int64) {
 	if run := p.Load(); run != nil && !run.dead.Load() && a.failed(run, now) {
+		run.dead.Store(true)
+		a.wakeOpener()
+	}
+}
+
+// still marks the stream p holds dead where its device stood still, as
+// stood says, and wakes the opener. It runs on the feed, as watch does.
+func (a *aaOutput) still(p *atomic.Pointer[aaRun], now int64) {
+	if run := p.Load(); run != nil && !run.dead.Load() && a.stood(run, now) {
 		run.dead.Store(true)
 		a.wakeOpener()
 	}
@@ -777,6 +932,10 @@ func (a *aaOutput) keep() {
 			// Resume wakes the opener, to ask again.
 			ask = time.After(time.Duration(max(0, run.ask.Load()-a.clock())))
 		}
+		var quiet <-chan time.Time
+		if q := a.quiet.Load(); q != 0 && !a.paused.Load() {
+			quiet = time.After(time.Duration(max(0, q-a.clock())))
+		}
 		select {
 		case <-a.quit:
 			return
@@ -784,6 +943,7 @@ func (a *aaOutput) keep() {
 		case <-next:
 		case <-ask:
 			a.askRoute()
+		case <-quiet:
 		}
 	}
 }
@@ -797,6 +957,7 @@ func (a *aaOutput) keepOpen() (wait time.Duration, ok bool) {
 	if a.paused.Load() {
 		return 0, false
 	}
+	a.moveStreams()
 	// The count of attempts that failed is cleared only by a stream
 	// that ran aaProven, so one that opens and fails at once waits as
 	// one that fails to open.
@@ -1240,6 +1401,7 @@ func (a *aaOutput) resume() error {
 	a.settle.Store(a.clock())
 	if run := a.run.Load(); run != nil {
 		run.moved.Store(a.clock())
+		run.resumed.Store(a.clock())
 		run.waitPast.Store(run.sh.Frames.Load())
 		a.startOut()
 	}

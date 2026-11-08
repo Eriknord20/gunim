@@ -35,6 +35,11 @@ uint16_t *gunim_user_folder(int f, int *n);
 // r, n ints at most. Each returns how many it wrote, or 0.
 int gunim_audio_route(int device, int *r, int n);
 int gunim_audio_probe(int usage, int *r, int n);
+// gunim_audio_watch has GunimAudio tell of audio devices coming and
+// going, and returns 1 once it does; gunim_audio_changes writes how many
+// times it told of an output, and of an input.
+int gunim_audio_watch(void);
+void gunim_audio_changes(long long *out, long long *in);
 
 // EGL, from the render thread. Each returns 0, or the EGL error.
 int gunim_egl_init(void);

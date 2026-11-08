@@ -16,4 +16,7 @@ func init() {
 		}
 		return st, nil
 	}
+	if !aaudio.TellsOfLoss() {
+		aaWatchDevices, aaDeviceChanges = aaudio.WatchDevices, aaudio.DeviceChanges
+	}
 }

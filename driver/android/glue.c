@@ -17,7 +17,7 @@ static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder, midChoose
 static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midAwake, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
 static jclass audioClass;
-static jmethodID midAudioRoute, midAudioProbe;
+static jmethodID midAudioRoute, midAudioProbe, midAudioWatch;
 
 // JNI_OnLoad runs on the thread that loads the library, which has the
 // application's class loader, so it looks up the class Go calls back.
@@ -60,6 +60,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 		audioClass = (*env)->NewGlobalRef(env, ac);
 		midAudioRoute = (*env)->GetStaticMethodID(env, ac, "route", "(I)[I");
 		midAudioProbe = (*env)->GetStaticMethodID(env, ac, "probe", "(I)[I");
+		midAudioWatch = (*env)->GetStaticMethodID(env, ac, "watch", "()Z");
 	} else {
 		(*env)->ExceptionClear(env);
 	}
@@ -618,3 +619,44 @@ static int ints(jmethodID mid, int arg, int *r, int n) {
 int gunim_audio_route(int device, int *r, int n) { return ints(midAudioRoute, device, r, n); }
 
 int gunim_audio_probe(int usage, int *r, int n) { return ints(midAudioProbe, usage, r, n); }
+
+// The devices GunimAudio told of coming and going: outputs and inputs.
+static long long audioOuts, audioIns;
+static int audioWatching;
+
+int gunim_audio_watch(void) {
+	if (__atomic_load_n(&audioWatching, __ATOMIC_ACQUIRE)) {
+		return 1;
+	}
+	if (audioClass == NULL || midAudioWatch == NULL) {
+		return 0;
+	}
+	int a;
+	JNIEnv *env = envGet(&a);
+	jboolean ok = (*env)->CallStaticBooleanMethod(env, audioClass, midAudioWatch);
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+		ok = JNI_FALSE;
+	}
+	envPut(a);
+	if (ok) {
+		__atomic_store_n(&audioWatching, 1, __ATOMIC_RELEASE);
+	}
+	return ok ? 1 : 0;
+}
+
+void gunim_audio_changes(long long *out, long long *in) {
+	*out = __atomic_load_n(&audioOuts, __ATOMIC_ACQUIRE);
+	*in = __atomic_load_n(&audioIns, __ATOMIC_ACQUIRE);
+}
+
+JNIEXPORT void JNICALL Java_gunim_android_GunimAudio_devicesChanged(JNIEnv *env, jclass c, jboolean out, jboolean in) {
+	(void)env;
+	(void)c;
+	if (out) {
+		__atomic_fetch_add(&audioOuts, 1, __ATOMIC_RELEASE);
+	}
+	if (in) {
+		__atomic_fetch_add(&audioIns, 1, __ATOMIC_RELEASE);
+	}
+}

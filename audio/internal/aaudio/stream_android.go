@@ -15,11 +15,16 @@ import (
 	"unsafe"
 )
 
-// minAPI is the oldest Android AAudio plays on here: 11. Before it
-// AAudio did not always tell of a stream whose device went away
-// (google/oboe#893), so a headset unplugged could leave the sound
+// minAPI is the oldest Android AAudio plays on here: 8.1. Google's
+// Oboe uses AAudio from 8.1 too: on 8.0 it found AAudio unstable
+// (google/oboe#40; AudioStreamBuilder::isAAudioRecommended).
+const minAPI = 27
+
+// toldAPI is the first Android whose AAudio always tells of a stream
+// whose device went away: 11. Before it some phones' did not
+// (google/oboe#893), and the sound stayed on a device gone, or went
 // silent for good.
-const minAPI = 30
+const toldAPI = 30
 
 // Supported returns nil where AAudio plays, and [ErrUnsupported]
 // where it does not.
@@ -28,6 +33,28 @@ func Supported() error {
 		return ErrUnsupported
 	}
 	return nil
+}
+
+// TellsOfLoss says AAudio itself tells of a stream whose device went
+// away, as its error callback's AAUDIO_ERROR_DISCONNECTED: true from
+// Android 11. Before it the speaker watches the devices itself, with
+// [WatchDevices] and [Stream.Position].
+func TellsOfLoss() bool { return C.gunim_aa_api() >= toldAPI }
+
+// WatchDevices asks Android's Java side to tell of audio devices
+// coming and going, from now on, and says it does: false where the
+// Android driver is missing or not ready yet. It calls into Java, as
+// Route does; once it has said true, it returns at once.
+func WatchDevices() bool { return C.gunim_aa_watch() != 0 }
+
+// DeviceChanges counts the times Android told of an output device, and
+// of an input device, coming or going, since [WatchDevices] began. A
+// device that both plays and records counts on both sides. It reads two
+// counters, and is cheap.
+func DeviceChanges() (out, in int64) {
+	var o, i C.int64_t
+	C.gunim_aa_changes(&o, &i)
+	return int64(o), int64(i)
 }
 
 // Config says how to open a stream.
@@ -142,6 +169,17 @@ func (s *Stream) Info() Info {
 	i := s.info
 	i.Buffer = int(C.AAudioStream_getBufferSizeInFrames(s.s))
 	return i
+}
+
+// Position returns the frames the device has moved since the stream
+// opened: those an output's device read, or an input's wrote. It
+// stands still while the device does, as one gone that AAudio did not
+// tell of.
+func (s *Stream) Position() int64 {
+	if s.input {
+		return int64(C.AAudioStream_getFramesWritten(s.s))
+	}
+	return int64(C.AAudioStream_getFramesRead(s.s))
 }
 
 // XRuns counts the times the device ran dry or overflowed, as AAudio
