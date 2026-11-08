@@ -404,6 +404,7 @@ func (a *aaOutput) devicesChanged(now int64) {
 		moved = true
 	}
 	if moved {
+		a.s.logf("Android told of devices coming or going: %d outputs and %d inputs so far", out, in)
 		a.quiet.Store(now + int64(aaDeviceQuiet))
 		a.wakeOpener()
 	}
