@@ -20,8 +20,8 @@ type backend struct {
 	// fail has it fail every open from then on, and works sets it
 	// working; reopen asks an open speaker for a change that opens it
 	// again.
-	fail, works func(t *testing.T)
-	reopen      func(s *Speaker) error
+	fail, works, heal func(t *testing.T)
+	reopen            func(s *Speaker) error
 	// plays says the output is the backend's.
 	plays func(o output) bool
 }
@@ -41,6 +41,7 @@ func backends() []backend {
 			useFakeWas(t, was)
 		},
 		fail:   func(*testing.T) { was.failOpen.Store(1 << 30) },
+		heal:   func(*testing.T) { was.failOpen.Store(0) },
 		reopen: func(s *Speaker) error { return s.Set(Options{Record: true}) },
 	}, {
 		name:  driver.CoreAudio,
@@ -50,6 +51,11 @@ func backends() []backend {
 		fail: func(*testing.T) {
 			au.mu.Lock()
 			au.failed = audiounit.ErrNoOutput
+			au.mu.Unlock()
+		},
+		heal: func(*testing.T) {
+			au.mu.Lock()
+			au.failed = nil
 			au.mu.Unlock()
 		},
 		reopen: func(s *Speaker) error { return s.Set(Options{Buffer: 256}) },
@@ -62,6 +68,7 @@ func backends() []backend {
 			useFakeAA(t, aa)
 		},
 		fail:   func(*testing.T) { aa.failOut.Store(1 << 30) },
+		heal:   func(*testing.T) { aa.failOut.Store(0) },
 		reopen: func(s *Speaker) error { return s.Set(Options{Record: true}) },
 	}}
 }
@@ -175,7 +182,8 @@ func TestANamedDriverThatFailsPlaysThroughTheBackend(t *testing.T) {
 
 // An output open that opens again, as on a change Set asks, Reopen or
 // the device going, where the backend fails, returns the error and
-// tells of it in the state.
+// tells of it in the state. Set with the same options, Reopen and
+// Resume each try again, and play once the backend works.
 func TestOpeningAgainWhereTheBackendFailsSaysWhy(t *testing.T) {
 	for _, b := range backends() {
 		t.Run(b.name, func(t *testing.T) {
@@ -198,10 +206,11 @@ func TestOpeningAgainWhereTheBackendFailsSaysWhy(t *testing.T) {
 				if s.Err() == nil {
 					t.Error("Err tells of nothing")
 				}
-				// Reopen and Resume, which open the output on the speaker's
-				// own goroutine, fail the same way.
+				if err := b.reopen(s); err == nil {
+					t.Error("Set with the same options returned no error, though nothing plays")
+				}
+				// Reopen and Resume fail the same way.
 				s.Reopen()
-				time.Sleep(time.Second)
 				synctest.Wait()
 				if err := s.Suspend(); err != nil {
 					t.Fatal(err)
@@ -216,6 +225,97 @@ func TestOpeningAgainWhereTheBackendFailsSaysWhy(t *testing.T) {
 				if s.State().Problem == nil {
 					t.Error("after Resume, the state tells of no problem")
 				}
+				// The backend back, Set with the same options plays again.
+				b.heal(t)
+				if err := b.reopen(s); err != nil {
+					t.Fatalf("Set with the backend back: %v", err)
+				}
+				if out := s.out.Load(); out == nil || !b.plays(out.output) || s.State().Problem != nil {
+					t.Fatalf("after Set, it plays through %v and tells of %v", out, s.State().Problem)
+				}
+				// Failed again, Reopen plays once the backend is back.
+				b.fail(t)
+				s.Reopen()
+				synctest.Wait()
+				if s.out.Load() != nil {
+					t.Fatal("Reopen opened the output, though the backend failed")
+				}
+				b.heal(t)
+				s.Reopen()
+				synctest.Wait()
+				if out := s.out.Load(); out == nil || !b.plays(out.output) {
+					t.Fatalf("after Reopen with the backend back, it plays through %v", out)
+				}
+			})
+		})
+	}
+}
+
+// An output that fails to open again, as a device goes or changes its
+// rate, opens by itself once the backend works again, with no call
+// from the application. While it fails, it tries less and less often,
+// and not at all while suspended or after Close.
+func TestAFailedOpenTriesAgainByItself(t *testing.T) {
+	for _, b := range backends() {
+		t.Run(b.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				b.first(t)
+				b.works(t)
+				noSystemSound(t)
+				s, err := Open(audio.NewMixer(), Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = s.Close() }()
+				fails := func() int {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+					return s.fails
+				}
+				b.fail(t)
+				// As the backend asks, as on a device gone.
+				s.askReset()
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				// The first and then 0.25, 0.5, 1, 2, 2, 2 and 2 s on.
+				if n := fails(); n < 5 || n > 9 {
+					t.Errorf("in 10 s it tried %d times, want 5 to 9", n)
+				}
+				// Suspended, it waits for Resume.
+				if err := s.Suspend(); err != nil {
+					t.Fatal(err)
+				}
+				n := fails()
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
+				if m := fails(); m != n {
+					t.Errorf("suspended, it tried %d times", m-n)
+				}
+				if err := s.Resume(); err == nil {
+					t.Error("Resume opened the output, though the backend failed")
+				}
+				b.heal(t)
+				select {
+				case <-s.Changed():
+				case <-time.After(3 * time.Second):
+					t.Fatal("the backend back, the output opened not in 3 s")
+				}
+				if out := s.out.Load(); out == nil || !b.plays(out.output) || s.State().Problem != nil {
+					t.Fatalf("it plays through %v and tells of %v", out, s.State().Problem)
+				}
+				if n := fails(); n != 0 {
+					t.Errorf("playing, it counts %d failed opens", n)
+				}
+				// Closed, it tries nothing, and leaves no goroutine:
+				// synctest fails a bubble that ends with one running.
+				b.fail(t)
+				s.askReset()
+				synctest.Wait()
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(10 * time.Second)
+				synctest.Wait()
 			})
 		})
 	}

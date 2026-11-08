@@ -230,6 +230,11 @@ type Speaker struct {
 	mu      sync.Mutex
 	o       Options
 	problem error
+	// fails counts the opens of the output that failed in a row since
+	// it last played, and retry is when the watch tries again. A
+	// failed open leaves no output: out is nil while fails is set.
+	fails int
+	retry time.Time
 	// out is the output playing, nil while it changes.
 	out atomic.Pointer[outlet]
 	// ahead is how far ahead the mixer works, as Latency set it and dry
@@ -439,7 +444,8 @@ func (s *Speaker) open() (output, error) {
 func (s *Speaker) openSystem(start func(startedOutput) (output, error)) (output, error) {
 	sys, err := openSystemSound(s, s.o)
 	if err != nil {
-		return nil, err
+		// What failed before the system's sound tells most.
+		return nil, errors.Join(s.problem, err)
 	}
 	return start(sys)
 }
@@ -619,7 +625,7 @@ func (s *Speaker) Latency() time.Duration {
 }
 
 // watch grows the buffer while the sound runs dry, and opens the
-// output again as a driver asks.
+// output again as a driver asks, and where it failed to open.
 func (s *Speaker) watch() {
 	defer close(s.done)
 	const every = 250 * time.Millisecond
@@ -636,6 +642,7 @@ func (s *Speaker) watch() {
 			}
 			s.mu.Unlock()
 		case <-t.C:
+			s.retryOpen()
 			s.Anchor()
 			dry := s.dry.Swap(0)
 			if dry > 0 {
@@ -713,7 +720,8 @@ func (s *Speaker) SetLatency(d time.Duration) {
 // where the driver playing uses it, opens the output again, with a
 // moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
-// far ahead the mixer works from where it is.
+// far ahead the mixer works from where it is. Where the output failed
+// to open, Set opens it again, whatever changed.
 func (s *Speaker) Set(o Options) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -737,7 +745,8 @@ func (s *Speaker) Set(o Options) error {
 	}
 	named := o.Driver != ""
 	drives := named || driverFirst()
-	if o.Driver != prev.Driver || rate ||
+	// An output that failed to open tries again, whatever changed.
+	if s.fails > 0 || o.Driver != prev.Driver || rate ||
 		(named && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
 		(!named && (coreAudioFirst || pipeWireFirst) && o.Buffer != prev.Buffer) ||
 		(drives && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
@@ -772,8 +781,11 @@ func (s *Speaker) reopenLocked() error {
 	out, err := s.open()
 	if err != nil {
 		s.problem = err
+		s.fails++
+		s.retry = time.Now().Add(reopenDelay(s.fails))
 		return err
 	}
+	s.fails = 0
 	s.anchor.reset()
 	s.smu.Lock()
 	s.out.Store(&outlet{out})
@@ -791,6 +803,34 @@ func (s *Speaker) reopenLocked() error {
 	default:
 	}
 	return nil
+}
+
+// retryOpen opens the output again where it failed to open, as a
+// device that went away comes back, once the wait reopenDelay says is
+// over. A device stopped opens the output as it resumes instead.
+func (s *Speaker) retryOpen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fails == 0 || s.out.Load() != nil || time.Now().Before(s.retry) {
+		return
+	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		return
+	}
+	if err := s.reopenLocked(); err != nil {
+		s.logf("opening the output again: %v; trying again in %v", err, reopenDelay(s.fails))
+	}
+}
+
+// reopenDelay is how long the watch waits before it opens the output
+// again after fails opens in a row failed: a quarter of a second at
+// first, as a route settles, then twice as long each time, to every
+// 2 s, for a device gone a while.
+func reopenDelay(fails int) time.Duration {
+	return min(250*time.Millisecond<<min(max(fails-1, 0), 3), 2*time.Second)
 }
 
 // Changed returns a channel that receives as the output opens again:
@@ -1001,14 +1041,16 @@ func (s *Speaker) stopLocked() error {
 // Suspend faded out, over [SuspendFade]. Where nothing sounded as it
 // suspended, a sound played as it resumes starts at once. An output
 // that was to open again while the device was stopped, as its device
-// changed, opens now.
+// changed, opens now, as does one that failed to open.
 func (s *Speaker) Resume() error {
 	err := s.restart()
-	if s.waiting.Swap(false) {
-		s.mu.Lock()
+	waiting := s.waiting.Swap(false)
+	s.mu.Lock()
+	// An output that failed to open tries again at once.
+	if waiting || (s.fails > 0 && s.out.Load() == nil) {
 		err = errors.Join(err, s.reopenLocked())
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	return err
 }
 
