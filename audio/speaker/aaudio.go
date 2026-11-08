@@ -414,9 +414,12 @@ func (a *aaOutput) devicesChanged(now int64) {
 // told of a device on its side coming or going at changed, 0 for never:
 // one on Android's pick of device, picked, follows any such change, as
 // Android may pick another now; one asked for a device follows only
-// where that device is gone, no longer listed.
+// where that device is gone, no longer listed. A stream opened less
+// than aaDeviceQuiet before the change opened on the devices as they
+// are now: AAudio may tell of a device gone, and the stream open again,
+// just before Java tells of it.
 func moveFor(opened, changed int64, picked, listed bool) bool {
-	return changed > 0 && opened <= changed && (picked || !listed)
+	return changed > 0 && opened+int64(aaDeviceQuiet) <= changed && (picked || !listed)
 }
 
 // moveStreams marks dead the streams the devices Android told of moved,

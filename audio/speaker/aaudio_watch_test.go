@@ -10,18 +10,20 @@ import (
 )
 
 func TestMoveFor(t *testing.T) {
+	const q = int64(aaDeviceQuiet)
 	for _, c := range []struct {
 		name                  string
 		opened, changed       int64
 		picked, listed, moves bool
 	}{
 		{"no change yet", 10, 0, true, true, false},
-		{"Android's pick, a change after it opened", 10, 20, true, true, true},
-		{"Android's pick, a change as it opened", 10, 10, true, true, true},
+		{"Android's pick, a change after it opened", 10, 10 + q, true, true, true},
+		{"Android's pick, a change just after it opened", 10, 10 + q - 1, true, true, false},
+		{"Android's pick, a change as it opened", 10, 10, true, true, false},
 		{"Android's pick, opened since the change", 30, 20, true, true, false},
-		{"its own device, still listed", 10, 20, false, true, false},
-		{"its own device, gone", 10, 20, false, false, true},
-		{"its own device gone, opened since", 30, 20, false, false, false},
+		{"its own device, still listed", 10, 10 + q, false, true, false},
+		{"its own device, gone", 10, 10 + q, false, false, true},
+		{"its own device gone, opened since", 30 + q, 20 + q, false, false, false},
 	} {
 		if got := moveFor(c.opened, c.changed, c.picked, c.listed); got != c.moves {
 			t.Errorf("%s: moveFor says %v, want %v", c.name, got, c.moves)
@@ -140,6 +142,7 @@ func TestAAudioFollowsTheDevicesAndroidTellsOf(t *testing.T) {
 
 		// While suspended nothing moves; the resume opens the microphone
 		// anew, and the output moves.
+		time.Sleep(time.Second)
 		if err := s.Suspend(); err != nil {
 			t.Fatal(err)
 		}
@@ -199,6 +202,27 @@ func TestAAudioKeepsTheBuiltInMicWhileListed(t *testing.T) {
 		if _, ins := f.streams(); len(ins) != 2 || ins[1].c.device != mic {
 			t.Fatalf("with its device gone %d inputs opened, the last on %d; want 2, on %d", len(ins),
 				ins[len(ins)-1].c.device, mic)
+		}
+	})
+}
+
+// TestAAudioReopensOnceWhereAAudioTellsToo has AAudio tell of a device
+// gone before Android 11, as it does on many phones, and Java tell of
+// it a moment later: the output opens again once, not twice.
+func TestAAudioReopensOnceWhereAAudioTellsToo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := &fakeAA{rate: 48000, burst: 240, delay: 960, older: true}
+		useFakeAA(t, f)
+		openAA(t, audio.NewMixer(), Options{})
+		time.Sleep(500 * time.Millisecond)
+		outs, _ := f.streams()
+		outs[0].sh.Err.Store(-899) // AAUDIO_ERROR_DISCONNECTED
+		time.Sleep(60 * time.Millisecond)
+		f.outChanges.Add(1)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if outs, _ := f.streams(); len(outs) != 2 {
+			t.Fatalf("%d outputs opened, want 2", len(outs))
 		}
 	})
 }
