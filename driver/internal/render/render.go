@@ -78,9 +78,11 @@ type Renderer struct {
 	vao, vbo, ibo uint32
 	drawProg      program
 	blurProg      program
-	// clipProg is drawProg cutting each quad to the ellipse it carries,
-	// for what draws inside a layer clipped to one in place.
+	// clipProg is drawProg cutting each quad to the ellipse or rounded
+	// rectangle it carries, for what draws inside a layer clipped to one
+	// in place; cutAt is where its u_cut is.
 	clipProg program
+	cutAt    int32
 	// convertProg is drawProg converting to the display's colours, for
 	// the copy to the window, and color the conversion; see color.go.
 	convertProg program
@@ -175,9 +177,9 @@ type Renderer struct {
 	stack []openLayer
 	depth int
 	clip  geom.Rect
-	// ellipse is the ellipse a layer clips to in place, which every quad
-	// drawn meanwhile carries; see clipEllipse.
-	ellipse clipEllipse
+	// cut is the ellipse or rounded rectangle a layer clips to in place,
+	// which every quad drawn meanwhile carries; see clipCut.
+	cut clipCut
 	// ramps holds the colours of gradients with stops; see ramps.go.
 	ramps ramps
 	// scenes draws 3D scenes; see scenes.go.
@@ -206,15 +208,18 @@ type openLayer struct {
 	op      *paint.LayerOp
 	inPlace bool
 	clip    geom.Rect
-	ellipse clipEllipse
+	cut     clipCut
 }
 
-// clipEllipse is an ellipse that quads are cut to as they draw, with
-// its centre and its radii across and down in device pixels from the
-// target's top left. A zero one cuts nothing.
-type clipEllipse struct {
-	on          bool
+// clipCut is the ellipse, or the rounded rectangle, that quads are cut
+// to as they draw: its centre and its half sizes across and down, its
+// radii for an ellipse, in device pixels from the target's top left,
+// and for a rounded rectangle, which box says, the radius of its
+// corners. A zero one cuts nothing.
+type clipCut struct {
+	on, box     bool
 	centre, rad geom.Point
+	radius      float32
 }
 
 // Each vertex is vertFloats floats, in nine attributes of two or four:
@@ -232,9 +237,9 @@ type clipEllipse struct {
 //	a_extra  the shadow's offset, blur and spread; or texture
 //	         coordinates, then the point on a gradient
 //	a_stroke the stroke's colour
-//	a_clip   the vertex on the ellipse it is cut to, where the ellipse
-//	         is the unit circle, times the depth; 1 where there is one;
-//	         and the depth, 1 for a flat quad
+//	a_clip   the vertex in the space of the shape it is cut to, where
+//	         the shape's half sizes are 1, times the depth; 1 where
+//	         there is one; and the depth, 1 for a flat quad
 //
 // A ribbon's quads use a_local and a_extra otherwise, as their pixels
 // do not share them; see ribbons.go.
@@ -387,6 +392,9 @@ flat in vec4 v_stroke;
 in vec4 v_clip;
 in vec2 v_uv;
 uniform sampler2D u_atlas;
+#ifdef CUT
+uniform vec4 u_cut;
+#endif
 uniform sampler2D u_ramp;
 
 // gradient returns a gradient's colour at g, which runs from 0 to 1
@@ -538,9 +546,17 @@ vec4 shade(out vec4 cover) {
 void main() {
 	vec4 cover;
 	vec4 col = shade(cover);
-#ifdef ELLIPSE
-	// Cut to the ellipse a layer clips to in place.
-	float c = ellipseCover(v_clip.xy / v_clip.w);
+#ifdef CUT
+	// Cut to the ellipse, or the rounded rectangle, a layer clips to in
+	// place: u_cut holds a rounded rectangle's half sizes and corner
+	// radius in device pixels, and w is 1 for one.
+	float c;
+	if (u_cut.w > 0.5) {
+		vec2 p = v_clip.xy / v_clip.w * u_cut.xy;
+		c = rrectCover(p, vec4(-u_cut.xy, u_cut.xy), u_cut.z);
+	} else {
+		c = ellipseCover(v_clip.xy / v_clip.w);
+	}
 	col *= c;
 	cover *= c;
 #endif
@@ -570,6 +586,7 @@ func New(g gl.Context, isES bool, sh *Shared) (*Renderer, error) {
 	if r.drawProg, r.clipProg, r.blurProg, r.dual, err = sh.programs(g, isES); err != nil {
 		return nil, err
 	}
+	r.cutAt = g.GetUniformLocation(r.clipProg.id, "u_cut")
 
 	r.vao = g.CreateVertexArray()
 	g.BindVertexArray(r.vao)
@@ -624,8 +641,8 @@ func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 // on unit 2, colour glyphs on unit 3, and the gradients' ramp on unit
 // 6. The draw programs blend by channel where the context has
 // dual-source blending, and dual says so. clip is the draw program that
-// cuts what it draws to an ellipse; the plain one leaves that work out
-// of every other pixel.
+// cuts what it draws to an ellipse or a rounded rectangle; the plain one
+// leaves that work out of every other pixel.
 func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
 	header, dualHeader := "#version 150\n", "#version 330\n#define DUAL\n"
 	if isES {
@@ -644,8 +661,8 @@ func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool
 			return program{}, program{}, program{}, false, "", err
 		}
 	}
-	ellipse := dualHeader + "#define ELLIPSE\n"
-	if clip, err = link(g, ellipse+vertexShader, ellipse+sdfFunc+drawOut+drawShader); err != nil {
+	cut := dualHeader + "#define CUT\n"
+	if clip, err = link(g, cut+vertexShader, cut+sdfFunc+drawOut+drawShader); err != nil {
 		return program{}, program{}, program{}, false, "", err
 	}
 	for _, p := range []program{draw, clip} {
@@ -808,7 +825,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	}
 	r.bigs.newFrame()
 	r.stack, r.depth = r.stack[:0], 0
-	r.ellipse = clipEllipse{}
+	r.cut = clipCut{}
 	// bindDraw, below, makes the plain draw program current.
 	r.scratchX = 0
 	if len(r.layers) == 0 {
@@ -888,7 +905,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 		for i, b := range boxes {
 			if i > 0 {
 				r.stack, r.depth = r.stack[:0], 0
-				r.ellipse = clipEllipse{}
+				r.cut = clipCut{}
 				r.scratchX = 0
 				r.bindDraw()
 			}
@@ -1155,11 +1172,16 @@ func (r *Renderer) bindDraw() {
 }
 
 // useDraw makes current the draw program for the clip in force: the one
-// that cuts to an ellipse while a layer clips to one in place. The batch
-// queued must be drawn first.
+// that cuts to an ellipse or a rounded rectangle while a layer clips to
+// one in place. The batch queued must be drawn first.
 func (r *Renderer) useDraw() {
-	if r.ellipse.on {
+	if c := r.cut; c.on {
 		r.GL.UseProgram(r.clipProg.id)
+		box := float32(0)
+		if c.box {
+			box = 1
+		}
+		r.GL.Uniform4fv(r.cutAt, []float32{c.rad.X, c.rad.Y, c.radius, box})
 		return
 	}
 	r.GL.UseProgram(r.drawProg.id)
@@ -1317,7 +1339,7 @@ func (r *Renderer) emit(corners [4]quadVert, at [4]geom.Point, w [4]float32, sca
 		// the shader divides out, so it spreads evenly over the target
 		// whatever the depth.
 		clip := [4]float32{0, 0, 0, w[i]}
-		if e := r.ellipse; e.on {
+		if e := r.cut; e.on {
 			clip = [4]float32{(p.X*scale - e.centre.X) / e.rad.X * w[i], (p.Y*scale - e.centre.Y) / e.rad.Y * w[i], 1, w[i]}
 		}
 		r.verts = append(r.verts,
@@ -1443,20 +1465,24 @@ func abs32(v float32) float32 { return max(v, -v) }
 // in place.
 func (r *Renderer) openLayer(op *paint.LayerOp) {
 	r.flush()
-	r.stack = append(r.stack, openLayer{op: op, clip: r.clip, ellipse: r.ellipse})
+	r.stack = append(r.stack, openLayer{op: op, clip: r.clip, cut: r.cut})
 	if box, ok := r.inPlace(op); ok {
 		r.stack[len(r.stack)-1].inPlace = true
 		r.setClip(intersect(r.clip, box))
-		if op.Opts.Clip && op.Opts.Ellipse {
+		if o := op.Opts; o.Clip && (o.Ellipse || o.Radius > 0) {
 			b := r.region(op, true)
 			rad := geom.Pt((b.Max.X-b.Min.X)/2, (b.Max.Y-b.Min.Y)/2)
-			r.ellipse = clipEllipse{on: rad.X > 0 && rad.Y > 0, centre: b.Min.Add(rad), rad: rad}
+			r.cut = clipCut{on: rad.X > 0 && rad.Y > 0, centre: b.Min.Add(rad), rad: rad}
+			if !o.Ellipse {
+				// Its corners scale as the layer does, the same across and down.
+				r.cut.box, r.cut.radius = true, min(o.Radius*r.scale*abs32(op.Transform.A), rad.X, rad.Y)
+			}
 			r.useDraw()
 		}
 		return
 	}
 	// The layer is cut as it is composited, once.
-	r.ellipse = clipEllipse{}
+	r.cut = clipCut{}
 	r.useDraw()
 	if tilted(op) {
 		// A tilted layer draws flat, all of it, and the clip round it
@@ -1479,9 +1505,12 @@ func (r *Renderer) openLayer(op *paint.LayerOp) {
 // target around it as composited from a target of its own, and the
 // device-pixel box it clips to: it is opaque, blurs nothing, adds
 // nothing, and clips
-// to an upright rectangle, to an upright ellipse inside no other, or
-// not at all. The quads drawn inside an ellipse carry it, and are cut
-// to it as they draw; a grid of cells keeps to its box.
+// to an upright rectangle, to an upright ellipse or rounded rectangle
+// inside no other, or not at all. The quads drawn inside an ellipse or
+// a rounded rectangle carry it, and are cut to it as they draw, each on
+// its own: on the pixel-wide antialiased rim, a quad under another shows
+// through faintly, where offscreen the layer is cut once, whole. A grid
+// of cells keeps to its box, uncut at rounded corners.
 func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 	o, t := op.Opts, op.Transform
 	switch {
@@ -1492,8 +1521,11 @@ func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 		return r.region(op, false), true
 	case t.B != 0 || t.D != 0:
 		return geom.Rect{}, false
-	case o.Ellipse:
-		if r.ellipse.on {
+	case o.Ellipse || o.Radius > 0:
+		// Cut as it draws, to the ellipse or to the rounded rectangle, in
+		// no other: one cut at a time. Rounded corners stay round only
+		// where the layer scales the same across and down.
+		if r.cut.on || !o.Ellipse && abs32(t.A) != abs32(t.E) {
 			return geom.Rect{}, false
 		}
 		b := r.region(op, true)
@@ -1501,8 +1533,6 @@ func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 			Min: geom.Pt(float32(math.Floor(float64(b.Min.X))), float32(math.Floor(float64(b.Min.Y)))),
 			Max: geom.Pt(float32(math.Ceil(float64(b.Max.X))), float32(math.Ceil(float64(b.Max.Y)))),
 		}, true
-	case o.Radius > 0:
-		return geom.Rect{}, false
 	}
 	b := r.region(op, true)
 	round := func(v float32) float32 { return float32(math.Round(float64(v))) }
@@ -1520,8 +1550,8 @@ func (r *Renderer) closeLayer() {
 	top := r.stack[len(r.stack)-1]
 	r.stack = r.stack[:len(r.stack)-1]
 	r.setClip(top.clip)
-	if r.ellipse != top.ellipse {
-		r.ellipse = top.ellipse
+	if r.cut != top.cut {
+		r.cut = top.cut
 		r.useDraw()
 	}
 	if top.inPlace {
