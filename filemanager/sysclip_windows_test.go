@@ -116,7 +116,7 @@ func TestMemoryThatCannotBeReadIsAnError(t *testing.T) {
 	}
 }
 
-func TestAStreamIsAskedForMoreWhileItAnswersQuicklyAndLessWhenNot(t *testing.T) {
+func TestAStreamIsAskedForMoreWhileItAnswersQuicklyAndForItsPaceWhenNot(t *testing.T) {
 	var asked []uintptr
 	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
 		asked = append(asked, size)
@@ -134,20 +134,21 @@ func TestAStreamIsAskedForMoreWhileItAnswersQuicklyAndLessWhenNot(t *testing.T) 
 			}
 		}
 	}
-	// A round trip of a quarter second: the pieces grow to the most.
-	read(250*time.Millisecond, 5)
+	// A round trip of most of a second: the pieces grow to the most.
+	read(900*time.Millisecond, 5)
 	if asked[0] != minPiece || asked[4] != maxPiece {
 		t.Fatalf("a stream with a long round trip was asked for %d", asked)
 	}
-	// Then slow: the pieces shrink, to the least and no further.
-	read(1500*time.Millisecond, 6)
-	if asked[6] != maxPiece/2 || asked[len(asked)-1] != minPiece {
+	// Then four times slower than a second: the next read is sized to
+	// that pace at once.
+	read(4*time.Second, 2)
+	if asked[6] != maxPiece/4 {
 		t.Fatalf("a stream slow to answer was asked for %d", asked)
 	}
-	// Between the two: the pieces stay as they are.
-	read(700*time.Millisecond, 2)
+	// Slower still than the least piece: the least.
+	read(10*time.Second, 2)
 	if asked[len(asked)-1] != minPiece {
-		t.Fatalf("a stream neither quick nor slow was asked for %d", asked)
+		t.Fatalf("a stream slower than the least piece was asked for %d", asked)
 	}
 }
 

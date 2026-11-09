@@ -50,19 +50,19 @@ const (
 	vtGetData    = 3
 	vtStreamRead = 3
 
-	// A stream is asked for minPiece at first, for twice as much after a
-	// read quicker than quickRead, and for half after one slower than
-	// slowRead, from minPiece to maxPiece. Stop is heard between reads,
+	// A stream is asked for minPiece at first, for twice the last after a
+	// read quicker than aimRead, and after a slower one for what it moved
+	// in aimRead, from minPiece to maxPiece. Stop is heard between reads,
 	// and Remote Desktop fetches what is asked as it is asked, so a large
 	// piece on a slow link keeps a paste from stopping, and a small one on
-	// a link with a long way to go spends it on asking. A read so takes
-	// about a second at most, and pieces grow to the most on any round
-	// trip under quickRead. A link that slows all at once is learnt of only
-	// as a read ends: one read of up to maxPiece may then hold Stop off.
-	minPiece  = 64 << 10
-	maxPiece  = 1 << 20
-	quickRead = 400 * time.Millisecond
-	slowRead  = time.Second
+	// a link with a long way to go spends it on asking. Pieces so grow on
+	// any round trip under aimRead, and a read takes about twice aimRead
+	// at most, or what minPiece takes on a link slower than that. A link
+	// that slows all at once is learnt of only as a read ends: that one
+	// read may hold Stop off, and the next is sized to the new pace.
+	minPiece = 64 << 10
+	maxPiece = 1 << 20
+	aimRead  = time.Second
 )
 
 // The formats Windows names rather than numbers: the list of files held
@@ -361,11 +361,10 @@ func (s *oleStream) Read(p []byte) (int, error) {
 	start := time.Now()
 	hr := comCall(s.stream, vtStreamRead, uintptr(unsafe.Pointer(&p[0])),
 		uintptr(min(len(p), s.piece)), uintptr(unsafe.Pointer(&n)))
-	switch took := s.since(start); {
-	case took < quickRead && s.piece < maxPiece:
-		s.piece *= 2
-	case took > slowRead && s.piece > minPiece:
-		s.piece /= 2
+	if took := s.since(start); took < aimRead {
+		s.piece = min(s.piece*2, maxPiece)
+	} else if n > 0 {
+		s.piece = min(max(int(float64(n)*aimRead.Seconds()/took.Seconds()), minPiece), maxPiece)
 	}
 	if failed(hr) {
 		return int(n), fmt.Errorf("HRESULT %#x", hr)

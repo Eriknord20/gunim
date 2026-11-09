@@ -1266,3 +1266,18 @@ func TestAChangedClipboardIsSaidSoWhateverTheFileIsCalled(t *testing.T) {
 		t.Fatalf("a changed clipboard is explained as %q", why)
 	}
 }
+
+// failingReader hands over n bytes, and err with them.
+type failingReader struct {
+	n   int
+	err error
+}
+
+func (f failingReader) Read([]byte) (int, error) { return f.n, f.err }
+
+func TestASizedFileThatFailsSaysWhyBeforeHowLongItRan(t *testing.T) {
+	r := &sizedReader{r: failingReader{n: 64 << 10, err: errClipboardChanged}, size: 10}
+	if _, err := r.Read(make([]byte, 64<<10)); !errors.Is(err, errClipboardChanged) {
+		t.Fatalf("a read that ran past its size as the clipboard changed says %v", err)
+	}
+}

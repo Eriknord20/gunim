@@ -308,6 +308,10 @@ func (s *sizedReader) Read(p []byte) (int, error) {
 	n, err := s.r.Read(p)
 	s.read += int64(n)
 	switch {
+	case err != nil && !errors.Is(err, io.EOF):
+		// What failed says why, as a clipboard that changed does, before
+		// what came of it.
+		return n, err
 	case s.read > s.size:
 		return n, fmt.Errorf("it holds more than the %d bytes the clipboard says it does", s.size)
 	case errors.Is(err, io.EOF) && s.read < s.size:
