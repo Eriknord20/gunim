@@ -161,14 +161,22 @@ func (t xdgTrash) Restore(original, trashed string, _ time.Time, to string) erro
 	return nil
 }
 
-// renameAbsent moves an item to a path where nothing is. On a file system
-// that renames so in one step, an item that turns up at the path
-// meanwhile is never replaced; on another, Restore's look at the path just
-// before is all there is.
+// renameAbsent moves an item to a path where nothing is. Where the file
+// system renames the item so in one step, an item that turns up at the
+// path meanwhile is never replaced; elsewhere it looks at the path just
+// before, which leaves that moment.
 func (t xdgTrash) renameAbsent(from, to string) error {
 	fsys, _ := t.on()
 	if r, ok := fsys.(NoReplaceRenamer); ok {
-		return r.RenameNoReplace(from, to)
+		err := r.RenameNoReplace(from, to)
+		if !errors.Is(err, errors.ErrUnsupported) {
+			return err
+		}
+	}
+	if _, err := fsys.Lstat(to); err == nil {
+		return &fs.PathError{Op: "rename", Path: to, Err: fs.ErrExist}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return fsys.Rename(from, to)
 }

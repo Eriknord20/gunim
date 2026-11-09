@@ -421,3 +421,36 @@ func TestTheTrashHasAPlaceOnlyWhereItOpens(t *testing.T) {
 		t.Fatalf("the computer's own trash has the place %+v", p)
 	}
 }
+
+// deferringFS is a file system whose renames that must not replace move
+// nothing and say it cannot, as one without such a rename does.
+type deferringFS struct{ FS }
+
+func (deferringFS) RenameNoReplace(from, to string) error {
+	return fmt.Errorf("not here: %w", errors.ErrUnsupported)
+}
+
+func TestARestoreGoesOnWhereTheFileSystemCannotRefuseANameTaken(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "work/d/x.txt", "work/b.txt")
+	tr := xdgTrash{fs: deferringFS{LocalFS()}, dir: filepath.Join(root, "Trash")}
+	for _, p := range []string{"work/d", "work/b.txt"} {
+		if _, err := tr.Trash(at(root, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tree(t, root, "work/b.txt")
+	for _, it := range trashItems(t, tr) {
+		err := tr.RestoreItem(it)
+		switch it.Name {
+		case "d":
+			if err != nil || contents(t, at(root, "work/d/x.txt")) != "work/d/x.txt" {
+				t.Fatalf("the folder did not come back: %v", err)
+			}
+		case "b.txt":
+			if err == nil || !strings.Contains(err.Error(), "exists again") {
+				t.Fatalf("restoring over a new b.txt made %v", err)
+			}
+		}
+	}
+}

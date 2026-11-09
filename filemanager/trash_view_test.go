@@ -528,10 +528,59 @@ func TestRestoredRowsLeaveAndTheNoteFadesIn(t *testing.T) {
 	h.frames(30)
 	h.pickTrash(pg, "a.txt")
 	h.clickButton(pg, pg.restore.OnClick)
-	h.until("a.txt's row leaves", func() bool { return pg.grid.Leaving() > 0 })
 	h.until("the note that it was restored shows", func() bool { return strings.Contains(pg.foot.Text, "restored") })
 	if a := pg.footFade.alpha(); a >= 1 {
 		t.Errorf("the note showed at once, at %v, rather than fading in", a)
 	}
+	h.until("a.txt's row leaves", func() bool { return pg.grid.Leaving() > 0 })
 	h.until("the note has faded in", func() bool { return pg.footFade.alpha() == 1 })
+}
+
+func TestAClickOnAMessageFadingOutReachesTheRowUnder(t *testing.T) {
+	names := make([]string, 0, 14)
+	for i := range 14 {
+		names = append(names, fmt.Sprintf("f%02d.txt", i))
+	}
+	h := newTrashHarness(t, names, names...)
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	if a := pg.msgFade.alpha(); a == 0 {
+		t.Fatal("the reading message has faded already; the test needs it on its way out")
+	}
+	var r geom.Rect
+	h.ui(func(_ *browser, u *gunim.UI) { r, _ = u.Bounds(pg.msg) })
+	h.click(r.Center())
+	if len(pg.grid.SelectedRows()) != 1 {
+		t.Fatalf("a click on the message fading out selected %v, want the row under it", pg.grid.SelectedRows())
+	}
+}
+
+func TestATrashPageOpenedNarrowNeverShowsItsTitle(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	h.w.Offscreen().Resize(geom.Sz(480, 500))
+	h.frames(5)
+	h.do(Command{Name: CmdTrashCan})
+	for range 30 {
+		pg := h.trashPage()
+		if pg != nil && pg.titleFade.alpha() > 0 {
+			t.Fatalf("a page opened narrow shows its title at %v", pg.titleFade.alpha())
+		}
+		h.frames(1)
+	}
+}
+
+func TestATitleBackWhileFadingGoesOnFromWhereItIs(t *testing.T) {
+	h := newTrashHarness(t, nil, "a.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.frames(20)
+	h.w.Offscreen().Resize(geom.Sz(480, 500))
+	h.frames(3)
+	was := pg.titleFade.alpha()
+	if was == 0 || was == 1 {
+		t.Fatalf("the title is at %v, not on its way out", was)
+	}
+	h.w.Offscreen().Resize(geom.Sz(1100, 700))
+	h.frames(1)
+	if a := pg.titleFade.alpha(); a < was/2 {
+		t.Fatalf("the title back while fading went to %v from %v, rather than on from there", a, was)
+	}
 }

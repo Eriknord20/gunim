@@ -114,7 +114,11 @@ type TrashItem struct {
 // restored is never replaced.
 type NoReplaceRenamer interface {
 	// RenameNoReplace moves the item at from to to, and fails with an
-	// error that matches fs.ErrExist where something is at to.
+	// error that matches fs.ErrExist where something is at to. Where it
+	// cannot move this item so, as a folder on a file system that has no
+	// such rename, it fails with an error that matches
+	// errors.ErrUnsupported, having moved nothing, and the caller renames
+	// as it can.
 	RenameNoReplace(from, to string) error
 }
 

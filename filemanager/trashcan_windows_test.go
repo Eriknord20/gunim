@@ -181,6 +181,11 @@ func TestTheRecycleBinActsOnlyOnTheItemListed(t *testing.T) {
 	if !ok {
 		t.Fatalf("the Recycle Bin does not list %s", p)
 	}
+	// What the shell counts, read as SHQUERYRBINFO is laid out, holds the
+	// item just deleted.
+	if n, err := binItems(); err != nil || n < 1 {
+		t.Fatalf("the Recycle Bin counts %d items, %v, holding at least the one just deleted", n, err)
+	}
 	stale := listed
 	stale.Deleted = stale.Deleted.Add(-time.Minute)
 	if err := (recycleBin{}).PurgeItem(context.Background(), stale); err == nil {

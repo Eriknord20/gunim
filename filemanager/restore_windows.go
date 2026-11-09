@@ -166,6 +166,7 @@ func restoreKept(kept, to string) error {
 		}
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
+	binChanged()
 	if err := dropRecord(kept); err != nil {
 		return fmt.Errorf("restored %s, but %w", to, err)
 	}

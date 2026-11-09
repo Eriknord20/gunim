@@ -14,9 +14,14 @@ import (
 )
 
 var (
-	procSHEmptyRecycleBinW = shell32.NewProc("SHEmptyRecycleBinW")
-	procSHQueryRecycleBinW = shell32.NewProc("SHQueryRecycleBinW")
+	procSHEmptyRecycleBinW     = shell32.NewProc("SHEmptyRecycleBinW")
+	procSHQueryRecycleBinW     = shell32.NewProc("SHQueryRecycleBinW")
+	procSHUpdateRecycleBinIcon = shell32.NewProc("SHUpdateRecycleBinIcon")
 )
+
+// binChanged has the shell show the Recycle Bin as full or empty again, as
+// an item moved out of it by a rename tells it nothing.
+func binChanged() { _, _, _ = procSHUpdateRecycleBinIcon.Call() }
 
 // SHEmptyRecycleBin's flags, IFileOperation's DeleteItem by its place in
 // the table, and what SHEmptyRecycleBin returns for a bin already empty.
@@ -156,6 +161,7 @@ func (recycleBin) PurgeItem(ctx context.Context, it TrashItem) error {
 	if err != nil {
 		return err
 	}
+	binChanged()
 	if err := dropRecord(it.ID); err != nil {
 		return fmt.Errorf("deleting %s: %w", it.Name, err)
 	}
@@ -170,6 +176,7 @@ func (recycleBin) EmptyTrash(ctx context.Context) error {
 		return err
 	}
 	hr, _, _ := procSHEmptyRecycleBinW.Call(0, 0, sherbNoConfirmation|sherbNoProgressUI|sherbNoSound)
+	binChanged()
 	switch {
 	case !failed(uint32(hr)):
 		return nil

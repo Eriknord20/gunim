@@ -41,7 +41,7 @@ type trashPage struct {
 	closing bool
 
 	back    *widget.IconButton
-	title   *widget.Label
+	title   *wordsLabel
 	restore *widget.Button
 	remove  *widget.Button
 	empty   *widget.Button
@@ -50,8 +50,8 @@ type trashPage struct {
 	menu    *widget.ContextMenu
 	// msg says why the grid is empty, over it, and foot what the trash
 	// holds, or what came of the last act.
-	msg  *widget.Label
-	foot *widget.Label
+	msg  *wordsLabel
+	foot *wordsLabel
 
 	// rows are the state's rows in the order shown, sorted by the column
 	// sort, down where desc is set.
@@ -63,8 +63,9 @@ type trashPage struct {
 	// heading is the title, which a narrow page leaves out.
 	heading string
 	// msgFade, footFade and titleFade fade the page's words as they
-	// change.
+	// change, and titled says the title has been laid out once.
 	msgFade, footFade, titleFade *fader
+	titled                       bool
 }
 
 func newTrashPage() *trashPage {
@@ -72,7 +73,7 @@ func newTrashPage() *trashPage {
 	pg.Add(pg.in)
 	pg.back = widget.NewIconButton(icon.ArrowLeft, "Back to the files (Escape)")
 	pg.back.OnClick = func(u *gunim.UI) gunim.Intent { pg.close(u); return nil }
-	pg.title = widget.NewLabel("Trash")
+	pg.title = &wordsLabel{widget.NewLabel("Trash")}
 	pg.title.Face, pg.title.Size, pg.title.MaxLines = widget.BoldFont, TitleText, 1
 	pg.restore = widget.NewButton("Restore")
 	pg.restore.Icon = icon.Undo2
@@ -126,14 +127,22 @@ func newTrashPage() *trashPage {
 		return len(items) > 0
 	}
 	pg.menu.OnPick = func(i int, u *gunim.UI) gunim.Intent { return pg.menuPicked(i, u) }
-	pg.msg = widget.NewLabel("")
+	pg.msg = &wordsLabel{widget.NewLabel("")}
 	pg.msg.Color, pg.msg.Align = Faint, text.AlignCenter
-	pg.foot = widget.NewLabel("")
+	pg.foot = &wordsLabel{widget.NewLabel("")}
 	pg.foot.Size, pg.foot.MaxLines = SmallText, 2
-	pg.msgFade, pg.footFade, pg.titleFade = newFader(pg.msg), newFader(pg.foot), newFader(pg.title)
+	pg.msgFade, pg.footFade, pg.titleFade = newFader(pg.msg.Label), newFader(pg.foot.Label), newFader(pg.title.Label)
 	pg.Add(pg.msgFade.in, pg.footFade.in, pg.titleFade.in)
 	return pg
 }
+
+// wordsLabel is a label of the page's words, which leaves the pointer to
+// what is under it: a message fading out over the rows is no reason for a
+// click on them to go nowhere.
+type wordsLabel struct{ *widget.Label }
+
+// Covers implements [gunim.Shaped]: none of it.
+func (*wordsLabel) Covers(geom.Point) bool { return false }
 
 // fader fades a label's text as it changes: a new text comes in from
 // nothing, and a text that goes fades out where it was.
@@ -163,8 +172,12 @@ func (f *fader) show(words string, ink theme.Token[color.NRGBA], th *theme.Live)
 		f.in.Animate(0, widget.Settle.Get(th))
 		return
 	}
+	if words != f.label.Text {
+		// Other words come in from nothing; the same ones, back while
+		// they fade, go on from where they are.
+		f.in.Jump(0)
+	}
 	f.label.Text, f.label.Color = words, ink
-	f.in.Jump(0)
 	f.in.Animate(1, widget.Quick.Get(th))
 }
 
@@ -183,7 +196,9 @@ func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	if fresh && !first {
 		// The rows that went, as restored or deleted, leave while the
 		// grid still draws them as they were.
-		pg.grid.Leave(pg.gone(s.Rows), u)
+		if gone, ok := pg.gone(s.Rows); ok {
+			pg.grid.Leave(gone, u)
+		}
 	}
 	pg.state = s
 	title := s.Title
@@ -215,9 +230,6 @@ func (pg *trashPage) set(s Trash, u *gunim.UI) {
 		pg.footFade.show(s.Note, ErrorInk, th)
 	default:
 		pg.footFade.show(s.Note, Faint, th)
-	}
-	if first {
-		pg.titleFade.show(pg.heading, widget.Ink, nil)
 	}
 	pg.enable()
 	if first {
@@ -296,6 +308,8 @@ func (pg *trashPage) sortBy(c int, u *gunim.UI) {
 		return
 	}
 	keep := keySet(pg.selectedKeys())
+	// Rows still leaving stand where they were, which a sort changes.
+	pg.grid.Leave(nil, u)
 	if c == pg.sort {
 		pg.desc = !pg.desc
 	} else {
@@ -341,7 +355,11 @@ func (pg *trashPage) row(i int) (widget.GridRow, bool) {
 }
 
 // gone are the indexes of the rows shown whose items rows no longer has.
-func (pg *trashPage) gone(rows []TrashRow) []int {
+// It is false where none went, or where rows has items the rows shown do
+// not: the grid closes the gaps of rows leaving over the rows that stay,
+// in the order they had, which only holds where rows are those shown less
+// the ones gone.
+func (pg *trashPage) gone(rows []TrashRow) ([]int, bool) {
 	have := make(map[string]bool, len(rows))
 	for _, r := range rows {
 		have[r.Key] = true
@@ -352,7 +370,7 @@ func (pg *trashPage) gone(rows []TrashRow) []int {
 			out = append(out, i)
 		}
 	}
-	return out
+	return out, len(out) > 0 && len(pg.rows)-len(out) == len(rows)
 }
 
 // keySet is keys as a set.
@@ -535,12 +553,17 @@ func (pg *trashPage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			k.Place(geom.Pt(usageMargin-6, (trashHeadH-s.H)/2))
 		case gunim.Node(pg.title):
 			// Narrow, the title fades out and gives its room to the
-			// buttons; a width of 0 would be no limit.
+			// buttons; a width of 0 would be no limit. The first layout
+			// shows it as the width has it at once.
 			room := right - left
+			th := f.Theme
+			if !pg.titled {
+				th, pg.titled = nil, true
+			}
 			if room < trashTitleLeast {
-				pg.titleFade.show("", widget.Ink, f.Theme)
+				pg.titleFade.show("", widget.Ink, th)
 			} else {
-				pg.titleFade.show(pg.heading, widget.Ink, f.Theme)
+				pg.titleFade.show(pg.heading, widget.Ink, th)
 			}
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(room, 1), 0)})
 			k.Place(geom.Pt(left, (trashHeadH-s.H)/2))
