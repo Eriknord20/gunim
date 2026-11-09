@@ -3,6 +3,7 @@ package filemanager
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	iofs "io/fs"
 	"os"
@@ -1256,5 +1257,12 @@ func TestAPasteStopsWhereTheClipboardChangesBetweenItsFiles(t *testing.T) {
 	}
 	if h.exists("b.txt") {
 		t.Fatal("the paste wrote a file of the copy that came between")
+	}
+}
+
+func TestAChangedClipboardIsSaidSoWhateverTheFileIsCalled(t *testing.T) {
+	err := fmt.Errorf("reading Access is denied.txt from the clipboard: %w", errClipboardChanged)
+	if why := explainWhy(err); !strings.Contains(why, "clipboard changed") {
+		t.Fatalf("a changed clipboard is explained as %q", why)
 	}
 }

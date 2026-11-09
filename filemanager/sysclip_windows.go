@@ -50,16 +50,19 @@ const (
 	vtGetData    = 3
 	vtStreamRead = 3
 
-	// A stream is asked for minPiece at first, and then for what the last
-	// read moved in aimRead, from minPiece to maxPiece. Stop is heard
-	// between reads, and Remote Desktop fetches what is asked as it is
-	// asked, so a large piece on a slow link keeps a paste from stopping,
-	// and a small one on a link with a long way to go spends it on asking.
-	// A link that slows all at once is learnt of only as a read ends: one
-	// read of up to maxPiece may then hold Stop off.
-	minPiece = 64 << 10
-	maxPiece = 1 << 20
-	aimRead  = 200 * time.Millisecond
+	// A stream is asked for minPiece at first, for twice as much after a
+	// read quicker than quickRead, and for half after one slower than
+	// slowRead, from minPiece to maxPiece. Stop is heard between reads,
+	// and Remote Desktop fetches what is asked as it is asked, so a large
+	// piece on a slow link keeps a paste from stopping, and a small one on
+	// a link with a long way to go spends it on asking. A read so takes
+	// about a second at most, and pieces grow to the most on any round
+	// trip under quickRead. A link that slows all at once is learnt of only
+	// as a read ends: one read of up to maxPiece may then hold Stop off.
+	minPiece  = 64 << 10
+	maxPiece  = 1 << 20
+	quickRead = 400 * time.Millisecond
+	slowRead  = time.Second
 )
 
 // The formats Windows names rather than numbers: the list of files held
@@ -285,7 +288,7 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 	}
 	// Again, as another copy may have come between the look and the
 	// fetch, and a seq only grows. A stream is fetched as it is read, so
-	// it is looked at a third time at its end.
+	// it is looked at after each read too.
 	if err := stillHeld(o.seq, o.now()); err != nil {
 		releaseMedium(&m)
 		return nil, err
@@ -312,9 +315,11 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
-// clipReader reads what the clipboard held at seq, and fails at its end
-// where the clipboard's seq, as now gives it, has moved on since: what
-// was read may hold some of another copy, and is not to be written.
+// clipReader reads what the clipboard held at seq, and fails once the
+// clipboard's seq, as now gives it, has moved on: what was read may hold
+// some of another copy, and is not to be written. It looks after every
+// read, so a change is learnt of at once, and where the stream fails or
+// runs on rather than ending.
 type clipReader struct {
 	io.ReadCloser
 	now func() uint32
@@ -324,10 +329,8 @@ type clipReader struct {
 // Read implements [io.Reader].
 func (h clipReader) Read(p []byte) (int, error) {
 	n, err := h.ReadCloser.Read(p)
-	if errors.Is(err, io.EOF) {
-		if err := stillHeld(h.seq, h.now()); err != nil {
-			return n, err
-		}
+	if err := stillHeld(h.seq, h.now()); err != nil {
+		return n, err
 	}
 	return n, err
 }
@@ -339,6 +342,8 @@ type oleStream struct {
 	stream unsafe.Pointer
 	// piece is how much the next read asks for, once it has been set.
 	piece int
+	// since says how long ago a time was; a test gives one of its own.
+	since func(time.Time) time.Duration
 }
 
 // Read implements [io.Reader].
@@ -349,13 +354,18 @@ func (s *oleStream) Read(p []byte) (int, error) {
 	if s.piece == 0 {
 		s.piece = minPiece
 	}
+	if s.since == nil {
+		s.since = time.Since
+	}
 	var n uint32
 	start := time.Now()
 	hr := comCall(s.stream, vtStreamRead, uintptr(unsafe.Pointer(&p[0])),
 		uintptr(min(len(p), s.piece)), uintptr(unsafe.Pointer(&n)))
-	if n > 0 {
-		took := max(time.Since(start), time.Millisecond)
-		s.piece = min(max(int(float64(n)*aimRead.Seconds()/took.Seconds()), minPiece), maxPiece)
+	switch took := s.since(start); {
+	case took < quickRead && s.piece < maxPiece:
+		s.piece *= 2
+	case took > slowRead && s.piece > minPiece:
+		s.piece /= 2
 	}
 	if failed(hr) {
 		return int(n), fmt.Errorf("HRESULT %#x", hr)

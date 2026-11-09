@@ -116,36 +116,38 @@ func TestMemoryThatCannotBeReadIsAnError(t *testing.T) {
 	}
 }
 
-func TestAStreamIsAskedForWhatItMovesInAFifthOfASecond(t *testing.T) {
-	// read answers a read after wait, as a link with a round trip and a
-	// rate would.
-	stream := func(asked *[]uintptr, wait func(size uintptr) time.Duration) *oleStream {
-		return &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
-			*asked = append(*asked, size)
-			time.Sleep(wait(size))
-			*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)
-			return 0
-		})}
-	}
-	read := func(s *oleStream, times int) {
-		buf := make([]byte, 4<<20)
+func TestAStreamIsAskedForMoreWhileItAnswersQuicklyAndLessWhenNot(t *testing.T) {
+	var asked []uintptr
+	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
+		asked = append(asked, size)
+		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)
+		return 0
+	})}
+	// Each read takes as long as the next of took says.
+	var took []time.Duration
+	s.since = func(time.Time) time.Duration { d := took[0]; took = took[1:]; return d }
+	read := func(d time.Duration, times int) {
 		for range times {
-			if _, err := s.Read(buf); err != nil {
+			took = append(took, d)
+			if _, err := s.Read(make([]byte, 4<<20)); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	// A long round trip on a fast link: the pieces grow to the most.
-	var far []uintptr
-	read(stream(&far, func(uintptr) time.Duration { return 60 * time.Millisecond }), 5)
-	if far[0] != minPiece || far[len(far)-1] != maxPiece {
-		t.Fatalf("a stream with a long round trip was asked for %d", far)
+	// A round trip of a quarter second: the pieces grow to the most.
+	read(250*time.Millisecond, 5)
+	if asked[0] != minPiece || asked[4] != maxPiece {
+		t.Fatalf("a stream with a long round trip was asked for %d", asked)
 	}
-	// A slow link, 1 MiB a second: pieces of what it moves in aimRead.
-	var slow []uintptr
-	read(stream(&slow, func(size uintptr) time.Duration { return time.Duration(size) * time.Second / (1 << 20) }), 4)
-	if last, aim := slow[len(slow)-1], uintptr(aimRead.Seconds()*(1<<20)); last < aim*3/4 || last > aim*5/4 {
-		t.Fatalf("a stream at 1 MiB a second was asked for %d", slow)
+	// Then slow: the pieces shrink, to the least and no further.
+	read(1500*time.Millisecond, 6)
+	if asked[6] != maxPiece/2 || asked[len(asked)-1] != minPiece {
+		t.Fatalf("a stream slow to answer was asked for %d", asked)
+	}
+	// Between the two: the pieces stay as they are.
+	read(700*time.Millisecond, 2)
+	if asked[len(asked)-1] != minPiece {
+		t.Fatalf("a stream neither quick nor slow was asked for %d", asked)
 	}
 }
 
@@ -187,9 +189,15 @@ func TestAnEmptyFileIsEmptyThoughItsMemoryCannotBeLocked(t *testing.T) {
 // fakeDataObject is a data object whose GetData hands over a stream, and
 // counts its calls and the stream's releases.
 func fakeDataObject(gets, releases *int) unsafe.Pointer {
+	return fakeDataObjectReading(gets, releases, 0)
+}
+
+// fakeDataObjectReading is fakeDataObject, whose stream's reads answer hr.
+func fakeDataObjectReading(gets, releases *int, hr uintptr) unsafe.Pointer {
 	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
 	release := syscall.NewCallback(func(uintptr) uintptr { *releases++; return 0 })
-	stream := unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, release, nop, nop}})
+	read := syscall.NewCallback(func(_, _, _, _ uintptr) uintptr { return hr })
+	stream := unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, release, read, nop}})
 	return newFakeCOM(func(_, _, medium uintptr) uintptr {
 		*gets++
 		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
@@ -219,6 +227,7 @@ func TestAFileFetchedAsTheClipboardChangesIsLetGo(t *testing.T) {
 
 func TestAStreamReadWhileTheClipboardChangedIsNotWritten(t *testing.T) {
 	var gets, releases int
+	// Still at its two looks, moved on by the first read.
 	seqs := []uint32{7, 7, 8}
 	o := &oleFiles{seq: 7, obj: fakeDataObject(&gets, &releases), list: []outsideItem{{name: "a.txt", size: -1}}}
 	o.now = func() uint32 { s := seqs[0]; seqs = seqs[1:]; return s }
@@ -247,5 +256,21 @@ func TestAnEmptyFileHandedOverAsNoMemoryIsEmpty(t *testing.T) {
 		if _, err := o.open(0); tc.empty != (err == nil) {
 			t.Fatalf("a file said to be %d bytes, handed over as no memory, opens with %v", tc.size, err)
 		}
+	}
+}
+
+func TestAStreamThatFailsAsTheClipboardChangesSaysTheClipboardChanged(t *testing.T) {
+	var gets, releases int
+	seqs := []uint32{7, 7, 8}
+	const eFail = 0x80004005
+	o := &oleFiles{seq: 7, obj: fakeDataObjectReading(&gets, &releases, eFail), list: []outsideItem{{name: "a.txt", size: -1}}}
+	o.now = func() uint32 { s := seqs[0]; seqs = seqs[1:]; return s }
+	in, err := o.open(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = in.Close() }()
+	if _, err := io.ReadAll(in); !errors.Is(err, errClipboardChanged) {
+		t.Fatalf("a stream that failed as the clipboard changed ends with %v", err)
 	}
 }
