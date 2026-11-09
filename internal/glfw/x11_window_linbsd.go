@@ -3037,69 +3037,33 @@ func (c *Cursor) platformCreateCursor(img *image.NRGBA, xhot, yhot int) error {
 }
 
 func (c *Cursor) platformCreateStandardCursor(shape StandardCursor) error {
-	// See GLFW 3.4 implementation.
-	if _glfw.platformWindow.xcursor.handle != 0 {
-		theme := _glfw.platformWindow.xcursor.GetTheme(_glfw.platformWindow.display)
-		if theme != 0 {
-			size := _glfw.platformWindow.xcursor.GetDefaultSize(_glfw.platformWindow.display)
-			var name string
-
-			switch shape {
-			case ArrowCursor:
-				name = "default"
-			case IBeamCursor:
-				name = "text"
-			case CrosshairCursor:
-				name = "crosshair"
-			case HandCursor:
-				name = "pointer"
-			case HResizeCursor:
-				name = "ew-resize"
-			case VResizeCursor:
-				name = "ns-resize"
-			case ResizeNWSECursor:
-				name = "nwse-resize"
-			case ResizeNESWCursor:
-				name = "nesw-resize"
-			case ResizeAllCursor:
-				name = "all-scroll"
-			case NotAllowedCursor:
-				name = "not-allowed"
+	// gunim change: GLFW 3.4 loads a theme's cursor only where the display names a theme, and has no fallback for the
+	// diagonal shapes. A desktop that sets its theme only through the default theme, as Cinnamon and GNOME under
+	// Xwayland can, then got the arrow at a window's corners. The default theme is asked for as well, by the
+	// theme's own name first and then by the older names some themes keep.
+	if xc := &_glfw.platformWindow.xcursor; xc.handle != 0 {
+		theme := xc.GetTheme(_glfw.platformWindow.display)
+		size := xc.GetDefaultSize(_glfw.platformWindow.display)
+		for _, name := range cursorNames(shape) {
+			imagePtr := xc.LibraryLoadImage(name, theme, size)
+			if imagePtr == 0 {
+				continue
 			}
-
-			imagePtr := _glfw.platformWindow.xcursor.LibraryLoadImage(name, theme, size)
-			if imagePtr != 0 {
-				c.platform.handle = _glfw.platformWindow.xcursor.ImageLoadCursor(
-					_glfw.platformWindow.display, imagePtr)
-				_glfw.platformWindow.xcursor.ImageDestroy(imagePtr)
+			c.platform.handle = xc.ImageLoadCursor(_glfw.platformWindow.display, imagePtr)
+			xc.ImageDestroy(imagePtr)
+			if c.platform.handle != _None {
+				break
 			}
 		}
 	}
 
 	if c.platform.handle == _None {
-		var native uint32
-
-		switch shape {
-		case ArrowCursor:
-			native = _XC_left_ptr
-		case IBeamCursor:
-			native = _XC_xterm
-		case CrosshairCursor:
-			native = _XC_crosshair
-		case HandCursor:
-			native = _XC_hand2
-		case HResizeCursor:
-			native = _XC_sb_h_double_arrow
-		case VResizeCursor:
-			native = _XC_sb_v_double_arrow
-		case ResizeAllCursor:
-			native = _XC_fleur
-		default:
+		native, ok := fontCursor(shape)
+		if !ok {
 			// An unavailable shape is deliberately not an error: callers
 			// fall back to the default cursor (#2476).
 			return nil
 		}
-
 		c.platform.handle = xCreateFontCursor(_glfw.platformWindow.display, native)
 		if c.platform.handle == _None {
 			return fmt.Errorf("glfw: x11: failed to create standard cursor: %w", PlatformError)

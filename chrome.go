@@ -27,11 +27,21 @@ type titleBar struct {
 
 // resizeMargin is how near the window's edge, in logical pixels, a
 // press sizes a chromeless window, where the system does not.
-const resizeMargin = 6
+const resizeMargin = ResizeEdge
+
+// cornerReach is how far along an edge from a corner, in logical
+// pixels, a press near that edge sizes the window by the corner. A
+// corner is the hardest place to hit, and the one most used.
+const cornerReach = 20
+
+// cornerSquare is the side of the square inside each bottom corner,
+// in logical pixels, that sizes the window by the corner. The top
+// corners have none: the title bar's buttons and caption are there.
+const cornerSquare = 12
 
 // ResizeEdge is how near a chromeless window's edge, in logical pixels,
 // a press may size it, on any system: Windows takes its frame's
-// thickness, 8 pixels at 100%, and elsewhere gunim takes resizeMargin.
+// thickness, 8 pixels at 100%, and elsewhere gunim takes as much.
 // A child window of the system's, as a plugin's own editor, takes every
 // press over it, so one kept this far in from the edges leaves the
 // window its edges to size it by.
@@ -205,17 +215,27 @@ func (u *UI) edgeAt(p geom.Point) (driver.Edge, bool) {
 	if c == nil || c.fr.NativeFrame() || c.maximized || u.fixed {
 		return 0, false
 	}
-	size := u.w.dw.Size()
+	return edgeIn(p, u.w.dw.Size())
+}
+
+// edgeIn is the edge or corner of a window of the given size that p is
+// near: within resizeMargin of an edge, and by a corner where that is
+// within cornerReach of the corner along the edge, or in a bottom
+// corner's square.
+func edgeIn(p geom.Point, size geom.Size) (driver.Edge, bool) {
 	left, right := p.X < resizeMargin, p.X >= size.W-resizeMargin
 	top, bottom := p.Y < resizeMargin, p.Y >= size.H-resizeMargin
+	nearL, nearR := p.X < cornerReach, p.X >= size.W-cornerReach
+	nearT, nearB := p.Y < cornerReach, p.Y >= size.H-cornerReach
+	square := p.Y >= size.H-cornerSquare && (p.X < cornerSquare || p.X >= size.W-cornerSquare)
 	switch {
-	case top && left:
+	case (left || top) && nearL && nearT:
 		return driver.EdgeTopLeft, true
-	case top && right:
+	case (right || top) && nearR && nearT:
 		return driver.EdgeTopRight, true
-	case bottom && left:
+	case (left || bottom || square) && nearL && nearB:
 		return driver.EdgeBottomLeft, true
-	case bottom && right:
+	case (right || bottom || square) && nearR && nearB:
 		return driver.EdgeBottomRight, true
 	case left:
 		return driver.EdgeLeft, true
