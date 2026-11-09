@@ -31,11 +31,24 @@ func TestAWindowsCornersReachAlongItsEdgesAndIntoTheBottomCorners(t *testing.T) 
 		{390, 10, 0, false, "inside the top right corner, where the title bar's buttons are"},
 		{200, 0, driver.EdgeTop, true, "on the top edge"},
 		{200, 150, 0, false, "in the middle"},
+		{380, 299, driver.EdgeBottomRight, true, "on the bottom edge, at the corner's reach"},
+		{379, 299, driver.EdgeBottom, true, "on the bottom edge, just past the corner's reach"},
 	}
 	for _, c := range cases {
 		got, ok := edgeIn(geom.Pt(c.x, c.y), size)
 		if ok != c.ok || got != c.want {
 			t.Errorf("%s (%v,%v): got %v %v, want %v %v", c.why, c.x, c.y, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+// A small window keeps the middle of each side a plain edge: corners reach a third of the way along it at most.
+func TestASmallWindowKeepsThePlainEdgesBetweenItsCorners(t *testing.T) {
+	size := geom.Sz(300, 30)
+	if got, ok := edgeIn(geom.Pt(0, 15), size); !ok || got != driver.EdgeLeft {
+		t.Errorf("the middle of a 30 px tall window's left edge sizes by %v %v, want the left edge", got, ok)
+	}
+	if got, ok := edgeIn(geom.Pt(0, 2), size); !ok || got != driver.EdgeTopLeft {
+		t.Errorf("the top of its left edge sizes by %v %v, want the top left corner", got, ok)
 	}
 }

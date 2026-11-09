@@ -225,8 +225,10 @@ func (u *UI) edgeAt(p geom.Point) (driver.Edge, bool) {
 func edgeIn(p geom.Point, size geom.Size) (driver.Edge, bool) {
 	left, right := p.X < resizeMargin, p.X >= size.W-resizeMargin
 	top, bottom := p.Y < resizeMargin, p.Y >= size.H-resizeMargin
-	nearL, nearR := p.X < cornerReach, p.X >= size.W-cornerReach
-	nearT, nearB := p.Y < cornerReach, p.Y >= size.H-cornerReach
+	// A small window keeps the middle third of each side its plain edge.
+	reachX, reachY := min(cornerReach, size.W/3), min(cornerReach, size.H/3)
+	nearL, nearR := p.X < reachX, p.X >= size.W-reachX
+	nearT, nearB := p.Y < reachY, p.Y >= size.H-reachY
 	square := p.Y >= size.H-cornerSquare && (p.X < cornerSquare || p.X >= size.W-cornerSquare)
 	switch {
 	case (left || top) && nearL && nearT:
