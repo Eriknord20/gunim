@@ -189,9 +189,13 @@ func (b *PresetBrowser) Follow(u *gunim.UI) {
 	b.inView(u)
 }
 
-// Reveal centres the preset playing and its group at the next layout with room for them: at once on the browser's
-// first such layout, and gliding after.
-func (b *PresetBrowser) Reveal(u *gunim.UI) {
+// Reveal implements [gunim.Revealer]: as Tab brings the keyboard to a column, the columns show the group shown and
+// the preset playing, in place of the column's top.
+func (b *PresetBrowser) Reveal(_ geom.Rect, u *gunim.UI) { b.inView(u) }
+
+// ShowPlaying centres the preset playing and its group at the next layout with room for them: at once on the
+// browser's first such layout, and gliding after.
+func (b *PresetBrowser) ShowPlaying(u *gunim.UI) {
 	b.revealing = true
 	u.Invalidate()
 }
@@ -332,7 +336,7 @@ func moveTo(key input.Key, at, n, page int) (int, bool) {
 }
 
 // ringFollows springs ring to show the focus ring as e says, and reports whether e was a focus event.
-func ringFollows(ring *anim.Float, e input.Event, u *gunim.UI) bool {
+func (b *PresetBrowser) ringFollows(ring *anim.Float, e input.Event, u *gunim.UI) bool {
 	on := float32(0)
 	switch e := e.(type) {
 	case input.FocusRing:
@@ -513,7 +517,7 @@ func (g *groupList) at(y float32) int { return rowAt(g.rows, y) }
 // click shows its presets. Up, Down, Home, End, Page Up and Page Down
 // show the group they move to.
 func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
-	if ringFollows(g.ring, e, u) {
+	if g.b.ringFollows(g.ring, e, u) {
 		return true
 	}
 	switch e := e.(type) {
@@ -735,7 +739,7 @@ func (l *presetList) at(y float32) int { return rowAt(l.rows, y) }
 // click picks it. Home, End, Page Up and Page Down play the preset they
 // move to; Up and Down go on to the browser.
 func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
-	if ringFollows(l.ring, e, u) {
+	if l.b.ringFollows(l.ring, e, u) {
 		return true
 	}
 	switch e := e.(type) {

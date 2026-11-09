@@ -540,7 +540,7 @@ func TestARevealCentresThePresetPlayingOnTheFirstLayout(t *testing.T) {
 	}
 	src.cur = src.list[3+40]
 	b := NewPresetBrowser(src)
-	b.Reveal(nil)
+	b.ShowPlaying(nil)
 	w := gunimtest.New(t, geom.Sz(360, 480), nil)
 	s := &sized{kid: b}
 	gunim.RegisterView(w, "sized", func(struct{}) gunim.Node { return s }, nil)
@@ -576,7 +576,7 @@ func TestARevealCentresTheGroup(t *testing.T) {
 	}
 	src.cur = src.list[40]
 	b := NewPresetBrowser(src)
-	b.Reveal(nil)
+	b.ShowPlaying(nil)
 	w := mountBrowser(t, b)
 	h := viewOf(t, w, b.gs)
 	if d := offCentre(b.gs, b.groups.rowRect(b.groups.index("Factory", "Group 140")), h); d > rowH/2 {
@@ -593,7 +593,7 @@ func TestALaterRevealGlidesToTheMiddle(t *testing.T) {
 	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
 	before := b.ps.Offset()
 	src.cur = src.list[3+40]
-	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, _ struct{}, u *gunim.UI) { b.Reveal(u) })
+	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, _ struct{}, u *gunim.UI) { b.ShowPlaying(u) })
 	if err := w.Client().Patch("browser", struct{}{}); err != nil {
 		t.Fatal(err)
 	}
@@ -731,4 +731,22 @@ func TestHomeEndAndPagesPlayThePresets(t *testing.T) {
 		}
 		shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), src.cur.Name)
 	}
+}
+
+// Tab into a column scrolled to the preset playing keeps that preset in view, not the column's top.
+func TestTabIntoAColumnKeepsThePresetPlayingInView(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[3+40]
+	b := NewPresetBrowser(src)
+	b.ShowPlaying(nil)
+	w := mountBrowser(t, b)
+	for range 3 {
+		w.Input(input.KeyPress{Key: input.KeyTab})
+		frames(w, 30)
+	}
+	if b.presets.ring.Value() < 0.99 {
+		t.Fatal("three Tabs didn't reach the presets")
+	}
+	shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), "the preset playing")
+	shows(t, w, b.gs, b.groups.rowRect(b.groups.index(b.bank, b.group)), "the group shown")
 }
