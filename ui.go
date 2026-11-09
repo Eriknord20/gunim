@@ -1466,8 +1466,24 @@ func (w *Window) wait() bool {
 // of the way through its animation before its first frame.
 func (w *Window) draw() {
 	t0 := time.Now()
+	wanted, stirred := w.ui.needsFrame(), w.ui.stirred
+	w.ui.stirredBy = false
 	w.applyPending()
 	applied := time.Since(t0)
+	if !w.ui.stirredBy {
+		// Only patches that changed nothing laid out came: the frame
+		// carries what it would have without them.
+		w.ui.stirred = stirred
+		if !wanted && !w.ui.needsFrame() {
+			// Nor did they start a spring: no frame at all. Looking
+			// mustn't leave a wake asked for by a node now at rest.
+			wake := w.ui.wakeIn
+			if !w.ui.springsMoving() {
+				w.ui.wakeIn = wake
+				return
+			}
+		}
+	}
 	interval := refreshInterval(w.dw.RefreshRate())
 	due := nextVsync(w.shown, interval, time.Now())
 	if w.unshown > 0 {
@@ -1598,7 +1614,9 @@ func (w *Window) queueLocked(cmd Command) {
 		}
 	} else {
 		// Mount, Unmount and Focus change what exists, so state queued
-		// ahead of one of them keeps its place and gets applied.
+		// ahead of one of them keeps its place and gets applied. A Patch
+		// keeps its place too, as it may stand on the state before it:
+		// publishes either side of one don't merge.
 		w.barrier = len(w.pending) + 1
 	}
 	w.pending = append(w.pending, cmd)
@@ -1809,6 +1827,11 @@ type UI struct {
 	painter   paint.Painter
 	animating bool
 	invalid   bool
+	// unchanged says the patch handler running called Unchanged.
+	unchanged bool
+	// stirredBy says a command applied since the window last looked
+	// needs a frame: any but a patch that changed nothing laid out.
+	stirredBy bool
 	// due runs a deadline's frame. runTimers invalidates ordinary timers;
 	// only Waker deadlines leave unrelated Steady subtrees calm.
 	due bool
@@ -2212,6 +2235,17 @@ func (u *UI) Blends() bool { return u.w.blends }
 func (u *UI) Invalidate() {
 	if u != nil {
 		u.invalid = true
+	}
+}
+
+// Unchanged says, from a patch's handler (see [RegisterPatch]), that
+// the patch changed nothing the window lays out or paints but springs,
+// which step and draw what moves themselves: the window builds no frame
+// for it. A value that is shown, set without a spring, needs the frame.
+// Anywhere else it does nothing.
+func (u *UI) Unchanged() {
+	if u != nil {
+		u.unchanged = true
 	}
 }
 
@@ -2682,6 +2716,21 @@ func (u *UI) placeCaret() {
 		u.caretAt = at
 		cp.SetTextCaret(at)
 	}
+}
+
+// springsMoving reports whether any spring moves, looking without moving
+// time on, as a frame looks again at its end: a patch's handler may have
+// started one.
+func (u *UI) springsMoving() bool {
+	if u.theme.Step(0) {
+		return true
+	}
+	for _, r := range u.roots() {
+		if u.step(r, 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // needsFrame reports whether there is anything to draw.
