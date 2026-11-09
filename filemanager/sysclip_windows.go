@@ -50,16 +50,16 @@ const (
 	vtGetData    = 3
 	vtStreamRead = 3
 
-	// A stream is asked for minPiece at first, and for up to maxPiece
-	// while it answers within quickRead. Stop is heard between reads, and
-	// Remote Desktop fetches what is asked as it is asked, so a large piece
-	// on a slow link keeps a paste from stopping; a small one on a fast
-	// link with a long way to go spends the link on asking. One that takes
-	// longer than slowRead halves.
-	minPiece  = 64 << 10
-	maxPiece  = 1 << 20
-	quickRead = 50 * time.Millisecond
-	slowRead  = 500 * time.Millisecond
+	// A stream is asked for minPiece at first, and then for what the last
+	// read moved in aimRead, from minPiece to maxPiece. Stop is heard
+	// between reads, and Remote Desktop fetches what is asked as it is
+	// asked, so a large piece on a slow link keeps a paste from stopping,
+	// and a small one on a link with a long way to go spends it on asking.
+	// A link that slows all at once is learnt of only as a read ends: one
+	// read of up to maxPiece may then hold Stop off.
+	minPiece = 64 << 10
+	maxPiece = 1 << 20
+	aimRead  = 200 * time.Millisecond
 )
 
 // The formats Windows names rather than numbers: the list of files held
@@ -243,12 +243,19 @@ func getData(obj unsafe.Pointer, cf uintptr, i int32, tymed uint32) (stgMedium, 
 	if hr := comCall(obj, vtGetData, uintptr(unsafe.Pointer(&f)), uintptr(unsafe.Pointer(&m))); failed(hr) {
 		return stgMedium{}, fmt.Errorf("HRESULT %#x", hr)
 	}
-	if m.tymed&tymed == 0 || m.handle == 0 {
+	if m.tymed&tymed == 0 {
 		releaseMedium(&m)
 		return stgMedium{}, errors.New("the program that put it there gave it in a form that cannot be read")
 	}
+	if m.handle == 0 {
+		releaseMedium(&m)
+		return stgMedium{}, errNoMedium
+	}
 	return m, nil
 }
+
+// errNoMedium says a program handed over nothing for what was asked.
+var errNoMedium = errors.New("the program that put it there handed over nothing")
 
 func releaseMedium(m *stgMedium) { _, _, _ = procReleaseStgMedium.Call(uintptr(unsafe.Pointer(m))) }
 
@@ -270,24 +277,29 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 		return nil, err
 	}
 	m, err := getData(o.obj, clipFormats().contents, int32(i), tymedIStream|tymedHGlobal)
+	if errors.Is(err, errNoMedium) && o.list[i].size == 0 {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	// Again, as another copy may have come between the look and the
-	// fetch, and a seq only grows: what was fetched is what was copied.
+	// fetch, and a seq only grows. A stream is fetched as it is read, so
+	// it is looked at a third time at its end.
 	if err := stillHeld(o.seq, o.now()); err != nil {
 		releaseMedium(&m)
 		return nil, err
 	}
 	if m.tymed == tymedIStream {
 		// The medium's handle is the stream itself.
-		return &oleStream{m: m, stream: *(*unsafe.Pointer)(unsafe.Pointer(&m.handle))}, nil
+		s := &oleStream{m: m, stream: *(*unsafe.Pointer)(unsafe.Pointer(&m.handle))}
+		return clipReader{ReadCloser: s, now: o.now, seq: o.seq}, nil
 	}
 	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
 	if err != nil && o.list[i].size == 0 {
 		// Movable memory of no size cannot be locked: what it holds is
-		// nothing, as the clipboard says.
+		// nothing, as the clipboard says, as with no memory above.
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	if err != nil {
@@ -298,6 +310,26 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 		b = b[:size]
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+// clipReader reads what the clipboard held at seq, and fails at its end
+// where the clipboard's seq, as now gives it, has moved on since: what
+// was read may hold some of another copy, and is not to be written.
+type clipReader struct {
+	io.ReadCloser
+	now func() uint32
+	seq uint32
+}
+
+// Read implements [io.Reader].
+func (h clipReader) Read(p []byte) (int, error) {
+	n, err := h.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		if err := stillHeld(h.seq, h.now()); err != nil {
+			return n, err
+		}
+	}
+	return n, err
 }
 
 // oleStream reads a file's contents from the stream a program handed
@@ -321,11 +353,9 @@ func (s *oleStream) Read(p []byte) (int, error) {
 	start := time.Now()
 	hr := comCall(s.stream, vtStreamRead, uintptr(unsafe.Pointer(&p[0])),
 		uintptr(min(len(p), s.piece)), uintptr(unsafe.Pointer(&n)))
-	switch took := time.Since(start); {
-	case took < quickRead && s.piece < maxPiece:
-		s.piece *= 2
-	case took > slowRead && s.piece > minPiece:
-		s.piece /= 2
+	if n > 0 {
+		took := max(time.Since(start), time.Millisecond)
+		s.piece = min(max(int(float64(n)*aimRead.Seconds()/took.Seconds()), minPiece), maxPiece)
 	}
 	if failed(hr) {
 		return int(n), fmt.Errorf("HRESULT %#x", hr)

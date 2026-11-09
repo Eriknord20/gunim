@@ -525,9 +525,6 @@ func (p *outsidePaste) item(i int) error {
 		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	default:
 		in, err := p.of.open(i)
-		if errors.Is(err, errClipboardChanged) {
-			return err
-		}
 		if err != nil {
 			return fmt.Errorf("reading %s from the clipboard: %w", it.name, err)
 		}
