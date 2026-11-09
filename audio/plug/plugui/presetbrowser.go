@@ -16,6 +16,7 @@ import (
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -37,6 +38,10 @@ type PresetSource interface {
 // lists the presets it finds in every group, under their groups' names,
 // and counts them beside each group; a click on a group then scrolls to
 // its presets. A click on a preset picks it.
+//
+// Up and Down play the preset before or after the one playing. In the groups they show the group before or after
+// instead. Home, End, Page Up and Page Down move in the column with the keyboard. Tab reaches each column, and its
+// focus ring fades in.
 type PresetBrowser struct {
 	anim.Group
 	src PresetSource
@@ -57,6 +62,9 @@ type PresetBrowser struct {
 	gs, ps      *widget.Scroll
 	// colH is how tall the columns show, as last laid out.
 	colH float32
+	// revealing is a reveal asked for and not yet laid out, revealJump says it puts new content in place at once,
+	// and laid that the columns have had room before.
+	revealing, revealJump, laid bool
 }
 
 // NewPresetBrowser returns a browser of src's presets.
@@ -71,9 +79,12 @@ func NewPresetBrowser(src PresetSource) *PresetBrowser {
 		b.ps.JumpTo(0)
 		return nil
 	}
-	b.groups = &groupList{b: b, hover: -1, pill: anim.NewFloat(0), lit: anim.NewFloat(0), hoverY: anim.NewFloat(0)}
-	b.presets = &presetList{b: b, hover: -1, pill: anim.NewFloat(0), shown: anim.NewFloat(0), lit: anim.NewFloat(0), hoverY: anim.NewFloat(0)}
-	b.Add(b.groups.pill, b.groups.lit, b.groups.hoverY, b.presets.pill, b.presets.shown, b.presets.lit, b.presets.hoverY)
+	b.groups = &groupList{b: b, hover: -1, pill: anim.NewFloat(0), lit: anim.NewFloat(0), hoverY: anim.NewFloat(0),
+		ring: anim.NewFloat(0)}
+	b.presets = &presetList{b: b, hover: -1, pill: anim.NewFloat(0), shown: anim.NewFloat(0), lit: anim.NewFloat(0),
+		hoverY: anim.NewFloat(0), ring: anim.NewFloat(0)}
+	b.Add(b.groups.pill, b.groups.lit, b.groups.hoverY, b.groups.ring, b.presets.pill, b.presets.shown, b.presets.lit,
+		b.presets.hoverY, b.presets.ring)
 	b.gs, b.ps = widget.NewScroll(b.groups), widget.NewScroll(b.presets)
 	b.Refresh(nil)
 	return b
@@ -175,11 +186,43 @@ func (b *PresetBrowser) Follow(u *gunim.UI) {
 	} else {
 		b.glide(u)
 	}
-	b.reveal(u)
+	b.inView(u)
 }
 
-// reveal scrolls the columns to the group shown and the preset playing.
-func (b *PresetBrowser) reveal(u *gunim.UI) {
+// Reveal implements [gunim.Revealer]: as Tab brings the keyboard to a column, the columns show the group shown and
+// the preset playing, in place of the column's top.
+func (b *PresetBrowser) Reveal(_ geom.Rect, u *gunim.UI) { b.inView(u) }
+
+// ShowPlaying centres the preset playing and its group at the next layout with room for them: at once on the
+// browser's first such layout, and gliding after.
+func (b *PresetBrowser) ShowPlaying(u *gunim.UI) {
+	b.revealing = true
+	u.Invalidate()
+}
+
+// centre scrolls the columns so the group shown and the preset playing stand in their middles, at once or gliding
+// on Quick.
+func (b *PresetBrowser) centre(jump bool, th *theme.Live) {
+	for _, c := range [...]struct {
+		s    *widget.Scroll
+		rows []listRow
+		i    int
+	}{{b.gs, b.groups.rows, b.groups.index(b.bank, b.group)}, {b.ps, b.presets.rows, b.presets.current()}} {
+		if c.i < 0 {
+			continue
+		}
+		r := c.rows[c.i]
+		y := min(max(r.y+r.h/2-b.colH/2, 0), max(listHeight(c.rows)-b.colH, 0))
+		if jump {
+			c.s.JumpTo(y)
+		} else {
+			c.s.ScrollTo(y, widget.Quick.Get(th))
+		}
+	}
+}
+
+// inView scrolls the columns to the group shown and the preset playing.
+func (b *PresetBrowser) inView(u *gunim.UI) {
 	if u == nil {
 		return
 	}
@@ -196,6 +239,10 @@ func (b *PresetBrowser) reveal(u *gunim.UI) {
 // column's scroll still holds the old group's height, so a scroll
 // there would stop short of a row past it.
 func (b *PresetBrowser) jumpToCurrent() {
+	if b.revealing {
+		b.revealJump = true
+		return
+	}
 	y := float32(0)
 	if i := b.presets.current(); i >= 0 {
 		const room = 8
@@ -209,6 +256,8 @@ func (b *PresetBrowser) jumpToCurrent() {
 // group's alone; during one, scrolled to the group's.
 func (b *PresetBrowser) showGroup(bank, group string, u *gunim.UI) {
 	if b.query != "" {
+		b.bank, b.group = bank, group
+		b.glide(u)
 		if i := b.presets.headerIndex(bank, group); i >= 0 {
 			b.ps.ScrollTo(b.presets.rowRect(i).Min.Y, widget.Settle.Get(u.Theme()))
 		}
@@ -234,30 +283,88 @@ func (b *PresetBrowser) pick(p plug.Preset, u *gunim.UI) {
 // Skip plays the preset by from the one playing, in the group listed,
 // or in what the search finds, round from the last to the first.
 func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
-	var list []plug.Preset
-	for _, r := range b.presets.rows {
-		if !r.header {
-			list = append(list, r.p)
-		}
-	}
+	list, i := b.listed()
 	if len(list) == 0 {
 		return
-	}
-	i := -1
-	if cur, ok := b.current(); ok {
-		for j, p := range list {
-			if p.Same(cur) {
-				i = j
-				break
-			}
-		}
 	}
 	if i < 0 && by < 0 {
 		i = 0
 	}
 	i = ((i+by)%len(list) + len(list)) % len(list)
 	b.pick(list[i], u)
-	b.reveal(u)
+	b.inView(u)
+}
+
+// listed returns the presets the column lists, and the index of the one playing among them, or -1.
+func (b *PresetBrowser) listed() (list []plug.Preset, at int) {
+	at = -1
+	cur, ok := b.current()
+	for _, r := range b.presets.rows {
+		if !r.header {
+			if ok && at < 0 && r.p.Same(cur) {
+				at = len(list)
+			}
+			list = append(list, r.p)
+		}
+	}
+	return list, at
+}
+
+// page is how many rows a page key moves: a column's height, less a row.
+func (b *PresetBrowser) page() int { return max(int(b.colH/rowH)-1, 1) }
+
+// moveTo is where key moves a cursor at of n rows, a page of page apart: a row on, a page on or an end, kept inside
+// the rows; false for any other key.
+func moveTo(key input.Key, at, n, page int) (int, bool) {
+	switch key {
+	case input.KeyUp:
+		at--
+	case input.KeyDown:
+		at++
+	case input.KeyPageUp:
+		at -= page
+	case input.KeyPageDown:
+		at += page
+	case input.KeyHome:
+		at = 0
+	case input.KeyEnd:
+		at = n - 1
+	default:
+		return 0, false
+	}
+	return min(max(at, 0), n-1), true
+}
+
+// ringFollows springs ring to show the focus ring as e says, and reports whether e was a focus event.
+func (b *PresetBrowser) ringFollows(ring *anim.Float, e input.Event, u *gunim.UI) bool {
+	on := float32(0)
+	switch e := e.(type) {
+	case input.FocusRing:
+		if e.On {
+			on = 1
+		}
+	case input.FocusLost:
+	default:
+		return false
+	}
+	ring.Animate(on, widget.RingFade.Get(u.Theme()))
+	u.Invalidate()
+	return true
+}
+
+// Handle implements [gunim.Handler]: Up and Down, with the keyboard in the browser, play the preset before or after
+// the one playing.
+func (b *PresetBrowser) Handle(e input.Event, u *gunim.UI) bool {
+	k, ok := e.(input.KeyPress)
+	if !ok || k.Mods != 0 || k.Key != input.KeyUp && k.Key != input.KeyDown {
+		return false
+	}
+	by := 1
+	if k.Key == input.KeyUp {
+		by = -1
+	}
+	b.Skip(by, u)
+	return true
 }
 
 // Children implements [gunim.Composite].
@@ -274,32 +381,47 @@ const (
 
 // Layout implements [gunim.Node]: the field across the top, and the
 // columns under it.
-func (b *PresetBrowser) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+func (b *PresetBrowser) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
 	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, fieldH)))
 	kids.At(0).Place(geom.Point{})
 	top := float32(fieldH + colGap)
 	h := max(size.H-top, 0)
 	b.colH = h
+	reveal := b.revealing && h >= rowH
+	jump := reveal && (!b.laid || b.revealJump)
+	if jump {
+		b.centre(true, f.Theme)
+	}
 	gw := float32(int(size.W * groupsW))
 	kids.At(1).Layout(gunim.Tight(geom.Sz(gw, h)))
 	kids.At(1).Place(geom.Pt(0, top))
 	kids.At(2).Layout(gunim.Tight(geom.Sz(max(size.W-gw-colGap, 0), h)))
 	kids.At(2).Place(geom.Pt(gw+colGap, top))
+	if reveal && !jump {
+		b.centre(false, f.Theme)
+	}
+	if h >= rowH {
+		b.laid = true
+		b.revealing, b.revealJump = false, false
+	}
 	return size
 }
 
-// Paint implements [gunim.Node]: the columns in wells.
+// Paint implements [gunim.Node]: the columns in wells, the one with the keyboard ringed.
 func (b *PresetBrowser) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	ink := widget.Ink.Get(f.Theme)
 	top := float32(fieldH + colGap)
 	gw := float32(int(box.W * groupsW))
-	for _, r := range []geom.Rect{geom.Rc(0, top, gw, box.H-top), geom.Rc(gw+colGap, top, box.W-gw-colGap, box.H-top)} {
+	wells := [...]geom.Rect{geom.Rc(0, top, gw, box.H-top), geom.Rc(gw+colGap, top, box.W-gw-colGap, box.H-top)}
+	for _, r := range wells {
 		p.RRect(r, 10, paint.Solid(paint.Faded(ink, 0.035)))
 	}
 	for i := range kids.Len() {
 		kids.At(i).Paint(p)
 	}
+	widget.FocusRing(p, wells[0], 10, b.groups.ring.Value(), f.Theme)
+	widget.FocusRing(p, wells[1], 10, b.presets.ring.Value(), f.Theme)
 }
 
 // bankIcon draws the icon of bank in r.
@@ -334,10 +456,14 @@ type groupList struct {
 	// parts are the keys of the rows the access tree last listed.
 	parts []uint64
 	// pill is the row the pill marking the group shown stands on, lit
-	// how far the pill under the pointer shows, at hoverY.
-	pill, lit, hoverY *anim.Float
-	size              geom.Size
+	// how far the pill under the pointer shows, at hoverY, and ring how
+	// far the focus ring shows.
+	pill, lit, hoverY, ring *anim.Float
+	size                    geom.Size
 }
+
+// Focusable implements [gunim.Focusable]: a click or Tab puts the keyboard in the groups.
+func (g *groupList) Focusable() bool { return true }
 
 func (g *groupList) fill() {
 	var words []string
@@ -380,11 +506,7 @@ func (g *groupList) rowRect(i int) geom.Rect { return geom.Rc(0, g.rows[i].y, g.
 
 // Layout implements [gunim.Node]: as tall as its rows.
 func (g *groupList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	h := float32(8)
-	if n := len(g.rows); n > 0 {
-		h = g.rows[n-1].y + g.rows[n-1].h + 8
-	}
-	g.size = geom.Sz(c.Max.W, h)
+	g.size = geom.Sz(c.Max.W, listHeight(g.rows))
 	return g.size
 }
 
@@ -392,9 +514,15 @@ func (g *groupList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children)
 func (g *groupList) at(y float32) int { return rowAt(g.rows, y) }
 
 // Handle implements [gunim.Handler]: the pointer lights a group, and a
-// click shows its presets.
+// click shows its presets. Up, Down, Home, End, Page Up and Page Down
+// show the group they move to.
 func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
+	if g.b.ringFollows(g.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
+	case input.KeyPress:
+		return e.Mods == 0 && g.move(e.Key, u)
 	case input.PointerMove:
 		g.setHover(g.at(e.Pos.Y), u)
 		return false
@@ -414,6 +542,31 @@ func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
 		return true
 	}
 	return false
+}
+
+// move shows the group key moves to from the group shown, and reports whether key moves.
+func (g *groupList) move(key input.Key, u *gunim.UI) bool {
+	var rows []int
+	at := -1
+	for i, r := range g.rows {
+		if !r.header {
+			if r.bank == g.b.bank && r.group == g.b.group {
+				at = len(rows)
+			}
+			rows = append(rows, i)
+		}
+	}
+	if len(rows) == 0 {
+		return false
+	}
+	to, ok := moveTo(key, at, len(rows), g.b.page())
+	if !ok {
+		return false
+	}
+	r := g.rows[rows[to]]
+	g.b.showGroup(r.bank, r.group, u)
+	g.b.gs.RevealContent(g.rowRect(rows[to]), u)
+	return true
 }
 
 func (g *groupList) setHover(i int, u *gunim.UI) {
@@ -511,10 +664,13 @@ type presetList struct {
 	parts []uint64
 	// pill is the row the pill marking the preset playing stands on,
 	// shown how far it shows; lit is how far the pill under the pointer
-	// shows, at hoverY.
-	pill, shown, lit, hoverY *anim.Float
-	size                     geom.Size
+	// shows, at hoverY, and ring how far the focus ring shows.
+	pill, shown, lit, hoverY, ring *anim.Float
+	size                           geom.Size
 }
+
+// Focusable implements [gunim.Focusable]: a click or Tab puts the keyboard in the presets.
+func (l *presetList) Focusable() bool { return true }
 
 func (l *presetList) fill() {
 	l.rows = l.rows[:0]
@@ -573,20 +729,35 @@ func (l *presetList) rowRect(i int) geom.Rect { return geom.Rc(0, l.rows[i].y, l
 
 // Layout implements [gunim.Node]: as tall as its rows.
 func (l *presetList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	h := float32(8)
-	if n := len(l.rows); n > 0 {
-		h = l.rows[n-1].y + l.rows[n-1].h + 8
-	}
-	l.size = geom.Sz(c.Max.W, h)
+	l.size = geom.Sz(c.Max.W, listHeight(l.rows))
 	return l.size
 }
 
 func (l *presetList) at(y float32) int { return rowAt(l.rows, y) }
 
 // Handle implements [gunim.Handler]: the pointer lights a preset, and a
-// click picks it.
+// click picks it. Home, End, Page Up and Page Down play the preset they
+// move to; Up and Down go on to the browser.
 func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
+	if l.b.ringFollows(l.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
+	case input.KeyPress:
+		if e.Mods != 0 || e.Key == input.KeyUp || e.Key == input.KeyDown {
+			return false
+		}
+		list, at := l.b.listed()
+		if len(list) == 0 {
+			return false
+		}
+		to, ok := moveTo(e.Key, at, len(list), l.b.page())
+		if !ok {
+			return false
+		}
+		l.b.pick(list[to], u)
+		l.b.inView(u)
+		return true
 	case input.PointerMove:
 		l.setHover(l.at(e.Pos.Y), u)
 		return false
@@ -751,6 +922,14 @@ func keyRows(rows []listRow) {
 		h.Write([]byte(strconv.Itoa(n)))
 		r.key = max(h.Sum64(), 1)
 	}
+}
+
+// listHeight is how tall a column of rows is.
+func listHeight(rows []listRow) float32 {
+	if n := len(rows); n > 0 {
+		return rows[n-1].y + rows[n-1].h + 8
+	}
+	return 8
 }
 
 // rowAt returns the row of rows at y, or -1.
