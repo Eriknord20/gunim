@@ -1,6 +1,7 @@
 package plugui
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -502,5 +504,231 @@ func TestUpAndDownPlayThePresetsBeside(t *testing.T) {
 	frames(w, 1)
 	if want := []string{"Sub", "Growl", "Sub", "Growl"}; !slices.Equal(src.picked, want) {
 		t.Fatalf("Down in the search field picked %v, want %v", src.picked, want)
+	}
+}
+
+// sized lays its child out at size, as a window that gives the browser its room only once it opens.
+type sized struct {
+	kid  gunim.Node
+	size geom.Size
+}
+
+func (s *sized) Children() []gunim.Node { return []gunim.Node{s.kid} }
+
+func (s *sized) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	kids.At(0).Layout(gunim.Tight(s.size))
+	kids.At(0).Place(geom.Point{})
+	return c.Max
+}
+
+func (s *sized) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+	kids.At(0).Paint(p)
+}
+
+// offCentre is how far row, a box in s's content, stands from the middle of a view h tall.
+func offCentre(s *widget.Scroll, row geom.Rect, h float32) float32 {
+	mid := (row.Min.Y+row.Max.Y)/2 - s.Offset()
+	return float32(math.Abs(float64(mid - h/2)))
+}
+
+// A reveal asked for before the browser has room waits for it, then centres the preset playing and its group on
+// that first layout, at once.
+func TestARevealCentresThePresetPlayingOnTheFirstLayout(t *testing.T) {
+	src := kits(60)
+	for i := range 40 {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Group " + strconv.Itoa(100+i), Name: "More " + strconv.Itoa(i)})
+	}
+	src.cur = src.list[3+40]
+	b := NewPresetBrowser(src)
+	b.Reveal(nil)
+	w := gunimtest.New(t, geom.Sz(360, 480), nil)
+	s := &sized{kid: b}
+	gunim.RegisterView(w, "sized", func(struct{}) gunim.Node { return s }, nil)
+	if err := w.Client().Mount(gunim.Root, "sized", "sized", nil); err != nil {
+		t.Fatal(err)
+	}
+	frames(w, 2)
+	gunim.RegisterPatch(w, "sized", func(s *sized, size geom.Size, u *gunim.UI) {
+		s.size = size
+		u.Invalidate()
+	})
+	if err := w.Client().Patch("sized", geom.Sz(360, 480)); err != nil {
+		t.Fatal(err)
+	}
+	h := float32(480 - fieldH - colGap)
+	row := b.presets.rowRect(b.presets.current())
+	for f := range 30 {
+		w.Frame(time.Second / 60)
+		if d := offCentre(b.ps, row, h); d > rowH/2 {
+			t.Fatalf("frame %d: the preset playing stands %v from the middle of its column", f, d)
+		}
+		if b.gs.Offset() > 0 {
+			t.Fatalf("frame %d: the groups' column scrolled to %v, want its top, as Kits is near it", f, b.gs.Offset())
+		}
+	}
+}
+
+// A reveal of a group far down its column centres it too.
+func TestARevealCentresTheGroup(t *testing.T) {
+	src := &presetHost{}
+	for i := range 60 {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Group " + strconv.Itoa(100+i), Name: "Sound " + strconv.Itoa(i)})
+	}
+	src.cur = src.list[40]
+	b := NewPresetBrowser(src)
+	b.Reveal(nil)
+	w := mountBrowser(t, b)
+	h := viewOf(t, w, b.gs)
+	if d := offCentre(b.gs, b.groups.rowRect(b.groups.index("Factory", "Group 140")), h); d > rowH/2 {
+		t.Fatalf("the group stands %v from the middle of its column", d)
+	}
+}
+
+// A reveal asked for once the browser has been laid out glides the preset playing to the middle of its column.
+func TestALaterRevealGlidesToTheMiddle(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[3]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
+	before := b.ps.Offset()
+	src.cur = src.list[3+40]
+	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, _ struct{}, u *gunim.UI) { b.Reveal(u) })
+	if err := w.Client().Patch("browser", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	h := float32(480 - fieldH - colGap)
+	row := b.presets.rowRect(b.presets.current())
+	frames(w, 2)
+	if mid := b.ps.Offset(); mid <= before || offCentre(b.ps, row, h) < rowH {
+		t.Fatalf("two frames in, the column stands at %v, want it on the way from %v", mid, before)
+	}
+	frames(w, 60)
+	if d := offCentre(b.ps, row, h); d > rowH/2 {
+		t.Fatalf("the preset playing stands %v from the middle of its column", d)
+	}
+}
+
+// Tab brings the keyboard to each column, and its focus ring fades in; a click leaves no ring.
+func TestTheColumnsShowAFocusRing(t *testing.T) {
+	b := NewPresetBrowser(newPresetHost())
+	w := mountBrowser(t, b)
+	var on []string
+	for range 3 {
+		w.Input(input.KeyPress{Key: input.KeyTab})
+		w.Frame(time.Second / 60)
+		if g, p := b.groups.ring.Value(), b.presets.ring.Value(); g > 0.99 || p > 0.99 {
+			t.Fatalf("a frame after Tab, the rings are at %v and %v, want them fading in", g, p)
+		}
+		frames(w, 30)
+		switch {
+		case b.groups.ring.Value() > 0.99:
+			on = append(on, "groups")
+		case b.presets.ring.Value() > 0.99:
+			on = append(on, "presets")
+		default:
+			on = append(on, "")
+		}
+	}
+	if want := []string{"", "groups", "presets"}; !slices.Equal(on, want) {
+		t.Fatalf("Tab ringed %q, want %q", on, want)
+	}
+	at := geom.Pt(20, fieldH+colGap+b.groups.rows[1].y+rowH/2)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	frames(w, 30)
+	if g, p := b.groups.ring.Value(), b.presets.ring.Value(); g > 0.01 || p > 0.01 {
+		t.Fatalf("after a click the rings are at %v and %v, want none", g, p)
+	}
+}
+
+// groupsHost is a source of two banks of 20 groups.
+func groupsHost() *presetHost {
+	src := &presetHost{}
+	for _, bank := range []string{"Factory", "User"} {
+		for i := range 20 {
+			g := bank + " " + strconv.Itoa(i)
+			src.list = append(src.list, plug.Preset{Bank: bank, Group: g, Name: g + " a"}, plug.Preset{Bank: bank, Group: g, Name: g + " b"})
+		}
+	}
+	src.cur = src.list[0]
+	return src
+}
+
+// After a click on a group, Up and Down show the group before and after, across banks, and Home, End, Page Up and
+// Page Down go to the ends and a page on.
+func TestKeysMoveThroughTheGroups(t *testing.T) {
+	src := groupsHost()
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	i := b.groups.index("Factory", "Factory 18")
+	b.gs.JumpTo(b.groups.rows[i].y - 100)
+	frames(w, 10)
+	at := geom.Pt(20, fieldH+colGap+b.groups.rows[i].y-b.gs.Offset()+rowH/2)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	frames(w, 2)
+	if b.group != "Factory 18" {
+		t.Fatalf("the click showed %q, want Factory 18", b.group)
+	}
+	page := int((480-fieldH-colGap)/rowH) - 1
+	for _, c := range []struct {
+		key  input.Key
+		want string
+	}{
+		{input.KeyDown, "Factory 19"},
+		{input.KeyDown, "User 0"},
+		{input.KeyUp, "Factory 19"},
+		{input.KeyHome, "Factory 0"},
+		{input.KeyUp, "Factory 0"},
+		{input.KeyPageDown, "Factory " + strconv.Itoa(page)},
+		{input.KeyEnd, "User 19"},
+		{input.KeyDown, "User 19"},
+		{input.KeyPageUp, "User " + strconv.Itoa(19-page)},
+	} {
+		w.Input(input.KeyPress{Key: c.key})
+		frames(w, 20)
+		if b.group != c.want {
+			t.Fatalf("%v showed %q, want %q", c.key, b.group, c.want)
+		}
+		shows(t, w, b.gs, b.groups.rowRect(b.groups.index(b.bank, b.group)), b.group)
+	}
+	if len(src.picked) != 0 {
+		t.Fatalf("moving through the groups picked %v, want nothing", src.picked)
+	}
+}
+
+// With the keyboard in the presets, Home, End, Page Up and Page Down play the first, the last and a page on.
+func TestHomeEndAndPagesPlayThePresets(t *testing.T) {
+	src := kits(60)
+	src.cur = src.list[3+10]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Follow(u) })
+	row := b.presets.rows[b.presets.current()]
+	w360 := float32(360)
+	gw := float32(int(w360 * groupsW))
+	at := geom.Pt(gw+colGap+20, fieldH+colGap+row.y-b.ps.Offset()+row.h/2)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	frames(w, 2)
+	page := int((480-fieldH-colGap)/rowH) - 1
+	for _, c := range []struct {
+		key  input.Key
+		want int
+	}{
+		{input.KeyPageDown, 10 + page},
+		{input.KeyHome, 0},
+		{input.KeyPageUp, 0},
+		{input.KeyEnd, 59},
+		{input.KeyPageDown, 59},
+		{input.KeyPageUp, 59 - page},
+	} {
+		w.Input(input.KeyPress{Key: c.key})
+		frames(w, 20)
+		if want := "Kit " + strconv.Itoa(c.want); src.cur.Name != want {
+			t.Fatalf("%v played %q, want %q", c.key, src.cur.Name, want)
+		}
+		shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), src.cur.Name)
 	}
 }
