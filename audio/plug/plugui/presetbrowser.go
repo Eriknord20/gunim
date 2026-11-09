@@ -260,6 +260,21 @@ func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 	b.reveal(u)
 }
 
+// Handle implements [gunim.Handler]: Up and Down, with the keyboard in the browser, play the preset before or after
+// the one playing.
+func (b *PresetBrowser) Handle(e input.Event, u *gunim.UI) bool {
+	k, ok := e.(input.KeyPress)
+	if !ok || k.Mods != 0 || k.Key != input.KeyUp && k.Key != input.KeyDown {
+		return false
+	}
+	by := 1
+	if k.Key == input.KeyUp {
+		by = -1
+	}
+	b.Skip(by, u)
+	return true
+}
+
 // Children implements [gunim.Composite].
 func (b *PresetBrowser) Children() []gunim.Node { return []gunim.Node{b.field, b.gs, b.ps} }
 
@@ -338,6 +353,12 @@ type groupList struct {
 	pill, lit, hoverY *anim.Float
 	size              geom.Size
 }
+
+// Focusable implements [gunim.Focusable]: a click puts the keyboard in the browser, for Up and Down.
+func (g *groupList) Focusable() bool { return true }
+
+// SkipsTab implements [gunim.TabSkipper].
+func (g *groupList) SkipsTab() {}
 
 func (g *groupList) fill() {
 	var words []string
@@ -515,6 +536,12 @@ type presetList struct {
 	pill, shown, lit, hoverY *anim.Float
 	size                     geom.Size
 }
+
+// Focusable implements [gunim.Focusable]: a click puts the keyboard in the browser, for Up and Down.
+func (l *presetList) Focusable() bool { return true }
+
+// SkipsTab implements [gunim.TabSkipper].
+func (l *presetList) SkipsTab() {}
 
 func (l *presetList) fill() {
 	l.rows = l.rows[:0]

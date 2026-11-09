@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -467,5 +468,39 @@ func TestTwoPresetsOfOneNameAreRowsApart(t *testing.T) {
 		if src.cur.Pitch != want {
 			t.Fatalf("a press on Sub %d picked the one of pitch %v", i+1, src.cur.Pitch)
 		}
+	}
+}
+
+// A click on a preset puts the keyboard in the browser, where Down and Up play the preset after and before; they do so
+// from the search field too.
+func TestUpAndDownPlayThePresetsBeside(t *testing.T) {
+	src := newPresetHost()
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	i := slices.IndexFunc(b.presets.rows, func(r listRow) bool { return !r.header && r.p.Name == "Sub" })
+	if i < 0 {
+		t.Fatal("Sub isn't listed")
+	}
+	w360 := float32(360)
+	gw := float32(int(w360 * groupsW))
+	at := geom.Pt(gw+colGap+20, fieldH+colGap+b.presets.rows[i].y+b.presets.rows[i].h/2)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	frames(w, 2)
+	for _, k := range []input.Key{input.KeyDown, input.KeyUp} {
+		w.Input(input.KeyPress{Key: k})
+		frames(w, 1)
+	}
+	if want := []string{"Sub", "Growl", "Sub"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("the click and the keys picked %v, want %v", src.picked, want)
+	}
+	at = geom.Pt(40, fieldH/2)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	frames(w, 2)
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	frames(w, 1)
+	if want := []string{"Sub", "Growl", "Sub", "Growl"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("Down in the search field picked %v, want %v", src.picked, want)
 	}
 }
