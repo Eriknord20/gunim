@@ -50,10 +50,16 @@ const (
 	vtGetData    = 3
 	vtStreamRead = 3
 
-	// streamPiece is the most asked of a stream at once. Stop is heard
-	// between reads, and Remote Desktop fetches what is asked as it is
-	// asked, so on a slow link a large read keeps a paste from stopping.
-	streamPiece = 64 << 10
+	// A stream is asked for minPiece at first, and for up to maxPiece
+	// while it answers within quickRead. Stop is heard between reads, and
+	// Remote Desktop fetches what is asked as it is asked, so a large piece
+	// on a slow link keeps a paste from stopping; a small one on a fast
+	// link with a long way to go spends the link on asking. One that takes
+	// longer than slowRead halves.
+	minPiece  = 64 << 10
+	maxPiece  = 1 << 20
+	quickRead = 50 * time.Millisecond
+	slowRead  = 500 * time.Millisecond
 )
 
 // The formats Windows names rather than numbers: the list of files held
@@ -158,11 +164,9 @@ func (c osClip) files() (sf systemFiles, err error) {
 			sf.paths = append(sf.paths, windows.UTF16ToString(buf))
 		}
 		if h, _, _ := procGetClipboardData.Call(clipFormats().effect); h != 0 {
-			b, err := globalBytes(h)
-			if err != nil {
-				return sf, fmt.Errorf("reading whether the files were cut: %w", err)
-			}
-			if len(b) >= 4 {
+			// Where it cannot be read, the files are copied rather than
+			// moved, which loses nothing.
+			if b, err := globalBytes(h); err == nil && len(b) >= 4 {
 				effect := binary.LittleEndian.Uint32(b)
 				sf.cut = effect&dropEffectMove != 0 && effect&dropEffectCopy == 0
 			}
@@ -228,7 +232,7 @@ func (c osClip) outside(seq uint32, fn func(outsideFiles) error) error {
 	if err != nil {
 		return err
 	}
-	return fn(&oleFiles{c: c, seq: seq, obj: obj, list: items})
+	return fn(&oleFiles{now: c.seq, seq: seq, obj: obj, list: items})
 }
 
 // getData asks the data object obj for format cf, the item of index i in
@@ -249,11 +253,11 @@ func getData(obj unsafe.Pointer, cf uintptr, i int32, tymed uint32) (stgMedium, 
 func releaseMedium(m *stgMedium) { _, _, _ = procReleaseStgMedium.Call(uintptr(unsafe.Pointer(m))) }
 
 // oleFiles is the files the clipboard's data object obj holds as
-// contents, described by list, while c is still as it was at seq: the
-// object reads what the clipboard holds now, not what it held when it
-// was taken.
+// contents, described by list, while the clipboard's seq, as now gives
+// it, is still seq: the object reads what the clipboard holds now, not
+// what it held when it was taken.
 type oleFiles struct {
-	c    osClip
+	now  func() uint32
 	seq  uint32
 	obj  unsafe.Pointer
 	list []outsideItem
@@ -262,11 +266,17 @@ type oleFiles struct {
 func (o *oleFiles) items() []outsideItem { return o.list }
 
 func (o *oleFiles) open(i int) (io.ReadCloser, error) {
-	if err := stillHeld(o.seq, o.c.seq()); err != nil {
+	if err := stillHeld(o.seq, o.now()); err != nil {
 		return nil, err
 	}
 	m, err := getData(o.obj, clipFormats().contents, int32(i), tymedIStream|tymedHGlobal)
 	if err != nil {
+		return nil, err
+	}
+	// Again, as another copy may have come between the look and the
+	// fetch, and a seq only grows: what was fetched is what was copied.
+	if err := stillHeld(o.seq, o.now()); err != nil {
+		releaseMedium(&m)
 		return nil, err
 	}
 	if m.tymed == tymedIStream {
@@ -275,6 +285,11 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 	}
 	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
+	if err != nil && o.list[i].size == 0 {
+		// Movable memory of no size cannot be locked: what it holds is
+		// nothing, as the clipboard says.
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -290,6 +305,8 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 type oleStream struct {
 	m      stgMedium
 	stream unsafe.Pointer
+	// piece is how much the next read asks for, once it has been set.
+	piece int
 }
 
 // Read implements [io.Reader].
@@ -297,9 +314,19 @@ func (s *oleStream) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	if s.piece == 0 {
+		s.piece = minPiece
+	}
 	var n uint32
+	start := time.Now()
 	hr := comCall(s.stream, vtStreamRead, uintptr(unsafe.Pointer(&p[0])),
-		uintptr(min(len(p), streamPiece)), uintptr(unsafe.Pointer(&n)))
+		uintptr(min(len(p), s.piece)), uintptr(unsafe.Pointer(&n)))
+	switch took := time.Since(start); {
+	case took < quickRead && s.piece < maxPiece:
+		s.piece *= 2
+	case took > slowRead && s.piece > minPiece:
+		s.piece /= 2
+	}
 	if failed(hr) {
 		return int(n), fmt.Errorf("HRESULT %#x", hr)
 	}

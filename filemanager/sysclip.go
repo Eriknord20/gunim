@@ -42,7 +42,7 @@ type sysClip interface {
 
 // errClipboardChanged says the clipboard no longer holds what a paste
 // began with, which another copy, or a retry long after, would find.
-var errClipboardChanged = errors.New("the clipboard changed after the paste began, so what it holds now was not pasted")
+var errClipboardChanged = errors.New("the clipboard changed after the paste began, so what it holds now was not pasted; paste again to take it")
 
 // stillHeld says whether a clipboard whose seq is now still holds what it
 // held at seq. A seq of 0 is a system that gives none, which cannot say.
@@ -294,13 +294,12 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 	a.startOp(job{kind: OpCopy, srcs: srcs, dest: here}, "Copying "+a.what(srcs)+" to "+a.ps.placeName(here))
 }
 
-// sizedReader reads what r holds, a file called name the clipboard says
-// is size bytes long, and fails where it holds fewer or more: a stream
-// the program cut short, or memory short of what it said, would else be
+// sizedReader reads what r holds, a file the clipboard says is size
+// bytes long, and fails where it holds fewer or more: a stream the
+// program cut short, or memory short of what it said, would else be
 // written as the whole file, and replace one there.
 type sizedReader struct {
 	r          io.Reader
-	name       string
 	size, read int64
 }
 
@@ -310,9 +309,9 @@ func (s *sizedReader) Read(p []byte) (int, error) {
 	s.read += int64(n)
 	switch {
 	case s.read > s.size:
-		return n, fmt.Errorf("%s holds more than the %d bytes the clipboard says it does", s.name, s.size)
+		return n, fmt.Errorf("it holds more than the %d bytes the clipboard says it does", s.size)
 	case errors.Is(err, io.EOF) && s.read < s.size:
-		return n, fmt.Errorf("%s ended after %d of its %d bytes", s.name, s.read, s.size)
+		return n, fmt.Errorf("it ended after %d of its %d bytes", s.read, s.size)
 	}
 	return n, err
 }
@@ -526,12 +525,15 @@ func (p *outsidePaste) item(i int) error {
 		p.written[looseKey(dst)] = append(p.written[looseKey(dst)], dst)
 	default:
 		in, err := p.of.open(i)
+		if errors.Is(err, errClipboardChanged) {
+			return err
+		}
 		if err != nil {
 			return fmt.Errorf("reading %s from the clipboard: %w", it.name, err)
 		}
 		var src io.Reader = in
 		if it.size >= 0 {
-			src = &sizedReader{r: in, name: it.name, size: it.size}
+			src = &sizedReader{r: in, size: it.size}
 		}
 		werr := r.writeFile(src, it.name, dst, outsideInfo{it})
 		if err := errors.Join(werr, in.Close()); err != nil {

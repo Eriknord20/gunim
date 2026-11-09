@@ -5,12 +5,15 @@ package filemanager
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -114,17 +117,101 @@ func TestMemoryThatCannotBeReadIsAnError(t *testing.T) {
 	}
 }
 
-func TestAStreamIsReadInPiecesStopCanComeBetween(t *testing.T) {
-	var asked uintptr
+func TestAStreamIsAskedForMoreWhileItAnswersQuicklyAndLessWhenNot(t *testing.T) {
+	var asked []uintptr
+	slow := false
 	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
-		asked = max(asked, size)
+		asked = append(asked, size)
+		if slow {
+			time.Sleep(slowRead + 100*time.Millisecond)
+		}
 		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)
 		return 0
 	})}
-	if _, err := s.Read(make([]byte, 4<<20)); err != nil {
+	buf := make([]byte, 4<<20)
+	for range 6 {
+		if _, err := s.Read(buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if asked[0] != minPiece || slices.Max(asked) != maxPiece {
+		t.Fatalf("a quick stream was asked for %d", asked)
+	}
+	slow = true
+	for range 2 {
+		if _, err := s.Read(buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if last := asked[len(asked)-1]; last != maxPiece/2 {
+		t.Fatalf("a stream slow to answer was asked for %d", asked)
+	}
+}
+
+func TestAnEmptyFileIsEmptyThoughItsMemoryCannotBeLocked(t *testing.T) {
+	// Movable memory of no size, as a program may hand over for an empty
+	// file, cannot be locked.
+	const gmemMoveable = 0x2
+	h, _, err := kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, 0)
+	if h == 0 {
 		t.Fatal(err)
 	}
-	if asked > streamPiece {
-		t.Fatalf("the stream was asked for %d bytes at once", asked)
+	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	obj := unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, nop, syscall.NewCallback(func(_, _, medium uintptr) uintptr {
+		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
+		m.tymed, m.handle = tymedHGlobal, h
+		return 0
+	}), nop}})
+	for _, tc := range []struct {
+		size  int64
+		empty bool
+	}{{0, true}, {-1, false}} {
+		o := &oleFiles{now: func() uint32 { return 0 }, obj: obj, list: []outsideItem{{name: "a", size: tc.size}}}
+		in, err := o.open(0)
+		if tc.empty != (err == nil) {
+			t.Fatalf("a file said to be %d bytes opens with %v", tc.size, err)
+		}
+		if in != nil {
+			if b, _ := io.ReadAll(in); len(b) > 0 {
+				t.Fatalf("an empty file holds %q", b)
+			}
+		}
+		if tc.size == 0 {
+			// The release freed it; the next case hands over another.
+			h, _, _ = kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, 0)
+		}
+	}
+}
+
+// fakeDataObject is a data object whose GetData hands over a stream, and
+// counts its calls and the stream's releases.
+func fakeDataObject(gets, releases *int) unsafe.Pointer {
+	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	release := syscall.NewCallback(func(uintptr) uintptr { *releases++; return 0 })
+	stream := unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, release, nop, nop}})
+	return newFakeCOM(func(_, _, medium uintptr) uintptr {
+		*gets++
+		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
+		m.tymed, m.handle = tymedIStream, uintptr(stream)
+		return 0
+	})
+}
+
+func TestAFileIsNotFetchedFromAClipboardThatChanged(t *testing.T) {
+	var gets, releases int
+	o := &oleFiles{now: func() uint32 { return 8 }, seq: 7, obj: fakeDataObject(&gets, &releases),
+		list: []outsideItem{{name: "a.txt", size: 1}}}
+	if _, err := o.open(0); !errors.Is(err, errClipboardChanged) || gets != 0 {
+		t.Fatalf("open says %v, and fetched %d times", err, gets)
+	}
+}
+
+func TestAFileFetchedAsTheClipboardChangesIsLetGo(t *testing.T) {
+	var gets, releases int
+	seqs := []uint32{7, 8}
+	o := &oleFiles{seq: 7, obj: fakeDataObject(&gets, &releases), list: []outsideItem{{name: "a.txt", size: 1}}}
+	o.now = func() uint32 { s := seqs[0]; seqs = seqs[1:]; return s }
+	if _, err := o.open(0); !errors.Is(err, errClipboardChanged) || gets != 1 || releases != 1 {
+		t.Fatalf("open says %v, fetched %d times and let go %d", err, gets, releases)
 	}
 }

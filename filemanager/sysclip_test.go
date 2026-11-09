@@ -38,7 +38,15 @@ type fakeClip struct {
 	list    []outsideItem
 	data    map[string]string
 	broken  map[string]bool
+	opened  map[string]func()
 	emptied bool
+}
+
+// onOpen calls fn as the file called name is opened, once.
+func (c *fakeClip) onOpen(name string, fn func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.opened = map[string]func(){name: fn}
 }
 
 // breakFiles makes the contents of the files called names unreadable, or
@@ -125,6 +133,13 @@ func (f fakeFiles) open(i int) (io.ReadCloser, error) {
 	}
 	if f.broken[f.list[i].name] {
 		return nil, errors.New("the stream broke")
+	}
+	f.c.mu.Lock()
+	fn := f.c.opened[f.list[i].name]
+	delete(f.c.opened, f.list[i].name)
+	f.c.mu.Unlock()
+	if fn != nil {
+		defer fn()
 	}
 	return io.NopCloser(strings.NewReader(f.data[f.list[i].name])), nil
 }
@@ -1200,6 +1215,9 @@ func TestARetryAfterTheClipboardChangedPastesNothingNew(t *testing.T) {
 	if h.exists("report.txt") {
 		t.Fatal("the retry pasted what the clipboard holds now")
 	}
+	if e := h.a.ops.dialogs[0].state.(ErrorBox); e.Retry {
+		t.Fatal("a retry is offered that would refuse again")
+	}
 }
 
 func TestAPasteOfWhatTheClipboardNoLongerHoldsPastesNothing(t *testing.T) {
@@ -1220,5 +1238,23 @@ func TestAPasteOfWhatTheClipboardNoLongerHoldsPastesNothing(t *testing.T) {
 	}
 	if h.exists("report.txt") {
 		t.Fatal("the paste wrote what the clipboard holds now")
+	}
+}
+
+func TestAPasteStopsWhereTheClipboardChangesBetweenItsFiles(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	list := []outsideItem{{name: "a.txt", size: 1}, {name: "b.txt", size: 1}}
+	c.holdContents(list, map[string]string{"a.txt": "a", "b.txt": "b"})
+	// Another copy of files of the same names lands as a.txt is read.
+	c.onOpen("a.txt", func() { c.holdContents(list, map[string]string{"a.txt": "A", "b.txt": "B"}) })
+	h.do(Command{Name: CmdPaste})
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !strings.Contains(e.Body, "Paste again") || e.Retry {
+		t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("b.txt") {
+		t.Fatal("the paste wrote a file of the copy that came between")
 	}
 }

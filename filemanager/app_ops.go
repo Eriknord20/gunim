@@ -632,7 +632,8 @@ func (a *app) finish(id int, j job, rec record, err error) {
 			box.Body += " " + done + " done before this."
 		}
 		again, ok := a.retryJob(j, rec)
-		box.Retry = ok
+		// A paste of a clipboard that changed would refuse again.
+		box.Retry = ok && !errors.Is(err, errClipboardChanged)
 		title := r.title
 		a.showErrorThen(box, func(retry bool) {
 			if retry {
