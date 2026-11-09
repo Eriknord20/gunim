@@ -584,3 +584,18 @@ func TestATitleBackWhileFadingGoesOnFromWhereItIs(t *testing.T) {
 		t.Fatalf("the title back while fading went to %v from %v, rather than on from there", a, was)
 	}
 }
+
+func TestAReadWhileARowLeavesEndsItsLeaving(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt"}, "a.txt", "b.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.frames(30)
+	h.pickTrash(pg, "a.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("a.txt's row leaves", func() bool { return pg.grid.Leaving() > 0 })
+	gen := pg.state.RowsGen
+	h.do(TrashAct{Seq: pg.state.Seq, Act: TrashRead})
+	h.until("the trash is read again", func() bool { return pg.state.RowsGen != gen && !pg.state.Reading })
+	if n := pg.grid.Leaving(); n != 0 {
+		t.Fatalf("%d rows still leave over the rows read again", n)
+	}
+}

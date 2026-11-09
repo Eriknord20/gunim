@@ -196,9 +196,13 @@ func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	if fresh && !first {
 		// The rows that went, as restored or deleted, leave while the
 		// grid still draws them as they were.
-		if gone, ok := pg.gone(s.Rows); ok {
-			pg.grid.Leave(gone, u)
+		// Where none went, or the rows changed otherwise, rows still
+		// leaving from before would stand where the new rows are.
+		gone, ok := pg.gone(s.Rows)
+		if !ok {
+			gone = nil
 		}
+		pg.grid.Leave(gone, u)
 	}
 	pg.state = s
 	title := s.Title
