@@ -204,3 +204,86 @@ func TestAChipTakesTheKeyboardAndDeleteRemovesIt(t *testing.T) {
 		}
 	}
 }
+
+// A chip hiding its cross narrows over frames, with no jump, and a click
+// where the cross was removes nothing.
+func TestAChipHidesItsCrossOverFrames(t *testing.T) {
+	c := NewChip("", "Ctrl+K")
+	gone := 0
+	c.OnRemove = func(*gunim.UI) gunim.Intent { gone++; return nil }
+	w, run := stage(t, &frame{child: Row(c), size: geom.Sz(300, 100)})
+	run(1)
+	width := c.size.W
+	do(t, w, func(u *gunim.UI) { c.SetCross(false, u) })
+	last := c.cross.Value()
+	moved := 0
+	for range 40 {
+		run(1)
+		if v := c.cross.Value(); v != last {
+			moved++
+			if d := last - v; d > 0.5 {
+				t.Fatalf("the cross jumped from %v to %v", last, v)
+			}
+			last = v
+		}
+		if d := width - c.size.W; d > 8 || d < -8 {
+			t.Fatalf("the chip jumped from %v wide to %v", width, c.size.W)
+		}
+		width = c.size.W
+	}
+	if moved < 3 || last > 0.01 {
+		t.Fatalf("the cross moved on %d frames and ended at %v", moved, last)
+	}
+	click(w, c.crossX, c.size.H/2)
+	run(1)
+	if gone != 0 {
+		t.Fatal("a click where the hidden cross was removed the chip")
+	}
+}
+
+// A chip of keys keeps its width as its cross comes and goes, and draws
+// inside its box.
+func TestAChipOfKeysHoldsStill(t *testing.T) {
+	c := NewChip("", "Ctrl+K")
+	c.Keys = []string{"Ctrl", "K"}
+	w, run := stage(t, &frame{child: Row(c), size: geom.Sz(300, 100)})
+	run(1)
+	width := c.size.W
+	do(t, w, func(u *gunim.UI) { c.SetCross(false, u) })
+	for range 30 {
+		run(1)
+		if c.size.W != width {
+			t.Fatalf("the chip went from %v wide to %v", width, c.size.W)
+		}
+	}
+	box := geom.Sz(width, c.size.H)
+	if bad := spills(painted(c, box), box, 3); len(bad) > 0 {
+		t.Fatalf("it paints outside its box: %v", bad)
+	}
+}
+
+// Each line of a wrap packed at the end ends at its right edge, and a child too
+// wide for it stays in rather than running off to the left.
+func TestAWrapPackedAtTheEnd(t *testing.T) {
+	a, b, c, d := newSpot(150, 20), newSpot(100, 20), newSpot(150, 20), newSpot(500, 20)
+	wrap := NewWrap()
+	wrap.Gap = tableNoGap
+	wrap.Justify = JustifyEnd
+	w := gunimtest.New(t, geom.Sz(320, 200), nil)
+	gunim.RegisterView(w, "wrap", func(struct{}) gunim.Node { return wrap },
+		func(n gunim.Node, _ struct{}, u *gunim.UI) {
+			for _, k := range []gunim.Node{a, b, c, d} {
+				u.Insert(n, k)
+			}
+		})
+	if err := w.Client().Mount(gunim.Root, "wrap", "wrap", nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		w.Frame(time.Second / 60)
+	}
+	at(t, a, geom.Pt(70, 0))
+	at(t, b, geom.Pt(220, 0))
+	at(t, c, geom.Pt(170, 20))
+	at(t, d, geom.Pt(0, 40))
+}

@@ -379,17 +379,17 @@ func (t *Table) Handle(e input.Event, u *gunim.UI) bool {
 		case input.KeyBackspace:
 			// Takes back a letter of a name being found, and is left to
 			// the application otherwise.
-			if !t.finding(when(e.Time)) {
+			if !t.finding(when(e.Time, u)) {
 				return false
 			}
 			typed := []rune(t.typed)
 			t.typed = string(typed[:len(typed)-1])
-			t.typedAt = when(e.Time)
+			t.typedAt = when(e.Time, u)
 			t.findTyped(u)
 		case input.KeyEscape:
 			// Gives up finding, and is left to the application when
 			// nothing is being found.
-			if !t.finding(when(e.Time)) {
+			if !t.finding(when(e.Time, u)) {
 				return false
 			}
 			t.typed = ""
@@ -409,16 +409,21 @@ func (t *Table) Handle(e input.Event, u *gunim.UI) bool {
 	return false
 }
 
-// when is an event's time, or now for one that carries none.
-func when(at time.Time) time.Time {
+// when is an event's time, or now by u's clock for one that carries none.
+func when(at time.Time, u *gunim.UI) time.Time {
 	if at.IsZero() {
-		return time.Now()
+		return u.Clock()
 	}
 	return at
 }
 
 // findPause is how long typing rests before a new name starts.
 const findPause = time.Second
+
+// KeepsKey implements [gunim.KeyKeeper]: a Space while a name to find is typed goes into it.
+func (t *Table) KeepsKey(e input.KeyPress, u *gunim.UI) bool {
+	return e.Key == input.KeySpace && !e.Mods.Has(input.ModControl) && !e.Mods.Has(input.ModAlt) && t.finding(when(e.Time, u))
+}
 
 func (t *Table) finding(now time.Time) bool {
 	return t.typed != "" && now.Sub(t.typedAt) < findPause
@@ -428,10 +433,7 @@ func (t *Table) finding(now time.Time) bool {
 // what has been typed, whatever its case. Typing after a pause starts
 // a new name.
 func (t *Table) find(e input.TextInput, u *gunim.UI) {
-	now := e.Time
-	if now.IsZero() {
-		now = time.Now()
-	}
+	now := when(e.Time, u)
 	if !t.finding(now) {
 		t.typed = ""
 		// A name never starts with a space: that one marked a row.

@@ -267,7 +267,9 @@ func (u *UI) accessRequest(r access.Request) {
 		r.Part = at - 1
 	}
 	if r.Focus {
+		u.userFocus = true
 		u.Focus(s.node)
+		u.userFocus = false
 	}
 	if a, ok := s.node.(AccessActor); ok && (r.Action != "" || r.SetValue) {
 		u.on(s, func() { a.AccessAct(r, u) })
@@ -304,7 +306,10 @@ func (c Client) Access(ctx context.Context) (*access.Tree, error) {
 // such as one from [NewOffscreen], which has no loop to answer
 // [Client.Access], and must be called from the goroutine calling Frame:
 // never on a window its loop runs, which answers [Client.Access].
-func (w *Window) Access() *access.Tree { return w.ui.clientAccess() }
+func (w *Window) Access() *access.Tree {
+	w.ui.paintOwed()
+	return w.ui.clientAccess()
+}
 
 // clientAccess builds [Client.Access]'s tree, with each open popup's moved into the window's space.
 func (u *UI) clientAccess() *access.Tree {

@@ -16,3 +16,12 @@ func TestADrawnShadowWindowLeavesAnEdgeAsWideAsItsBorder(t *testing.T) {
 		t.Fatalf("with the system's shadow, the corner is %v and the edge %v, want 0 and 0", r, e)
 	}
 }
+
+func TestADrawnShadowWindowCutsTheCornersItAsksFor(t *testing.T) {
+	for _, c := range []struct{ corner, want float32 }{{0, 12}, {26, 39}, {-1, 0}} {
+		w := &Window{shadow: true, content: 1.5, corner: c.corner}
+		if r, _ := w.cornerRadius(); r != c.want {
+			t.Errorf("asking for a corner of %v, the corner is %v, want %v", c.corner, r, c.want)
+		}
+	}
+}

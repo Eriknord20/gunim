@@ -287,7 +287,7 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 func TestADueTimerWaitsForTheFrameInFlight(t *testing.T) {
 	w := newTestWindow()
 	w.ui.After(0, func(*UI) {})
-	w.inFlight = true
+	w.unshown, w.unreleased = 1, 1
 	woke := make(chan bool, 1)
 	go func() { woke <- w.wait() }()
 	select {
@@ -298,8 +298,8 @@ func TestADueTimerWaitsForTheFrameInFlight(t *testing.T) {
 	w.Offscreen().Tick()
 	select {
 	case open := <-woke:
-		if !open || w.inFlight {
-			t.Fatalf("the frame shown left the window open %v, a frame in flight %v", open, w.inFlight)
+		if !open || !w.free() {
+			t.Fatalf("the frame shown left the window open %v, free to draw %v", open, w.free())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("the frame shown left the loop asleep")

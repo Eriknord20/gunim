@@ -9,7 +9,9 @@ import (
 )
 
 // A WAVWriter writes stereo sound to a WAV file: 16 or 24 bit integer
-// samples, or 32 bit float. Dither, for integer samples, adds noise of
+// samples, or 32 bit float. Its header is [WAVHeader]'s: the file is
+// RIFF, with a JUNK chunk keeping room for a ds64 chunk, and turns RF64
+// as it closes where it passed 4 GB. Dither, for integer samples, adds noise of
 // a triangular distribution an LSB either way before each sample is
 // rounded, so a quiet fade's last bits fade into a soft hiss rather
 // than break into distortion, as rounding alone does.
@@ -57,26 +59,9 @@ func (w *WAVWriter) header() error {
 	if _, err := w.w.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	bytes := w.bits / 8
-	data := uint32(w.frames * int64(2*bytes))
-	format := uint16(1)
-	if w.bits == 32 {
-		format = 3
-	}
-	var h [44]byte
-	copy(h[0:], "RIFF")
-	binary.LittleEndian.PutUint32(h[4:], uint32(36+int64(data)+w.extra))
-	copy(h[8:], "WAVEfmt ")
-	binary.LittleEndian.PutUint32(h[16:], 16)
-	binary.LittleEndian.PutUint16(h[20:], format)
-	binary.LittleEndian.PutUint16(h[22:], 2)
-	binary.LittleEndian.PutUint32(h[24:], uint32(w.rate))
-	binary.LittleEndian.PutUint32(h[28:], uint32(w.rate*2*bytes))
-	binary.LittleEndian.PutUint16(h[32:], uint16(2*bytes))
-	binary.LittleEndian.PutUint16(h[34:], uint16(w.bits))
-	copy(h[36:], "data")
-	binary.LittleEndian.PutUint32(h[40:], data)
-	_, err := w.w.Write(h[:])
+	s := WAVSpec{Rate: w.rate, Channels: 2, Bits: w.bits, Float: w.bits == 32}
+	w.buf = appendWAVHeader(w.buf[:0], s, w.frames, w.extra)
+	_, err := w.w.Write(w.buf)
 	return err
 }
 
@@ -110,8 +95,8 @@ func (w *WAVWriter) Write(frames []float32) error {
 	return nil
 }
 
-// Close writes the tags, and the file's sizes into its header. It
-// leaves the file open.
+// Close writes the tags, and the file's sizes into its header: RIFF up
+// to 4 GB, RF64 past it. It leaves the file open.
 func (w *WAVWriter) Close() error {
 	if list := w.list(); len(list) > 0 {
 		if _, err := w.w.Write(list); err != nil {

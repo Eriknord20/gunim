@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
@@ -50,12 +51,12 @@ func (t *TrimPot) slotAngle() float64 { return (t.turnOf(t.v)*2 - 1) * 0.75 * ma
 func (t *TrimPot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
-	hover := max(t.hover.Value(), onOff(t.held))
+	hover := max(t.hover.Value(), anim.OnOff(t.held))
 	c := geom.Pt(box.W/2, box.H/2)
 	r := min(box.W, box.H)/2 - 1.5
 	if hover > 0.01 {
-		p.ShadowRRect(geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(accent, 0)),
-			paint.Shadow{Blur: 10 * hover, Color: audioui.Faded(accent, 0.5*hover)})
+		p.ShadowRRect(geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, paint.Solid(paint.Faded(accent, 0)),
+			paint.Shadow{Blur: 10 * hover, Color: paint.Faded(accent, 0.5*hover)})
 	}
 	// The hole it sits in, then the head, lit from above.
 	p.RRect(geom.Rc(c.X-r-1.5, c.Y-r-1.5, 2*r+3, 2*r+3), r+1.5, paint.Solid(color.NRGBA{A: 0x70}))
@@ -68,7 +69,7 @@ func (t *TrimPot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	audioui.Segment(p, geom.Pt(c.X-dx, c.Y-dy+0.6), geom.Pt(c.X+dx, c.Y+dy+0.6), 1.6, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x50})
 	slot := TrimSlot.Get(th)
 	if t.held {
-		slot = audioui.Mix(slot, accent, 0.5)
+		slot = anim.MixColor(slot, accent, 0.5)
 	}
 	audioui.Segment(p, geom.Pt(c.X-dx, c.Y-dy), geom.Pt(c.X+dx, c.Y+dy), 1.6, slot)
 	// Its value, beside it to the left, as it is turned or looked at.
@@ -76,7 +77,7 @@ func (t *TrimPot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		words := audioui.Shaped(t.p.Name+" "+t.p.Text(t.v), 10, false, true)
 		pad := float32(5)
 		bub := geom.Rc(-words.Advance-2*pad-4, c.Y-9, words.Advance+2*pad, 18)
-		p.RRect(bub, 9, paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.92*hover)))
-		words.Paint(p, geom.Pt(bub.Min.X+pad, bub.Min.Y+(18-words.Height())/2), audioui.Faded(ink, 0.95*hover))
+		p.RRect(bub, 9, paint.Solid(paint.Faded(audioui.Ground.Get(th), 0.92*hover)))
+		words.Paint(p, geom.Pt(bub.Min.X+pad, bub.Min.Y+(18-words.Height())/2), paint.Faded(ink, 0.95*hover))
 	}
 }

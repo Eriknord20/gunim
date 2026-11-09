@@ -49,7 +49,7 @@ const SelectorH = KnobH
 func NewSelector(title string, names, tips []string) *Selector {
 	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0)}
 	for i := range names {
-		s.lit = append(s.lit, anim.NewFloat(float32(onOff(i == 0))))
+		s.lit = append(s.lit, anim.NewFloat(float32(anim.OnOff(i == 0))))
 		s.Add(s.lit[i])
 	}
 	s.Add(s.shown)
@@ -72,7 +72,7 @@ func (s *Selector) SetSelected(i int, u *gunim.UI) {
 	s.sel = i
 	if u == nil {
 		for k, l := range s.lit {
-			l.Jump(onOff(k == s.sel))
+			l.Jump(anim.OnOff(k == s.sel))
 		}
 		s.shown.Jump(float32(s.sel))
 		return
@@ -85,7 +85,7 @@ func (s *Selector) SetSelected(i int, u *gunim.UI) {
 func (s *Selector) glide(u *gunim.UI) {
 	sp := widget.Quick.Get(u.Theme())
 	for i, l := range s.lit {
-		l.Animate(onOff(i == s.sel), sp)
+		l.Animate(anim.OnOff(i == s.sel), sp)
 	}
 	show := s.sel
 	if s.hot >= 0 {
@@ -141,18 +141,18 @@ func (s *Selector) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) 
 func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
-	end := widget.Faint(p, box, onOff(s.Locked)*0.6)
+	end := widget.Faint(p, box, anim.OnOff(s.Locked)*0.6)
 	defer end()
 	for i, r := range s.cells {
 		lit := s.lit[i].Value()
 		cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
 		if lit > 0.01 {
-			p.ShadowRRect(geom.Rc(cx-5, cy-5, 10, 10), 5, paint.Solid(audioui.Faded(accent, 0.3*lit)),
-				paint.Shadow{Blur: 8 * lit, Color: audioui.Faded(accent, 0.4*lit)})
+			p.ShadowRRect(geom.Rc(cx-5, cy-5, 10, 10), 5, paint.Solid(paint.Faded(accent, 0.3*lit)),
+				paint.Shadow{Blur: 8 * lit, Color: paint.Faded(accent, 0.4*lit)})
 		}
-		lamp := audioui.Mix(audioui.Faded(ink, 0.16), accent, lit)
+		lamp := anim.MixColor(paint.Faded(ink, 0.16), accent, lit)
 		if i == s.hot && i != s.sel {
-			lamp = audioui.Faded(ink, 0.4)
+			lamp = paint.Faded(ink, 0.4)
 		}
 		p.RRect(geom.Rc(cx-3.5, cy-3.5, 7, 7), 3.5, paint.Solid(lamp))
 	}
@@ -161,7 +161,7 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	// away as the new come, as a knob's value.
 	const text = 10.5
 	title := audioui.Shaped(s.Title, text, false, false)
-	title.Paint(p, geom.Pt((box.W-title.Advance)/2, lampMid+17+4), audioui.Faded(ink, 0.6))
+	title.Paint(p, geom.Pt((box.W-title.Advance)/2, lampMid+17+4), paint.Faded(ink, 0.6))
 	at := s.shown.Value()
 	for i := range s.names {
 		d := at - float32(i)
@@ -173,7 +173,7 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			alpha *= 0.7
 		}
 		t := audioui.Shaped(s.names[i], text, false, true)
-		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, lampMid+17+4+title.Height()), audioui.Faded(ink, alpha))
+		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, lampMid+17+4+title.Height()), paint.Faded(ink, alpha))
 	}
 }
 
@@ -243,6 +243,11 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 		s.tip.Hide(u)
 		s.pick(s.at(e.Pos), u)
 	case input.KeyPress:
+		// Ctrl, Alt or Super with a key is the window's shortcut, such as
+		// Alt+Left to the loop's start: the selector leaves it be.
+		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
+			return false
+		}
 		switch e.Key {
 		case input.KeyLeft, input.KeyUp:
 			s.pick(s.sel-1, u)

@@ -1,11 +1,15 @@
+//go:build !js
+
 package vst3
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/marrasen/gunim/audio/plug"
@@ -316,5 +320,104 @@ func TestASetWaitsForTheProcessorAsItsLastValue(t *testing.T) {
 	}
 	if p.edits.put(0xfffffff0, 1) {
 		t.Fatal("a parameter the plugin does not list was put")
+	}
+}
+
+// TestClosingAPluginFromTwoGoroutinesClosesItOnce closes a plugin from
+// two goroutines at once while a third asks it a parameter's text and
+// sets it up again. The race detector finds no race, and the component
+// is terminated once.
+func TestClosingAPluginFromTwoGoroutinesClosesItOnce(t *testing.T) {
+	f := fakeSynth()
+	p, err := f.open(t, Config{Rate: 48000, Block: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	asked := make(chan struct{})
+	go func() {
+		defer close(asked)
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			p.Text(0, 0.5)
+			_ = p.Configure(Config{Rate: 44100 + i%2*3900, Block: 64})
+		}
+	}()
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.Close()
+		}()
+	}
+	wg.Wait()
+	close(done)
+	<-asked
+	f.mu.Lock()
+	n := f.terminates
+	f.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the component was terminated %d times", n)
+	}
+}
+
+// A plugin closed asks its objects nothing more: each call that would
+// ask them on the plugins' thread asks nothing, and those that can fail
+// say it is closed.
+func TestAPluginClosedAsksItsObjectsNothing(t *testing.T) {
+	f := fakeSynth()
+	p, err := f.open(t, Config{Rate: 48000, Block: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := p.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+	p.restart(restartLatency)
+	_ = p.Values()
+	_ = p.Params()
+	_ = p.Text(900, 0.5)
+	p.Set(900, 0.5)
+	_ = p.Latency()
+	p.Reset()
+	if _, err := p.State(); !errors.Is(err, ErrClosed) {
+		t.Errorf("State gave %v", err)
+	}
+	if err := p.SetState(st); !errors.Is(err, ErrClosed) {
+		t.Errorf("SetState gave %v", err)
+	}
+	if err := p.SetActive(true); !errors.Is(err, ErrClosed) {
+		t.Errorf("SetActive(true) gave %v", err)
+	}
+	if err := p.SetActive(false); err != nil {
+		t.Errorf("SetActive(false) gave %v", err)
+	}
+	if err := p.Configure(Config{Rate: 44100, Block: 64}); !errors.Is(err, ErrClosed) {
+		t.Errorf("Configure gave %v", err)
+	}
+	if _, _, ok := p.EditorSize(); ok {
+		t.Error("EditorSize found an editor")
+	}
+	if p.EditorResizable() {
+		t.Error("EditorResizable found an editor")
+	}
+	if err := p.OpenEditor("Fake"); !errors.Is(err, ErrClosed) {
+		t.Errorf("OpenEditor gave %v", err)
+	}
+	if _, _, err := p.EmbedEditor(1, nil); !errors.Is(err, ErrClosed) {
+		t.Errorf("EmbedEditor gave %v", err)
+	}
+	f.mu.Lock()
+	late := f.late
+	f.mu.Unlock()
+	if late != 0 {
+		t.Fatalf("the closed plugin was asked %d times", late)
 	}
 }

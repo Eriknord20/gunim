@@ -1,12 +1,12 @@
 package desktop
 
-import (
-	"errors"
-	"fmt"
-)
-
-// NativeHandle implements [driver.NativeWindow]: macOS hands out no
-// window yet.
+// NativeHandle implements [driver.NativeWindow]: the window's content
+// view, an NSView, which a plugin's editor is a subview of.
 func (w *Window) NativeHandle() (uintptr, error) {
-	return 0, fmt.Errorf("desktop: native window: %w", errors.ErrUnsupported)
+	var h uintptr
+	err := w.d.call(func() (err error) {
+		h, err = w.gw.GetCocoaView()
+		return err
+	})
+	return h, err
 }

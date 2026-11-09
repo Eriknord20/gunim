@@ -41,7 +41,10 @@ func floatThunkArgs(fn uintptr, args ...int) uintptr {
 	if err != nil {
 		panic("vst3: " + err.Error())
 	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(mem)), len(code)), code) //nolint:govet // memory of the system's
+	// mem is the system's memory, outside Go's heap: read its address as
+	// a pointer in place, as converting the uintptr reads to vet as a
+	// pointer Go may have moved.
+	copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&mem))), len(code)), code)
 	var old uint32
 	if err := windows.VirtualProtect(mem, uintptr(len(code)), windows.PAGE_EXECUTE_READ, &old); err != nil {
 		panic("vst3: " + err.Error())

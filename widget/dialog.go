@@ -105,9 +105,18 @@ type Dialog struct {
 	// is set once the keyboard has gone to the body's first field.
 	height  float32
 	focused bool
-	// problem is what Check last said, and shake the shake it set off.
-	problem *Label
-	shake   *anim.Float
+	// problem shows what Check said, and shake is the shake it set off.
+	// saying is what the problem should say: it differs from problem's text
+	// while the last words fade out. problemIn fades the words, and
+	// problemRoom is the height the panel has grown by to hold them.
+	// problemClear is how far, 0 to 1, the words have cleared the buttons
+	// below them, as the panel grows.
+	problem      *Label
+	shake        *anim.Float
+	saying       string
+	problemIn    *anim.Float
+	problemRoom  *anim.Float
+	problemClear float32
 	// scroll holds the body, once mounted, so a long one scrolls.
 	scroll *Scroll
 }
@@ -115,10 +124,10 @@ type Dialog struct {
 // NewDialog returns a dialog with an OK and a Cancel button. Mount it
 // from a view and it animates itself in.
 func NewDialog(title string) *Dialog {
-	d := &Dialog{Title: title, in: anim.NewFloat(0), shake: anim.NewFloat(0)}
+	d := &Dialog{Title: title, in: anim.NewFloat(0), shake: anim.NewFloat(0), problemIn: anim.NewFloat(0), problemRoom: anim.NewFloat(0)}
 	d.problem = NewLabel("")
 	d.problem.Color = DialogProblem
-	d.Add(d.in, d.shake)
+	d.Add(d.in, d.shake, d.problemIn, d.problemRoom)
 
 	d.ok = NewButton("OK")
 	d.ok.OnClick = func(u *gunim.UI) gunim.Intent {
@@ -182,7 +191,7 @@ func (d *Dialog) Close(u *gunim.UI) { d.finish(u, nil) }
 func (d *Dialog) accept(u *gunim.UI) {
 	if d.Check != nil {
 		if msg := d.Check(); msg != "" {
-			d.problem.Text = msg
+			d.say(msg, u)
 			// A kick sideways that a springy motion rings down to rest.
 			d.shake.Jump(1)
 			d.shake.Animate(0, anim.Spring{Response: 0.18, Damping: 0.12})
@@ -190,7 +199,7 @@ func (d *Dialog) accept(u *gunim.UI) {
 			return
 		}
 	}
-	d.problem.Text = ""
+	d.say("", u)
 	var what gunim.Intent
 	if d.OnAccept != nil {
 		what = d.OnAccept(u)
@@ -228,6 +237,42 @@ func (d *Dialog) okCancel() []gunim.Node {
 		return []gunim.Node{d.ok}
 	}
 	return []gunim.Node{d.cancel, d.ok}
+}
+
+// say has the dialog say msg under its body, or nothing for "". Words fade
+// in as the panel grows to hold them, and fade out before other words take
+// their place.
+func (d *Dialog) say(msg string, u *gunim.UI) {
+	d.saying = msg
+	th := u.Theme()
+	switch {
+	case msg == "":
+		d.problemIn.Animate(0, Settle.Get(th))
+	case d.problem.Text == "" || d.problem.Text == msg:
+		d.problem.Text = msg
+		d.problemIn.Animate(1, Quick.Get(th))
+	default:
+		d.problemIn.Animate(0, Quick.Get(th))
+	}
+}
+
+// settleProblem changes the words shown once the last ones have faded out.
+// Words about to go stay until they have gone; words taking their place
+// come in as the last ones are nearly gone.
+func (d *Dialog) settleProblem(th *theme.Live) {
+	if d.saying == d.problem.Text {
+		return
+	}
+	if d.saying == "" {
+		if !d.problemIn.Active() {
+			d.problem.Text = ""
+		}
+		return
+	}
+	if d.problemIn.Value() < 0.05 {
+		d.problem.Text = d.saying
+		d.problemIn.Animate(1, Quick.Get(th))
+	}
 }
 
 // Children implements [gunim.Composite], so mounting the dialog brings
@@ -432,12 +477,22 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	around := bar + pad + ButtonHeight.Get(th) + pad
 	if hasBody {
 		body, problem = kids.At(0), kids.At(1)
+		d.settleProblem(th)
 		bs = body.Layout(gunim.Constraints{Max: geom.Sz(width-2*pad, 0)})
 		ps = problem.Layout(gunim.Constraints{Max: geom.Sz(width-2*pad, 0)})
 		around += pad
-		if d.problem.Text != "" {
-			around += pad/2 + ps.H
+		var room float32
+		if d.saying != "" {
+			room = pad/2 + ps.H
 		}
+		if d.problemRoom.Target() != room {
+			d.problemRoom.Animate(room, Settle.Get(th))
+		}
+		grown := max(d.problemRoom.Value(), 0)
+		around += grown
+		// The words start pad/2 under the body and the buttons pad+grown
+		// under it: the words show only as they come clear.
+		d.problemClear = min(max((grown+pad/2-ps.H)/pad, 0), 1)
 		// A body too tall to leave the dialog its margin is measured
 		// again with the room that is left, so a form that scrolls
 		// fills it instead of running off both ends of the screen, or
@@ -542,7 +597,27 @@ func (d *Dialog) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 		p.RRectStroke(inner, max(radius-gap, 0), paint.Fill{}, paint.Stroke{Width: 1, Color: DialogBorder.Get(th)})
 	}
 
+	i := 0
 	for kid := range kids.All {
+		// The second child, under a body, is the problem.
+		if d.Body != nil && i == 1 {
+			d.paintProblem(p, panel, kid)
+		} else {
+			kid.Paint(p)
+		}
+		i++
+	}
+}
+
+// paintProblem paints the words under the body as far as they have faded in.
+func (d *Dialog) paintProblem(p *paint.Painter, panel geom.Rect, kid gunim.Child) {
+	v := min(d.problemIn.Value(), 1) * d.problemClear
+	switch {
+	case v <= 0 || d.problem.Text == "":
+	case v >= 1:
+		kid.Paint(p)
+	default:
+		defer p.Layer(paint.LayerOpts{Bounds: panel, Opacity: v})()
 		kid.Paint(p)
 	}
 }

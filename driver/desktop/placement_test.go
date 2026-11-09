@@ -193,3 +193,50 @@ func TestAWindowBesideItsParentOpensOnTheScreen(t *testing.T) {
 		t.Errorf("Placement = %v, off the work area %v", p.Bounds, work)
 	}
 }
+
+// A window reports the scale its placement was taken at, and one opened
+// at a placement saved at another scale keeps its size in logical
+// pixels: saved at 1 coordinate per logical pixel, it opens at the
+// monitor's number of coordinates per logical pixel times that.
+func TestAPlacementKeepsItsLogicalSizeAcrossScales(t *testing.T) {
+	if display == nil {
+		t.Skip("no display")
+	}
+	var m driver.Monitor
+	for _, mm := range display.Monitors() {
+		if mm.Primary {
+			m = mm
+		}
+	}
+	per := max(m.CoordsPerLogical, 1)
+	work := m.WorkArea
+	if work.Empty() {
+		work = m.Bounds
+	}
+	if work.Size().W < 400*per || work.Size().H < 300*per {
+		t.Skip("no primary monitor with room for the window")
+	}
+	saved := driver.Placement{Bounds: geom.Rc(work.Min.X+per*40, work.Min.Y+per*60, 320, 200), CoordsPerLogical: per / 2}
+	w, err := display.NewWindow(driver.Options{Title: "gunim scaled placement test", Place: &saved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = w.Close() }()
+	r, _ := w.(driver.PlacementReader)
+	var p driver.Placement
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var ok bool
+		p, ok = r.Placement()
+		if ok && p.Bounds.Size() == geom.Sz(640, 400) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if p.Bounds.Size() != geom.Sz(640, 400) {
+		t.Errorf("Placement = %v, want 640x400: saved 320x200 at half the monitor's scale", p.Bounds)
+	}
+	if p.CoordsPerLogical != per {
+		t.Errorf("Placement.CoordsPerLogical = %v, want the monitor's, %v", p.CoordsPerLogical, per)
+	}
+}

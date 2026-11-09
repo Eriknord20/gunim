@@ -72,8 +72,13 @@ type Knob struct {
 	tip   widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
-	// has none of.
+	// has none of. Each glides there.
 	Disabled, Locked bool
+	// grey is how far the knob's arc has gone grey, faint how far a lock
+	// has faded it, and laid says it has been laid out, before which they
+	// jump to where they are set.
+	grey, faint *anim.Float
+	laid        bool
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -141,6 +146,13 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 // to show it move, and rests while they stand still, as with the song
 // stopped.
 func (k *Knob) Step(dt time.Duration) bool {
+	if k.laid {
+		k.aim(func(a *anim.Float, v float32) {
+			if a.Target() != v {
+				a.Animate(v, anim.Snappy)
+			}
+		})
+	}
 	moving := k.Group.Step(dt)
 	m, modded := k.modulation()
 	changed := modded != k.modded || modded && m != k.shown
@@ -148,12 +160,18 @@ func (k *Knob) Step(dt time.Duration) bool {
 	return moving || changed
 }
 
+// aim moves its greys by to where Disabled and Locked have them.
+func (k *Knob) aim(to func(a *anim.Float, v float32)) {
+	to(k.grey, anim.OnOff(k.Disabled || k.Locked))
+	to(k.faint, anim.OnOff(k.Locked))
+}
+
 // NewKnobFunc returns a knob of what p describes, at v, turning it by
 // a gesture of begin, a set for each move, and end: a value of a
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
-	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0)}
-	k.Add(k.hover)
+	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
+	k.Add(k.hover, k.grey, k.faint)
 	return k
 }
 
@@ -207,6 +225,10 @@ func (k *Knob) Follow(v float64, u *gunim.UI) {
 
 // Layout implements [gunim.Node].
 func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	if !k.laid {
+		k.laid = true
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	}
 	if k.Compact {
 		return c.Constrain(geom.Sz(CompactW, CompactH))
 	}
@@ -217,21 +239,19 @@ func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
-	if k.Disabled || k.Locked {
-		accent = audioui.Faded(ink, 0.35)
-	}
+	accent = anim.MixColor(accent, paint.Faded(ink, 0.35), k.grey.Value())
 	hover := k.hover.Value()
 	r, text := float32(17), float32(10.5)
 	if k.Compact {
 		r, text = 14, 9.5
 	}
-	end := widget.Faint(p, box, onOff(k.Locked)*0.6)
+	end := widget.Faint(p, box, k.faint.Value()*0.6)
 	defer end()
 	c := geom.Pt(box.W/2, 4+r)
 	if hover > 0.01 {
 		// Under the pointer, a glow about the knob.
-		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(audioui.Faded(accent, 0)),
-			paint.Shadow{Blur: 12 * hover, Color: audioui.Faded(accent, 0.35*hover)})
+		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
+			paint.Shadow{Blur: 12 * hover, Color: paint.Faded(accent, 0.35*hover)})
 	}
 	// The turn runs three quarters round, clockwise from bottom left.
 	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
@@ -247,18 +267,18 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
 		}
 	}
-	arc(0, 1, 3.5, audioui.Mix(KnobGroove.Get(th), audioui.Faded(ink, 0.25), 0.5*hover))
+	arc(0, 1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	t := k.turnOf(k.v)
 	zero := 0.0
 	if k.p.Min < 0 && k.p.Max > 0 {
 		zero = k.turnOf(0)
 	}
 	if k.held {
-		arc(zero, t, 5, audioui.Faded(accent, 0.25))
+		arc(zero, t, 5, paint.Faded(accent, 0.25))
 	}
 	arc(zero, t, 3.5, accent)
 	if m, ok := k.modulation(); ok {
-		k.paintModulation(p, m, c, r, audioui.Mix(accent, KnobRing.Get(th), 0.7))
+		k.paintModulation(p, m, c, r, anim.MixColor(accent, KnobRing.Get(th), 0.7))
 	}
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
@@ -267,9 +287,9 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	audioui.Segment(p, geom.Pt(c.X+(r-13)*float32(math.Cos(a)), c.Y+(r-13)*float32(math.Sin(a))),
 		geom.Pt(c.X+(r-7)*float32(math.Cos(a)), c.Y+(r-7)*float32(math.Sin(a))), 2, ink)
 	name := audioui.Shaped(k.p.Name, text, false, false)
-	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), audioui.Faded(ink, 0.6+0.3*hover))
+	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), paint.Faded(ink, 0.6+0.3*hover))
 	val := audioui.Shaped(k.p.Text(k.v), text, false, true)
-	col := audioui.Faded(ink, 0.9)
+	col := paint.Faded(ink, 0.9)
 	if k.held {
 		col = accent
 	}
@@ -297,18 +317,11 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 	}
 	if n := int((t1 - t0) * 40); n > 0 {
 		for i := range n {
-			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, audioui.Faded(ring, a))
+			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, paint.Faded(ring, a))
 		}
 	}
 	dot := at(k.turnOf(m.Now), r)
-	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: audioui.Faded(ring, 0.6)})
-}
-
-func onOff(b bool) float32 {
-	if b {
-		return 1
-	}
-	return 0
+	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: paint.Faded(ring, 0.6)})
 }
 
 // turn sets the knob to v as one move of the gesture held.
@@ -410,6 +423,11 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
 	case input.KeyPress:
+		// Ctrl, Alt or Super with a key is the window's shortcut, such as
+		// Alt+Left to the loop's start: the knob leaves it be.
+		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
+			return false
+		}
 		d := k.stepSize()
 		if e.Mods.Has(input.ModShift) {
 			d *= 10

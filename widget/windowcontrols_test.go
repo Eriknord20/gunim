@@ -32,8 +32,8 @@ func TestWindowControlsWorkTheWindow(t *testing.T) {
 	}
 	run(2)
 	x0 := float32(600 - 3*windowButtonWidth)
-	if want := geom.Rc(x0+windowButtonWidth, 0, windowButtonWidth, 30); fr.Maximize != want {
-		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.Maximize, want)
+	if want := geom.Rc(x0+windowButtonWidth, 0, windowButtonWidth, 30); fr.MaximizeButton() != want {
+		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.MaximizeButton(), want)
 	}
 	click := func(i int) {
 		p := geom.Pt(x0+float32(i)*windowButtonWidth+20, 15)
@@ -77,8 +77,8 @@ func TestThePinButtonKeepsTheWindowOnTop(t *testing.T) {
 	}
 	run(2)
 	x0 := float32(600 - 4*compactButtonWidth)
-	if want := geom.Rc(x0+2*compactButtonWidth, 0, compactButtonWidth, 26); fr.Maximize != want {
-		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.Maximize, want)
+	if want := geom.Rc(x0+2*compactButtonWidth, 0, compactButtonWidth, 26); fr.MaximizeButton() != want {
+		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.MaximizeButton(), want)
 	}
 	click := func(i int) {
 		p := geom.Pt(x0+float32(i)*compactButtonWidth+10, 13)
@@ -116,8 +116,8 @@ func TestWindowControlsCanShowCloseAlone(t *testing.T) {
 	for range 2 {
 		w.Frame(time.Second / 60)
 	}
-	if !fr.Maximize.Empty() {
-		t.Fatalf("with no maximize button the system was told of one at %v", fr.Maximize)
+	if !fr.MaximizeButton().Empty() {
+		t.Fatalf("with no maximize button the system was told of one at %v", fr.MaximizeButton())
 	}
 	if info := c.Access(); len(info.Parts) != 1 || info.Parts[0].Name != "Close" {
 		t.Fatalf("the controls tell assistive technology of %v, want Close alone", info.Parts)

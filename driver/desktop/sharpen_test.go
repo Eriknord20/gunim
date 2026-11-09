@@ -1,3 +1,5 @@
+//go:build !js
+
 package desktop
 
 import (
@@ -85,7 +87,7 @@ func TestABigMaskDrawnStretchedSharpensWithNoNewFrame(t *testing.T) {
 		return frame{}
 	}
 	for i, width := range []float32{400, 420} {
-		if err := w.Present(ops(width), paint.Everything); err != nil {
+		if err := w.Present(ops(width), []geom.Rect{paint.Everything}); err != nil {
 			t.Fatal(err)
 		}
 		f := next()

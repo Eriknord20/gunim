@@ -303,3 +303,76 @@ func TestAnErrorToastKeepsItsActionBesideItsCloseButton(t *testing.T) {
 		t.Fatalf("a click on Retry sent %v", got)
 	}
 }
+
+// Buttons too wide for one row of the card wrap, whole, and stay at the right.
+func TestAToastsButtonsWrapRatherThanClip(t *testing.T) {
+	w, h, wait := newToastStage(t)
+	type do struct{ fn func(u *gunim.UI) }
+	gunim.RegisterPatch(w, "stage", func(_ gunim.Node, d do, u *gunim.UI) { d.fn(u) })
+	on := func(fn func(u *gunim.UI)) {
+		if err := w.Client().Patch("stage", do{fn}); err != nil {
+			t.Fatal(err)
+		}
+		wait(time.Second / 60)
+	}
+	clicked := -1
+	labels := []string{"Use MOTU M Series Number One", "Use MOTU M Series Number Two", "Use HDA Intel PCH"}
+	bs := make([]ToastButton, 0, len(labels))
+	for i, l := range labels {
+		bs = append(bs, ToastButton{Label: l, OnClick: func(bool, *gunim.UI) gunim.Intent { clicked = i; return nil }})
+	}
+	on(func(u *gunim.UI) { h.t.Show(Toast{Title: "Hej", Key: "k", Buttons: bs}, u) })
+	wait(time.Second)
+	card := h.t.cards[0]
+	kids := card.buttons.Children()
+	if len(kids) != len(labels) {
+		t.Fatalf("%d buttons", len(kids))
+	}
+	rects := make([]geom.Rect, len(kids))
+	var box geom.Rect
+	on(func(u *gunim.UI) {
+		box, _ = u.Bounds(card)
+		for i, k := range kids {
+			rects[i], _ = u.Bounds(k)
+		}
+	})
+	for i, r := range rects {
+		// Each is as wide as its words want, which a clipped one isn't.
+		if r.Size().W < float32(len(labels[i]))*4 {
+			t.Errorf("%q is clipped to %v", labels[i], r)
+		}
+		if r.Min.X < box.Min.X || r.Max.X > box.Max.X {
+			t.Errorf("%q at %v is outside the card at %v", labels[i], r, box)
+		}
+		for j := range i {
+			o := rects[j]
+			if r.Min.X < o.Max.X && o.Min.X < r.Max.X && r.Min.Y < o.Max.Y && o.Min.Y < r.Max.Y {
+				t.Errorf("%q overlaps %q: %v, %v", labels[i], labels[j], r, rects[j])
+			}
+		}
+	}
+	if rects[1].Min.Y < rects[0].Max.Y {
+		t.Errorf("two wide buttons share a row: %v, %v", rects[0], rects[1])
+	}
+	// Each line stays at the right, and all of them in the card.
+	for _, i := range []int{1, 2} {
+		if d := rects[0].Max.X - rects[i].Max.X; d > 1 || d < -1 {
+			t.Errorf("the lines end at %v and %v, not both at the right", rects[0].Max.X, rects[i].Max.X)
+		}
+		if rects[i].Max.Y > box.Max.Y {
+			t.Errorf("%q at %v is below the card at %v", labels[i], rects[i], box)
+		}
+	}
+	// One on a lower line answers like any other. The bounds are the card's own.
+	var last geom.Rect
+	on(func(u *gunim.UI) { last, _ = u.Bounds(kids[len(kids)-1]) })
+	at := last.Center()
+	w.Input(input.PointerMove{Pos: at, Time: time.Now()})
+	wait(time.Second / 30)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	wait(time.Second / 10)
+	if clicked != len(kids)-1 {
+		t.Errorf("clicking the last button answered %d", clicked)
+	}
+}

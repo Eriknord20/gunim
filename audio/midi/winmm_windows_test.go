@@ -169,3 +169,17 @@ func TestCloseLetsGoOfTheNotesLeftSounding(t *testing.T) {
 		}
 	}
 }
+
+// A port another program holds says so, not a bare number.
+func TestABusyPortSaysAnotherProgramMayHoldIt(t *testing.T) {
+	t.Parallel()
+	for code, want := range map[uintptr]string{
+		mmAllocated: "midiInOpen: another program has the port open",
+		mmNoMem:     "midiInOpen: the port is busy; another program may have it open",
+		99:          "midiInOpen: error 99",
+	} {
+		if got := mm("midiInOpen", code).Error(); got != want {
+			t.Errorf("code %d says %q; want %q", code, got, want)
+		}
+	}
+}

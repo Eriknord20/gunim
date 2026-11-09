@@ -1,12 +1,14 @@
 package widget_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
@@ -232,5 +234,91 @@ func TestAnArrivingRowStartsWhereItBelongs(t *testing.T) {
 		if want := float32(3 * cellHeight); y < want-1 {
 			t.Fatalf("a frame after it came back, row %s is at %v, want at %v or below, not on its way from the top", k, y, want)
 		}
+	}
+}
+
+// The selection's fill glides from the row picked to the next one,
+// part way between them a few frames after.
+func TestTheSelectionGlidesToTheRowPicked(t *testing.T) {
+	f := newListFixture(t)
+	f.publish(t, []string{"a", "b", "c", "d"}, 120)
+	f.list.SetSelected("a", nil)
+	f.run(120)
+	f.list.SetSelected("d", nil)
+	f.run(3)
+	y := widget.SelectionAt(f.list).Min.Y
+	if y <= 0 || y >= 3*cellHeight {
+		t.Fatalf("a few frames after picking d, the selection is at %v; want it between a and d", y)
+	}
+	f.run(120)
+	if y := widget.SelectionAt(f.list).Min.Y; y != 3*cellHeight {
+		t.Fatalf("settled, the selection is at %v, want %v", y, 3*cellHeight)
+	}
+}
+
+// What a list holds as it is first shown is there at once, at its full
+// height on the first frame; a row that comes after grows in.
+func TestAListsFirstRowsAreThereAtOnce(t *testing.T) {
+	f := newListFixture(t)
+	f.publish(t, []string{"a", "b", "c"}, 1)
+	if got := f.list.Height(); got != 3*cellHeight {
+		t.Fatalf("on its first frame the list is %v tall, want %v", got, 3*cellHeight)
+	}
+	f.publish(t, []string{"a", "b", "c", "d"}, 1)
+	if got := f.list.Height(); got >= 4*cellHeight {
+		t.Fatalf("a frame after d came, the list is %v tall; want d still growing in", got)
+	}
+}
+
+// With ReorderGroup, a row dragged past the end of its group lands at
+// the end of it, a row in no group does not move, and Alt+Down moves the
+// cursor's row a place within its group.
+func TestARowMovesOnlyWithinItsGroup(t *testing.T) {
+	f := newListFixture(t)
+	f.publish(t, []string{"a", "b", "c", "d"}, 120)
+	group := map[widget.Key]string{"b": "g", "c": "g"}
+	var got []widget.Key
+	f.list.OnActivate = func(widget.Key, *gunim.UI) gunim.Intent { return nil }
+	f.list.OnReorder = func(keys []widget.Key, _ *gunim.UI) gunim.Intent { got = keys; return nil }
+	f.list.ReorderGroup = func(k widget.Key) string { return group[k] }
+	drag := func(from, to float32) {
+		f.w.Input(input.PointerMove{Pos: geom.Pt(10, from)})
+		f.w.Input(input.PointerDown{Pos: geom.Pt(10, from), Button: input.ButtonPrimary})
+		for y := from; y != to; {
+			if y < to {
+				y = min(y+5, to)
+			} else {
+				y = max(y-5, to)
+			}
+			f.w.Input(input.PointerMove{Pos: geom.Pt(10, y)})
+			f.run(1)
+		}
+		f.w.Input(input.PointerUp{Pos: geom.Pt(10, to), Button: input.ButtonPrimary})
+		f.run(60)
+	}
+	// b, dragged to below d, stops at the end of its group, after c.
+	drag(1.5*cellHeight, 4.5*cellHeight)
+	if want := []widget.Key{"a", "c", "b", "d"}; !slices.Equal(got, want) {
+		t.Fatalf("b dragged past d: the order is %v, want %v", got, want)
+	}
+	// a, in no group, is not picked up.
+	got = nil
+	drag(0.5*cellHeight, 3.5*cellHeight)
+	if got != nil {
+		t.Fatalf("a, in no group, moved: %v", got)
+	}
+	// Alt+Down on c moves it below b, and no further.
+	f.w.Input(input.PointerDown{Pos: geom.Pt(10, 1.5*cellHeight), Button: input.ButtonPrimary})
+	f.w.Input(input.PointerUp{Pos: geom.Pt(10, 1.5*cellHeight), Button: input.ButtonPrimary})
+	f.run(2)
+	f.w.Input(input.KeyPress{Key: input.KeyDown, Mods: input.ModAlt})
+	f.run(2)
+	if want := []widget.Key{"a", "b", "c", "d"}; !slices.Equal(got, want) {
+		t.Fatalf("Alt+Down on c: the order is %v, want %v", got, want)
+	}
+	f.w.Input(input.KeyPress{Key: input.KeyDown, Mods: input.ModAlt})
+	f.run(2)
+	if want := []widget.Key{"a", "b", "c", "d"}; !slices.Equal(got, want) {
+		t.Fatalf("Alt+Down again, past its group: the order is %v", got)
 	}
 }

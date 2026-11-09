@@ -1,7 +1,19 @@
 // Package speaker plays a [audio.Mixer] through the computer's
 // speakers: through PulseAudio or PipeWire, else ALSA, on Linux,
-// WASAPI on Windows, Core Audio on macOS and Oboe on Android; and on
-// Windows through an ASIO driver too, as package audio/asio plays.
+// WASAPI on Windows, Core Audio on macOS and Oboe on Android before
+// 8.1; and on
+// Windows through an ASIO driver too, as package audio/driver plays;
+// and on Linux through JACK, where a JACK server answers, or
+// PipeWire's. On Android 8.1 and newer the speaker plays through
+// AAudio by gunim's own code, in low-latency mode, as [driver.AAudio]
+// does, with Options.Driver empty too, and records with
+// [Options].Record. On Windows the speaker plays through WASAPI by
+// gunim's own code, at the device's rate, as [driver.WASAPI] does, with
+// Options.Driver empty too, and records the default input with
+// [Options].Record.
+// On macOS the speaker plays through Core Audio's HAL output unit by
+// gunim's own code, as [driver.CoreAudio] does, with Options.Driver
+// empty too, and records the default input with [Options].Record.
 //
 // A process opens the speakers once and plays everything through the
 // one mixer:
@@ -18,9 +30,31 @@
 // [Options].Direct has the driver's own thread mix each buffer as it
 // takes it, so the sound is heard sooner, by a buffer at the least.
 //
-// Package audio/capture records the inputs of the ASIO driver the
-// speakers play through, where [Options].Record is set, and stamps
-// what it records with [Speaker.Heard].
+// Through JACK, chosen as a driver named [driver.JACK], the server's own
+// real-time thread takes each buffer from a ring the speaker fills, and
+// runs no Go as it does. The server owns the rate and the buffer size:
+// the speaker follows them.
+//
+// Through PipeWire, chosen as a driver named [driver.PipeWire], the
+// speaker plays to the default output by gunim's own code, the same
+// way: PipeWire's real-time thread takes each cycle from
+// a ring and runs no Go. The speaker plays at the rate Options asks,
+// and PipeWire converts it to the device's. The sound follows the
+// default output as it changes, and the speaker counts the delay
+// PipeWire reports for it, a Bluetooth headset's too.
+//
+// On macOS, the speaker plays through the default output device the
+// same way, by a HAL output unit: Core Audio's real-time thread takes
+// each buffer from a ring and runs no Go. It does so where Options.Driver
+// is empty, as the system's own sound, or names [driver.CoreAudio]. The
+// speaker plays at the device's rate, and opens again as the default
+// device changes, goes away or changes its rate.
+//
+// Package audio/capture records the inputs of the driver the speakers
+// play through, an ASIO driver's, JACK's, or PipeWire's or Core Audio's
+// default input,
+// where [Options].Record is set, and stamps what it records with
+// [Speaker.Heard].
 //
 // [Speaker.Anchor] ties the mixer's frames to the clock [time.Now]
 // reads, so a host sends MIDI for a frame to leave as it is heard, and
@@ -32,27 +66,43 @@ import (
 	"log"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
+	"github.com/marrasen/gunim/audio/internal/aaudio"
 )
 
 // Options says how to open the speakers.
 type Options struct {
 	// Name names the application to the system's volume controls.
 	Name string
-	// Driver is the ASIO driver to play through, by its name from
-	// [asio.Drivers]. Empty plays through the system's own sound, as
-	// does a driver that fails to open: [State] tells why.
+	// Driver is the driver to play through, by its name from
+	// [driver.Drivers]: an ASIO driver, [driver.JACK] for JACK, which that
+	// lists on Linux where a server answers, [driver.PipeWire] for
+	// PipeWire, which it lists on Linux likewise, [driver.AAudio] on Android,
+	// [driver.WASAPI] on Windows, or [driver.CoreAudio] on macOS. Empty
+	// plays through the system's own sound, as does a driver that fails
+	// to open, or JACK's server shut down: [State] tells why. The
+	// system's own sound is gunim's own code: Core Audio's HAL output
+	// unit on macOS, as [driver.CoreAudio] plays, WASAPI on Windows, as
+	// [driver.WASAPI] plays, and AAudio on Android 8.1 and newer, as
+	// [driver.AAudio] plays. Where it fails to open, [Open] and
+	// [Speaker.Set] return the error. On Linux it is PipeWire, as
+	// [driver.PipeWire] plays, and the first sound card directly where
+	// PipeWire doesn't play. Linux plays sound on amd64 and arm64. The
+	// browser and Android 8.0, which has no AAudio, play through oto.
+	// Any other system has no sound: Open returns an error.
 	Driver string
 	// Rate is the rate to play at, in frames a second; the speaker sets
 	// the mixer to it. Zero is [audio.SampleRate]. An ASIO driver that
-	// refuses a rate plays at its own. The system's own sound may
-	// convert the rate on its way to the device, as Windows converts to
-	// the format its device is set to. [State] tells both rates.
+	// refuses a rate plays at its own, JACK at its server's, and
+	// Core Audio on macOS at the device's. The system's own sound may convert the rate on its way to the device,
+	// as Windows converts to the format its device is set to. [State]
+	// tells both rates.
 	Rate int
 	// Bits rounds the sound to integer samples of 16 or 24 bits as it
 	// leaves, as a WAV file of such samples holds it, with dither where
@@ -70,9 +120,15 @@ type Options struct {
 	// milliseconds at a time, as far as [MaxLatency].
 	Fixed bool
 	// Buffer is how many frames an ASIO driver takes at a time, brought
-	// to the nearest size the driver allows. Zero takes the size its
+	// to the nearest size the driver allows. JACK takes the size its
+	// server is set to, whatever Buffer says. Zero takes the size its
 	// control panel sets. The latency is never less than a buffer and
-	// the driver's own latency, whatever Latency asks for.
+	// the driver's own latency, whatever Latency asks for. On macOS it
+	// sets the device's buffer: the process's own, as other applications
+	// playing keep theirs. Zero there asks for a quarter of Latency, from
+	// 64 to 1024 frames. Through [driver.PipeWire] it is the cycle the
+	// streams ask PipeWire for, with the same default; PipeWire runs at
+	// the shortest any stream asks, within its own limits.
 	Buffer int
 	// Direct mixes each buffer an ASIO driver takes on the driver's own
 	// thread, as it takes it, in place of reading the mixer ahead into a
@@ -83,19 +139,46 @@ type Options struct {
 	// buffer plays, with nothing to spare, and a buffer that takes longer
 	// counts in [State].Dropouts. Latency and Fixed are let be, and the
 	// speaker never works further ahead: choose the Buffer to fit.
-	// Through the system's own sound it changes nothing.
+	// Through the system's own sound it changes nothing. Through JACK,
+	// and Core Audio on macOS, it changes nothing either: their threads
+	// run no Go, so a ring is always between them and the mixer.
 	Direct bool
-	// Record opens the inputs of the ASIO driver too, for package
-	// audio/capture to record. A driver may then open a device of its
-	// own to record from, as FlexASIO and ASIO4ALL open Windows'
-	// microphone, so leave it unset to play alone.
+	// Record opens the inputs of the ASIO driver too, or each of the
+	// system's inputs JACK lists, for package audio/capture to record.
+	// A driver may then open a device of its own to record from, as
+	// FlexASIO and ASIO4ALL open Windows'
+	// microphone, so leave it unset to play alone. Through [driver.AAudio] it
+	// records the microphone, which shows the system's sign of a
+	// microphone in use while the application is in front. Through
+	// [driver.WASAPI] it records Windows' default input, and through
+	// [driver.PipeWire] PipeWire's default input. On macOS it
+	// records the default input device, where it
+	// runs at the output's rate and the application may record: macOS
+	// asks the user the first time, and [State].Problem tells why it
+	// records nothing.
 	Record bool
+	// Quick asks for the shortest delay the system offers to a wireless
+	// headset, for an instrument or a game: a sound heard soon after a
+	// touch. Unset asks for smooth playing, for music. Through
+	// [driver.AAudio] it tells Android the sound is a game's in place of
+	// media's. On Bluetooth LE Audio, Android then sets the link up for
+	// low latency in place of high reliability, which may cost sound
+	// quality. On classic Bluetooth (A2DP) it changes little or nothing:
+	// Android asks the headset for a low-latency mode only for a game's
+	// stream in AAudio's low-latency mode, and a Pixel 8 Pro opens
+	// streams to A2DP earbuds without it. It changes nothing on wires or the phone's own
+	// speaker, nor through other drivers.
+	Quick bool
 	// Outputs are the outputs of the ASIO driver to play on, by their
-	// index from 0, as [asio.Channels] lists them; nil plays on its
-	// first two. The mixer plays on the first two named, or on the one
-	// named alone. Those named past two play what Aux fills, in step
+	// index from 0, as [driver.Channels] lists them; nil plays on its
+	// first two. Through JACK they are the system's ports it lists, and
+	// an output missing leaves its port unconnected, for a patchbay.
+	// On macOS they are the default output device's channels, and one
+	// missing plays nowhere. The mixer plays on the
+	// first two named, or on the one named alone. Those named past two play what Aux fills, in step
 	// with the mixer, at the same latency. The system's own sound plays
-	// the mixer's two alone: [State].Aux tells how many more play.
+	// the mixer's two alone, but on macOS: [State].Aux tells how many
+	// more play.
 	Outputs []int
 	// Aux, where set, fills the channels past the mixer's two, where
 	// Outputs names more than two: dst holds frames of channels
@@ -142,16 +225,23 @@ const chunk = 5 * time.Millisecond
 // A Speaker plays a mixer. Its methods are safe from any goroutine.
 type Speaker struct {
 	m *audio.Mixer
-	// mu guards o and problem, and opening and closing the output.
+	// mu guards o and problem, opening and closing the output, and
+	// changing how far ahead the mixer works.
 	mu      sync.Mutex
 	o       Options
 	problem error
+	// fails counts the opens of the output that failed in a row since
+	// it last played, and retry is when the watch tries again. A
+	// failed open leaves no output: out is nil while fails is set.
+	fails int
+	retry time.Time
 	// out is the output playing, nil while it changes.
 	out atomic.Pointer[outlet]
 	// ahead is how far ahead the mixer works, as Latency set it and dry
-	// spells grew it, in nanoseconds.
-	ahead atomic.Int64
-	fixed atomic.Bool
+	// spells grew it, in nanoseconds. margin is what dry spells grew past
+	// it, for an output that keeps it apart: see margined.
+	ahead, margin atomic.Int64
+	fixed         atomic.Bool
 	// dry counts the reads that found the buffer empty: the sound ran
 	// out before the mixer filled it again. reads counts all of them, so
 	// the first, into an empty buffer, are let be. dropouts counts dry
@@ -166,6 +256,16 @@ type Speaker struct {
 	smu            sync.Mutex
 	stopped, faded bool
 	asked          int
+	// auChurn counts the Core Audio outputs opened in a row, each less
+	// than auSteady after the one before, and auOpened is when the last
+	// opened, in Unix nanoseconds: a device that changes again as soon
+	// as it opens, as AirPods switching their rate as their microphone
+	// opens, waits longer each time before it opens again.
+	auChurn, auOpened atomic.Int64
+	// waiting says an output closed while the device was stopped, to
+	// open again as it resumes: opened then, it would start the device,
+	// and the microphone, while the application is away.
+	waiting atomic.Bool
 	// q rounds the sound as it leaves, as bits and dither say: q is
 	// the one thread's that pulls, the feed's or the driver's, and the
 	// settings anyone's, so neither waits.
@@ -227,6 +327,18 @@ type output interface {
 	close() error
 }
 
+// A margined output keeps what dry spells grow, the speaker's margin,
+// apart from how far ahead the mixer works: it adds the margin to the
+// frames it keeps past its device's delay. Its latency counts the
+// delay as its device measures or reports it, and that may read long
+// for a while after the device opens, or belong to a slow device, as
+// Bluetooth earbuds: a lead grown from it would keep the extra on the
+// next device, and so would never come back down.
+type margined interface {
+	// remargin takes the margin the speaker grew.
+	remargin()
+}
+
 // outlet holds an output, for an atomic pointer.
 type outlet struct{ output }
 
@@ -239,7 +351,8 @@ var (
 var ErrOpen = errors.New("speaker: the speakers are open already")
 
 // Open starts the speakers playing m. A process has them open once at
-// a time.
+// a time. In a browser, which holds sound back until the user's first click, key or
+// touch, Open returns at once, and what plays meanwhile sounds from then on.
 func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	opened.Lock()
 	defer opened.Unlock()
@@ -266,30 +379,140 @@ func Open(m *audio.Mixer, o Options) (*Speaker, error) {
 	return s, nil
 }
 
-// open opens the output s.o asks for, falling back to the system's own
-// sound, and sets the mixer to its rate. It runs with mu held, or
-// before s is shared.
+// open opens the output s.o asks for and sets the mixer to its rate.
+// A named driver that fails to open gives way to the system's own
+// sound. That is gunim's own backend where the system has one:
+// AAudio, WASAPI, Core Audio or PipeWire. Where that fails too, open
+// returns the error, except on Linux, which then opens the first sound
+// card, and on Android 8.0, which has no AAudio and plays through oto.
+// The browser and other systems with no backend of gunim's own go
+// straight to [openSystemSound]. It runs with mu held, or before s is
+// shared.
 func (s *Speaker) open() (output, error) {
 	s.problem = nil
 	s.reads.Store(0)
+	// Dry reads of the output closed tell nothing of the one opening.
+	s.dry.Store(0)
 	ahead := time.Duration(s.ahead.Load())
-	if s.o.Driver != "" {
-		out, err := openRing(s, s.o)
+	start := func(out startedOutput) (output, error) {
+		s.m.SetRate(out.rate())
+		out.start(ahead)
+		return out, nil
+	}
+	named := s.o.Driver != "" && s.o.Driver != defaultDriver()
+	switch {
+	case named:
+		out, err := s.openDriver()
 		if err == nil {
-			s.m.SetRate(out.rate())
-			out.start(ahead)
-			return out, nil
+			return start(out)
 		}
 		s.problem = err
+		if defaultDriver() == "" {
+			s.logf("%v; playing through the system's sound", err)
+			return s.openSystem(start)
+		}
+		// A named driver gone, the system's own sound shares the
+		// device with everything else on the computer.
+		s.logf("%v; playing through %s", err, defaultDriver())
+	case defaultDriver() == "":
+		return s.openSystem(start)
+	}
+	def := s.o
+	if named {
+		def.Driver = ""
+	}
+	out, err := openDefault(s, def)
+	if err == nil {
+		return start(out)
+	}
+	if pipeWireFirst || errors.Is(err, aaudio.ErrUnsupported) {
+		if !named {
+			s.problem = err
+		}
 		s.logf("%v; playing through the system's sound", err)
+		return s.openSystem(start)
 	}
-	out, err := openOto(s, s.o)
+	if named {
+		err = errors.Join(s.problem, err)
+	}
+	s.problem = err
+	s.logf("%v", err)
+	return nil, err
+}
+
+// openSystem opens [openSystemSound], and starts it by start.
+func (s *Speaker) openSystem(start func(startedOutput) (output, error)) (output, error) {
+	sys, err := openSystemSound(s, s.o)
 	if err != nil {
-		return nil, err
+		// What failed before the system's sound tells most.
+		return nil, errors.Join(s.problem, err)
 	}
-	s.m.SetRate(out.rate())
-	out.start(ahead)
-	return out, nil
+	return start(sys)
+}
+
+// errNoDefault is openDefault's error where the system has no backend
+// of gunim's own.
+var errNoDefault = errors.New("speaker: no backend of gunim's own on this system")
+
+// defaultDriver names the backend that plays the system's own sound:
+// AAudio on Android, WASAPI on Windows, Core Audio on macOS, PipeWire on
+// Linux, and "" on any other system.
+func defaultDriver() string {
+	switch {
+	case aaudioFirst:
+		return driver.AAudio
+	case wasapiFirst:
+		return driver.WASAPI
+	case coreAudioFirst:
+		return driver.CoreAudio
+	case pipeWireFirst:
+		return driver.PipeWire
+	}
+	return ""
+}
+
+// openDefault opens the system's own backend, as o names it or as the
+// system's own sound where o names no driver.
+func openDefault(s *Speaker, o Options) (startedOutput, error) {
+	byName := o.Driver != ""
+	switch {
+	case aaudioFirst:
+		return openAAudio(s, o, byName)
+	case wasapiFirst:
+		return openWasapi(s, o, byName)
+	case coreAudioFirst:
+		return openAUOutput(s, o, byName)
+	case pipeWireFirst:
+		return openPWOutput(s, o, byName)
+	}
+	return nil, errNoDefault
+}
+
+// A startedOutput is an output that starts once the speaker holds it.
+type startedOutput interface {
+	output
+	start(ahead time.Duration)
+}
+
+// openDriver opens the driver s.o names: JACK, PipeWire, Core Audio,
+// WASAPI, AAudio, or an ASIO driver.
+func (s *Speaker) openDriver() (startedOutput, error) {
+	if strings.HasPrefix(s.o.Driver, driver.PipeWirePrefix) {
+		return openPWOutput(s, s.o, true)
+	}
+	switch s.o.Driver {
+	case driver.JACK:
+		return openJackOutput(s, s.o)
+	case driver.PipeWire:
+		return openPWOutput(s, s.o, true)
+	case driver.CoreAudio:
+		return openAUOutput(s, s.o, true)
+	case driver.WASAPI:
+		return openWasapi(s, s.o, true)
+	case driver.AAudio:
+		return openAAudio(s, s.o, true)
+	}
+	return openRing(s, s.o)
 }
 
 // pull fills frames with what plays next, rounded as Bits says.
@@ -304,6 +527,65 @@ func (s *Speaker) ranDry() {
 	s.dry.Add(1)
 	s.dropouts.Add(1)
 }
+
+// ranDryOnce counts a read that found the buffer empty for a reason
+// that passes, as a stream opening: a dropout, but no sign the buffer
+// is too small.
+func (s *Speaker) ranDryOnce() { s.dropouts.Add(1) }
+
+// settleFor is how long a device that counts the buffers it takes, as
+// Core Audio's and JACK's do, plays once it takes its first after it
+// opens or resumes, before a buffer it finds short counts as the sound
+// running dry for good, as wasSettle is for WASAPI.
+const settleFor = 250 * time.Millisecond
+
+// settling tells the short buffers of a device opening from those of a
+// device playing steadily, for an output whose device counts the
+// buffers it takes. Its pump alone calls count; restart may come from
+// any goroutine.
+type settling struct {
+	// cycles is the device's count of buffers taken as count last saw
+	// it, and began when it first moved since the device opened or
+	// resumed, zero until then.
+	cycles int64
+	began  time.Time
+	// restarted says the device resumed: it settles again from the next
+	// buffer it takes.
+	restarted atomic.Bool
+}
+
+// restart has the device settle again, as it resumes.
+func (g *settling) restart() { g.restarted.Store(true) }
+
+// count counts short buffers the device found short, at now, where it
+// has taken cycles buffers ever: as dropouts of the opening until it
+// has played settleFor since it first took one, and as the sound
+// running dry after.
+func (g *settling) count(s *Speaker, short, cycles int64, now time.Time) {
+	if g.restarted.Swap(false) {
+		g.began, g.cycles = time.Time{}, cycles
+	}
+	if cycles != g.cycles {
+		g.cycles = cycles
+		if g.began.IsZero() {
+			g.began = now
+		}
+	}
+	steady := !g.began.IsZero() && now.Sub(g.began) > settleFor
+	for range min(short, 100) {
+		if steady {
+			s.ranDry()
+		} else {
+			s.ranDryOnce()
+		}
+	}
+}
+
+// Reopen asks for the output to be opened again as the options say, in a moment,
+// on a goroutine of the speaker's: as where a driver that failed to open, so the
+// system's sound played in its place, has come back. [Speaker.Changed] tells
+// of it, as it does of any output opened again.
+func (s *Speaker) Reopen() { s.askReset() }
 
 // askReset asks the watch to open the output again.
 func (s *Speaker) askReset() {
@@ -343,7 +625,7 @@ func (s *Speaker) Latency() time.Duration {
 }
 
 // watch grows the buffer while the sound runs dry, and opens the
-// output again as a driver asks.
+// output again as a driver asks, and where it failed to open.
 func (s *Speaker) watch() {
 	defer close(s.done)
 	const every = 250 * time.Millisecond
@@ -360,6 +642,7 @@ func (s *Speaker) watch() {
 			}
 			s.mu.Unlock()
 		case <-t.C:
+			s.retryOpen()
 			s.Anchor()
 			dry := s.dry.Swap(0)
 			if dry > 0 {
@@ -372,16 +655,41 @@ func (s *Speaker) watch() {
 					}
 				}
 			}
-			// Once might be a hiccup; more is the buffer too small. It
-			// grows from how far ahead the output works, which may be
-			// further than asked, as a driver's buffer is long.
-			ahead := max(time.Duration(s.ahead.Load()), s.Latency())
-			if dry >= 2 && !s.suspended.Load() && !s.fixed.Load() && ahead < MaxLatency {
-				s.setAhead(min(ahead+10*time.Millisecond, MaxLatency))
-				s.logf("working %v ahead", s.Latency())
+			// Once might be a hiccup; more is the buffer too small.
+			if dry >= 2 && !s.suspended.Load() && !s.fixed.Load() {
+				s.grow()
 			}
 		}
 	}
+}
+
+// grow works 10 ms further ahead, as far as MaxLatency: from how far
+// ahead the output works, which may be further than asked, as a
+// driver's buffer is long; or, for a margined output, by its margin.
+// It holds mu, so SetLatency and Set, which reset the lead, come
+// wholly before it or wholly after.
+func (s *Speaker) grow() {
+	const step = 10 * time.Millisecond
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.out.Load()
+	if out == nil {
+		return
+	}
+	if m, ok := out.output.(margined); ok {
+		if s.Latency() >= MaxLatency {
+			return
+		}
+		s.margin.Store(min(s.margin.Load()+int64(step), int64(MaxLatency)))
+		m.remargin()
+	} else {
+		ahead := max(time.Duration(s.ahead.Load()), s.Latency())
+		if ahead >= MaxLatency {
+			return
+		}
+		s.setAhead(min(ahead+step, MaxLatency))
+	}
+	s.logf("working %v ahead", s.Latency())
 }
 
 // setAhead sets how far ahead the mixer works, as far as MaxLatency.
@@ -401,16 +709,19 @@ func (s *Speaker) setAhead(d time.Duration) {
 func (s *Speaker) SetLatency(d time.Duration) {
 	s.mu.Lock()
 	s.o.Latency = d
-	s.mu.Unlock()
+	s.margin.Store(0)
 	s.setAhead(max(d, device))
+	s.mu.Unlock()
 	s.logf("working %v ahead", s.Latency())
 }
 
-// Set changes how the speakers play. A change of driver or rate, or of
-// Buffer, Record, Direct or Outputs while a driver plays, opens the output
-// again, with a moment's silence; the mixer's rate follows, and
+// Set changes how the speakers play. A change of driver, of a rate the
+// output plays otherwise, or of Buffer, Record, Quick, Direct or Outputs
+// where the driver playing uses it, opens the output again, with a
+// moment's silence; the mixer's rate follows, and
 // [Speaker.Changed] tells of it. A change of Latency or Fixed sets how
-// far ahead the mixer works from where it is.
+// far ahead the mixer works from where it is. Where the output failed
+// to open, Set opens it again, whatever changed.
 func (s *Speaker) Set(o Options) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -421,11 +732,24 @@ func (s *Speaker) Set(o Options) error {
 	s.setAux(o.Aux)
 	s.fixed.Store(o.Fixed)
 	if o.latency() != prev.latency() || o.Fixed != prev.Fixed {
+		s.margin.Store(0)
 		s.setAhead(o.latency())
 	}
-	if o.Driver != prev.Driver || o.rate() != prev.rate() ||
-		(o.Driver != "" && (o.Buffer != prev.Buffer || o.Record != prev.Record || o.Direct != prev.Direct ||
-			!slices.Equal(o.Outputs, prev.Outputs))) {
+	// A rate asked reopens where the output plays at another. Buffer and
+	// Direct reopen a driver named, and Core Audio's buffer as the
+	// system's own sound; Record, Quick and Outputs reopen any driver,
+	// named or playing as the system's own sound.
+	rate := o.Rate != prev.Rate
+	if out := s.out.Load(); rate && out != nil && out.rate() == o.rate() {
+		rate = false
+	}
+	named := o.Driver != ""
+	drives := named || driverFirst()
+	// An output that failed to open tries again, whatever changed.
+	if s.fails > 0 || o.Driver != prev.Driver || rate ||
+		(named && (o.Buffer != prev.Buffer || o.Direct != prev.Direct)) ||
+		(!named && (coreAudioFirst || pipeWireFirst) && o.Buffer != prev.Buffer) ||
+		(drives && (o.Record != prev.Record || o.Quick != prev.Quick || !slices.Equal(o.Outputs, prev.Outputs))) {
 		return s.reopenLocked()
 	}
 	return nil
@@ -437,7 +761,7 @@ func (s *Speaker) reopenLocked() error {
 	if cur := s.out.Load(); cur != nil {
 		s.out.Store(nil)
 		if err := cur.close(); err != nil {
-			if !errors.Is(err, asio.ErrNotAnswering) {
+			if !errors.Is(err, driver.ErrNotAnswering) {
 				s.out.Store(cur)
 				return err
 			}
@@ -446,19 +770,67 @@ func (s *Speaker) reopenLocked() error {
 			s.logf("%v; opening the output again all the same", err)
 		}
 	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		s.waiting.Store(true)
+		s.logf("suspended: the output opens again as it resumes")
+		return nil
+	}
 	out, err := s.open()
 	if err != nil {
 		s.problem = err
+		s.fails++
+		s.retry = time.Now().Add(reopenDelay(s.fails))
 		return err
 	}
+	s.fails = 0
 	s.anchor.reset()
+	s.smu.Lock()
 	s.out.Store(&outlet{out})
+	if s.stopped {
+		// Suspend stopped the device while this opened, and found no
+		// output to stop.
+		if err := out.suspend(); err != nil {
+			s.logf("suspending the output opened: %v", err)
+		}
+	}
+	s.smu.Unlock()
 	s.logf("opened again, at %d Hz, working %v ahead", out.rate(), s.Latency())
 	select {
 	case s.changed <- struct{}{}:
 	default:
 	}
 	return nil
+}
+
+// retryOpen opens the output again where it failed to open, as a
+// device that went away comes back, once the wait reopenDelay says is
+// over. A device stopped opens the output as it resumes instead.
+func (s *Speaker) retryOpen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fails == 0 || s.out.Load() != nil || time.Now().Before(s.retry) {
+		return
+	}
+	s.smu.Lock()
+	stopped := s.stopped
+	s.smu.Unlock()
+	if stopped {
+		return
+	}
+	if err := s.reopenLocked(); err != nil {
+		s.logf("opening the output again: %v; trying again in %v", err, reopenDelay(s.fails))
+	}
+}
+
+// reopenDelay is how long the watch waits before it opens the output
+// again after fails opens in a row failed: a quarter of a second at
+// first, as a route settles, then twice as long each time, to every
+// 2 s, for a device gone a while.
+func reopenDelay(fails int) time.Duration {
+	return min(250*time.Millisecond<<min(max(fails-1, 0), 3), 2*time.Second)
 }
 
 // Changed returns a channel that receives as the output opens again:
@@ -469,8 +841,11 @@ func (s *Speaker) Changed() <-chan struct{} { return s.changed }
 
 // A State says how the speakers play.
 type State struct {
-	// Driver is the ASIO driver playing, or empty for the system's own
-	// sound.
+	// Driver is the driver playing: an ASIO driver, [driver.JACK] for
+	// JACK, [driver.AAudio] for AAudio, [driver.CoreAudio] for Core
+	// Audio's HAL output unit, or empty for the system's own sound, as
+	// on macOS and Android where Options names no driver: Info then
+	// says which plays.
 	Driver string
 	// Rate is the rate the mixer and the output play at, in frames a
 	// second. DeviceRate is the rate the system converts it to on its
@@ -487,18 +862,69 @@ type State struct {
 	Fixed   bool
 	// Dropouts counts the times the sound ran dry since the speakers
 	// opened: where Direct is set, the buffers that took longer to mix
-	// than they play.
+	// than they play. An ASIO driver that says it lost sound adds to it.
 	Dropouts int64
-	// ASIO is what the driver says of itself, while one plays; its
-	// Played tells the output each channel plays on.
-	ASIO *asio.Info
+	// Info is what the driver says of itself, while one plays; its
+	// Played tells the output each channel plays on. Through JACK its
+	// Latency is the server's buffer and its ports' latency, and its
+	// buffer sizes the server's. On macOS it is what Core Audio says,
+	// where Driver is empty too.
+	Info *driver.Info
 	// Aux is how many channels play past the mixer's two, which
 	// [Options].Aux fills: as many as Options.Outputs names past two,
 	// while an ASIO driver plays; none through the system's own sound.
 	Aux int
+	// Route is where the sound plays. Through [driver.AAudio] Android
+	// tells it, and it follows as the sound moves, within a few seconds
+	// at most. Elsewhere it stays RouteUnknown.
+	Route Route
+	// Headphones says the sound plays into wired or USB headphones, so a
+	// microphone nearby can't hear it. A line out, an aux jack or a USB
+	// dock may drive loudspeakers, so it is false for those, whose Route
+	// is still RouteWired or RouteUSB, as it is for all the rest. An
+	// application playing a microphone back live should ask this.
+	Headphones bool
 	// Problem is why the output asked for plays otherwise, or not at
 	// all.
 	Problem error
+}
+
+// Route is where the sound plays.
+type Route int
+
+const (
+	// RouteUnknown is a route nothing tells, or one of no other kind
+	// here, as an HDMI screen.
+	RouteUnknown Route = iota
+	// RouteSpeaker is the device's own speaker. A microphone beside it
+	// hears the sound.
+	RouteSpeaker
+	// RouteWired is headphones or a line on a jack.
+	RouteWired
+	// RouteBluetooth is a Bluetooth headset, speaker or hearing aid,
+	// whose delay is long enough to feel in an instrument or a game.
+	RouteBluetooth
+	// RouteUSB is a device on USB, as a USB-C headset is, and an analog
+	// one through a USB-C adapter. A phone with no jack has its wired
+	// headphones here. Its delay is about that of RouteWired.
+	RouteUSB
+)
+
+// String names the route: "unknown", "speaker", "wired", "Bluetooth" or
+// "USB".
+func (r Route) String() string {
+	switch r {
+	case RouteSpeaker:
+		return "speaker"
+	case RouteWired:
+		return "wired"
+	case RouteBluetooth:
+		return "Bluetooth"
+	case RouteUSB:
+		return "USB"
+	case RouteUnknown:
+	}
+	return "unknown"
 }
 
 // State returns how the speakers play now.
@@ -520,29 +946,39 @@ func (s *Speaker) State() State {
 }
 
 // ControlPanel opens the own settings of the ASIO driver Options
-// names, and returns once they close. A driver that failed to open
+// names, and returns once they close. JACK has none: while it plays,
+// ControlPanel returns an error that says so. A driver that failed to open
 // opens its settings too, as a change there may let it start, and the
 // speaker tries it again once they close.
 func (s *Speaker) ControlPanel() error {
 	if out := s.out.Load(); out != nil {
-		if r, ok := out.output.(*ringOutput); ok {
-			return r.dev.ControlPanel()
+		switch o := out.output.(type) {
+		case *ringOutput:
+			return o.dev.ControlPanel()
+		case *jackOutput:
+			return errJackPanel
+		case *pwOutput:
+			return errPWPanel
+		case *auOutput:
+			return auControlPanel()
+		case *wasOutput:
+			return errWasPanel
 		}
 	}
 	s.mu.Lock()
-	driver := s.o.Driver
+	name := s.o.Driver
 	s.mu.Unlock()
-	if driver == "" {
-		return errors.New("speaker: no ASIO driver is chosen")
+	if name == "" {
+		return errors.New("speaker: no driver is chosen")
 	}
-	err := driverPanel(driver)
+	err := driverPanel(name)
 	s.askReset()
 	return err
 }
 
 // driverPanel opens the settings of a driver that plays nothing; a
 // test puts a function of its own here.
-var driverPanel = asio.ControlPanel
+var driverPanel = driver.ControlPanel
 
 // Err returns an error the speakers met while playing, if any.
 func (s *Speaker) Err() error {
@@ -562,7 +998,10 @@ const SuspendFade = 150 * time.Millisecond
 // background on a phone. The mixer stops with it. Sound playing fades
 // out first, over [SuspendFade]: Suspend returns at once, and the
 // device stops once the fade has been heard, unless Resume comes
-// first.
+// first. While the device is stopped, a change that opens the output
+// again, as the system's default device changing or a call of Set,
+// closes it and waits: the output opens as Resume is called, so the
+// device and its microphone stay off until then.
 func (s *Speaker) Suspend() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
@@ -587,20 +1026,36 @@ func (s *Speaker) Suspend() error {
 	return nil
 }
 
-// stopLocked stops the device. It runs with smu held.
+// stopLocked stops the device: the output, where one is open, and any
+// opened until Resume. It runs with smu held.
 func (s *Speaker) stopLocked() error {
+	s.stopped = true
 	out := s.out.Load()
 	if out == nil {
 		return nil
 	}
-	s.stopped = true
 	return out.suspend()
 }
 
 // Resume starts a suspended device again, and fades back in the sound
 // Suspend faded out, over [SuspendFade]. Where nothing sounded as it
-// suspended, a sound played as it resumes starts at once.
+// suspended, a sound played as it resumes starts at once. An output
+// that was to open again while the device was stopped, as its device
+// changed, opens now, as does one that failed to open.
 func (s *Speaker) Resume() error {
+	err := s.restart()
+	waiting := s.waiting.Swap(false)
+	s.mu.Lock()
+	// An output that failed to open tries again at once.
+	if waiting || (s.fails > 0 && s.out.Load() == nil) {
+		err = errors.Join(err, s.reopenLocked())
+	}
+	s.mu.Unlock()
+	return err
+}
+
+// restart is Resume, but for an output waiting to open.
+func (s *Speaker) restart() error {
 	s.smu.Lock()
 	defer s.smu.Unlock()
 	s.asked++

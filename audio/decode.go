@@ -5,13 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
+	"slices"
+	"strings"
 )
 
 // ErrFormat is returned by [Decode] for a sound in no format it reads.
 var ErrFormat = errors.New("audio: unknown format")
 
-// Decode returns a source playing the sound r holds: WAV, MP3, Ogg
-// Vorbis or FLAC, told apart by how it starts. The source plays at
+// Extensions are the file extensions of the sounds [Decode] reads, in
+// lower case, each with its dot, for a file picker's patterns. A program
+// tells the files it takes by them, so they must not be changed.
+var Extensions = []string{".wav", ".aif", ".aiff", ".aifc", ".mp3", ".ogg", ".oga", ".flac"}
+
+// IsSoundFile reports whether name ends in one of [Extensions], in any
+// case: whether it names a sound [Decode] reads, going by its name.
+func IsSoundFile(name string) bool {
+	return slices.Contains(Extensions, strings.ToLower(filepath.Ext(name)))
+}
+
+// Decode returns a source playing the sound r holds: WAV (RIFF, or RF64
+// and BW64 past 4 GB), AIFF (or AIFF-C), MP3, Ogg Vorbis or FLAC, told
+// apart by how it starts. The source plays at
 // [SampleRate], resampling a sound recorded at another, and in stereo:
 // a mono sound plays in both speakers, and a sound of more channels
 // plays its first two.
@@ -76,8 +91,12 @@ func openDecoder(r io.ReadSeeker) (decoder, error) {
 	var d decoder
 	h := head[:n]
 	switch {
-	case bytes.HasPrefix(h, []byte("RIFF")) && len(h) >= 12 && string(h[8:12]) == "WAVE":
+	case len(h) >= 12 && string(h[8:12]) == "WAVE" &&
+		(bytes.HasPrefix(h, []byte("RIFF")) || bytes.HasPrefix(h, []byte("RF64")) || bytes.HasPrefix(h, []byte("BW64"))):
 		d, err = newWAV(r)
+	case len(h) >= 12 && bytes.HasPrefix(h, []byte("FORM")) &&
+		(string(h[8:12]) == "AIFF" || string(h[8:12]) == "AIFC"):
+		d, err = newAIFF(r)
 	case bytes.HasPrefix(h, []byte("OggS")):
 		d, err = newVorbis(r)
 	case bytes.HasPrefix(h, []byte("fLaC")):
@@ -98,7 +117,8 @@ func openDecoder(r io.ReadSeeker) (decoder, error) {
 
 // Format is what a sound is stored as.
 type Format struct {
-	// Name names the format: "MP3", "FLAC", "Ogg Vorbis" or "WAV".
+	// Name names the format: "MP3", "FLAC", "Ogg Vorbis", "WAV" or
+	// "AIFF".
 	Name string
 	// SampleRate is the rate it was recorded at, in hertz, before it
 	// is resampled to play.

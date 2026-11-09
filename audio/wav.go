@@ -3,13 +3,12 @@ package audio
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 )
 
-// wav decodes a WAV file of integer samples of 8 to 32 bits, or float
-// samples of 32.
+// wav decodes a WAV file, RIFF, RF64 or BW64, of integer samples of 8
+// to 32 bits, or float samples of 32, in up to 64 channels.
 type wav struct {
 	r io.ReadSeeker
 	// reader is r, as the io.Reader io.ReadFull takes: converted once,
@@ -37,71 +36,18 @@ const (
 )
 
 func newWAV(r io.ReadSeeker) (*wav, error) {
-	var riff [12]byte
-	if _, err := io.ReadFull(r, riff[:]); err != nil {
+	l, err := ReadWAVLayout(seekReaderAt{r})
+	if err != nil {
 		return nil, err
 	}
-	w := &wav{r: r, reader: r}
-	pos := int64(12)
-	haveFmt := false
-	for {
-		var h [8]byte
-		if _, err := io.ReadFull(r, h[:]); err != nil {
-			return nil, fmt.Errorf("audio: wav: no data chunk: %w", err)
-		}
-		pos += 8
-		id, size := string(h[:4]), int64(binary.LittleEndian.Uint32(h[4:]))
-		switch id {
-		case "fmt ":
-			if size < 16 {
-				return nil, errors.New("audio: wav: short fmt chunk")
-			}
-			f := make([]byte, size)
-			if _, err := io.ReadFull(r, f); err != nil {
-				return nil, err
-			}
-			format := binary.LittleEndian.Uint16(f)
-			w.channels = int(binary.LittleEndian.Uint16(f[2:]))
-			w.sampleHz = int(binary.LittleEndian.Uint32(f[4:]))
-			w.bits = int(binary.LittleEndian.Uint16(f[14:]))
-			if format == wavExtensible && size >= 26 {
-				format = binary.LittleEndian.Uint16(f[24:])
-			}
-			switch {
-			case format == wavPCM && w.bits >= 8 && w.bits <= 32 && w.bits%8 == 0:
-			case format == wavFloat && w.bits == 32:
-				w.float = true
-			default:
-				return nil, fmt.Errorf("audio: wav: format %d of %d bits", format, w.bits)
-			}
-			if w.channels < 1 {
-				return nil, errors.New("audio: wav: no channels")
-			}
-			haveFmt = true
-		case "data":
-			if !haveFmt {
-				return nil, errors.New("audio: wav: data before fmt")
-			}
-			w.data = pos
-			w.frames = size / int64(w.channels*w.bits/8)
-			// Room for the most a read takes, made now so reading
-			// makes nothing.
-			w.buf = make([]byte, wavChunk*w.channels*w.bits/8)
-			return w, nil
-		default:
-			if _, err := r.Seek(size, io.SeekCurrent); err != nil {
-				return nil, err
-			}
-		}
-		// A chunk of odd size is followed by a byte of padding.
-		if size&1 == 1 {
-			if _, err := r.Seek(1, io.SeekCurrent); err != nil {
-				return nil, err
-			}
-			size++
-		}
-		pos += size
+	if _, err := r.Seek(l.Data, io.SeekStart); err != nil {
+		return nil, err
 	}
+	return &wav{r: r, reader: r, channels: l.Channels, sampleHz: l.Rate, bits: l.Bits, float: l.Float,
+		data: l.Data, frames: l.Frames,
+		// Room for the most a read takes, made now so reading makes
+		// nothing.
+		buf: make([]byte, wavChunk*l.Channels*l.Bits/8)}, nil
 }
 
 func (w *wav) read(dst []float32) (int, error) {

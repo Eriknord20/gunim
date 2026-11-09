@@ -1,4 +1,4 @@
-//go:build linux || windows || darwin
+//go:build linux || windows || darwin || (js && wasm)
 
 package render
 
@@ -105,11 +105,10 @@ type batchState struct {
 	prog   uint32
 	failed bool
 	u      struct{ vp, light, lightColor, ambient, eye, shine int32 }
-	// inst is the instance buffer, of instCap bytes, and data what a
-	// scene puts in it: each instance's model matrix and tint.
-	inst    uint32
-	instCap int
-	data    []byte
+	// inst is the instance buffer, and data what a scene puts in it:
+	// each instance's model matrix and tint.
+	inst uint32
+	data []byte
 	// of numbers the groups by mesh and gloss; groups are the scene's,
 	// group the group of each solid item, and order the solid items
 	// group by group.
@@ -368,6 +367,11 @@ func (r *Renderer) sceneReady() bool {
 // scene draws a scene into its own target and queues it into the
 // frame, at its rectangle, as an image.
 func (r *Renderer) scene(op *paint.SceneOp) {
+	// Before anything else: drawing the scene is the costly part, and the frame
+	// comes here once for each of its damage rectangles.
+	if !r.cull.Empty() && r.outside(r.deviceRect(op.Transform, op.Rect)) {
+		return
+	}
 	t := op.Transform
 	size := op.Rect.Size()
 	// The scene draws at the size it shows, its transform's scale
@@ -563,14 +567,10 @@ func (r *Renderer) drawBatches(items []paint.SceneItem, vp geom.Mat4, eye, dir g
 	r.uniformRGB(b.u.ambient, amb)
 	r.uniform3(b.u.eye, eye.X, eye.Y, eye.Z)
 	g.BindBuffer(gl.ARRAY_BUFFER, b.inst)
-	if len(b.data) > b.instCap {
-		b.instCap = max(len(b.data), 2*b.instCap)
-	}
 	// A fresh store each scene, so a second scene in the frame writes
 	// while the GPU still draws the first, rather than waiting on it as
 	// a tile-based phone GPU would.
-	g.BufferInit(gl.ARRAY_BUFFER, b.instCap, glDynamicDraw)
-	g.BufferSubData(gl.ARRAY_BUFFER, 0, b.data)
+	g.BufferData(gl.ARRAY_BUFFER, b.data, glDynamicDraw)
 	stride := int32(instanceFloats * 4)
 	for gi := range b.groups {
 		grp := &b.groups[gi]
@@ -769,8 +769,7 @@ func (r *Renderer) meshBuffers(m *paint.Mesh, now time.Time) *meshBuffers {
 		c := rgba(v.Color)
 		put(v.Pos.X, v.Pos.Y, v.Pos.Z, v.Normal.X, v.Normal.Y, v.Normal.Z, c[0], c[1], c[2], c[3])
 	}
-	g.BufferInit(gl.ARRAY_BUFFER, len(data), glStaticDraw)
-	g.BufferSubData(gl.ARRAY_BUFFER, 0, data)
+	g.BufferData(gl.ARRAY_BUFFER, data, glStaticDraw)
 	stride := int32(meshVertexFloats * 4)
 	for i, a := range [3]struct {
 		size int32
@@ -785,8 +784,7 @@ func (r *Renderer) meshBuffers(m *paint.Mesh, now time.Time) *meshBuffers {
 		ib = binary.LittleEndian.AppendUint32(ib, i)
 	}
 	g.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, mb.ibo)
-	g.BufferInit(gl.ELEMENT_ARRAY_BUFFER, len(ib), glStaticDraw)
-	g.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, ib)
+	g.BufferData(gl.ELEMENT_ARRAY_BUFFER, ib, glStaticDraw)
 	mb.n = int32(len(idx))
 	mb.bytes = len(data) + len(ib)
 	st.meshBytes += mb.bytes

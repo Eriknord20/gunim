@@ -992,7 +992,7 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	if len(g.bands) == 0 {
 		size := ReadoutSize.Get(th)
 		run := audioui.Shaped("Double-click to add a band", size, false, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H/2-2*size), audioui.Faded(widget.Ink.Get(th), 0.55))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H/2-2*size), paint.Faded(widget.Ink.Get(th), 0.55))
 	}
 	end()
 	widget.GroupRing(p, whole, radius, g.ring.Value(), th)
@@ -1018,7 +1018,7 @@ func (g *graph) paintSpectrum(p *paint.Painter, th *theme.Live, box geom.Size) {
 		x0 := float32(math.Round(float64(g.xOf(float64(f) / step))))
 		x1 := float32(math.Round(float64(g.xOf(float64(f) * step))))
 		if y := g.specY(heard[i]); x1 > x0 && y < box.H {
-			p.RRect(geom.Rc(x0, y, x1-x0, box.H-y), 0, paint.Solid(audioui.Faded(accent, 0.18)))
+			p.RRect(geom.Rc(x0, y, x1-x0, box.H-y), 0, paint.Solid(paint.Faded(accent, 0.18)))
 		}
 	}
 	var prevHeard, prevBefore geom.Point
@@ -1026,8 +1026,8 @@ func (g *graph) paintSpectrum(p *paint.Painter, th *theme.Live, box geom.Size) {
 		x := g.xOf(float64(f))
 		h, b := geom.Pt(x, g.specY(heard[i])), geom.Pt(x, g.specY(before[i]))
 		if i > 0 {
-			audioui.Segment(p, prevHeard, h, 1.5, audioui.Faded(accent, 0.6))
-			audioui.Segment(p, prevBefore, b, 1.2, audioui.Faded(ink, 0.4))
+			audioui.Segment(p, prevHeard, h, 1.5, paint.Faded(accent, 0.6))
+			audioui.Segment(p, prevBefore, b, 1.2, paint.Faded(ink, 0.4))
 		}
 		prevHeard, prevBefore = h, b
 	}
@@ -1055,12 +1055,12 @@ func (g *graph) paintGrid(p *paint.Painter, th *theme.Live, box geom.Size) {
 	ink, size := widget.Ink.Get(th), LabelSize.Get(th)
 	for _, hz := range []float64{50, 100, 200, 500, 1000, 2000, 5000, 10000} {
 		x := g.xOf(hz)
-		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(audioui.Faded(ink, 0.06)))
+		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		label := fmt.Sprintf("%.0f", hz)
 		if hz >= 1000 {
 			label = fmt.Sprintf("%.0fk", hz/1000)
 		}
-		audioui.Shaped(label, size, false, false).Paint(p, geom.Pt(x+4, box.H-1.6*size), audioui.Faded(ink, 0.35))
+		audioui.Shaped(label, size, false, false).Paint(p, geom.Pt(x+4, box.H-1.6*size), paint.Faded(ink, 0.35))
 	}
 	for db := -eqRange + 6; db < eqRange; db += 6 {
 		y := g.yOf(float32(db))
@@ -1069,9 +1069,9 @@ func (g *graph) paintGrid(p *paint.Painter, th *theme.Live, box geom.Size) {
 		if db == 0 {
 			a, label = 0.14, "0"
 		}
-		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(paint.Faded(ink, a)))
 		run := audioui.Shaped(label, size, false, false)
-		run.Paint(p, geom.Pt(box.W-run.Advance-6, y-1.3*size), audioui.Faded(ink, 0.35))
+		run.Paint(p, geom.Pt(box.W-run.Advance-6, y-1.3*size), paint.Faded(ink, 0.35))
 	}
 }
 
@@ -1118,10 +1118,10 @@ func (g *graph) paintCurve(p *paint.Painter, th *theme.Live, box geom.Size, bypa
 		for i, r := range own {
 			y := g.yOf(max(-eqRange-6, min(r, eqRange+6)))
 			top, h := min(y, zero), float32(math.Abs(float64(y-zero)))
-			p.RRect(geom.Rc(box.W*float32(i)/float32(n)-w/2, top, w+0.5, h), 0, paint.Solid(audioui.Faded(c, 0.16*(1-bypass))))
+			p.RRect(geom.Rc(box.W*float32(i)/float32(n)-w/2, top, w+0.5, h), 0, paint.Solid(paint.Faded(c, 0.16*(1-bypass))))
 		}
 	}
-	line := audioui.Mix(widget.Ink.Get(th), widget.Accent.Get(th), 0.35)
+	line := anim.MixColor(widget.Ink.Get(th), widget.Accent.Get(th), 0.35)
 	alpha := 1 - 0.65*bypass
 	width := CurveWidth.Get(th)
 	var prev geom.Point
@@ -1130,8 +1130,8 @@ func (g *graph) paintCurve(p *paint.Painter, th *theme.Live, box geom.Size, bypa
 		db *= 1 - bypass
 		pt := geom.Pt(box.W*float32(i)/float32(n), g.yOf(max(-eqRange-8, min(db, eqRange+8))))
 		if i > 0 {
-			audioui.Segment(p, prev, pt, 3*width, audioui.Faded(line, 0.12*alpha))
-			audioui.Segment(p, prev, pt, width, audioui.Faded(line, alpha))
+			audioui.Segment(p, prev, pt, 3*width, paint.Faded(line, 0.12*alpha))
+			audioui.Segment(p, prev, pt, width, paint.Faded(line, alpha))
 		}
 		prev = pt
 	}
@@ -1169,7 +1169,7 @@ func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32
 		}
 		focus := g.focusOf(b.ID)
 		strength := w * (0.45 + 0.55*focus)
-		c := audioui.Mix(bandColor(th, i), audioui.Mix(ground, ink, 0.5), 0.7*bypass)
+		c := anim.MixColor(bandColor(th, i), anim.MixColor(ground, ink, 0.5), 0.7*bypass)
 		from, to := g.heardSpan(d.playing(g.amount.Value(), g.qScale.Value()))
 		db := b.Dynamic.Threshold + g.shift.Value()
 		y := g.specY(db)
@@ -1177,20 +1177,20 @@ func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32
 		if heard := d.heard.Value(); heard > specBottom {
 			hy := g.specY(heard)
 			if hy < y {
-				p.RRect(geom.Rc(x0, hy, x1-x0, y-hy), 0, paint.Solid(audioui.Faded(c, 0.22*strength)))
+				p.RRect(geom.Rc(x0, hy, x1-x0, y-hy), 0, paint.Solid(paint.Faded(c, 0.22*strength)))
 			}
-			p.RRect(geom.Rc(x0, hy-0.5, x1-x0, 1), 0.5, paint.Solid(audioui.Faded(c, 0.45*strength)))
+			p.RRect(geom.Rc(x0, hy-0.5, x1-x0, 1), 0.5, paint.Solid(paint.Faded(c, 0.45*strength)))
 		}
-		p.RRect(geom.Rc(x0, y-0.75, x1-x0, 1.5), 0.75, paint.Solid(audioui.Faded(c, 0.8*strength)))
+		p.RRect(geom.Rc(x0, y-0.75, x1-x0, 1.5), 0.75, paint.Solid(paint.Faded(c, 0.8*strength)))
 		for _, x := range []float32{x0, x1} {
 			if x > 1 && x < g.size.W-1 {
-				p.RRect(geom.Rc(x-0.75, y-4, 1.5, 8), 0.75, paint.Solid(audioui.Faded(c, 0.8*strength)))
+				p.RRect(geom.Rc(x-0.75, y-4, 1.5, 8), 0.75, paint.Solid(paint.Faded(c, 0.8*strength)))
 			}
 		}
 		if focus > 0.01 {
 			label := audioui.Shaped(fmt.Sprintf("threshold %.0f dB", db), 9, false, true)
 			lx := min(max((x0+x1-label.Advance)/2, x0), g.size.W-label.Advance-4)
-			label.Paint(p, geom.Pt(lx, y-13), audioui.Faded(c, 0.9*w*focus))
+			label.Paint(p, geom.Pt(lx, y-13), paint.Faded(c, 0.9*w*focus))
 		}
 	}
 }
@@ -1244,7 +1244,7 @@ func (g *graph) paintDot(p *paint.Painter, th *theme.Live, d *dot, i int, picked
 		return
 	}
 	ground, ink := audioui.Ground.Get(th), widget.Ink.Get(th)
-	c := audioui.Mix(bandColor(th, i), audioui.Mix(ground, ink, 0.5), 0.7*bypass)
+	c := anim.MixColor(bandColor(th, i), anim.MixColor(ground, ink, 0.5), 0.7*bypass)
 	at := g.dotAt(d)
 	base := DotRadius.Get(th)
 	r := (base + base/3*d.hot.Value()) * grow
@@ -1252,22 +1252,22 @@ func (g *graph) paintDot(p *paint.Painter, th *theme.Live, d *dot, i int, picked
 		// A dynamic band turning itself down: a line from its point to
 		// where it plays now, and a mark there.
 		y := g.yOf(d.gain.Value()*g.amount.Value() + down)
-		audioui.Segment(p, geom.Pt(at.X, at.Y+r), geom.Pt(at.X, y), 1.5, audioui.Faded(c, 0.7))
+		audioui.Segment(p, geom.Pt(at.X, at.Y+r), geom.Pt(at.X, y), 1.5, paint.Faded(c, 0.7))
 		p.RRect(geom.Rc(at.X-4, y-1, 8, 2), 1, paint.Solid(c))
 	}
 	if picked {
 		ring := geom.Rc(at.X-r-5, at.Y-r-5, 2*r+10, 2*r+10)
-		p.RRectStroke(ring, r+5, paint.Fill{}, paint.Stroke{Width: 2, Color: audioui.Faded(c, 0.6)})
+		p.RRectStroke(ring, r+5, paint.Fill{}, paint.Stroke{Width: 2, Color: paint.Faded(c, 0.6)})
 	}
 	on := min(max(d.on.Value(), 0), 1)
 	circle := geom.Rc(at.X-r, at.Y-r, 2*r, 2*r)
-	p.ShadowRRect(circle, r, paint.Solid(audioui.Mix(ground, c, 0.25+0.75*on)),
-		paint.Shadow{Blur: 10 + 8*d.hot.Value(), Color: audioui.Faded(c, 0.5*on)})
+	p.ShadowRRect(circle, r, paint.Solid(anim.MixColor(ground, c, 0.25+0.75*on)),
+		paint.Shadow{Blur: 10 + 8*d.hot.Value(), Color: paint.Faded(c, 0.5*on)})
 	p.RRectStroke(circle, r, paint.Fill{}, paint.Stroke{Width: 1.5, Color: c})
 	if grow > 0.6 {
 		size := LabelSize.Get(th) + 1
 		run := audioui.Shaped(strconv.Itoa(i+1), size, true, false)
-		run.Paint(p, geom.Pt(at.X-run.Advance/2, at.Y-0.7*size), audioui.Mix(c, ground, on))
+		run.Paint(p, geom.Pt(at.X-run.Advance/2, at.Y-0.7*size), anim.MixColor(c, ground, on))
 	}
 }
 
@@ -1299,8 +1299,8 @@ func (g *graph) paintReadout(p *paint.Painter, th *theme.Live, box geom.Size) {
 		y = at.Y + 24
 	}
 	c := bandColor(th, i)
-	p.RRect(geom.Rc(x, y, w, h), h/2, paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.92)))
-	p.RRectStroke(geom.Rc(x, y, w, h), h/2, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(c, 0.7)})
+	p.RRect(geom.Rc(x, y, w, h), h/2, paint.Solid(paint.Faded(audioui.Ground.Get(th), 0.92)))
+	p.RRectStroke(geom.Rc(x, y, w, h), h/2, paint.Fill{}, paint.Stroke{Width: 1, Color: paint.Faded(c, 0.7)})
 	run.Paint(p, geom.Pt(x+10, y+(h-size)/2), widget.Ink.Get(th))
 }
 

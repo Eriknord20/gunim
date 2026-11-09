@@ -9,7 +9,6 @@
 package glfw
 
 import (
-	"math"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -60,8 +59,10 @@ type drawnShadow struct {
 	hwnds [4]windows.HWND
 	dc    _HDC
 	bmp   _HBITMAP
-	// measure draws solid green bands instead of a shadow, for measuring how closely it follows.
+	// measure draws solid green bands instead of a shadow, for measuring how closely it follows, and corner is the
+	// radius of the window's corners, in logical pixels.
 	measure bool
+	corner  float64
 
 	// size, dpi and the window's size are what the bitmap was drawn for.
 	w, h, dpi int32
@@ -91,9 +92,10 @@ type drawnShadow struct {
 }
 
 // SetDrawnShadow draws the window's shadow and border in a window of gunim's own, or with measure set, green bands
-// for measuring. The window's corners stay square, so Windows draws no shadow of its own. The shadow stays hidden
+// for measuring, cut round at corners of radius corner, in logical pixels; 0 cuts none. The window's own corners stay
+// square, so Windows draws no shadow of its own. The shadow stays hidden
 // until SetShadowOpacity shows it. It is a gunim addition, on Windows alone.
-func (w *Window) SetDrawnShadow(measure bool) error {
+func (w *Window) SetDrawnShadow(measure bool, corner float64) error {
 	if !_glfw.initialized {
 		return NotInitialized
 	}
@@ -115,7 +117,7 @@ func (w *Window) SetDrawnShadow(measure bool) error {
 		}
 		shadowClassRegistered = true
 	}
-	s := &drawnShadow{measure: measure, restore: 1, scale: 1}
+	s := &drawnShadow{measure: measure, corner: corner, restore: 1, scale: 1}
 	for i := range s.hwnds {
 		h, err := _CreateWindowExW(_WS_EX_LAYERED|_WS_EX_TRANSPARENT|_WS_EX_TOOLWINDOW|_WS_EX_NOACTIVATE, shadowClassName,
 			"", _WS_POPUP, 0, 0, 1, 1, w.platform.handle, 0, _glfw.platformWindow.instance, nil)
@@ -353,17 +355,11 @@ func (s *drawnShadow) destroy() error {
 	return first
 }
 
-// draw draws the shadow and border for a window of winW by winH pixels at dpi, into a premultiplied bitmap: a
-// rectangle offset downwards and blurred, outside the window, and the border as it looks now in the window's edge,
-// which the window leaves clear.
+// draw draws the shadow and border for a window of winW by winH pixels at dpi, into a premultiplied bitmap; see
+// paintShadow.
 func (s *drawnShadow) draw(winW, winH, dpi int32, b *windowBorder) error {
 	k := float64(dpi) / 96
-	// Fitted to the shadow Windows 11 draws round an active window, and a weaker, shorter one round an inactive one
-	sigma, drop, inset, radius, strength := 22.7*k, 21.3*k, 2*k, 8*k, 0.366
-	if !s.active {
-		sigma, strength = 18.7*k, 0.25
-	}
-	side, top, bottom := int32(50*k+0.5), int32(31*k+0.5), int32(73*k+0.5)
+	side, top, bottom := shadowMargins(k)
 	if s.measure {
 		side, top, bottom = 24, 24, 24
 	}
@@ -392,9 +388,9 @@ func (s *drawnShadow) draw(winW, winH, dpi int32, b *windowBorder) error {
 	s.inX, s.inY = 17, 17
 	px := s.bits
 
-	// The window's rectangle in the bitmap
-	x0, y0, x1, y1 := side, top, side+winW, top+winH
 	if s.measure {
+		// The window's rectangle in the bitmap
+		x0, y0, x1, y1 := side, top, side+winW, top+winH
 		clear(px)
 		for y := int32(0); y < H; y++ {
 			for x := int32(0); x < W; x++ {
@@ -406,82 +402,12 @@ func (s *drawnShadow) draw(winW, winH, dpi int32, b *windowBorder) error {
 		}
 		return nil
 	}
-	var edge float64
-	var bc [4]float64
+	l := shadowLook{winW: winW, winH: winH, k: k, corner: s.corner, scale: s.scale, active: s.active}
 	if b != nil {
-		edge, bc = b.drawnWidth(), b.now.color
+		l.edge, l.bc = b.drawnWidth(), b.now.color
 	}
-	// As the window comes and goes it is drawn smaller about its middle, and so are its corners and border
-	sc := float64(s.scale)
-	if sc <= 0 {
-		sc = 1
-	}
-	mx, my := float64(x0+x1)/2, float64(y0+y1)/2
-	hw, hh := float64(winW)*sc/2, float64(winH)*sc/2
-	fx0, fy0, fx1, fy1 := mx-hw, my-hh, mx+hw, my+hh
-	radius, edge = radius*sc, edge*sc
-	x0, y0, x1, y1 = int32(math.Ceil(fx0)), int32(math.Ceil(fy0)), int32(fx1), int32(fy1)
-	// A blurred rectangle is the product of a blurred edge across and a blurred edge down
-	blur := func(p, a, b float64) float64 {
-		return 0.5 * (math.Erf((p-a)/(sigma*math.Sqrt2)) - math.Erf((p-b)/(sigma*math.Sqrt2)))
-	}
-	across := make([]float64, W)
-	for x := range across {
-		across[x] = blur(float64(x)+0.5, fx0+inset, fx1-inset)
-	}
-	// Rows and columns this far inside the window are covered by it whole
-	reach := int32(max(radius, edge)) + 2
-	s.inX, s.inY = x0-side+reach+1, y0-top+reach+1
-	for y := int32(0); y < H; y++ {
-		down := strength * blur(float64(y)+0.5, fy0+drop, fy1+drop)
-		row := px[y*W : (y+1)*W]
-		pixel := func(x int32) uint32 {
-			cx, cy := float64(x)+0.5, float64(y)+0.5
-			outer := min(max(0.5-sdRRect(cx, cy, fx0, fy0, fx1, fy1, radius), 0), 1)
-			inner := min(max(0.5-sdRRect(cx, cy, fx0+edge, fy0+edge, fx1-edge, fy1-edge, max(radius-edge, 0)), 0), 1)
-			if inner >= 1 {
-				return 0
-			}
-			// The border lies between the window's edge and its content
-			border := (outer - inner) * bc[3] / 0xff
-			a := border + down*across[x]*(1-outer)
-			r := uint32(bc[0]*border + 0.5)
-			g := uint32(bc[1]*border + 0.5)
-			b := uint32(bc[2]*border + 0.5)
-			return uint32(a*255+0.5)<<24 | r<<16 | g<<8 | b
-		}
-		// Outside the window's rectangle there is only shadow, and inside it, only near its edge and corners, the
-		// window's shape and border
-		shadow := func(x int32) uint32 { return uint32(down*across[x]*255+0.5) << 24 }
-		if y < y0-1 || y > y1 {
-			for x := range row {
-				row[x] = shadow(int32(x))
-			}
-			continue
-		}
-		middle := y >= y0+reach && y < y1-reach
-		for x := int32(0); x < W; x++ {
-			switch {
-			case x < x0-1 || x > x1:
-				row[x] = shadow(x)
-			case !middle || x < x0+reach || x >= x1-reach:
-				row[x] = pixel(x)
-			default:
-				row[x] = 0
-			}
-		}
-	}
+	s.inX, s.inY = paintShadow(px, W, H, side, top, l)
 	return nil
-}
-
-// sdRRect is the signed distance from (px, py) to the rectangle x0, y0, x1, y1 with corners rounded by r: negative
-// inside.
-func sdRRect(px, py, x0, y0, x1, y1, r float64) float64 {
-	hx, hy := (x1-x0)/2, (y1-y0)/2
-	r = min(r, hx, hy)
-	qx := math.Abs(px-(x0+x1)/2) - hx + r
-	qy := math.Abs(py-(y0+y1)/2) - hy + r
-	return math.Hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - r
 }
 
 // dropShadow destroys the drawn shadow's window and bitmap.

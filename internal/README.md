@@ -66,6 +66,9 @@ gunim's changes are marked `gunim change` in the code:
   every GL call. The `Uniform*v` calls copy up to 16 values into the
   context's scratch and pass its address the same way; longer ones, and
   the calls that pass other memory, call `SyscallN` as before.
+- `gl` has `BufferData` in place of upstream's `BufferInit`. It makes a
+  buffer's store and fills it in one call, because on Intel's OpenGL
+  driver a store made empty and filled apart stalls.
 - `glfw` reads display colour profiles, for colour management. On X11,
   `ICCProfile` reads a screen's `_ICC_PROFILE` property from the root
   window, `SetICCProfileCallback` hears it change, and

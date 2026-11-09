@@ -1,3 +1,5 @@
+//go:build !js
+
 // Package vst3 hosts VST3 plugins, as a mastering chain does Ozone and
 // a DAW does a synth: it loads a plugin's module, makes its effect or
 // its instrument, runs sound through it in realtime or offline, plays

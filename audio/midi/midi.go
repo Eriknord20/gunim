@@ -44,6 +44,11 @@
 // within a millisecond. WinMM stamps messages that arrive to the
 // millisecond. Its port names are 31 characters at most.
 //
+// On macOS it speaks CoreMIDI, loaded as the program runs. CoreMIDI
+// holds a message sent ahead itself, and sends it at its time. A port
+// is listed by its display name, as Audio MIDI Setup shows it, and a
+// message that arrives keeps the time CoreMIDI stamped it with.
+//
 // Elsewhere [Outputs] and [Inputs] return [ErrUnsupported].
 package midi
 
@@ -59,7 +64,7 @@ import (
 var (
 	// ErrUnsupported is returned on a system the package has no MIDI
 	// for.
-	ErrUnsupported = errors.New("midi: MIDI plays on Linux and Windows")
+	ErrUnsupported = errors.New("midi: MIDI plays on Linux, Windows and macOS")
 	// ErrNotFound is returned by OpenOut and OpenIn for a name that
 	// names no port.
 	ErrNotFound = errors.New("midi: no port of that name")
@@ -167,7 +172,7 @@ func Changed() <-chan struct{} {
 }
 
 // announce closes the channel Changed returned.
-func announce() {
+func announce() { //nolint:unused // Only systems with MIDI drivers announce.
 	changes.mu.Lock()
 	defer changes.mu.Unlock()
 	if changes.ch != nil {
@@ -185,7 +190,7 @@ var open struct {
 
 // goneWhere calls f with each open port's address, and whether it is
 // an output, and marks the port gone where f says so.
-func goneWhere(f func(a portAddr, out bool) bool) {
+func goneWhere(f func(a portAddr, out bool) bool) { //nolint:unused // Likewise.
 	open.mu.Lock()
 	var outs []*Out
 	var ins []*In
@@ -255,9 +260,9 @@ func (o *Out) Err() error {
 //
 // Send is quick, and makes nothing new for a channel or system
 // message, so a host can call it from the goroutine that renders its
-// sound. On Linux a sysex is handed whole to the sequencer. On Windows
-// a sysex due now is sent before Send returns, and one sent ahead is
-// copied to wait.
+// sound. On Linux a sysex is handed whole to the sequencer, and on
+// macOS to CoreMIDI. On Windows a sysex due now is sent before Send
+// returns, and one sent ahead is copied to wait.
 func (o *Out) Send(at time.Time, m Message) error {
 	if e := o.state.Load(); e != nil {
 		return *e
@@ -324,7 +329,7 @@ func (o *Out) Close() error {
 	return errors.Join(err, o.sys.close(o))
 }
 
-func (o *Out) gone() {
+func (o *Out) gone() { //nolint:unused // Likewise.
 	if o.state.CompareAndSwap(nil, &ErrGone) {
 		o.sys.gone(o)
 	}
@@ -398,14 +403,14 @@ func (i *In) Close() error {
 	return err
 }
 
-func (i *In) gone() {
+func (i *In) gone() { //nolint:unused // Likewise.
 	if i.state.CompareAndSwap(nil, &ErrGone) {
 		i.sys.gone(i)
 	}
 }
 
 // deliver hands e to f, while i is open.
-func (i *In) deliver(e Event) {
+func (i *In) deliver(e Event) { //nolint:unused // Likewise.
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.state.Load() != nil {

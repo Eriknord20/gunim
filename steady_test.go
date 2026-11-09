@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
 )
@@ -259,5 +260,29 @@ func TestASteadyNodeIsDrawnAnewAfterAHandlerRuns(t *testing.T) {
 	run(w, 1)
 	if row.painted == painted {
 		t.Fatal("after a handler ran, the row was carried")
+	}
+}
+
+// shapedRow is a steadyRow that names the pointer's shape over it.
+type shapedRow struct{ *steadyRow }
+
+func (shapedRow) Cursor(geom.Point) input.Cursor { return input.CursorText }
+
+func TestASteadyNodeIsCarriedWhileThePointerRestsOnIt(t *testing.T) {
+	row := &steadyRow{key: 1, ok: true, colour: rowBlue}
+	w := newTestWindow()
+	shaped := shapedRow{row}
+	w.ui.Insert(w.ui.Root(), shaped)
+	w.ui.Insert(shaped, &steadyLeaf{})
+	w.ui.Insert(w.ui.Root(), &ticker{})
+	w.Input(input.PointerMove{Pos: geom.Pt(50, 20)})
+	run(w, 60)
+	if w.ui.hover == nil || w.ui.hover.node != shaped {
+		t.Fatal("the pointer is not over the row")
+	}
+	painted := row.painted
+	run(w, 10)
+	if row.painted != painted {
+		t.Fatalf("ten frames with the pointer resting on it, the row was painted %d times more", row.painted-painted)
 	}
 }

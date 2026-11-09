@@ -132,7 +132,7 @@ func (n *notice) paint(p *paint.Painter, at geom.Point, size float32, col color.
 		return
 	}
 	run := shaped(n.text, size)
-	run.Paint(p, at.Add(geom.Pt(0, 8*(1-a))), faded(col, min(a, 1)))
+	run.Paint(p, at.Add(geom.Pt(0, 8*(1-a))), paint.Faded(col, min(a, 1)))
 }
 
 // errorInk is the colour a sum with no answer is told in.
@@ -336,20 +336,20 @@ func (g *graphBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	s := g.side
 	p.RRect(s, 18, paint.Solid(widget.CardFill.Get(th)))
 	head := shaped("Curves", 13)
-	head.Paint(p, geom.Pt(s.Min.X+18, s.Min.Y+14), faded(ink, 0.5))
+	head.Paint(p, geom.Pt(s.Min.X+18, s.Min.Y+14), paint.Faded(ink, 0.5))
 	if len(g.chips) == 0 {
 		hint := shaped("Type a sum of x, then =", 14)
-		hint.Paint(p, geom.Pt(s.Min.X+18, s.Min.Y+42), faded(ink, 0.35))
+		hint.Paint(p, geom.Pt(s.Min.X+18, s.Min.Y+42), paint.Faded(ink, 0.35))
 	}
 	for _, c := range g.chips {
 		y := s.Min.Y + 40 + c.y.Value()
 		a := c.a.Value()
 		col := hue(c.hue)
-		p.RRect(geom.Rc(s.Min.X+18, y+10, 12, 12), 6, paint.Solid(faded(col, a)))
+		p.RRect(geom.Rc(s.Min.X+18, y+10, 12, 12), 6, paint.Solid(paint.Faded(col, a)))
 		run := shaped("y = "+c.expr, 16)
-		run.Paint(p, geom.Pt(s.Min.X+40, y+(chipHeight-run.Height())/2-4), faded(ink, a))
+		run.Paint(p, geom.Pt(s.Min.X+40, y+(chipHeight-run.Height())/2-4), paint.Faded(ink, a))
 		cross := shaped("×", 16)
-		cross.Paint(p, geom.Pt(s.Max.X-30, y+(chipHeight-cross.Height())/2-4), faded(ink, 0.4*a))
+		cross.Paint(p, geom.Pt(s.Max.X-30, y+(chipHeight-cross.Height())/2-4), paint.Faded(ink, 0.4*a))
 	}
 	// The line being typed, over the keys, shaken when a sum has no
 	// curve, with why over it.
@@ -358,7 +358,7 @@ func (g *graphBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	g.why.paint(p, geom.Pt(line.Min.X+6, line.Min.Y-24), 14, errorInk)
 	func() {
 		defer p.Push(paint.Translate(geom.Pt(14*g.shake.Value(), 0)))()
-		p.RRect(line, 12, paint.Solid(faded(ink, 0.06)))
+		p.RRect(line, 12, paint.Solid(paint.Faded(ink, 0.06)))
 		g.expr.paint(p, line.Min.Y+10, g.expr.rightEdge(s), ink)
 	}()
 	kids.At(1).Paint(p)
@@ -559,12 +559,12 @@ func (c *canvas) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 	minor := major / 5
 	if minor*s > 6 {
 		a := float32(min(1, (minor*s-6)/14)) * 0.05
-		c.gridLines(p, minor, x0, x1, y0, y1, faded(ink, a))
+		c.gridLines(p, minor, x0, x1, y0, y1, paint.Faded(ink, a))
 	}
-	c.gridLines(p, major, x0, x1, y0, y1, faded(ink, 0.11))
+	c.gridLines(p, major, x0, x1, y0, y1, paint.Faded(ink, 0.11))
 	// The axes, and their numbers along them.
 	origin := c.toScreen(0, 0)
-	axis := faded(ink, 0.35)
+	axis := paint.Faded(ink, 0.35)
 	if origin.X >= 0 && origin.X <= box.W {
 		p.RRect(geom.Rc(origin.X-0.75, 0, 1.5, box.H), 0, paint.Solid(axis))
 	}
@@ -578,7 +578,7 @@ func (c *canvas) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		}
 		at := c.toScreen(x, 0)
 		run := shaped(trimNumber(x), 11)
-		run.Paint(p, geom.Pt(at.X-run.Advance/2, labelY), faded(ink, 0.45))
+		run.Paint(p, geom.Pt(at.X-run.Advance/2, labelY), paint.Faded(ink, 0.45))
 	}
 	labelX := min(max(origin.X+6, 6), box.W-40)
 	for y := math.Ceil(y0/major) * major; y <= y1; y += major {
@@ -587,7 +587,7 @@ func (c *canvas) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		}
 		at := c.toScreen(0, y)
 		run := shaped(trimNumber(y), 11)
-		run.Paint(p, geom.Pt(labelX, at.Y-run.Height()/2), faded(ink, 0.45))
+		run.Paint(p, geom.Pt(labelX, at.Y-run.Height()/2), paint.Faded(ink, 0.45))
 	}
 
 	for _, cv := range c.curves {
@@ -647,15 +647,15 @@ func (c *canvas) paintCurve(p *paint.Painter, cv *curve, box geom.Size) {
 			have = false
 		}
 		if have && (inY(prev.Y, box.H) || inY(at.Y, box.H)) {
-			segment(p, prev, at, width+6, faded(col, 0.12*alpha))
-			segment(p, prev, at, width, faded(col, alpha))
+			segment(p, prev, at, width+6, paint.Faded(col, 0.12*alpha))
+			segment(p, prev, at, width, paint.Faded(col, alpha))
 		}
 		prev, have = at, true
 	}
 	// The pen: a bright point where the curve is drawing itself on.
 	if cv.reveal.Active() && have {
-		p.RRect(geom.Rc(prev.X-5, prev.Y-5, 10, 10), 5, paint.Solid(faded(col, alpha)))
-		p.RRect(geom.Rc(prev.X-12, prev.Y-12, 24, 24), 12, paint.Solid(faded(col, 0.2*alpha)))
+		p.RRect(geom.Rc(prev.X-5, prev.Y-5, 10, 10), 5, paint.Solid(paint.Faded(col, alpha)))
+		p.RRect(geom.Rc(prev.X-12, prev.Y-12, 24, 24), 12, paint.Solid(paint.Faded(col, 0.2*alpha)))
 	}
 }
 
@@ -692,19 +692,19 @@ func (c *canvas) paintTrace(p *paint.Painter, f gunim.Frame, box geom.Size) {
 	}
 	at := c.trace.Value()
 	ink := widget.Ink.Get(f.Theme)
-	p.RRect(geom.Rc(at.X-0.5, 0, 1, box.H), 0, paint.Solid(faded(ink, 0.1*on)))
+	p.RRect(geom.Rc(at.X-0.5, 0, 1, box.H), 0, paint.Solid(paint.Faded(ink, 0.1*on)))
 	pulse := float32(math.Mod(c.pulse, 1.4) / 1.4)
 	ring := 6 + 16*pulse
-	p.RRect(geom.Rc(at.X-ring, at.Y-ring, 2*ring, 2*ring), ring, paint.Solid(faded(col, 0.35*(1-pulse)*on)))
-	p.RRect(geom.Rc(at.X-7, at.Y-7, 14, 14), 7, paint.Solid(faded(color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, on)))
-	p.RRect(geom.Rc(at.X-5, at.Y-5, 10, 10), 5, paint.Solid(faded(col, on)))
+	p.RRect(geom.Rc(at.X-ring, at.Y-ring, 2*ring, 2*ring), ring, paint.Solid(paint.Faded(col, 0.35*(1-pulse)*on)))
+	p.RRect(geom.Rc(at.X-7, at.Y-7, 14, 14), 7, paint.Solid(paint.Faded(color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}, on)))
+	p.RRect(geom.Rc(at.X-5, at.Y-5, 10, 10), 5, paint.Solid(paint.Faded(col, on)))
 	x, y := c.toWorld(at)
 	label := shaped(fmt.Sprintf("x = %s   y = %s", trimNumber(x), trimNumber(y)), 13)
 	lx := min(max(at.X+14, 8), box.W-label.Advance-24)
 	ly := min(max(at.Y-38, 8), box.H-32)
 	card := geom.Rc(lx, ly, label.Advance+16, label.Height()+10)
-	p.ShadowRRect(card, 8, paint.Solid(faded(widget.CardFill.Get(f.Theme), on)), paint.Shadow{Offset: geom.Pt(0, 3), Blur: 12, Color: color.NRGBA{A: uint8(0x70 * on)}})
-	label.Paint(p, geom.Pt(lx+8, ly+5), faded(ink, on))
+	p.ShadowRRect(card, 8, paint.Solid(paint.Faded(widget.CardFill.Get(f.Theme), on)), paint.Shadow{Offset: geom.Pt(0, 3), Blur: 12, Color: color.NRGBA{A: uint8(0x70 * on)}})
+	label.Paint(p, geom.Pt(lx+8, ly+5), paint.Faded(ink, on))
 }
 
 // retrace puts the dot on the curve nearest the pointer, at its x.

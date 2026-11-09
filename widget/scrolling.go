@@ -56,6 +56,8 @@ type scrolling struct {
 	// th is the window's live theme, kept from Layout for Step, which
 	// has no frame. It is a handle to the live values, never a copy.
 	th *theme.Live
+	// u is the window's UI, kept from Layout for its clock.
+	u *gunim.UI
 
 	content, viewport, width float32
 
@@ -171,7 +173,7 @@ func (s *scrolling) Step(dt time.Duration) bool {
 		s.stillSince, s.still = time.Time{}, 0
 	case s.bar.Target() > 0:
 		if s.stillSince.IsZero() {
-			s.stillSince = time.Now()
+			s.stillSince = s.u.Clock()
 		}
 		s.still += dt
 		if s.lingered() >= barLinger {
@@ -196,7 +198,7 @@ func (s *scrolling) WakeIn() time.Duration {
 // lingered is how long the bar has stayed since the content was still:
 // the frames' time, or the clock's where the window slept through it.
 func (s *scrolling) lingered() time.Duration {
-	return max(s.still, time.Since(s.stillSince))
+	return max(s.still, s.u.Clock().Sub(s.stillSince))
 }
 
 // scrollable reports whether the content is taller than the view.
@@ -341,7 +343,7 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		s.held = false
-		s.release(th)
+		s.release(th, e.Time)
 		u.Invalidate()
 		return true
 	case input.Scroll:
@@ -414,7 +416,7 @@ func (s *scrolling) base() float32 {
 // track records where the pointer is, for the fling's speed.
 func (s *scrolling) track(y float32, t time.Time) {
 	if t.IsZero() {
-		t = time.Now()
+		t = s.u.Clock()
 	}
 	copy(s.trail[1:], s.trail[:len(s.trail)-1])
 	s.trail[0] = sample{y, t}
@@ -423,8 +425,8 @@ func (s *scrolling) track(y float32, t time.Time) {
 
 // speed returns how fast the pointer moved over the last tenth of a
 // second, in pixels a second down the screen, or zero when it had come
-// to rest before letting go.
-func (s *scrolling) speed() float32 {
+// to rest before letting go at at. A zero at means now.
+func (s *scrolling) speed(at time.Time) float32 {
 	if s.trails < 2 {
 		return 0
 	}
@@ -436,18 +438,21 @@ func (s *scrolling) speed() float32 {
 		}
 		first = p
 	}
+	if at.IsZero() {
+		at = s.u.Clock()
+	}
 	dt := last.t.Sub(first.t).Seconds()
-	if dt <= 0 || time.Since(last.t) > 100*time.Millisecond {
+	if dt <= 0 || at.Sub(last.t) > 100*time.Millisecond {
 		return 0
 	}
 	return float32(float64(last.y-first.y) / dt)
 }
 
-// release ends a drag: flinging on at the pointer's speed, or springing
-// back from past an end.
-func (s *scrolling) release(th *theme.Live) {
+// release ends a drag let go at t: flinging on at the pointer's speed, or
+// springing back from past an end.
+func (s *scrolling) release(th *theme.Live, t time.Time) {
 	at := s.offset.Value()
-	v := -s.speed()
+	v := -s.speed(t)
 	if at < 0 || at > s.end() || math.Abs(float64(v)) < 50 {
 		s.target = s.clamp(at)
 		s.offset.Retarget(s.target, Settle.Get(th))
@@ -468,30 +473,34 @@ func (s *scrolling) shift(d float32) {
 }
 
 // reveal scrolls just far enough to bring r, in the widget's own
-// space, fully into view, with a little room around it.
+// space (from the top of the view, not of the content), fully into
+// view, with a little room around it. For a box in the content, use
+// revealContent.
 func (s *scrolling) reveal(r geom.Rect, u *gunim.UI) {
-	const room = 8
-	offset := s.offset.Value()
-	switch {
-	case r.Min.Y < 0:
-		s.ScrollTo(offset+r.Min.Y-room, Quick.Get(u.Theme()))
-	case r.Max.Y > s.viewport:
-		s.ScrollTo(offset+r.Max.Y-s.viewport+room, Quick.Get(u.Theme()))
-	}
+	// r is where the view shows it now, at the offset the spring has
+	// reached.
+	s.revealContent(r.Add(geom.Pt(0, s.offset.Value())), u)
 }
 
 // revealContent is reveal for r in the content's space, measured from
-// its top rather than from the top of the view.
+// its top rather than from the top of the view. It counts from where
+// the view is going, not where it is on the way: a reveal while a
+// scroll still moves keeps to the place that scroll lands.
 func (s *scrolling) revealContent(r geom.Rect, u *gunim.UI) {
-	off := s.offset.Value()
-	s.reveal(geom.Rect{Min: geom.Pt(r.Min.X, r.Min.Y-off), Max: geom.Pt(r.Max.X, r.Max.Y-off)}, u)
+	const room = 8
+	switch {
+	case r.Min.Y < s.target:
+		s.ScrollTo(r.Min.Y-room, Quick.Get(u.Theme()))
+	case r.Max.Y > s.target+s.viewport:
+		s.ScrollTo(r.Max.Y-s.viewport+room, Quick.Get(u.Theme()))
+	}
 }
 
 // fit takes the content's height and the view's size from a layout,
 // and brings the offset back inside when the content has shrunk under
 // it.
-func (s *scrolling) fit(content float32, view geom.Size, th *theme.Live) {
-	s.th = th
+func (s *scrolling) fit(content float32, view geom.Size, f gunim.Frame) {
+	s.th, s.u = f.Theme, f.UI()
 	s.content, s.viewport, s.width = content, view.H, view.W
 	if s.held || s.flinging {
 		return
@@ -501,7 +510,7 @@ func (s *scrolling) fit(content float32, view geom.Size, th *theme.Live) {
 		if s.jumped {
 			s.offset.Jump(t)
 		} else {
-			s.offset.Animate(t, Settle.Get(th))
+			s.offset.Animate(t, Settle.Get(s.th))
 		}
 	}
 	s.jumped = false

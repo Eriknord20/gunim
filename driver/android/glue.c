@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <android/native_window_jni.h>
 #include <android/log.h>
 #include <EGL/egl.h>
@@ -12,9 +13,11 @@
 
 static JavaVM *vm;
 static jclass nativeClass;
-static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder;
-static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
+static jmethodID midPermitted, midAsk, midUserFolder, midChooseFolder, midChooseFiles;
+static jmethodID midNowPlaying, midShowKeyboard, midCaret, midBuzz, midFingers, midAwake, midShare, midVibrate, midExclude, midOpenLink, midTextState, midClearTextState, midGetClipboard, midSetClipboard, midFinish;
 static jmethodID midHasCompass, midWatchHeading;
+static jclass audioClass;
+static jmethodID midAudioRoute, midAudioProbe, midAudioWatch;
 
 // JNI_OnLoad runs on the thread that loads the library, which has the
 // application's class loader, so it looks up the class Go calls back.
@@ -35,6 +38,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 	midCaret = (*env)->GetStaticMethodID(env, c, "caret", "(IIII)V");
 	midBuzz = (*env)->GetStaticMethodID(env, c, "buzz", "()V");
 	midFingers = (*env)->GetStaticMethodID(env, c, "takeFingers", "(Z)V");
+	midAwake = (*env)->GetStaticMethodID(env, c, "keepAwake", "(Z)V");
 	midShare = (*env)->GetStaticMethodID(env, c, "share", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
 	midVibrate = (*env)->GetStaticMethodID(env, c, "vibrate", "([J)Z");
 	midExclude = (*env)->GetStaticMethodID(env, c, "excludeGestures", "([I)V");
@@ -50,6 +54,16 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved) {
 	midAsk = (*env)->GetStaticMethodID(env, c, "ask", "(II)V");
 	midUserFolder = (*env)->GetStaticMethodID(env, c, "userFolder", "(I)Ljava/lang/String;");
 	midChooseFolder = (*env)->GetStaticMethodID(env, c, "chooseFolder", "(I)V");
+	midChooseFiles = (*env)->GetStaticMethodID(env, c, "chooseFiles", "(IZLjava/lang/String;)V");
+	jclass ac = (*env)->FindClass(env, "gunim/android/GunimAudio");
+	if (ac != NULL) {
+		audioClass = (*env)->NewGlobalRef(env, ac);
+		midAudioRoute = (*env)->GetStaticMethodID(env, ac, "route", "(I)[I");
+		midAudioProbe = (*env)->GetStaticMethodID(env, ac, "probe", "(I)[I");
+		midAudioWatch = (*env)->GetStaticMethodID(env, ac, "watch", "()Z");
+	} else {
+		(*env)->ExceptionClear(env);
+	}
 	return JNI_VERSION_1_6;
 }
 
@@ -182,6 +196,28 @@ void gunim_choose_folder(int code) {
 	envPut(a);
 }
 
+void gunim_choose_files(int code, int multiple, const uint16_t *patterns, int n) {
+	int a;
+	JNIEnv *env = envGet(&a);
+	jstring p = (*env)->NewString(env, (const jchar *)patterns, n);
+	(*env)->CallStaticVoidMethod(env, nativeClass, midChooseFiles, code, multiple ? JNI_TRUE : JNI_FALSE, p);
+	(*env)->DeleteLocalRef(env, p);
+	envPut(a);
+}
+
+JNIEXPORT void JNICALL Java_gunim_android_Native_files(JNIEnv *env, jclass c, jint code, jintArray fds, jstring names, jstring opens) {
+	jsize n = (*env)->GetArrayLength(env, fds);
+	jint *f = (*env)->GetIntArrayElements(env, fds, NULL);
+	jsize nn = (*env)->GetStringLength(env, names);
+	const jchar *ns = (*env)->GetStringChars(env, names, NULL);
+	jsize no = (*env)->GetStringLength(env, opens);
+	const jchar *os = (*env)->GetStringChars(env, opens, NULL);
+	goFiles(code, (int *)f, n, (uint16_t *)ns, nn, (uint16_t *)os, no);
+	(*env)->ReleaseStringChars(env, opens, os);
+	(*env)->ReleaseStringChars(env, names, ns);
+	(*env)->ReleaseIntArrayElements(env, fds, f, JNI_ABORT);
+}
+
 JNIEXPORT void JNICALL Java_gunim_android_Native_chosen(JNIEnv *env, jclass c, jint code, jstring path) {
 	if (path == NULL) {
 		goChosen(code, NULL, 0);
@@ -220,6 +256,13 @@ void gunim_take_fingers(int on) {
 	int a;
 	JNIEnv *env = envGet(&a);
 	(*env)->CallStaticVoidMethod(env, nativeClass, midFingers, on ? JNI_TRUE : JNI_FALSE);
+	envPut(a);
+}
+
+void gunim_keep_awake(int on) {
+	int a;
+	JNIEnv *env = envGet(&a);
+	(*env)->CallStaticVoidMethod(env, nativeClass, midAwake, on ? JNI_TRUE : JNI_FALSE);
 	envPut(a);
 }
 
@@ -419,6 +462,50 @@ int gunim_egl_init(void) {
 	return 0;
 }
 
+// Frame timestamps, EGL_ANDROID_get_frame_timestamps: Android records
+// when each frame swapped lit the screen, from SurfaceFlinger's present
+// fence. stamps says the surface keeps them. sent holds the frames
+// swapped whose present time is still to come, oldest first: each one's
+// frame ID and the CLOCK_MONOTONIC time its swap returned. lag is how
+// long the last frame read took from that return to the screen, in
+// nanoseconds, or -1 before one has been read.
+static PFNEGLGETNEXTFRAMEIDANDROIDPROC nextFrameId;
+static PFNEGLGETFRAMETIMESTAMPSANDROIDPROC frameTimestamps;
+static PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC timestampSupported;
+static int stamps;
+#define SENT 8
+static struct { EGLuint64KHR id; int64_t swapped; } sent[SENT];
+static int nsent;
+static int64_t lag = -1;
+
+static int64_t monotonic(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+// stampsOn has the surface keep frame timestamps, where EGL can and
+// they tell when a frame lit the screen: an emulator keeps them, but
+// without that.
+static void stampsOn(void) {
+	stamps = 0;
+	nsent = 0;
+	const char *ext = eglQueryString(dpy, EGL_EXTENSIONS);
+	if (ext == NULL || strstr(ext, "EGL_ANDROID_get_frame_timestamps") == NULL) {
+		return;
+	}
+	nextFrameId = (PFNEGLGETNEXTFRAMEIDANDROIDPROC)eglGetProcAddress("eglGetNextFrameIdANDROID");
+	frameTimestamps = (PFNEGLGETFRAMETIMESTAMPSANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampsANDROID");
+	timestampSupported = (PFNEGLGETFRAMETIMESTAMPSUPPORTEDANDROIDPROC)eglGetProcAddress("eglGetFrameTimestampSupportedANDROID");
+	if (nextFrameId == NULL || frameTimestamps == NULL || timestampSupported == NULL) {
+		return;
+	}
+	if (!timestampSupported(dpy, surf, EGL_DISPLAY_PRESENT_TIME_ANDROID)) {
+		return;
+	}
+	stamps = eglSurfaceAttrib(dpy, surf, EGL_TIMESTAMPS_ANDROID, EGL_TRUE) == EGL_TRUE;
+}
+
 int gunim_egl_attach(ANativeWindow *w) {
 	gunim_egl_detach();
 	surf = eglCreateWindowSurface(dpy, cfg, w, NULL);
@@ -429,8 +516,11 @@ int gunim_egl_attach(ANativeWindow *w) {
 		return eglGetError();
 	}
 	eglSwapInterval(dpy, 1);
+	stampsOn();
 	return 0;
 }
+
+int gunim_egl_stamps(void) { return stamps; }
 
 void gunim_egl_detach(void) {
 	if (surf == EGL_NO_SURFACE) {
@@ -442,11 +532,56 @@ void gunim_egl_detach(void) {
 }
 
 int gunim_egl_swap(void) {
+	EGLuint64KHR id = 0;
+	int known = stamps && nextFrameId(dpy, surf, &id);
 	if (!eglSwapBuffers(dpy, surf)) {
 		return eglGetError();
 	}
+	if (!known) {
+		return 0;
+	}
+	if (nsent == SENT) {
+		memmove(&sent[0], &sent[1], (SENT - 1) * sizeof sent[0]);
+		nsent--;
+	}
+	sent[nsent].id = id;
+	sent[nsent].swapped = monotonic();
+	nsent++;
+	// Read the frames before. The newest that lit the screen gives the
+	// lag. Each frame up to the newest Android has told of is done
+	// with: one left pending behind it, as a frame dropped may be,
+	// never will be. A frame EGL can't read, as one too old for the
+	// record, is let go alone.
+	const EGLint name = EGL_DISPLAY_PRESENT_TIME_ANDROID;
+	int8_t state[SENT]; // 0 pending, 1 told, -1 unread
+	int told = -1;
+	for (int i = 0; i < nsent; i++) {
+		EGLnsecsANDROID at = EGL_TIMESTAMP_INVALID_ANDROID;
+		if (!frameTimestamps(dpy, surf, sent[i].id, 1, &name, &at)) {
+			state[i] = -1;
+			continue;
+		}
+		if (at == EGL_TIMESTAMP_PENDING_ANDROID) {
+			state[i] = 0;
+			continue;
+		}
+		state[i] = 1;
+		told = i;
+		if (at > sent[i].swapped) {
+			lag = at - sent[i].swapped;
+		}
+	}
+	int kept = 0;
+	for (int i = told + 1; i < nsent; i++) {
+		if (state[i] == 0) {
+			sent[kept++] = sent[i];
+		}
+	}
+	nsent = kept;
 	return 0;
 }
+
+long long gunim_egl_lag(void) { return lag; }
 
 void gunim_window_release(ANativeWindow *w) {
 	ANativeWindow_release(w);
@@ -454,4 +589,74 @@ void gunim_window_release(ANativeWindow *w) {
 
 void gunim_log(const char *line) {
 	__android_log_write(ANDROID_LOG_INFO, "gunim", line);
+}
+
+// ints calls GunimAudio's method mid with arg, and copies the ints it
+// returns into r, n at most. It returns how many it copied, or 0 where
+// the call failed.
+static int ints(jmethodID mid, int arg, int *r, int n) {
+	if (audioClass == NULL || mid == NULL) {
+		return 0;
+	}
+	int a;
+	JNIEnv *env = envGet(&a);
+	jintArray got = (*env)->CallStaticObjectMethod(env, audioClass, mid, (jint)arg);
+	int k = 0;
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+	} else if (got != NULL) {
+		k = (*env)->GetArrayLength(env, got);
+		if (k > n) {
+			k = n;
+		}
+		(*env)->GetIntArrayRegion(env, got, 0, k, (jint *)r);
+		(*env)->DeleteLocalRef(env, got);
+	}
+	envPut(a);
+	return k;
+}
+
+int gunim_audio_route(int device, int *r, int n) { return ints(midAudioRoute, device, r, n); }
+
+int gunim_audio_probe(int usage, int *r, int n) { return ints(midAudioProbe, usage, r, n); }
+
+// The devices GunimAudio told of coming and going: outputs and inputs.
+static long long audioOuts, audioIns;
+static int audioWatching;
+
+int gunim_audio_watch(void) {
+	if (__atomic_load_n(&audioWatching, __ATOMIC_ACQUIRE)) {
+		return 1;
+	}
+	if (audioClass == NULL || midAudioWatch == NULL) {
+		return 0;
+	}
+	int a;
+	JNIEnv *env = envGet(&a);
+	jboolean ok = (*env)->CallStaticBooleanMethod(env, audioClass, midAudioWatch);
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+		ok = JNI_FALSE;
+	}
+	envPut(a);
+	if (ok) {
+		__atomic_store_n(&audioWatching, 1, __ATOMIC_RELEASE);
+	}
+	return ok ? 1 : 0;
+}
+
+void gunim_audio_changes(long long *out, long long *in) {
+	*out = __atomic_load_n(&audioOuts, __ATOMIC_ACQUIRE);
+	*in = __atomic_load_n(&audioIns, __ATOMIC_ACQUIRE);
+}
+
+JNIEXPORT void JNICALL Java_gunim_android_GunimAudio_devicesChanged(JNIEnv *env, jclass c, jboolean out, jboolean in) {
+	(void)env;
+	(void)c;
+	if (out) {
+		__atomic_fetch_add(&audioOuts, 1, __ATOMIC_RELEASE);
+	}
+	if (in) {
+		__atomic_fetch_add(&audioIns, 1, __ATOMIC_RELEASE);
+	}
 }

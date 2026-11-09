@@ -153,7 +153,7 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 		x0, x1 = r.Min.X, r.Min.X+MeterW-runs[1].Advance
 	}
 	for ch, x := range []float32{x0, x1} {
-		c := Faded(ink, 0.7)
+		c := paint.Faded(ink, 0.7)
 		if l.Top[ch] >= -9 {
 			c = LEDColour(th, l.Top[ch])
 		}
@@ -201,6 +201,6 @@ func PaintMeterScale(p *paint.Painter, th *theme.Live, x, top, bottom float32) {
 			label = "-inf"
 		}
 		run := Shaped(label, 9, false, true)
-		run.Paint(p, geom.Pt(x-run.Advance/2, bottom-(bottom-top)*MeterAt(t)-6), Faded(ink, 0.4))
+		run.Paint(p, geom.Pt(x-run.Advance/2, bottom-(bottom-top)*MeterAt(t)-6), paint.Faded(ink, 0.4))
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 	"github.com/marrasen/gunim/audio/speaker"
 )
@@ -253,11 +253,11 @@ func TestAChannelPastTheDeviceIsRefused(t *testing.T) {
 	}
 }
 
-// TestASIOInputsRecordThroughTheTap publishes a driver's inputs, as the
+// TestDriverInputsRecordThroughTheTap publishes a driver's inputs, as the
 // speaker does: Devices lists them, a stream records them with the
 // stamps the driver's buffers give, a second stream records them too,
 // on after the first closes, and the driver closing ends it.
-func TestASIOInputsRecordThroughTheTap(t *testing.T) {
+func TestDriverInputsRecordThroughTheTap(t *testing.T) {
 	tap := duplex.NewTap("Fake ASIO", 48000, 128, 200, []string{"In 1", "In 2", "In 3"})
 	duplex.Publish(tap)
 	defer duplex.Withdraw(tap)
@@ -322,9 +322,9 @@ func TestDriverInputsListsTheDriversInputsBeforeTheyOpen(t *testing.T) {
 	if _, ok := driverDevice(speaker.State{Rate: 48000}, nil); ok {
 		t.Fatal("the system's own sound lists driver inputs")
 	}
-	st := speaker.State{Driver: "MOTU", Rate: 48000, ASIO: &asio.Info{Driver: "MOTU", Inputs: 4}}
+	st := speaker.State{Driver: "MOTU", Rate: 48000, Info: &driver.Info{Driver: "MOTU", Inputs: 4}}
 	d, ok := driverDevice(st, nil)
-	if !ok || d.ID != asioPrefix+"MOTU" || d.Channels != 4 || d.Driver != "MOTU" || len(d.ChannelNames) != 0 {
+	if !ok || d.ID != driverPrefix+"MOTU" || d.Channels != 4 || d.Driver != "MOTU" || len(d.ChannelNames) != 0 {
 		t.Fatalf("before the inputs open: %+v, %v", d, ok)
 	}
 	// Open, the tap names them.
@@ -338,7 +338,18 @@ func TestDriverInputsListsTheDriversInputsBeforeTheyOpen(t *testing.T) {
 	if d.Channels != 4 {
 		t.Fatalf("another driver's tap: %+v", d)
 	}
-	if _, ok := driverDevice(speaker.State{Driver: "Out only", ASIO: &asio.Info{}}, nil); ok {
+	if _, ok := driverDevice(speaker.State{Driver: "Out only", Info: &driver.Info{}}, nil); ok {
 		t.Fatal("a driver with no inputs lists them")
+	}
+	// A driver playing as the system's own sound, as Core Audio does on
+	// macOS where Options names no driver, lists its inputs too.
+	sys := speaker.State{Rate: 48000, Info: &driver.Info{Driver: driver.CoreAudio, Inputs: 2}}
+	d, ok = driverDevice(sys, nil)
+	if !ok || d.ID != driverPrefix+driver.CoreAudio || d.Channels != 2 {
+		t.Fatalf("Core Audio as the system's sound: %+v, %v", d, ok)
+	}
+	d, ok = driverDevice(sys, duplex.NewTap(driver.CoreAudio, 48000, 64, 32, []string{"Mic 1"}))
+	if !ok || d.Channels != 1 || d.ChannelNames[0] != "Mic 1" {
+		t.Fatalf("Core Audio as the system's sound, its inputs open: %+v, %v", d, ok)
 	}
 }

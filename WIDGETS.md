@@ -102,6 +102,8 @@ An app's widget outside the package draws the same way with the exported helpers
   - A double click acts once. Set `Repeats` where every click counts, as on a button or a checkbox.
   - A finger that goes on to scroll lets go at `input.Away`, over no target, so scrolling a list picks nothing.
   - Act on the release, so a press dragged away cancels.
+  - For a control drawn by hand, whose parts are something other than an index, use `widget.Click[T]`. Every press
+    starts a click there, so check `Clicks` to act once on a double click.
 - **Keys.** Space and Enter activate; arrows move; Home and End go to the ends; Escape closes what is open; Tab moves
   on. Ctrl+Shift+key is its own shortcut, apart from Ctrl+key. A disabled control takes no keys.
 - **Focus.** A control is focusable while enabled. The ring follows `input.FocusRing` with a spring. When something
@@ -153,6 +155,10 @@ Everything moves; nothing jumps once the user can see it.
   engine keeps the node until it reports settled.
 - **Frames only while moving.** `Step` reports true only while something moves. A widget out of sight (on a hidden
   tab, scrolled away) asks for no frames.
+- **Draw another clock at `Frame.Present`.** A frame lights the screen a few refreshes after it is drawn. A playhead,
+  a meter or anything else that follows the sound or a video draws it as it is at `f.Present` (`ui.Present()` in
+  `Step`): `Mixer.HeardAt(f.Present)`, `Voice.PositionAt(f.Present)`, or `Analyzer.At = f.Present` before it measures.
+  Springs and fades keep to `Delta`.
 - **Sound cues.** Play the cue for what happened: `CuePress` (an activation), `CueToggleOn`/`CueToggleOff`,
   `CueSelect` (a choice among several), `CueTick` (a step on a scale), `CueOpen`/`CueClose` (something shown or put
   away). `act` plays it for you.
@@ -171,7 +177,9 @@ it. The test helper `spills(ops, box, reach)` lists anything drawn outside.
   implements `gunim.PopupPadder`.
 - **Too much content scrolls.** Inside `widget`, embed `scrolling` (as `Scroll`, `VirtualList` and `Menu` do). It
   gives the wheel, a finger, the scroll bar, springs past the ends, and the fade at an edge with more past it.
-  Implement `gunim.Revealer` to scroll the focused part into view.
+  Implement `gunim.Revealer` to scroll the focused part into view. `Scroll.Reveal` takes a box measured from the
+  top of what shows; a row's box measured from the top of the content goes to `Scroll.RevealContent`. Mixing them
+  up scrolls past the row by however far the view was already scrolled.
 
 **Work only on what shows.** A widget that holds a collection does work for the items in view, per frame, per key
 and on open. 100 000 items must cost the same per frame as 100.

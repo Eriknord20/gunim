@@ -70,3 +70,11 @@ func favIcon(name string) *icon.Icon {
 	}
 	return icon.Folder
 }
+
+// FavouriteIcon is the icon of name, one of FavouriteIcons, and a folder
+// for another, as the sidebar draws a favourite's.
+func FavouriteIcon(name string) *icon.Icon { return favIcon(name) }
+
+// FavouriteColor is the colour of name, one of FavouriteColors, and the
+// colour of folders for another, as the sidebar draws a favourite's.
+func FavouriteColor(name string) theme.Token[color.NRGBA] { return favColor(name) }

@@ -297,9 +297,9 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	defer end()
 	for _, hz := range []float64{50, 100, 200, 500, 1000, 2000, 5000, 10000} {
 		x := d.xOf(hz)
-		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(audioui.Faded(ink, 0.06)))
+		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		label := audioui.Shaped(hz2(hz), 9, false, true)
-		label.Paint(p, geom.Pt(x+4, 8), audioui.Faded(ink, 0.35))
+		label.Paint(p, geom.Pt(x+4, 8), paint.Faded(ink, 0.35))
 	}
 	// The sound going out, filled.
 	n := len(d.freqs)
@@ -307,7 +307,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	for i, fz := range d.freqs {
 		x0, x1 := d.xOf(float64(fz)/step), d.xOf(float64(fz)*step)
 		if y := d.specY(d.isSm[i]); y < d.line {
-			p.RRect(geom.Rc(x0, y, x1-x0+0.5, d.line-y), 0, paint.Solid(audioui.Faded(accent, 0.14)))
+			p.RRect(geom.Rc(x0, y, x1-x0+0.5, d.line-y), 0, paint.Solid(paint.Faded(accent, 0.14)))
 		}
 	}
 	plugui.Darken(p, whole, 1)
@@ -317,14 +317,14 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	for i, fz := range d.freqs {
 		o := geom.Pt(d.xOf(float64(fz)), d.specY(d.isSm[i]))
 		if i > 0 {
-			audioui.Segment(p, prev, o, 1.5, audioui.Faded(accent, 0.75))
+			audioui.Segment(p, prev, o, 1.5, paint.Faded(accent, 0.75))
 		}
 		prev = o
 	}
 	// The bands: each band's bar, from the middle, glowing as the band
 	// is turned; then the crossovers.
 	mid := d.middle()
-	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.18)))
+	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.18)))
 	for b, span := range d.bandsAt() {
 		v := d.v.punch(b)
 		c := punchColor(th, v)
@@ -334,11 +334,11 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		fill := 0.14 + 0.3*glow + 0.12*lit
 		if r.Size().H > 0.5 {
 			if glow > 0.02 {
-				p.ShadowRRect(r, 4, paint.Solid(audioui.Faded(c, 0)), paint.Shadow{Blur: 18 * glow, Color: audioui.Faded(c, 0.5*glow)})
+				p.ShadowRRect(r, 4, paint.Solid(paint.Faded(c, 0)), paint.Shadow{Blur: 18 * glow, Color: paint.Faded(c, 0.5*glow)})
 			}
-			p.RRect(r, 4, paint.Solid(audioui.Faded(c, fill)))
+			p.RRect(r, 4, paint.Solid(paint.Faded(c, fill)))
 		}
-		p.RRect(geom.Rc(r.Min.X, tip-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(audioui.Faded(c, 0.5+0.5*max(glow, lit))))
+		p.RRect(geom.Rc(r.Min.X, tip-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(paint.Faded(c, 0.5+0.5*max(glow, lit))))
 		label := audioui.Shaped(punch(v), 11, true, false)
 		if label.Advance < span[1]-span[0]-8 {
 			y := tip - 18
@@ -353,12 +353,12 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		lit := d.xLit[i].Value()
 		a := 0.35 + 0.55*lit
 		w, r := 1.5+lit, 5+2*lit
-		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(paint.Faded(ink, a)))
 		if lit > 0.01 {
-			p.ShadowRRect(geom.Rc(x-r, mid-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, 0)),
-				paint.Shadow{Blur: 10 * lit, Color: audioui.Faded(ink, 0.4*lit)})
+			p.ShadowRRect(geom.Rc(x-r, mid-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, 0)),
+				paint.Shadow{Blur: 10 * lit, Color: paint.Faded(ink, 0.4*lit)})
 		}
-		p.RRect(geom.Rc(x-r, mid-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-r, mid-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, a)))
 	}
 }
 
@@ -625,7 +625,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	ink := widget.Ink.Get(th)
 	w := min(box.W/bands, 12)
 	mid, half := box.H/2, box.H/2-1
-	p.RRect(geom.Rc(0, mid-0.5, w*bands, 1), 0, paint.Solid(audioui.Faded(ink, 0.25)))
+	p.RRect(geom.Rc(0, mid-0.5, w*bands, 1), 0, paint.Solid(paint.Faded(ink, 0.25)))
 	// bar draws a bar from the middle, h tall, up, or down where h is
 	// under 0.
 	bar := func(x, h float32, col color.NRGBA) {
@@ -640,7 +640,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		if a == 0 {
 			continue
 		}
-		bar(x, a*half, audioui.Faded(col, 0.3))
+		bar(x, a*half, paint.Faded(col, 0.3))
 		if s := c.shown[b].Value() * half; s > 0.5 {
 			if a < 0 {
 				s = -s

@@ -1,9 +1,12 @@
+//go:build js || android
+
 package speaker
 
 import (
 	"encoding/binary"
 	"io"
 	"math"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +29,11 @@ type otoOutput struct {
 	buf []float32
 }
 
+// openSystemSound opens the system's own sound by oto: in the browser,
+// and on Android 8.0, which has no AAudio. A test puts a function of
+// its own here.
+var openSystemSound = func(s *Speaker, o Options) (startedOutput, error) { return openOto(s, o) }
+
 func openOto(s *Speaker, o Options) (*otoOutput, error) {
 	ctx, ready, err := oto.NewContext(&oto.NewContextOptions{
 		SampleRate:      o.rate(),
@@ -37,10 +45,16 @@ func openOto(s *Speaker, o Options) (*otoOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	<-ready
-	if err := ctx.Err(); err != nil {
-		_ = ctx.Close()
-		return nil, err
+	// A browser holds its sound back until the first click, key or touch, and ready
+	// waits for that. So Open returns at once there, and what plays meanwhile
+	// sounds from that first gesture on: a cue set up after Open is in place for the
+	// click that lets sound start.
+	if runtime.GOOS != "js" {
+		<-ready
+		if err := ctx.Err(); err != nil {
+			_ = ctx.Close()
+			return nil, err
+		}
 	}
 	out := &otoOutput{s: s, ctx: ctx, hz: o.rate()}
 	out.player = ctx.NewPlayer(out)

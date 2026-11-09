@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -176,4 +177,52 @@ func TestTypingARuneLikeTheNextUndoesAsOneStep(t *testing.T) {
 	ty.want("abbxb", 4)
 	ty.key(input.KeyZ, input.ModControl)
 	ty.want("ab", 1)
+}
+
+// keysFasterThanFrames sends what a fast typist's keys bring, with no frame between,
+// so nothing has laid the text out since the first of them.
+func keysFasterThanFrames(t *testing.T, node gunim.Node, text func() string) {
+	t.Helper()
+	fr := &frame{child: node, size: geom.Sz(300, 200)}
+	w, run := stage(t, fr)
+	w.Input(input.PointerDown{Pos: geom.Pt(20, 18), Clicks: 1})
+	w.Input(input.PointerUp{Pos: geom.Pt(20, 18)})
+	run(1)
+	press := func(k input.Key) { w.Input(input.KeyPress{Key: k}) }
+	w.Input(input.TextInput{Text: "hello"})
+	press(input.KeyLeft)
+	w.Input(input.TextInput{Text: "x"})
+	if got := text(); got != "hellxo" {
+		t.Fatalf("hello, Left, x with no frame gave %q", got)
+	}
+	press(input.KeyRight)
+	press(input.KeyLeft)
+	press(input.KeyLeft)
+	press(input.KeyBackspace)
+	w.Input(input.TextInput{Text: "y"})
+	if got := text(); got != "helyxo" {
+		t.Fatalf("Right, two Lefts, Backspace, y with no frame gave %q", got)
+	}
+	press(input.KeyEnd)
+	w.Input(input.TextInput{Text: "z"})
+	press(input.KeyHome)
+	w.Input(input.TextInput{Text: "a"})
+	if got := text(); got != "ahelyxoz" {
+		t.Fatalf("End, z, Home, a with no frame gave %q", got)
+	}
+}
+
+func TestKeysFasterThanFramesInAField(t *testing.T) {
+	f := NewTextField()
+	keysFasterThanFrames(t, f, f.Text)
+}
+
+func TestKeysFasterThanFramesInAnArea(t *testing.T) {
+	a := NewTextArea()
+	keysFasterThanFrames(t, a, a.Text)
+}
+
+func TestKeysFasterThanFramesInCode(t *testing.T) {
+	c := NewCodeEditor()
+	keysFasterThanFrames(t, c, c.Text)
 }

@@ -302,6 +302,7 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	var made uint64
 	key := [][][]float32{{loud(512, 3), loud(512, 4)}}
+	ctl := [][]float32{make([]float32, 512), make([]float32, 512), make([]float32, 512)}
 	for i := range 64 {
 		b := &plug.Block{In: ch, Out: ch, Frames: 512, Position: plug.Position{Frame: int64(512 * i)},
 			Changes: set(float64(InputID), float64(i%24), float64(GateOnID), float64(i%2), float64(CompRatioID), float64(1+i%8),
@@ -309,6 +310,9 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 		if i%4 >= 2 {
 			// Half the blocks keyed by a sidechain.
 			b.AuxIn = key
+		}
+		if i%2 == 1 {
+			b.ControlOut = ctl
 		}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -730,5 +734,51 @@ func TestListeningPlaysTheSidechain(t *testing.T) {
 		if math.Abs(float64(out[0][f])-0.01) > 1e-6 || math.Abs(float64(out[1][f])-0.01) > 1e-6 {
 			t.Fatalf("listening, frame %d comes out %v %v, want the sidechain's 0.01", f, out[0][f], out[1][f])
 		}
+	}
+}
+
+func TestTheControlOutputsCarryEachPartsReduction(t *testing.T) {
+	p, _ := newDynamics(t)
+	// Loud, then quiet enough for the gate to shut.
+	n := 24000
+	main := [][]float32{loud(n, 1), loud(n, 2)}
+	for _, ch := range main {
+		for f := n / 2; f < n; f++ {
+			ch[f] *= 0.001
+		}
+	}
+	ports := plugtest.Ports{In: main, Changes: set(float64(GateOnID), 1, float64(GateThresholdID), -30,
+		float64(CompThresholdID), -30, float64(CompRatioID), 8, float64(CompAttackID), 1, float64(InputID), 12)}
+	r := plugtest.Drive(t, &Descriptor, &p.proc, plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2}, n, ports)
+	// A trace keeps the least of each short run of frames, so each frame
+	// is at or over its run's, and the least of all frames kept match.
+	var least [3]float32
+	for c, tr := range []*plug.Trace{GateOut: &p.proc.gateTrace, CompOut: &p.proc.compTrace, LimitOut: &p.proc.limitTrace} {
+		port := Descriptor.ControlOut[c]
+		var outLeast, traceLeast float32
+		kept := 0
+		for f, got := range r.ControlOut[c] {
+			if got != got || got < float32(port.Min) || got > 0 {
+				t.Fatalf("%s at frame %d is %v, out of its range", port.Name, f, got)
+			}
+			least[c] = min(least[c], got)
+			want, ok := tr.Get(int64(f))
+			if !ok {
+				continue
+			}
+			kept++
+			want = max(want, float32(port.Min))
+			if got < want {
+				t.Fatalf("%s at frame %d is %v, under the traced %v", port.Name, f, got, want)
+			}
+			outLeast, traceLeast = min(outLeast, got), min(traceLeast, want)
+		}
+		if kept < n/4 || outLeast != traceLeast {
+			t.Errorf("%s over %d frames kept reaches %v, the trace %v", port.Name, kept, outLeast, traceLeast)
+		}
+	}
+	if least[GateOut] > -20 || least[CompOut] > -6 || least[LimitOut] > -1 {
+		t.Errorf("the outputs reach only %v dB of gating, %v dB of compression and %v dB of limiting",
+			least[GateOut], least[CompOut], least[LimitOut])
 	}
 }

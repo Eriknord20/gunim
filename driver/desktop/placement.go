@@ -68,6 +68,10 @@ func (w *Window) placementNow() (p driver.Placement, ok bool) {
 	}
 	n := w.normals[len(w.normals)-1]
 	p.Bounds = geom.Rc(float32(n[0]), float32(n[1]), float32(n[2]), float32(n[3]))
+	// The scale it had there, which a window maximized and moved on doesn't have now.
+	if i := len(w.normals) - 1; i < len(w.normalScales) {
+		p.CoordsPerLogical = w.normalScales[i]
+	}
 	return p, true
 }
 
@@ -81,13 +85,33 @@ func (w *Window) noteNormal() {
 		return
 	}
 	n, ok := bounds(w.gw)
-	if !ok || len(w.normals) > 0 && w.normals[len(w.normals)-1] == n {
+	if !ok {
+		return
+	}
+	if l := len(w.normals) - 1; l >= 0 && w.normals[l] == n {
+		// Noted before the window was first measured, it has its scale now.
+		if l < len(w.normalScales) && w.normalScales[l] == 0 {
+			w.normalScales[l] = w.coordsPerLogicalNow()
+		}
 		return
 	}
 	if len(w.normals) == keptNormals {
 		w.normals = append(w.normals[:0], w.normals[1:]...)
+		w.normalScales = append(w.normalScales[:0], w.normalScales[1:]...)
 	}
 	w.normals = append(w.normals, n)
+	w.normalScales = append(w.normalScales, w.coordsPerLogicalNow())
+}
+
+// coordsPerLogicalNow is the screen coordinates per logical pixel the window has
+// now, 0 where it hasn't been measured.
+func (w *Window) coordsPerLogicalNow() float32 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.perCoord > 0 && w.content > 0 {
+		return w.content / w.perCoord
+	}
+	return 0
 }
 
 // forgetMaximized drops the places noted as normal that are really the
@@ -107,6 +131,7 @@ func (w *Window) forgetMaximized() {
 			return
 		}
 		w.normals = w.normals[:len(w.normals)-1]
+		w.normalScales = w.normalScales[:len(w.normals)]
 	}
 }
 
@@ -154,6 +179,7 @@ func (w *Window) placeAt(saved driver.Placement) (driver.Placement, [4]int, bool
 	w.debugf("placed at %v, saved at %v", n, saved.Bounds)
 	w.applyBounds(n)
 	w.normals = append(w.normals[:0], n)
+	w.normalScales = append(w.normalScales[:0], w.coordsPerLogicalNow())
 	return p, n, true
 }
 

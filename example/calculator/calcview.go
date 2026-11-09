@@ -122,7 +122,7 @@ func (r *roll) paint(p *paint.Painter, top, right float32, ink color.NRGBA) {
 	defer p.Push(paint.Scale(r.fit.Value(), geom.Pt(right, top+r.size)))()
 	for _, c := range r.chars {
 		run := shaped(c.s, r.size)
-		run.Paint(p, geom.Pt(c.x.Value(), top+c.y.Value()), faded(ink, c.a.Value()))
+		run.Paint(p, geom.Pt(c.x.Value(), top+c.y.Value()), paint.Faded(ink, c.a.Value()))
 	}
 }
 
@@ -312,11 +312,11 @@ func (b *calcBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 			if y < d.Min.Y+8 {
 				break
 			}
-			run.Paint(p, geom.Pt(d.Max.X-20-run.Advance, y), faded(ink, 0.35*row.a.Value()/float32(i+1)))
+			run.Paint(p, geom.Pt(d.Max.X-20-run.Advance, y), paint.Faded(ink, 0.35*row.a.Value()/float32(i+1)))
 		}
 		b.expr.paint(p, b.exprAt.Min.Y, b.exprAt.Max.X, ink)
 		below := st.Preview
-		col := faded(ink, 0.5)
+		col := paint.Faded(ink, 0.5)
 		if st.Error != "" {
 			below, col = st.Error, color.NRGBA{R: 0xff, G: 0x8a, B: 0x7a, A: 0xff}
 		} else if below != "" {
@@ -356,12 +356,12 @@ func (b *calcBody) paintTape(p *paint.Painter, f gunim.Frame) {
 	if t.Size().W < 60 {
 		return
 	}
-	p.RRect(t, 18, paint.Solid(faded(widget.CardFill.Get(th), 0.6)))
+	p.RRect(t, 18, paint.Solid(paint.Faded(widget.CardFill.Get(th), 0.6)))
 	head := shaped("Tape", 13)
-	head.Paint(p, geom.Pt(t.Min.X+18, t.Min.Y+14), faded(ink, 0.5))
+	head.Paint(p, geom.Pt(t.Min.X+18, t.Min.Y+14), paint.Faded(ink, 0.5))
 	if len(b.rows) == 0 {
 		hint := shaped("Sums worked out land here", 14)
-		hint.Paint(p, geom.Pt(t.Min.X+18, t.Min.Y+44), faded(ink, 0.3))
+		hint.Paint(p, geom.Pt(t.Min.X+18, t.Min.Y+44), paint.Faded(ink, 0.3))
 		return
 	}
 	defer p.Layer(paint.LayerOpts{Bounds: t, Opacity: 1, Clip: true, Radius: 18})()
@@ -372,9 +372,9 @@ func (b *calcBody) paintTape(p *paint.Painter, f gunim.Frame) {
 		}
 		a := row.a.Value()
 		sum := shaped(row.line.Expr, 14)
-		sum.Paint(p, geom.Pt(t.Min.X+18, y), faded(ink, 0.5*a))
+		sum.Paint(p, geom.Pt(t.Min.X+18, y), paint.Faded(ink, 0.5*a))
 		res := shaped("= "+row.line.Result, 22)
-		res.Paint(p, geom.Pt(t.Min.X+18, y+18), faded(ink, a))
+		res.Paint(p, geom.Pt(t.Min.X+18, y+18), paint.Faded(ink, a))
 	}
 }
 

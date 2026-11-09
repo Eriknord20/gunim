@@ -4,7 +4,7 @@ import "github.com/marrasen/gunim/input"
 
 // A Modal is a node that holds the keyboard while it is in the tree, such as a dialog. It takes the focus as it
 // arrives. While it stays, the focus and Tab keep to it and to the popups opened from inside it, and when it leaves,
-// the focus goes back to where it was before.
+// the focus goes back to where it was before, or to the node code last asked to focus meanwhile.
 //
 // A modal inside a [ModalScope] holds the keyboard only within the scope.
 type Modal interface {
@@ -22,10 +22,10 @@ type ModalScope interface {
 	ModalScope()
 }
 
-// modalHold is a modal in the tree, the node that had the focus before it came, and the scope it holds the keyboard
-// in, or nil for the whole window.
+// modalHold is a modal in the tree, the node that had the focus before it came, the node code last asked to focus
+// behind it, and the scope it holds the keyboard in, or nil for the whole window.
 type modalHold struct {
-	s, back, scope *state
+	s, back, asked, scope *state
 }
 
 // arrived gives a modal that just came into the tree the focus.
@@ -38,6 +38,24 @@ func (u *UI) arrived(s *state) {
 	u.modals = append(u.modals, h)
 	if h.scope == nil || u.focus == nil || inside(u.focus, h.scope) {
 		u.Focus(s.node)
+	}
+}
+
+// focusAfter has s take the focus when the last modal of h's scope that keeps s out leaves.
+func (u *UI) focusAfter(h modalHold, s *state) {
+	at := -1
+	for i := len(u.modals) - 1; i >= 0; i-- {
+		m := u.modals[i]
+		if m.scope != h.scope || !u.live(m) {
+			continue
+		}
+		if inside(s, m.s) {
+			break
+		}
+		at = i
+	}
+	if at >= 0 {
+		u.modals[at].asked = s
 	}
 }
 
@@ -110,10 +128,10 @@ func (u *UI) scopedModal(s *state) *state {
 	return nil
 }
 
-// left forgets the modals that have left or are leaving, and gives the focus back to what had it before the last
-// of them came, when it can still take it.
+// left forgets the modals that have left or are leaving, and gives the focus to the node asked for under the last of
+// them to go, or else back to what had it before that one came, when it can still take it.
 func (u *UI) left() {
-	var back *state
+	var asked, back *state
 	kept := u.modals[:0]
 	var found bool
 	for _, h := range u.modals {
@@ -123,18 +141,20 @@ func (u *UI) left() {
 		}
 		if !found {
 			// A scoped modal that came while the keyboard was elsewhere gives it back to nothing outside its scope.
-			found, back = true, h.back
+			found, asked, back = true, h.asked, h.back
 			if h.scope != nil && back != nil && !inside(back, h.scope) {
 				back = nil
 			}
 		}
 	}
 	u.modals = kept
-	if back == nil || u.index[back.node] != back || back.leaving() {
+	if u.focus != nil && !u.focus.leaving() {
 		return
 	}
-	if u.focus == nil || u.focus.leaving() {
-		u.Focus(back.node)
+	for _, s := range []*state{asked, back} {
+		if s != nil && u.index[s.node] == s && !s.leaving() && u.Focus(s.node) {
+			return
+		}
 	}
 }
 

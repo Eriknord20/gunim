@@ -41,6 +41,7 @@ import (
 	_ "unsafe" // for go:linkname
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -87,8 +88,13 @@ type Driver struct {
 	rate    float64
 	// surfW and surfH are the surface's size in device pixels.
 	surfW, surfH int
-	// windows is the stack of open windows, bottom first.
+	// windows is the stack of open windows, bottom first, and gone the
+	// panes of windows closed, for the render thread to free.
 	windows []*Window
+	gone    []*compose.Pane
+	// opened holds the files handed over before a window opened to take
+	// them, one batch to an entry.
+	opened [][]string
 	// touched is the window the touch in progress started in, which
 	// keeps the touch until it lifts. lastTap and lastAt are the last
 	// press, for a double tap.
@@ -148,6 +154,8 @@ type Driver struct {
 	compass     bool
 	compassOnce sync.Once
 
+	// awakeSent is what keepAwakeLocked last handed Java.
+	awakeSent bool
 	// excludedSent is the rects, four device pixel coordinates each,
 	// last handed to Java to keep from the system's edge gestures.
 	excludedSent []int32
@@ -180,6 +188,8 @@ func (d *Driver) start(zone string) {
 	d.started = true
 	d.mu.Unlock()
 	takeEnv()
+	// The last run's copies go as this one starts, apart from the UI thread.
+	go copies()
 	toLogcat()
 	setZone(zone)
 	go d.render()
@@ -248,6 +258,10 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 		w.pos = o.Anchor.Min.Add(w.parent.pos)
 	default:
 		w.fills = true
+		for _, paths := range d.opened {
+			w.in.Push(driver.FilesOpened{Paths: paths})
+		}
+		d.opened = nil
 	}
 	w.hidden = o.Hidden
 	d.windows = append(d.windows, w)
@@ -280,19 +294,7 @@ func (d *Driver) visibleLocked() geom.Rect {
 // there, slid sideways onto the screen, within the part of it that
 // shows above the keyboard. It runs with mu held.
 func (d *Driver) placeLocked(w *Window, anchor geom.Rect) {
-	a := anchor.Add(w.parent.pos)
-	if w.over {
-		w.pos = a.Min
-		return
-	}
-	s := d.visibleLocked()
-	below, above := s.Max.Y-a.Max.Y, a.Min.Y-s.Min.Y
-	y := a.Max.Y
-	if w.above && above >= w.size.H || w.size.H > below && above > below {
-		y = a.Min.Y - w.size.H
-	}
-	x := max(s.Min.X, min(a.Min.X, s.Max.X-w.size.W))
-	w.pos = geom.Pt(x, y)
+	w.pos = compose.Place(anchor.Add(w.parent.pos), w.size, w.over, w.above, d.visibleLocked())
 }
 
 // kick wakes the render thread.
@@ -561,6 +563,24 @@ func (d *Driver) shown(on bool) {
 	}
 }
 
+// filesOpened hands files another application opened to the top window
+// that fills the screen, or keeps them for the first to open.
+func (d *Driver) filesOpened(paths []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var top *Window
+	for _, w := range d.windows {
+		if w.fills {
+			top = w
+		}
+	}
+	if top == nil {
+		d.opened = append(d.opened, paths)
+		return
+	}
+	top.in.Push(driver.FilesOpened{Paths: paths})
+}
+
 func (d *Driver) windowFocus(focused bool) {
 	d.mu.Lock()
 	var top *Window
@@ -705,6 +725,8 @@ func (d *Driver) closed(w *Window) {
 	delete(d.headingTo, w)
 	d.runCompassLocked()
 	d.excludeGesturesLocked()
+	d.keepAwakeLocked()
+	d.gone = append(d.gone, &w.pane)
 	last := true
 	for _, x := range d.windows {
 		if x.fills {

@@ -139,8 +139,9 @@ const (
 // remember saves an edit of kind that replaces start to end with with, before it is made, as a new step of undo
 // unless it carries on the step before: typing on, or deleting on, with nothing else in between. A step keeps only
 // the runes its edits changed, so it costs what the edits do.
-func (e *editor) remember(kind editKind, start, end int, with []rune) {
-	joins := kind != otherEdit && kind == e.last && time.Since(e.lastAt) < undoPause &&
+func (e *editor) remember(kind editKind, start, end int, with []rune, u *gunim.UI) {
+	now := u.Clock()
+	joins := kind != otherEdit && kind == e.last && now.Sub(e.lastAt) < undoPause &&
 		(kind == deleting && (end == e.lastEnd || start == e.lastEnd) ||
 			kind == typing && start == e.lastEnd && (!e.lastSpace || unicode.IsSpace(with[0])))
 	if !joins || len(e.undo) == 0 {
@@ -152,7 +153,7 @@ func (e *editor) remember(kind editKind, start, end int, with []rune) {
 	top := &e.undo[len(e.undo)-1]
 	top.edits = append(top.edits, textEdit{at: start, old: slices.Clone(e.text[start:end]), new: slices.Clone(with)})
 	e.redo = e.redo[:0]
-	e.last, e.lastAt = kind, time.Now()
+	e.last, e.lastAt = kind, now
 	e.lastSpace = kind == typing && unicode.IsSpace(with[0])
 }
 
@@ -946,7 +947,7 @@ func (e *editor) replace(start, end int, with []rune, u *gunim.UI) {
 	case len(with) == 0 && end-start == 1:
 		kind = deleting
 	}
-	e.remember(kind, start, end, with)
+	e.remember(kind, start, end, with, u)
 	e.closeHandles()
 	e.splice(start, end, with)
 	e.set(start+len(with), false)

@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
@@ -56,7 +57,7 @@ func NewSection(h plug.Host, d *plug.Descriptor, name string, on uint32, ids ...
 		s.Switch.SetChecked(h.Param(on) > 0.5, nil)
 		s.Switch.OnChange = func(v bool, u *gunim.UI) gunim.Intent {
 			h.Begin(on, u)
-			h.Set(on, float64(onOff(v)), u)
+			h.Set(on, float64(anim.OnOff(v)), u)
 			h.End(on, u)
 			s.dim(v)
 			return nil
@@ -162,7 +163,7 @@ func (s *Section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	ink := widget.Ink.Get(th)
 	PaintGlass(p, th, geom.Rect{Max: box.Point()}, widget.CardRadius.Get(th))
 	name := audioui.Shaped(s.Name, sectionText, true, false)
-	name.Paint(p, geom.Pt(s.nameX(), (SectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
+	name.Paint(p, geom.Pt(s.nameX(), (SectionHead-name.Height())/2+2), paint.Faded(ink, 0.55))
 	for k := range kids.All {
 		k.Paint(p)
 	}

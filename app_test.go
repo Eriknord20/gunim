@@ -59,7 +59,7 @@ type failingWindow struct {
 	err error
 }
 
-func (w failingWindow) Present([]paint.Op, geom.Rect) error { return w.err }
+func (w failingWindow) Present([]paint.Op, []geom.Rect) error { return w.err }
 
 func TestFailedPresentClosesTheWindowOnce(t *testing.T) {
 	want := errors.New("lost the GL context")

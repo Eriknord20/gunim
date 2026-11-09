@@ -453,3 +453,98 @@ func TestAScrolledMenusHiddenRowsHaveNoBounds(t *testing.T) {
 		t.Fatal("a hidden item can't be pressed")
 	}
 }
+
+// A context menu its button toggles closes on a second press on the
+// button, rather than closing as the press lands and opening again as
+// the click ends; a press outside its anchor closes it too.
+func TestAContextMenuItsButtonTogglesClosesOnASecondPress(t *testing.T) {
+	b := NewButton("Grid")
+	b.KeepFocus = true
+	c := NewContextMenu(b, []MenuItem{{Label: "1/4"}, {Label: "1/8"}})
+	b.OnClick = func(u *gunim.UI) gunim.Intent {
+		c.Toggle(geom.Pt(0, 40), u)
+		return nil
+	}
+	w, run := stage(t, &frame{child: c, size: geom.Sz(400, 300)})
+	run(5)
+	click := func(at geom.Point) {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+		run(10)
+	}
+	on := geom.Pt(10, 10)
+	click(on)
+	if !c.Focusable() {
+		t.Fatal("a click on the button opened no menu")
+	}
+	click(on)
+	if c.Focusable() {
+		t.Fatal("a second click on the button left the menu open")
+	}
+	click(on)
+	if !c.Focusable() {
+		t.Fatal("a third click on the button opened no menu")
+	}
+	// Below the anchor, still on the button, which fills the frame.
+	w.Input(input.PointerDown{Pos: geom.Pt(390, 290), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	run(2)
+	if c.Focusable() {
+		t.Fatal("a press outside the anchor and the menu left the menu open")
+	}
+}
+
+// A context menu toggled from one of the buttons inside it closes on a second press on that button, and moves to
+// another button pressed while it is open.
+func TestAContextMenuToggledFromAButtonInsideItClosesOnASecondPress(t *testing.T) {
+	left, right := geom.Rc(10, 10, 60, 30), geom.Rc(200, 10, 60, 30)
+	c := NewContextMenu(nil, []MenuItem{{Label: "Rename"}, {Label: "Remove"}})
+	row := &clickArea{onPress: func(at geom.Point, u *gunim.UI) {
+		for _, b := range []geom.Rect{left, right} {
+			if b.Contains(at) {
+				c.ToggleFrom(geom.Rect{Min: b.Min, Max: geom.Pt(b.Max.X, b.Max.Y+4)}, u)
+			}
+		}
+	}}
+	c.child = row
+	w, run := stage(t, &frame{child: c, size: geom.Sz(400, 300)})
+	run(5)
+	click := func(at geom.Point) {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+		run(10)
+	}
+	click(geom.Pt(20, 20))
+	if !c.Focusable() {
+		t.Fatal("a click on the button opened no menu")
+	}
+	click(geom.Pt(20, 20))
+	if c.Focusable() {
+		t.Fatal("a second click on the button left the menu open")
+	}
+	click(geom.Pt(20, 20))
+	click(geom.Pt(210, 20))
+	if !c.Focusable() || c.anchor.Min.X != right.Min.X {
+		t.Fatalf("a click on the other button left the menu at %v, want it open under %v", c.anchor, right)
+	}
+	click(geom.Pt(150, 200))
+	if c.Focusable() {
+		t.Fatal("a click away from the buttons left the menu open")
+	}
+}
+
+// clickArea calls onPress with where the primary button goes down on it, and leaves the focus where it is.
+type clickArea struct {
+	onPress func(geom.Point, *gunim.UI)
+}
+
+func (a *clickArea) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	return cs.Max
+}
+func (a *clickArea) Paint(*paint.Painter, gunim.Frame, geom.Size, gunim.Children) {}
+func (a *clickArea) Handle(e input.Event, u *gunim.UI) bool {
+	if d, ok := e.(input.PointerDown); ok && d.Button == input.ButtonPrimary {
+		a.onPress(d.Pos, u)
+		return true
+	}
+	return false
+}

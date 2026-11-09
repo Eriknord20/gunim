@@ -471,6 +471,8 @@ func (c *CodeEditor) Handle(e input.Event, u *gunim.UI) bool {
 			send(u, c, c.OnCommit(c.Text(), u))
 			return true
 		}
+		// Keys come faster than frames: a key moves through the text as it is now.
+		c.relayout(u.Theme())
 		if !c.codeKey(e, u) && !c.key(e, u, codeNav{c}) {
 			return false
 		}

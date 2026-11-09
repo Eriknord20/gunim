@@ -49,11 +49,11 @@ func TestAChromelessWindowGetsATitleBar(t *testing.T) {
 	if r.Min.Y != 30 {
 		t.Fatalf("the application's tree starts at %v, want below a title bar 30 high", r.Min.Y)
 	}
-	if want := geom.Rc(600-2*windowButtonWidth, 0, windowButtonWidth, 30); fr.Maximize != want {
-		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.Maximize, want)
+	if want := geom.Rc(600-2*windowButtonWidth, 0, windowButtonWidth, 30); fr.MaximizeButton() != want {
+		t.Fatalf("the system was told the maximize button is at %v, want %v", fr.MaximizeButton(), want)
 	}
-	if len(fr.Caption) == 0 || fr.Caption[0].Min.Y != 0 || fr.Caption[0].Max.X > 600-3*windowButtonWidth {
-		t.Fatalf("the system was told the caption is %v, want the bar left of the buttons", fr.Caption)
+	if len(fr.Caption()) == 0 || fr.Caption()[0].Min.Y != 0 || fr.Caption()[0].Max.X > 600-3*windowButtonWidth {
+		t.Fatalf("the system was told the caption is %v, want the bar left of the buttons", fr.Caption())
 	}
 	// Full screen, the window has no title bar
 	on(func(u *gunim.UI) { u.SetFullScreen(true) })
@@ -99,8 +99,8 @@ func TestAnApplicationsOwnWindowButtonsTakeTheTitleBarsPlace(t *testing.T) {
 	if r.Min.Y != 0 {
 		t.Fatalf("the application's buttons are at %v, want at the top, with no title bar above them", r.Min.Y)
 	}
-	if fr.Maximize.Min.X != r.Min.X+windowButtonWidth {
-		t.Fatalf("the system was told the maximize button is at %v, want the application's, at %v", fr.Maximize, r)
+	if fr.MaximizeButton().Min.X != r.Min.X+windowButtonWidth {
+		t.Fatalf("the system was told the maximize button is at %v, want the application's, at %v", fr.MaximizeButton(), r)
 	}
 }
 
@@ -113,19 +113,19 @@ func TestATitleBarCanLeaveItsButtonsOut(t *testing.T) {
 	if got := bar.controls.buttons(); len(got) != 2 || got[0] != minimizeButton || got[1] != closeButton {
 		t.Fatalf("without maximize the bar shows buttons %v, want minimize and close", got)
 	}
-	if !fr.Maximize.Empty() {
-		t.Fatalf("without maximize the system was told the maximize button is at %v", fr.Maximize)
+	if !fr.MaximizeButton().Empty() {
+		t.Fatalf("without maximize the system was told the maximize button is at %v", fr.MaximizeButton())
 	}
-	if want := float32(600 - 2*compactButtonWidth); len(fr.Caption) == 0 || fr.Caption[0].Max.X != want {
-		t.Fatalf("the system was told the caption is %v, want it to end at %v", fr.Caption, want)
+	if want := float32(600 - 2*compactButtonWidth); len(fr.Caption()) == 0 || fr.Caption()[0].Max.X != want {
+		t.Fatalf("the system was told the caption is %v, want it to end at %v", fr.Caption(), want)
 	}
 	bar.NoMinimize, bar.NoClose = true, true
 	run(2)
 	if got := bar.controls.buttons(); len(got) != 0 {
 		t.Fatalf("with every button left out the bar shows %v", got)
 	}
-	if len(fr.Caption) == 0 || fr.Caption[0] != geom.Rc(0, 0, 600, TitleBarCompactHeight.Default()) || !fr.Maximize.Empty() {
-		t.Fatalf("with no buttons the caption is %v and the maximize button %v, want the whole bar and none", fr.Caption, fr.Maximize)
+	if len(fr.Caption()) == 0 || fr.Caption()[0] != geom.Rc(0, 0, 600, TitleBarCompactHeight.Default()) || !fr.MaximizeButton().Empty() {
+		t.Fatalf("with no buttons the caption is %v and the maximize button %v, want the whole bar and none", fr.Caption(), fr.MaximizeButton())
 	}
 }
 

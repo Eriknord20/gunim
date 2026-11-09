@@ -112,7 +112,7 @@ func (s *Spectrum) Bands(bands []float32) {
 // which at its top right.
 func (s *Spectrum) Paint(p *paint.Painter, th *theme.Live, area geom.Rect) {
 	ink, ground, sound := widget.Ink.Get(th), Ground.Get(th), Sound.Get(th)
-	p.RRect(area, 10, paint.Solid(Faded(ground, 0.6)))
+	p.RRect(area, 10, paint.Solid(paint.Faded(ground, 0.6)))
 	w := area.Size().W / float32(len(s.Out))
 	at := func(i int, v float32) geom.Point {
 		t := min(max((v-SpectrumBottom)/(SpectrumTop-SpectrumBottom), 0), 1)
@@ -122,15 +122,15 @@ func (s *Spectrum) Paint(p *paint.Painter, th *theme.Live, area geom.Rect) {
 	for i, v := range s.Out {
 		pt := at(i, v)
 		if !s.HideOut {
-			p.RRect(geom.Rc(pt.X-w/2, pt.Y, w+0.5, area.Max.Y-pt.Y), 0, paint.Solid(Faded(sound, 0.22)))
+			p.RRect(geom.Rc(pt.X-w/2, pt.Y, w+0.5, area.Max.Y-pt.Y), 0, paint.Solid(paint.Faded(sound, 0.22)))
 		}
 		pin := at(i, s.In[i])
 		if i > 0 {
 			if !s.HideOut {
-				Segment(p, prev, pt, 1.4, Faded(sound, 0.8))
+				Segment(p, prev, pt, 1.4, paint.Faded(sound, 0.8))
 			}
 			if s.ShowIn {
-				Segment(p, prevIn, pin, 1.2, Faded(ink, 0.5))
+				Segment(p, prevIn, pin, 1.2, paint.Faded(ink, 0.5))
 			}
 		}
 		prev, prevIn = pt, pin
@@ -145,15 +145,15 @@ func (s *Spectrum) Paint(p *paint.Painter, th *theme.Live, area geom.Rect) {
 		r    geom.Rect
 		c    color.NRGBA
 		on   bool
-	}{{"OUT", out, sound, !s.HideOut}, {"IN", in, Faded(ink, 0.6), s.ShowIn}} {
+	}{{"OUT", out, sound, !s.HideOut}, {"IN", in, paint.Faded(ink, 0.6), s.ShowIn}} {
 		c := l.c
 		if !l.on {
-			c = Faded(ink, 0.25)
+			c = paint.Faded(ink, 0.25)
 		}
 		if s.Switches {
-			p.RRect(l.r, 9, paint.Solid(Faded(ground, 0.75)))
+			p.RRect(l.r, 9, paint.Solid(paint.Faded(ground, 0.75)))
 			if l.on {
-				p.RRectStroke(l.r, 9, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: Faded(c, 0.6)})
+				p.RRectStroke(l.r, 9, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: paint.Faded(c, 0.6)})
 			}
 		}
 		x := l.r.Min.X + 6
@@ -192,20 +192,20 @@ func PaintPitches(p *paint.Painter, th *theme.Live, area geom.Rect, up bool) {
 		run := Shaped(label, 9, false, false)
 		if up {
 			y := area.Max.Y - area.Size().H*at
-			p.RRect(geom.Rc(area.Min.X, y, area.Size().W, 1), 0, paint.Solid(Faded(ink, 0.08)))
+			p.RRect(geom.Rc(area.Min.X, y, area.Size().W, 1), 0, paint.Solid(paint.Faded(ink, 0.08)))
 			if run.Advance+4 <= area.Size().W {
-				run.Paint(p, geom.Pt(area.Min.X+4, y-12), Faded(ink, 0.45))
+				run.Paint(p, geom.Pt(area.Min.X+4, y-12), paint.Faded(ink, 0.45))
 			}
 			continue
 		}
 		x := area.Min.X + area.Size().W*at
-		p.RRect(geom.Rc(x, area.Min.Y, 1, area.Size().H), 0, paint.Solid(Faded(ink, 0.06)))
+		p.RRect(geom.Rc(x, area.Min.Y, 1, area.Size().H), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		// The label goes right of its line, or left of it near the right edge, and not at all where neither fits.
 		switch lx := x + 3; {
 		case lx+run.Advance <= area.Max.X:
-			run.Paint(p, geom.Pt(lx, area.Max.Y-14), Faded(ink, 0.35))
+			run.Paint(p, geom.Pt(lx, area.Max.Y-14), paint.Faded(ink, 0.35))
 		case x-3-run.Advance >= area.Min.X:
-			run.Paint(p, geom.Pt(x-3-run.Advance, area.Max.Y-14), Faded(ink, 0.35))
+			run.Paint(p, geom.Pt(x-3-run.Advance, area.Max.Y-14), paint.Faded(ink, 0.35))
 		}
 	}
 }

@@ -144,14 +144,28 @@ func (u *UI) beginTitleBar() {
 }
 
 // sendTitleBar tells the driver where the title bar is, when it has
-// changed.
+// changed. While a popup that a press outside dismisses is open, the
+// caption is sent as none, so a press on it reaches the window and
+// dismisses the popup.
 func (u *UI) sendTitleBar() {
 	c := u.chrome
-	if c == nil || (slices.Equal(c.caption, c.sent) && c.maximize == c.sentMax) {
+	if c == nil {
 		return
 	}
-	c.sent, c.sentMax = append(c.sent[:0], c.caption...), c.maximize
+	caption := c.caption
+	if u.dismissible() {
+		caption = nil
+	}
+	if slices.Equal(caption, c.sent) && c.maximize == c.sentMax {
+		return
+	}
+	c.sent, c.sentMax = append(c.sent[:0], caption...), c.maximize
 	c.fr.SetTitleBar(c.sent, c.sentMax)
+}
+
+// dismissible reports whether a popup that a press outside dismisses is open.
+func (u *UI) dismissible() bool {
+	return slices.ContainsFunc(u.popups, func(p *surface) bool { return !p.closing && p.opts.Dismiss != nil })
 }
 
 // framePress acts on a press where the system would have, on a window

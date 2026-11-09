@@ -78,6 +78,7 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"control default out": {ID: "test.ctldef", Name: "X", New: newer,
 			ControlOut: []ControlPort{{Name: "LFO", Min: -1, Max: 1, Default: 2}}},
 		"look-ahead without notes": {ID: "test.ahead", Name: "X", New: newer, LookAhead: time.Second},
+		"past notes without notes": {ID: "test.past", Name: "X", New: newer, Past: true},
 		"look-ahead below zero": {ID: "test.behind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			LookAhead: -time.Millisecond},
 		"chords ahead without notes": {ID: "test.chords", Name: "X", New: newer, ChordAhead: time.Second},
@@ -97,6 +98,19 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			ControlIn: []ControlPort{{Name: "Kick", Min: -1, Max: 1, Trigger: true}}},
 		"trigger defaulting to a hit": {ID: "test.trigdef", Name: "X", New: newer,
 			ControlIn: []ControlPort{{Name: "Kick", Max: 1, Default: 1, Trigger: true}}},
+		"action unnamed": {ID: "test.actname", Name: "X", New: newer, Actions: []Action{{ID: "auto"}}},
+		"actions of one ID": {ID: "test.acttwice", Name: "X", New: newer,
+			Actions: []Action{{ID: "auto", Name: "Auto"}, {ID: "auto", Name: "Auto EQ"}}},
+		"measuring input": {ID: "test.measin", Name: "X", New: newer,
+			ControlIn: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Measures: MeasureCompression}}},
+		"measure not in dB": {ID: "test.measunit", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "GR", Min: -60, Measures: MeasureCompression}}},
+		"measure above 0": {ID: "test.measmax", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Max: 6, Measures: MeasureCompression}}},
+		"measuring trigger": {ID: "test.meastrig", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Trigger: true, Measures: MeasureGate}}},
+		"unknown measure": {ID: "test.measwhat", Name: "X", New: newer,
+			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Measures: Measure(99)}}},
 	} {
 		func() {
 			defer func() {
@@ -144,6 +158,15 @@ func TestRegisterTakesTriggersFromZeroToOne(t *testing.T) {
 		ControlOut: []ControlPort{{Name: "Kick", Max: 1, Trigger: true}, {Name: "Level", Max: 1}}}
 	if err := check(&d); err != nil {
 		t.Fatalf("a trigger in and out from 0 to 1 was refused: %v", err)
+	}
+}
+
+func TestRegisterTakesMeasuresInDecibels(t *testing.T) {
+	d := Descriptor{ID: "test.measures", Name: "X", New: func(Host) Plugin { return nil },
+		ControlOut: []ControlPort{{Name: "Gate", Unit: "dB", Min: -90, Measures: MeasureGate},
+			{Name: "Comp", Unit: "dB", Min: -60, Measures: MeasureCompression}}}
+	if err := check(&d); err != nil {
+		t.Fatalf("measuring outputs in dB up to 0 were refused: %v", err)
 	}
 }
 
@@ -340,5 +363,13 @@ func TestPortsInFollowTheState(t *testing.T) {
 	pad := d.PortsIn([]byte("pad"))
 	if pad.HasAuxOut(0) || pad.HasControlOut(0) || len(pad.AuxOut) != 3 {
 		t.Errorf("a melodic state has aux outputs %v and control outputs %v, want none", pad.AuxOut, pad.ControlOut)
+	}
+}
+
+func TestRegisterTakesActionsOfTheirOwnIDs(t *testing.T) {
+	d := Descriptor{ID: "test.actions", Name: "X", New: func(Host) Plugin { return nil },
+		Actions: []Action{{ID: "auto-eq", Name: "Auto", Group: "EQ"}, {ID: "auto-all", Name: "Auto all"}}}
+	if err := check(&d); err != nil {
+		t.Fatalf("two actions of their own IDs were refused: %v", err)
 	}
 }

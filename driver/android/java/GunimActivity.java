@@ -31,6 +31,7 @@ public class GunimActivity extends Activity {
 		Native.keepGestures(v);
 		setContentView(v);
 		edgeToEdge(v);
+		applyAwake();
 		if (android.os.Build.VERSION.SDK_INT >= 30) {
 			// The view keeps its size as the keyboard opens; the driver
 			// slides the drawing up instead, following the keyboard.
@@ -44,6 +45,32 @@ public class GunimActivity extends Activity {
 		v.requestFocus();
 		Native.start(java.util.TimeZone.getDefault().getID());
 		showBuild();
+		// An activity Android brings back has told of its intent already.
+		if (state == null) {
+			GunimOpen.opened(this, getIntent());
+		}
+	}
+
+	// With -opens the activity runs once, so a file opened while the
+	// program runs comes here.
+	@Override
+	protected void onNewIntent(android.content.Intent intent) {
+		super.onNewIntent(intent);
+		setIntent(intent);
+		GunimOpen.opened(this, intent);
+	}
+
+	/**
+	 * applyAwake sets the window's flag to keep the screen on to what the
+	 * program last asked, on the UI thread.
+	 */
+	void applyAwake() {
+		int flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+		if (Native.awake) {
+			getWindow().addFlags(flag);
+		} else {
+			getWindow().clearFlags(flag);
+		}
 	}
 
 	/**
@@ -152,10 +179,14 @@ public class GunimActivity extends Activity {
 		Native.answered(code, granted);
 	}
 
-	// The system's chooser of folders closed: with the folder chosen,
-	// or none.
+	// The system's document picker closed, with the files chosen or none,
+	// or its chooser of folders, with the folder chosen or none.
 	@Override
 	protected void onActivityResult(int code, int result, android.content.Intent data) {
+		if (Native.choosingFiles.remove(code)) {
+			GunimOpen.chosen(this, code, result == RESULT_OK ? data : null);
+			return;
+		}
 		String path = null;
 		if (result == RESULT_OK && data != null) {
 			path = Native.pathOf(data.getData());

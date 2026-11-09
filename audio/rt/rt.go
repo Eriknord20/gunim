@@ -9,11 +9,16 @@
 // Enter locks the goroutine to its thread. On Windows the thread then
 // joins the Multimedia Class Scheduler Service's "Pro Audio" task, at
 // high priority, so the system runs it before the rest of the work on
-// the computer. Elsewhere the thread runs at the priority it has: Enter
-// changes no privileges.
+// the computer. On Linux it asks for real-time scheduling, from the
+// system where the user's limits allow it, otherwise from RealtimeKit,
+// which most desktops run. Elsewhere, or where neither gives it, the
+// thread runs at the priority it has: Enter changes no privileges.
 package rt
 
-import "runtime"
+import (
+	"runtime"
+	"time"
+)
 
 // Enter locks the calling goroutine to its thread and raises the
 // thread to the system's audio priority, where it has one. It returns
@@ -28,3 +33,24 @@ func Enter() (leave func()) {
 		runtime.UnlockOSThread()
 	}
 }
+
+// Refused reports whether the last thread to [Enter] asked for the system's
+// audio priority where it could have had it, and was refused: on Linux, where
+// neither the user's limits allow it nor RealtimeKit gives it. The sound then
+// plays at normal priority, and may drop out under load, so an application can
+// say so. Threads held back on purpose, to keep a processor free or after one
+// ran too long, don't count.
+func Refused() bool { return wasNotGiven() }
+
+// Breathe has the thread truly sleep, for as short as the system can. A
+// thread that spins between its work, waiting for more, calls it every so
+// often: on Linux the system limits how long a real-time thread may run
+// without sleeping, and a yield doesn't count.
+func Breathe() { doze() }
+
+// Sleep has the thread sleep for about d, or less, as a signal may end it.
+// Where a thread is real-time, this is what wakes it on time: waiting on a
+// timer of Go's, it wakes only as the scheduler gets to it. Go still preempts
+// a goroutine that runs on for long, and with every P busy, it then waits its
+// turn. It is for a thread locked by [Enter].
+func Sleep(d time.Duration) { nap(d) }

@@ -453,7 +453,7 @@ func (u *UI) dragTo(p geom.Point) {
 		if d.over != nil {
 			u.w.sendDrag(d.over, dragMsg{kind: dragLeave})
 		}
-		u.toGhost(d.ghost, input.DragAnswer{Time: time.Now()})
+		u.toGhost(d.ghost, input.DragAnswer{Time: u.Clock()})
 	}
 	if dragDebug && d.over != over {
 		u.w.app.debugDrag(at, over)
@@ -473,12 +473,12 @@ func (u *UI) dragTo(p geom.Point) {
 	} else if d.hinted {
 		// Back near a window, the hint of files that cannot leave goes.
 		d.hinted = false
-		u.toGhost(d.ghost, input.DragAnswer{Time: time.Now()})
+		u.toGhost(d.ghost, input.DragAnswer{Time: u.Clock()})
 	}
 	if d.ghost != nil {
 		g := u.local(u.root, p).Sub(d.grab)
 		d.ghost.Move(geom.Rect{Min: g, Max: g})
-		u.toGhost(d.ghost, input.DragMove{At: p, Time: time.Now()})
+		u.toGhost(d.ghost, input.DragMove{At: p, Time: u.Clock()})
 	}
 	if over != nil {
 		u.w.sendDrag(over, dragMsg{kind: dragOver, at: at, data: d.data, mods: d.mods, from: u.w})
@@ -598,7 +598,7 @@ func (u *UI) exportWaits(d *drag, err error) {
 	}
 	if ee.Hint != nil {
 		d.hinted = true
-		u.toGhost(d.ghost, input.DragAnswer{Answer: ee.Hint, Time: time.Now()})
+		u.toGhost(d.ghost, input.DragAnswer{Answer: ee.Hint, Time: u.Clock()})
 	}
 	if !ee.Wait || d.retrying {
 		return
@@ -634,7 +634,7 @@ func (u *UI) dragDrop(p geom.Point) {
 		// node still hears the end when it comes.
 		u.After(ghostWait, func(u *UI) {
 			if p, ok := u.drops[id]; ok && p.ghost != nil {
-				u.dropGhost(p.ghost, input.DragEnd{Time: time.Now()})
+				u.dropGhost(p.ghost, input.DragEnd{Time: u.Clock()})
 				p.ghost = nil
 				u.drops[id] = p
 			}
@@ -675,7 +675,7 @@ func (u *UI) endDropAs(id uint64, e input.DragEnd) {
 		return
 	}
 	delete(u.drops, id)
-	e.Time = time.Now()
+	e.Time = u.Clock()
 	if p.from != nil && p.from.parent != nil {
 		u.deliver(p.from, e)
 	}
@@ -725,7 +725,7 @@ func (w *Window) sendDrag(to *Window, m dragMsg) {
 // node under it, and tells the node it left, if another took it. What
 // the node answers goes back to the window the drag came from.
 func (u *UI) dragHover(p geom.Point, data any) {
-	now := time.Now()
+	now := u.Clock()
 	u.dragAnswer = nil
 	took := u.dispatchAt(u.root, p, func(local geom.Point) input.Event {
 		return input.DragOver{Pos: local, Data: data, Mods: u.dragOverMods, Time: now}
@@ -750,7 +750,7 @@ func (u *UI) dragHover(p geom.Point, data any) {
 // dragMsg handles one step of a drag over this window.
 func (u *UI) dragMsg(m dragMsg) {
 	u.invalid = true
-	now := time.Now()
+	now := u.Clock()
 	switch m.kind {
 	case dragOver:
 		p := fromScreen(u.w, m.at)

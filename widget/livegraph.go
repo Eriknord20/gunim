@@ -19,6 +19,10 @@ const minAcross = 20
 // LiveGraphHeight is a live graph's height.
 var LiveGraphHeight = theme.Length("livegraph.height", 56)
 
+// LiveGraphCompactHeight is a compact live graph's height, as in a row
+// or beside a switch.
+var LiveGraphCompactHeight = theme.Length("livegraph.compact.height", 14)
+
 // LiveGraphHead is the colour of the dot round the newest sample, under the accent at its middle.
 var LiveGraphHead = theme.Color("livegraph.head", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
 
@@ -40,6 +44,26 @@ type LiveGraph struct {
 	// Label is what the head says for a value, such as "12 MB/s"; nil
 	// says nothing.
 	Label func(v float64) string
+	// Compact draws the graph small, for a row or beside a switch:
+	// [LiveGraphCompactHeight] tall, with no room for a label and a
+	// smaller head. It takes its room from the start, so what is beside
+	// it does not move as the first samples come.
+	Compact bool
+	// Width, when set, is how wide the graph is; unset, it takes the
+	// width it is given.
+	Width float32
+	// Ink, when set, colours the line, the fill and the head in place
+	// of [Accent], as for a state's colour.
+	Ink theme.Token[color.NRGBA]
+	// Floor is the least the scale reaches up to, so values far below
+	// it draw low: a connection's keepalives, beside the floor of a
+	// busy one, are not drawn full height.
+	Floor float64
+	// Sample, when set, is asked for a sample every Every while the
+	// graph runs, as the speed a meter shows, in place of calling Add.
+	Sample func() float64
+	// sinceSample is the time since Sample was last asked.
+	sinceSample time.Duration
 
 	samples []float64
 	// shown is the value drawn at each sample, which glides to the
@@ -55,6 +79,8 @@ type LiveGraph struct {
 	// it runs, the window sleeping between, and moves on by the time
 	// that passed.
 	stepped time.Time
+	// u is the window's UI, kept from Layout for its clock.
+	u *gunim.UI
 	// painted says the graph was painted since the last step: one out of
 	// sight asks for no frames.
 	painted bool
@@ -108,8 +134,8 @@ func (g *LiveGraph) Add(v float64) {
 	for _, s := range g.samples {
 		most = max(most, s)
 	}
-	if most > 0 {
-		g.top.Animate(float32(most*1.15), anim.Gentle)
+	if top := max(most*1.15, g.Floor); top > 0 {
+		g.top.Animate(float32(top), anim.Gentle)
 	}
 	if len(g.samples) == 1 || g.glow-g.saidAt >= 1 {
 		g.said, g.saidAt = g.recent(), g.glow
@@ -152,7 +178,7 @@ func (g *LiveGraph) Step(dt time.Duration) bool {
 
 // advance moves the graph on by dt, and reports whether it moves on.
 func (g *LiveGraph) advance(dt time.Duration) bool {
-	now := time.Now()
+	now := g.u.Clock()
 	if !g.stepped.IsZero() {
 		// The window slept between the graph's frames: the time that
 		// passed, rather than a refresh's.
@@ -174,6 +200,14 @@ func (g *LiveGraph) advance(dt time.Duration) bool {
 		if tol := 1e-4 * (1 + math.Abs(to)); math.Abs(g.shown[k]-to) < tol && math.Abs(g.vel[k]) < 10*tol {
 			g.shown[k], g.vel[k] = to, 0
 		} else {
+			moving = true
+		}
+	}
+	if g.running && g.Sample != nil {
+		// Asked for its own samples, as often as they come.
+		every := time.Duration(g.every() * float64(time.Second))
+		for g.sinceSample += dt; g.sinceSample >= every; g.sinceSample -= every {
+			g.Add(g.Sample())
 			moving = true
 		}
 	}
@@ -213,10 +247,18 @@ func (g *LiveGraph) WakeIn() time.Duration {
 
 // Layout implements [gunim.Node]: nothing until there are two samples.
 func (g *LiveGraph) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
+	g.u = f.UI()
+	w := c.Max.W
+	if g.Width > 0 {
+		w = g.Width
+	}
+	if g.Compact {
+		return c.Constrain(geom.Sz(w, LiveGraphCompactHeight.Get(f.Theme)))
+	}
 	if len(g.samples) < 2 {
 		return c.Constrain(geom.Size{})
 	}
-	return c.Constrain(geom.Sz(c.Max.W, LiveGraphHeight.Get(f.Theme)))
+	return c.Constrain(geom.Sz(w, LiveGraphHeight.Get(f.Theme)))
 }
 
 // Paint implements [gunim.Node].
@@ -229,8 +271,16 @@ func (g *LiveGraph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	}
 	th := f.Theme
 	accent := Accent.Get(th)
-	// The plot sits below room for the head's label.
-	plot := g.plot(box, TextSize.Get(th)+4)
+	if g.Ink.Key() != "" {
+		accent = g.Ink.Get(th)
+	}
+	// The plot sits below room for the head's label; a compact one has
+	// none.
+	room := TextSize.Get(th) + 4
+	if g.Compact {
+		room = 2
+	}
+	plot := g.plot(box, room)
 	xOf, yOf, valueAt, step := plot.xOf, plot.yOf, plot.valueAt, plot.step
 	plotTop := plot.top
 	pos := g.pos
@@ -296,15 +346,19 @@ func (g *LiveGraph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	// The head: a dot on the newest, and a ring breathing out of it
 	// while the graph runs.
 	headAt := pts[len(pts)-1]
+	dot, reach := float32(3), float32(7)
+	if g.Compact {
+		dot, reach = 2, 3
+	}
 	if g.running {
 		pulse := float32(math.Mod(g.glow, 1.2) / 1.2)
 		ring := accent
 		ring.A = uint8(0x90 * (1 - pulse))
-		r := 3 + 7*pulse
+		r := dot + reach*pulse
 		p.RRect(geom.Rc(headAt.X-r, headAt.Y-r, 2*r, 2*r), r, paint.Solid(ring))
 	}
-	p.RRect(geom.Rc(headAt.X-3, headAt.Y-3, 6, 6), 3, paint.Solid(LiveGraphHead.Get(th)))
-	p.RRect(geom.Rc(headAt.X-2, headAt.Y-2, 4, 4), 2, paint.Solid(accent))
+	p.RRect(geom.Rc(headAt.X-dot, headAt.Y-dot, 2*dot, 2*dot), dot, paint.Solid(LiveGraphHead.Get(th)))
+	p.RRect(geom.Rc(headAt.X-dot+1, headAt.Y-dot+1, 2*dot-2, 2*dot-2), dot-1, paint.Solid(accent))
 	if g.Label != nil {
 		// Over the plot, at the end the samples come in at, and cut to the box.
 		run := fitRun(g.text.shape(faceIn(Font, th), g.Label(g.said), TextSize.Get(th)*0.85), &g.ell, box.W)

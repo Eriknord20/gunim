@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -8,7 +10,7 @@ import (
 
 // A plugin's controller and editor live on one thread, as they expect:
 // the package's own, locked, which also runs what plugins ask to be run
-// there.
+// there; on macOS the main thread, where a driver runs work there.
 
 // uiMu is held to read while work is given the thread, and to write as
 // the thread starts or stops; uiExited closes as the thread running
@@ -32,6 +34,9 @@ var (
 // onUI runs f on the plugins' thread, starting it where none runs, and
 // waits for it.
 func onUI(f func()) {
+	if onMain(f) {
+		return
+	}
 	uiMu.RLock()
 	for !uiRunning {
 		uiMu.RUnlock()

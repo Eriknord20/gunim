@@ -45,6 +45,14 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+      # The browser is a platform of its own. It builds and vets here, and the
+      # browser job runs the tests for its driver.
+      - name: Vet and build for the browser
+        if: runner.os == 'Linux'
+        run: |
+          GOOS=js GOARCH=wasm go vet -unsafeptr=false ./...
+          GOOS=js GOARCH=wasm go build ./...
+
       # A type that is 64 bits here can be 32 elsewhere, and a linter run
       # on one machine cannot see that. Linux on 32-bit ARM is a real
       # place gunim runs.
@@ -55,6 +63,81 @@ jobs:
           GOARCH=386 go build ./...
         env:
           CGO_ENABLED: 0
+
+  # Linux on 64-bit ARM. The audio packages hold assembly for arm64, the
+  # JACK, PipeWire and Core Audio clients' callbacks, which their
+  # tests run through fakes: with the macOS job, this is where that
+  # assembly runs at all in CI.
+  arm64:
+    name: Vet, test audio (ubuntu-24.04-arm)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: Test audio
+        run: go test ./audio/...
+
+      - name: Test audio without cgo
+        run: go test ./audio/internal/jack/ ./audio/internal/pipewire/ ./audio/internal/audiounit/ ./audio/speaker/
+        env:
+          CGO_ENABLED: 0
+
+  # macOS on Apple silicon. The Core Audio client's tests run its arm64
+  # callbacks through a fake under Apple's calling convention, which
+  # keeps x18 for itself, and load every function it calls from the
+  # system's frameworks. The runners have no sound device, so the test
+  # that plays through one skips.
+  macos:
+    name: Vet, test Core Audio (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: Test Core Audio
+        run: go test -race ./audio/internal/audiounit/ ./audio/driver/
+
+      - name: Test opening files
+        run: go test -race -run 'TestShowingAFileThatIsGoneSaysSo|TestOnlyAWebPageOpensAsALink' ./driver/desktop/
+
+      - name: Test Core Audio without cgo
+        run: go test ./audio/internal/audiounit/ ./audio/driver/
+        env:
+          CGO_ENABLED: 0
+
+  # driver/web's tests need a real browser, and the runner fails if any of them
+  # skips, so this runs them all. It tells Chrome its page has window focus.
+  browser:
+    name: Test the browser driver (Chrome, ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Test in Chrome
+        run: go run ./tools/webtest
 
   lint:
     name: Lint
@@ -83,3 +166,7 @@ jobs:
       # Windows, so they are linted again with the same binary.
       - name: Lint for Windows
         run: GOOS=windows "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+      # Likewise the browser.
+      - name: Lint for the browser
+        run: GOOS=js GOARCH=wasm "$(go env GOPATH)/bin/golangci-lint" run ./...

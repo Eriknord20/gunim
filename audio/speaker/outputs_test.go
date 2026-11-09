@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 )
 
 // TestARingOfFourKeepsItsChannels writes frames of four channels
@@ -76,7 +76,7 @@ func (a *frameAux) fill(dst []float32, channels int, at int64) {
 // mixer plays on the first two, and Aux fills the other two, frame for
 // frame in step with the mixer through the one ring.
 func TestAuxPlaysInStepWithTheMix(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32, Outputs: 8})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Latency: 300, Bits: 32, Outputs: 8})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
 	var aux frameAux
@@ -120,7 +120,7 @@ func TestAuxPlaysInStepWithTheMix(t *testing.T) {
 // opened again on them; a change of Aux alone plays on without opening
 // it again.
 func TestSetChangesTheOutputs(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32, Outputs: 8})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 256, Bits: 32, Outputs: 8})
 	m := audio.NewMixer()
 	o := Options{Driver: "Fake", Outputs: []int{2, 3}}
 	s, err := Open(m, o)

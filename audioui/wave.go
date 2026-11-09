@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"math"
 
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
@@ -247,7 +248,7 @@ func (w *Wave) PaintChannel(p *paint.Painter, th *theme.Live, ch int, mid, half 
 	rate := float64(w.Rate)
 	fpp := (v.V1 - v.V0) * rate / float64(max(v.Width, 1))
 	useRaw := fpp < WaveFinest && raw != nil && len(raw.Data) > 0
-	p.RRect(geom.Rc(0, mid, v.Width, 1), 0, paint.Solid(Faded(ink, 0.06)))
+	p.RRect(geom.Rc(0, mid, v.Width, 1), 0, paint.Solid(paint.Faded(ink, 0.06)))
 	k := v.Gain
 	if k == 0 {
 		k = 1
@@ -277,15 +278,15 @@ func (w *Wave) PaintChannel(p *paint.Painter, th *theme.Live, ch int, mid, half 
 			continue
 		}
 		y0, y1 := mid-clip(hi), mid-clip(lo)
-		p.RRect(geom.Rc(x, y0, 1, max(1, y1-y0)), 0, paint.Solid(Faded(ink, 0.12)))
+		p.RRect(geom.Rc(x, y0, 1, max(1, y1-y0)), 0, paint.Solid(paint.Faded(ink, 0.12)))
 		g, heard := v.shape((colT(x) + colT(x+1)) / 2)
 		if !heard {
 			continue
 		}
 		ey0, ey1 := mid-clip(hi*g), mid-clip(lo*g)
 		r := clip(rms * g)
-		p.RRect(geom.Rc(x, ey0, 1, max(1, ey1-ey0)), 0, paint.Solid(Faded(sound, 0.55)))
-		p.RRect(geom.Rc(x, mid-r, 1, 2*r), 0, paint.Solid(Faded(Mix(sound, ink, 0.4), 0.85)))
+		p.RRect(geom.Rc(x, ey0, 1, max(1, ey1-ey0)), 0, paint.Solid(paint.Faded(sound, 0.55)))
+		p.RRect(geom.Rc(x, mid-r, 1, 2*r), 0, paint.Solid(paint.Faded(anim.MixColor(sound, ink, 0.4), 0.85)))
 	}
 }
 
@@ -309,7 +310,7 @@ func (w *Wave) paintLine(p *paint.Painter, ch int, mid float32, clip func(float3
 		}
 		hp := geom.Pt(x, mid-clip(s*g))
 		if f > f0 {
-			Segment(p, was, pt, 1, Faded(ink, 0.25))
+			Segment(p, was, pt, 1, paint.Faded(ink, 0.25))
 			Segment(p, wasHeard, hp, 1.5, sound)
 		}
 		if apart > 8 {

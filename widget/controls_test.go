@@ -439,3 +439,46 @@ func TestATabsPageStartsAGapBelowTheTitles(t *testing.T) {
 		t.Fatalf("the page is drawn at %v, want %v: the titles' %v and a gap of %v", page.at.Y, want, tabs.head, TabGap.Default())
 	}
 }
+
+// TestArrowsWithCtrlAltOrSuperPassTheSliderAndTabsBy checks the two leave
+// those keys to the window's shortcuts, such as Alt+Left in a DAW.
+func TestArrowsWithCtrlAltOrSuperPassTheSliderAndTabsBy(t *testing.T) {
+	mods := []input.Mods{input.ModAlt, input.ModControl, input.ModSuper}
+	s := NewSlider(0, 100)
+	s.Snap = 1
+	w, run := stage(t, &frame{child: s, size: geom.Sz(218, 28)})
+	w.Input(input.PointerDown{Pos: geom.Pt(109, 14), Clicks: 1})
+	w.Input(input.PointerUp{Pos: geom.Pt(109, 14)})
+	run(1)
+	for _, m := range mods {
+		for _, k := range []input.Key{input.KeyLeft, input.KeyRight, input.KeyEnd, input.KeyPageDown} {
+			w.Input(input.KeyPress{Key: k, Mods: m})
+		}
+	}
+	run(1)
+	if s.Value() != 50 {
+		t.Fatalf("the keys with Ctrl, Alt or Super moved the slider to %v", s.Value())
+	}
+	w.Input(input.KeyPress{Key: input.KeyLeft})
+	run(1)
+	if s.Value() != 49 {
+		t.Fatalf("plain Left took the slider to %v, want 49", s.Value())
+	}
+
+	tabs := NewTabs([]string{"One", "Two"}, &recorder{}, &recorder{})
+	w, run = stage(t, &frame{child: tabs, size: geom.Sz(300, 200)})
+	click(w, tabs.spans[0][0]+5, 10)
+	run(1)
+	for _, m := range mods {
+		w.Input(input.KeyPress{Key: input.KeyRight, Mods: m})
+	}
+	run(1)
+	if tabs.Selected() != 0 {
+		t.Fatalf("Right with Ctrl, Alt or Super went to tab %d", tabs.Selected())
+	}
+	w.Input(input.KeyPress{Key: input.KeyRight})
+	run(1)
+	if tabs.Selected() != 1 {
+		t.Fatal("plain Right on the focused titles did not go to the next tab")
+	}
+}

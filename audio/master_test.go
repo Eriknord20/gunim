@@ -154,7 +154,7 @@ func TestAWAVsTagsFollowItsSoundAndAreCounted(t *testing.T) {
 	if got := binary.LittleEndian.Uint32(b[4:]); int(got) != len(b)-8 {
 		t.Fatalf("the RIFF size is %d, the file %d bytes after it", got, len(b)-8)
 	}
-	tail := string(b[44+441*4:])
+	tail := string(b[WAVHeaderSize(WAVSpec{Bits: 16})+441*4:])
 	for _, want := range []string{"LIST", "INFO", "INAM", "Night Engine\x00", "IART", "The Oscillators\x00", "ITRK"} {
 		if !strings.Contains(tail, want) {
 			t.Fatalf("the tags after the sound lack %q: %q", want, tail)

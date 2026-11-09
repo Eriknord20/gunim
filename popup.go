@@ -392,7 +392,7 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		s.stale = true
 		return
 	}
-	if err := s.dw.Present(pp.Ops(), paint.Everything); err != nil {
+	if err := s.dw.Present(pp.Ops(), everything); err != nil {
 		u.w.err = fmt.Errorf("gunim: present popup: %w", err)
 		u.closePopup(s)
 		return
@@ -885,6 +885,7 @@ func (w *Window) forward(s *surface) {
 // called from the goroutine calling Frame: never on a window its loop
 // runs, which takes [Client.Input].
 func (w *Window) Inject(ev input.Event) {
+	w.ui.paintOwed()
 	w.route(ev)
 	w.ui.focusNow()
 }
@@ -908,6 +909,10 @@ func (w *Window) route(ev input.Event) {
 		defer func() { u.injectHeld = nil }()
 	}
 	if ok {
+		if u.pointerIn {
+			// The pointer leaves the window for the popup's, as the system tells a window it moves out of
+			w.platform(input.PointerLeave{Time: u.Clock()})
+		}
 		u.popupEvent(popupEvent{s: s, ev: local})
 		return
 	}
@@ -999,3 +1004,7 @@ func withPos(ev input.Event, p geom.Point) input.Event {
 	}
 	return ev
 }
+
+// everything is the damage of a popup's frame: a popup draws all of
+// itself every frame.
+var everything = []geom.Rect{paint.Everything}

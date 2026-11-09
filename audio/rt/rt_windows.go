@@ -1,6 +1,7 @@
 package rt
 
 import (
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -41,3 +42,9 @@ func raise() func() {
 		}
 	}
 }
+
+func doze() {}
+
+func nap(d time.Duration) { time.Sleep(d) }
+
+func wasNotGiven() bool { return false }

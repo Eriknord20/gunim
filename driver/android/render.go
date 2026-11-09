@@ -8,7 +8,6 @@ package android
 import "C"
 
 import (
-	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -18,20 +17,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver"
-	"github.com/marrasen/gunim/driver/internal/render"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/internal/gl"
-	"github.com/marrasen/gunim/paint"
-	"github.com/marrasen/gunim/text"
-)
-
-// GL constants the gl package leaves out.
-const (
-	glColorBufferBit = 0x4000
-	glLinear         = 0x2601
-	glRGBA8          = 0x8058
-	glStaticDraw     = 0x88E4
-	glUnsignedShort  = 0x1403
-	glScissorTest    = 0x0C11
 )
 
 // render is the render thread. It owns the EGL context, which every
@@ -43,13 +30,12 @@ const (
 // wait. The engine waits for its frame, so it draws nothing meanwhile.
 func (d *Driver) render() {
 	runtime.LockOSThread()
-	g, c, err := startGL()
+	c, err := startGL()
 	if err != nil {
 		log.Printf("gunim: android: %v", err)
 		d.idle()
 		return
 	}
-	var shared render.Shared
 
 	var surface *C.ANativeWindow
 	attached := false
@@ -90,33 +76,32 @@ func (d *Driver) render() {
 				continue
 			}
 			attached = true
+			if C.gunim_egl_stamps() == 0 {
+				log.Print("gunim: android: no frame timestamps: frames are taken to light the screen two refreshes after the swap")
+			}
 		case <-d.wake:
 		}
 		if !attached {
 			continue
 		}
-		d.frame(g, &shared, c)
+		d.frame(c)
 	}
 }
 
 // startGL makes the EGL context current on the render thread, loads
 // GL, and builds the compositor.
-func startGL() (gl.Context, *compositor, error) {
+func startGL() (*compose.Compositor, error) {
 	if e := C.gunim_egl_init(); e != 0 {
-		return nil, nil, fmt.Errorf("EGL: error %#x", int(e))
+		return nil, fmt.Errorf("EGL: error %#x", int(e))
 	}
 	g, err := gl.NewDefaultContext()
 	if err == nil {
 		err = g.LoadFunctions()
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	c, err := newCompositor(g)
-	if err != nil {
-		return nil, nil, err
-	}
-	return g, c, nil
+	return compose.New(g, "android")
 }
 
 // idle takes surfaces and lets them go, for a render thread that cannot
@@ -140,7 +125,7 @@ func (d *Driver) idle() {
 
 // frame draws the frames waiting, lays the windows on the surface and
 // swaps.
-func (d *Driver) frame(g gl.Context, shared *render.Shared, c *compositor) {
+func (d *Driver) frame(c *compose.Compositor) {
 	d.mu.Lock()
 	type job struct {
 		w        *Window
@@ -153,100 +138,51 @@ func (d *Driver) frame(g gl.Context, shared *render.Shared, c *compositor) {
 		again bool
 	}
 	var jobs []job
-	var stack []layer
-	scale, surfW, surfH := d.density, d.surfW, d.surfH
+	var stack []compose.Layer
+	gone := d.gone
+	d.gone = nil
+	scale, surfW, surfH, rate := d.density, d.surfW, d.surfH, d.rate
 	pan, panning := d.panLocked(time.Now())
 	for _, w := range d.windows {
-		r := w.rectLocked()
+		r := w.held.Rect(w.rectLocked(), w.next != nil)
 		fbW, fbH := int(math.Round(float64(r.Size().W*scale))), int(math.Round(float64(r.Size().H*scale)))
 		if w.next != nil {
-			jobs = append(jobs, job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under, shot: w.shot})
-			w.next, w.shot = nil, nil
-		} else if w.sharpen && w.last != nil {
-			jobs = append(jobs, job{w: w, f: &frame{ops: w.last}, fbW: fbW, fbH: fbH, under: w.under, again: true})
+			j := job{w: w, f: w.next, fbW: fbW, fbH: fbH, under: w.under}
+			if fbW > 0 && fbH > 0 {
+				// A shot waits for a frame that draws.
+				j.shot, w.shot = w.shot, nil
+			}
+			jobs = append(jobs, j)
+			w.next = nil
+		} else if w.sharpen && w.pane.Last != nil {
+			jobs = append(jobs, job{w: w, f: &frame{ops: w.pane.Last}, fbW: fbW, fbH: fbH, under: w.under, again: true})
 		}
 		w.sharpen = false
-		if !w.hidden {
+		if !w.hidden && !w.stale {
 			x, y := int(math.Round(float64(r.Min.X*scale))), int(math.Round(float64(r.Min.Y*scale)))-pan
-			stack = append(stack, layer{w: w, x: x, y: y, fbW: fbW, fbH: fbH})
+			stack = append(stack, compose.Layer{Pane: &w.pane, X: x, Y: y, W: fbW, H: fbH, Under: w.under})
 		}
 	}
 	d.mu.Unlock()
-	if len(jobs) == 0 && !c.dirty(stack) {
+	for _, p := range gone {
+		c.Release(p)
+	}
+	if len(jobs) == 0 && !c.Dirty(stack) {
 		return
 	}
-	// A window alone on the surface, filling it, draws straight onto it:
-	// a copy through its texture would cost the GPU the whole screen
-	// again each frame.
-	var solo *Window
-	if len(stack) == 1 {
-		if l := stack[0]; l.x == 0 && l.y == 0 && l.fbW == surfW && l.fbH == surfH {
-			solo = l.w
-		}
-	}
-
-	soloDrew := false
+	c.Begin(stack, surfW, surfH)
 	for _, j := range jobs {
-		w := j.w
-		if j.fbW <= 0 || j.fbH <= 0 {
+		if !c.Draw(&j.w.pane, j.f.ops, j.f.damage, j.fbW, j.fbH, j.under, scale) {
+			if j.shot != nil {
+				j.w.keepShot(j.shot)
+			}
 			continue
 		}
-		if w.r == nil {
-			r, err := render.New(g, true, shared)
-			if err != nil {
-				log.Printf("gunim: android: %v", err)
-				continue
-			}
-			r.SetText(text.Rendering{}, w.transparent)
-			w.r = r
-		}
-		if w.texW != j.fbW || w.texH != j.fbH {
-			w.resize(g, j.fbW, j.fbH)
-		}
-		w.r.Under = j.under
-		w.last, w.lastW, w.lastH = j.f.ops, j.fbW, j.fbH
-		if w == solo {
-			w.r.WindowFBO, w.onTex = 0, false
-			soloDrew = true
-		} else {
-			w.r.WindowFBO, w.onTex = w.fbo, true
-		}
-		w.r.Draw(j.f.ops, j.f.damage, j.fbW, j.fbH, scale)
-		d.sharpenAt(w, w.r.SharpAt)
 		if j.shot != nil {
-			g.BindFramebuffer(gl.FRAMEBUFFER, w.r.WindowFBO)
-			pix := make([]byte, j.fbW*j.fbH*4)
-			g.ReadPixels(pix, 0, 0, int32(j.fbW), int32(j.fbH), gl.RGBA, gl.UNSIGNED_BYTE)
-			go j.shot(upright(pix, j.fbW, j.fbH))
+			c.Shoot(&j.w.pane, j.fbW, j.fbH, j.shot)
 		}
 	}
-
-	if solo != nil {
-		if !soloDrew {
-			// Nothing new to draw, as the stack changed round it, but
-			// the surface holds nothing after a swap: the last frame
-			// again, onto it.
-			solo.redraw(g, 0, scale)
-		}
-		c.last = append(c.last[:0], stack...)
-	} else {
-		// A window last drawn straight onto the surface has its texture
-		// behind: it draws its last frame into it to be laid.
-		for _, l := range stack {
-			if !l.w.onTex {
-				l.w.redraw(g, l.w.fbo, scale)
-			}
-		}
-		c.draw(g, stack, surfW, surfH)
-	}
-	// The renderers share the context's blending, which the compositor
-	// changed.
-	for _, l := range stack {
-		if l.w.r != nil {
-			l.w.r.Rebind()
-			break
-		}
-	}
+	c.Finish(stack, surfW, surfH, scale)
 	if e := C.gunim_egl_swap(); e != 0 {
 		log.Printf("gunim: android: swap: error %#x", int(e))
 	}
@@ -254,15 +190,40 @@ func (d *Driver) frame(g gl.Context, shared *render.Shared, c *compositor) {
 		d.kick() // the next frame slides on
 	}
 	now := time.Now()
+	lag := swapLag(rate)
 	for _, j := range jobs {
 		if j.again {
 			continue
 		}
 		select {
-		case j.w.presented <- driver.Frame{Shown: now}:
+		case j.w.presented <- driver.Frame{Shown: now, Lag: lag}:
 		case <-j.w.quit:
 		}
 	}
+}
+
+// lagTold says the log has the first lag the frame timestamps measured.
+// It belongs to the render thread.
+var lagTold bool
+
+// swapLag returns how long after its swap returns a frame lights the
+// screen: as Android's frame timestamps measured it, where the surface
+// keeps them, and two refreshes at rate where not. SurfaceFlinger takes
+// a frame swapped in at one refresh and shows it at the next, at the
+// soonest, and a frame swapped while another waits waits a refresh more.
+func swapLag(rate float64) time.Duration {
+	if ns := C.gunim_egl_lag(); ns >= 0 {
+		if !lagTold {
+			lagTold = true
+			log.Printf("gunim: android: a frame lit the screen %v after its swap, as Android's frame timestamps tell",
+				time.Duration(ns).Round(100*time.Microsecond))
+		}
+		return time.Duration(ns)
+	}
+	if rate <= 0 {
+		rate = 60
+	}
+	return 2 * time.Duration(float64(time.Second)/rate)
 }
 
 // sharpenAt has w draw its last frame again at the time at, the zero
@@ -282,191 +243,4 @@ func (d *Driver) sharpenAt(w *Window, at time.Time) {
 		d.mu.Unlock()
 		d.kick()
 	})
-}
-
-// upright turns pixels read from GL, bottom row first, into a picture
-// the right way up.
-func upright(pix []byte, w, h int) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		copy(img.Pix[y*img.Stride:(y+1)*img.Stride], pix[(h-1-y)*w*4:(h-y)*w*4])
-	}
-	return img
-}
-
-// redraw draws the window's last frame again, whole, into fbo: its
-// texture, or 0 for the surface. It runs on the render thread.
-func (w *Window) redraw(g gl.Context, fbo uint32, scale float32) {
-	if w.r == nil || w.last == nil {
-		return
-	}
-	if fbo != 0 && (w.texW != w.lastW || w.texH != w.lastH) {
-		w.resize(g, w.lastW, w.lastH)
-	}
-	w.r.WindowFBO = fbo
-	w.r.Draw(w.last, paint.Everything, w.lastW, w.lastH, scale)
-	w.onTex = fbo != 0
-}
-
-// resize gives the window a texture of w×h device pixels to draw into.
-// It runs on the render thread.
-func (w *Window) resize(g gl.Context, width, height int) {
-	if w.tex == 0 {
-		w.tex = g.CreateTexture()
-		w.fbo = g.CreateFramebuffer()
-	}
-	g.BindTexture(gl.TEXTURE_2D, w.tex)
-	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glLinear)
-	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, glLinear)
-	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	g.TexImage2D(gl.TEXTURE_2D, 0, glRGBA8, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, nil)
-	g.BindFramebuffer(gl.FRAMEBUFFER, w.fbo)
-	g.FramebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, w.tex, 0)
-	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	w.texW, w.texH = width, height
-}
-
-// layer is a window as the compositor lays it: its texture at x, y on
-// the surface, in device pixels from the top left.
-type layer struct {
-	w        *Window
-	x, y     int
-	fbW, fbH int
-}
-
-// A compositor lays windows' textures on the surface.
-type compositor struct {
-	prog     uint32
-	rect     int32
-	vao, vbo uint32
-	ibo      uint32
-	// last is the stack laid last, so a change in it, as a popup
-	// moving or hiding, draws a frame with no window presenting.
-	last []layer
-	// at holds a layer's rect for the GL, kept here so handing it
-	// through gl.Context allocates nothing.
-	at [4]float32
-}
-
-const compositeVertex = `#version 300 es
-uniform vec4 rect;
-in vec2 corner;
-out vec2 uv;
-void main() {
-	uv = corner;
-	gl_Position = vec4(mix(rect.xy, rect.zw, corner), 0.0, 1.0);
-}
-`
-
-const compositeFragment = `#version 300 es
-precision mediump float;
-uniform sampler2D tex;
-in vec2 uv;
-out vec4 color;
-void main() {
-	color = texture(tex, uv);
-}
-`
-
-func newCompositor(g gl.Context) (*compositor, error) {
-	vs, err := compileShader(g, gl.VERTEX_SHADER, compositeVertex)
-	if err != nil {
-		return nil, err
-	}
-	fs, err := compileShader(g, gl.FRAGMENT_SHADER, compositeFragment)
-	if err != nil {
-		return nil, err
-	}
-	p := g.CreateProgram()
-	g.AttachShader(p, vs)
-	g.AttachShader(p, fs)
-	g.BindAttribLocation(p, 0, "corner")
-	g.LinkProgram(p)
-	g.DeleteShader(vs)
-	g.DeleteShader(fs)
-	if g.GetProgrami(p, gl.LINK_STATUS) == gl.FALSE {
-		return nil, fmt.Errorf("android: link compositor: %s", g.GetProgramInfoLog(p))
-	}
-	c := &compositor{prog: p, rect: g.GetUniformLocation(p, "rect")}
-	g.UseProgram(p)
-	g.Uniform1i(g.GetUniformLocation(p, "tex"), 0)
-
-	c.vao = g.CreateVertexArray()
-	g.BindVertexArray(c.vao)
-	c.vbo = g.CreateBuffer()
-	g.BindBuffer(gl.ARRAY_BUFFER, c.vbo)
-	var verts []byte
-	for _, v := range []float32{0, 0, 1, 0, 1, 1, 0, 1} {
-		verts = binary.LittleEndian.AppendUint32(verts, math.Float32bits(v))
-	}
-	g.BufferInit(gl.ARRAY_BUFFER, len(verts), glStaticDraw)
-	g.BufferSubData(gl.ARRAY_BUFFER, 0, verts)
-	g.EnableVertexAttribArray(0)
-	g.VertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0)
-	c.ibo = g.CreateBuffer()
-	g.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, c.ibo)
-	var idx []byte
-	for _, i := range []uint16{0, 1, 2, 0, 2, 3} {
-		idx = binary.LittleEndian.AppendUint16(idx, i)
-	}
-	g.BufferInit(gl.ELEMENT_ARRAY_BUFFER, len(idx), glStaticDraw)
-	g.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, idx)
-	g.BindVertexArray(0)
-	return c, nil
-}
-
-func compileShader(g gl.Context, kind uint32, src string) (uint32, error) {
-	s := g.CreateShader(kind)
-	g.ShaderSource(s, src)
-	g.CompileShader(s)
-	if g.GetShaderi(s, gl.COMPILE_STATUS) == gl.FALSE {
-		return 0, fmt.Errorf("android: compile compositor: %s", g.GetShaderInfoLog(s))
-	}
-	return s, nil
-}
-
-// dirty reports whether stack differs from the stack laid last.
-func (c *compositor) dirty(stack []layer) bool {
-	if len(stack) != len(c.last) {
-		return true
-	}
-	for i := range stack {
-		if stack[i] != c.last[i] {
-			return true
-		}
-	}
-	return false
-}
-
-// draw lays the windows on the surface, w×h device pixels, bottom
-// first. Each texture holds its window's frame premultiplied, with its
-// first row at the bottom, as the window's own framebuffer would.
-func (c *compositor) draw(g gl.Context, stack []layer, w, h int) {
-	c.last = append(c.last[:0], stack...)
-	g.BindFramebuffer(gl.FRAMEBUFFER, 0)
-	g.Viewport(0, 0, int32(w), int32(h))
-	g.Disable(glScissorTest)
-	g.ClearColor(0, 0, 0, 1)
-	g.Clear(glColorBufferBit)
-	g.ClearColor(0, 0, 0, 0)
-	g.Enable(gl.BLEND)
-	g.BlendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-	g.UseProgram(c.prog)
-	g.BindVertexArray(c.vao)
-	g.ActiveTexture(gl.TEXTURE0)
-	for _, l := range stack {
-		if l.w.tex == 0 {
-			continue
-		}
-		x0 := 2*float32(l.x)/float32(w) - 1
-		x1 := 2*float32(l.x+l.w.texW)/float32(w) - 1
-		y1 := 1 - 2*float32(l.y)/float32(h)
-		y0 := 1 - 2*float32(l.y+l.w.texH)/float32(h)
-		c.at = [4]float32{x0, y0, x1, y1}
-		g.Uniform4fv(c.rect, c.at[:])
-		g.BindTexture(gl.TEXTURE_2D, l.w.tex)
-		g.DrawElements(gl.TRIANGLES, 6, glUnsignedShort, 0)
-	}
-	g.BindVertexArray(0)
 }

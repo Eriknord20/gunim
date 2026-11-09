@@ -2,6 +2,7 @@ package plugui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"image/color"
 	"strconv"
 	"strings"
@@ -54,6 +55,8 @@ type PresetBrowser struct {
 	groups      *groupList
 	presets     *presetList
 	gs, ps      *widget.Scroll
+	// colH is how tall the columns show, as last laid out.
+	colH float32
 }
 
 // NewPresetBrowser returns a browser of src's presets.
@@ -168,6 +171,7 @@ func (b *PresetBrowser) Follow(u *gunim.UI) {
 	if b.query == "" && ok && (cur.Bank != b.bank || cur.Group != b.group) && b.hasGroup(cur.Bank, cur.Group) {
 		b.bank, b.group = cur.Bank, cur.Group
 		b.fill(u)
+		b.jumpToCurrent()
 	} else {
 		b.glide(u)
 	}
@@ -180,11 +184,25 @@ func (b *PresetBrowser) reveal(u *gunim.UI) {
 		return
 	}
 	if i := b.groups.index(b.bank, b.group); i >= 0 {
-		b.gs.Reveal(b.groups.rowRect(i), u)
+		b.gs.RevealContent(b.groups.rowRect(i), u)
 	}
 	if i := b.presets.current(); i >= 0 {
-		b.ps.Reveal(b.presets.rowRect(i), u)
+		b.ps.RevealContent(b.presets.rowRect(i), u)
 	}
+}
+
+// jumpToCurrent puts the presets column, new content, where the preset
+// playing shows, at once, as a group picked opens at its top. The
+// column's scroll still holds the old group's height, so a scroll
+// there would stop short of a row past it.
+func (b *PresetBrowser) jumpToCurrent() {
+	y := float32(0)
+	if i := b.presets.current(); i >= 0 {
+		const room = 8
+		r := b.presets.rows[i]
+		y = max(0, r.y+r.h+room-b.colH)
+	}
+	b.ps.JumpTo(y)
 }
 
 // showGroup shows the presets of a group: while no search runs, the
@@ -262,6 +280,7 @@ func (b *PresetBrowser) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Ch
 	kids.At(0).Place(geom.Point{})
 	top := float32(fieldH + colGap)
 	h := max(size.H-top, 0)
+	b.colH = h
 	gw := float32(int(size.W * groupsW))
 	kids.At(1).Layout(gunim.Tight(geom.Sz(gw, h)))
 	kids.At(1).Place(geom.Pt(0, top))
@@ -276,7 +295,7 @@ func (b *PresetBrowser) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, ki
 	top := float32(fieldH + colGap)
 	gw := float32(int(box.W * groupsW))
 	for _, r := range []geom.Rect{geom.Rc(0, top, gw, box.H-top), geom.Rc(gw+colGap, top, box.W-gw-colGap, box.H-top)} {
-		p.RRect(r, 10, paint.Solid(audioui.Faded(ink, 0.035)))
+		p.RRect(r, 10, paint.Solid(paint.Faded(ink, 0.035)))
 	}
 	for i := range kids.Len() {
 		kids.At(i).Paint(p)
@@ -301,6 +320,9 @@ type listRow struct {
 	count       int
 	p           plug.Preset
 	y, h        float32
+	// key names the row by what it shows, apart from every other row of
+	// its column (keyRows).
+	key uint64
 }
 
 // groupList is the column of groups, under their banks' captions, each
@@ -309,6 +331,8 @@ type groupList struct {
 	b     *PresetBrowser
 	rows  []listRow
 	hover int
+	// parts are the keys of the rows the access tree last listed.
+	parts []uint64
 	// pill is the row the pill marking the group shown stands on, lit
 	// how far the pill under the pointer shows, at hoverY.
 	pill, lit, hoverY *anim.Float
@@ -340,6 +364,7 @@ func (g *groupList) fill() {
 			}
 		}
 	}
+	keyRows(g.rows)
 }
 
 func (g *groupList) index(bank, group string) int {
@@ -401,11 +426,11 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := g.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
 	if g.index(g.b.bank, g.b.group) >= 0 {
 		y := rowY(g.rows, g.pill.Value())
-		p.RRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(accent, 0.2)))
+		p.RRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.2)))
 		p.RRect(geom.Rc(inset, y+6, 3, rowH-12), 1.5, paint.Solid(accent))
 	}
 	cur, playing := g.b.current()
@@ -414,14 +439,14 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 			continue
 		}
 		if r.header {
-			g.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), audioui.Faded(ink, 0.45))
-			audioui.Shaped(r.label, 9, true, false).Paint(p, geom.Pt(32, r.y+12), audioui.Faded(ink, 0.45))
+			g.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), paint.Faded(ink, 0.45))
+			audioui.Shaped(r.label, 9, true, false).Paint(p, geom.Pt(32, r.y+12), paint.Faded(ink, 0.45))
 			continue
 		}
-		c := audioui.Faded(ink, 0.82)
-		count := audioui.Faded(ink, 0.35)
+		c := paint.Faded(ink, 0.82)
+		count := paint.Faded(ink, 0.35)
 		if g.b.query != "" && r.count == 0 {
-			c, count = audioui.Faded(ink, 0.3), audioui.Faded(ink, 0.18)
+			c, count = paint.Faded(ink, 0.3), paint.Faded(ink, 0.18)
 		}
 		if i == g.index(g.b.bank, g.b.group) && g.b.query == "" {
 			c = ink
@@ -438,9 +463,42 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	}
 }
 
-// Access implements [gunim.Accessible]: the groups read as a list.
+// Access implements [gunim.Accessible]: the groups read as a list of
+// the rows in view, each bank's caption a heading, and each group by
+// its name, with how many presets it holds or the search finds in it,
+// the group shown selected.
 func (g *groupList) Access() access.Info {
-	return access.Info{Role: access.RoleList, Name: "Groups"}
+	info := access.Info{Role: access.RoleList, Name: "Groups"}
+	shown := -1
+	if g.b.query == "" {
+		shown = g.index(g.b.bank, g.b.group)
+	}
+	info.Parts, g.parts = rowParts(g.rows, g.b.gs.Offset(), g.b.colH, g.size.W, g.parts, func(i int, r listRow) access.Info {
+		if r.header {
+			return access.Info{Role: access.RoleHeading, Name: r.bank}
+		}
+		about := strconv.Itoa(r.count) + " presets"
+		if r.count == 1 {
+			about = "1 preset"
+		}
+		part := access.Info{Role: access.RoleListItem, Name: r.label, Description: about, Actions: []string{access.ActionPress}}
+		if i == shown {
+			part.State = access.StateSelected
+		}
+		return part
+	})
+	return info
+}
+
+// AccessAct implements [gunim.AccessActor]: a press on a group shows
+// its presets, as a click does.
+func (g *groupList) AccessAct(r access.Request, u *gunim.UI) bool {
+	i, ok := rowOfPart(g.rows, g.parts, r)
+	if !ok || g.rows[i].header {
+		return false
+	}
+	g.b.showGroup(g.rows[i].bank, g.rows[i].group, u)
+	return true
 }
 
 // presetList is the column of presets: the group's, or those a search
@@ -449,6 +507,8 @@ type presetList struct {
 	b     *PresetBrowser
 	rows  []listRow
 	hover int
+	// parts are the keys of the rows the access tree last listed.
+	parts []uint64
 	// pill is the row the pill marking the preset playing stands on,
 	// shown how far it shows; lit is how far the pill under the pointer
 	// shows, at hoverY.
@@ -464,6 +524,7 @@ func (l *presetList) fill() {
 		y += r.h
 		l.rows = append(l.rows, r)
 	}
+	defer func() { keyRows(l.rows) }()
 	if l.b.query == "" {
 		if l.b.group == "" && l.b.bank == "" {
 			return
@@ -557,33 +618,33 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := l.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
 	if a := l.shown.Value(); a > 0.01 {
 		y := rowY(l.rows, l.pill.Value())
-		p.ShadowRRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(audioui.Faded(accent, 0.28*a)),
-			paint.Shadow{Blur: 10, Color: audioui.Faded(accent, 0.25*a)})
+		p.ShadowRRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.28*a)),
+			paint.Shadow{Blur: 10, Color: paint.Faded(accent, 0.25*a)})
 	}
 	cur := l.current()
 	switch {
 	case len(l.b.list) == 0:
 		run := audioui.Shaped("No presets", 12, false, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), audioui.Faded(ink, 0.45))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), paint.Faded(ink, 0.45))
 	case len(l.rows) <= 1 && l.b.query != "":
 		run := audioui.Shaped("No preset matches", 12, false, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), audioui.Faded(ink, 0.45))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, 40), paint.Faded(ink, 0.45))
 	}
 	for i, r := range l.rows {
 		if culled && (r.y+r.h < vis.Min.Y || r.y > vis.Max.Y) {
 			continue
 		}
 		if r.header {
-			l.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), audioui.Faded(ink, 0.45))
+			l.b.bankIcon(p, f, r.bank, geom.Rc(14, r.y+11, 12, 12), paint.Faded(ink, 0.45))
 			run := audioui.Shaped(strings.ToUpper(r.label), 9, true, false)
-			run.PaintFaded(p, geom.Pt(32, r.y+12), audioui.Faded(ink, 0.5), box.W-44, 18)
+			run.PaintFaded(p, geom.Pt(32, r.y+12), paint.Faded(ink, 0.5), box.W-44, 18)
 			continue
 		}
-		c := audioui.Faded(ink, 0.85)
+		c := paint.Faded(ink, 0.85)
 		if i == cur {
 			c = ink
 			widget.PaintIcon(p, f.Theme, icon.AudioLines, geom.Rc(box.W-30, r.y+(rowH-14)/2, 14, 14), accent)
@@ -591,14 +652,105 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		run := audioui.Shaped(r.label, 12, i == cur, false)
 		run.PaintFaded(p, geom.Pt(20, r.y+(rowH-run.Height())/2), c, box.W-58, 18)
 		if r.p.Drums {
-			widget.PaintIcon(p, f.Theme, icon.Drum, geom.Rc(box.W-48, r.y+(rowH-12)/2, 12, 12), audioui.Faded(ink, 0.3))
+			widget.PaintIcon(p, f.Theme, icon.Drum, geom.Rc(box.W-48, r.y+(rowH-12)/2, 12, 12), paint.Faded(ink, 0.3))
 		}
 	}
 }
 
-// Access implements [gunim.Accessible]: the presets read as a list.
+// Access implements [gunim.Accessible]: the presets read as a list of
+// the rows in view, each group's caption a heading, and each preset by
+// its name, described by where it is filed and its tags, as "Factory ·
+// Kits · drums", the one playing selected.
 func (l *presetList) Access() access.Info {
-	return access.Info{Role: access.RoleList, Name: "Presets"}
+	info := access.Info{Role: access.RoleList, Name: "Presets"}
+	cur := l.current()
+	info.Parts, l.parts = rowParts(l.rows, l.b.ps.Offset(), l.b.colH, l.size.W, l.parts, func(i int, r listRow) access.Info {
+		if r.header {
+			return access.Info{Role: access.RoleHeading, Name: r.label}
+		}
+		about := r.p.Bank + " · " + r.p.Group
+		if r.p.Drums {
+			about += " · drums"
+		}
+		part := access.Info{Role: access.RoleListItem, Name: r.p.Name, Description: about, Actions: []string{access.ActionPress}}
+		if i == cur {
+			part.State = access.StateSelected
+		}
+		return part
+	})
+	return info
+}
+
+// AccessAct implements [gunim.AccessActor]: a press on a preset picks
+// it, as a click does.
+func (l *presetList) AccessAct(r access.Request, u *gunim.UI) bool {
+	i, ok := rowOfPart(l.rows, l.parts, r)
+	if !ok || l.rows[i].header {
+		return false
+	}
+	l.b.pick(l.rows[i].p, u)
+	return true
+}
+
+// rowParts are the parts of the rows of a column w wide that show, its
+// scroll at top and h of it in view, each as part makes it from the
+// row and its index, keyed by the row and cut to what of it shows; and
+// the rows' keys in turn, kept in kept.
+func rowParts(rows []listRow, top, h, w float32, kept []uint64, part func(i int, r listRow) access.Info) (parts []access.Info, keys []uint64) {
+	keys = kept[:0]
+	for i, r := range rows {
+		y0, y1 := max(r.y, top), min(r.y+r.h, top+h)
+		if y1 <= y0 {
+			continue
+		}
+		p := part(i, r)
+		p.Bounds, p.Key = geom.Rc(0, y0, w, y1-y0), r.key
+		parts = append(parts, p)
+		keys = append(keys, r.key)
+	}
+	return parts, keys
+}
+
+// rowOfPart is the row of rows a press on part r.Part is for: the row
+// it showed as the column last listed its parts, wherever that row
+// stands now, and false once it has gone.
+func rowOfPart(rows []listRow, parts []uint64, r access.Request) (int, bool) {
+	if r.Action != access.ActionPress || r.Part < 0 || r.Part >= len(parts) {
+		return 0, false
+	}
+	for i, row := range rows {
+		if row.key == parts[r.Part] {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// keyRows keys each of rows by what it shows, so a screen reader holding
+// one keeps it as the column scrolls or fills again: a caption by its
+// bank and group, a group by its bank and its name, a preset by where
+// it is filed and its name. Rows that show the same, as two presets of
+// one name a bank read from two folders holds, are keyed apart by how
+// many came before.
+func keyRows(rows []listRow) {
+	seen := map[uint64]int{}
+	for i := range rows {
+		r := &rows[i]
+		h := fnv.New64a()
+		kind := "row"
+		if r.header {
+			kind = "caption"
+		}
+		for _, s := range [...]string{kind, r.bank, r.group, r.p.Name} {
+			h.Write([]byte(s))
+			h.Write([]byte{0})
+		}
+		base := h.Sum64()
+		n := seen[base]
+		seen[base]++
+		h.Write([]byte(strconv.Itoa(n)))
+		r.key = max(h.Sum64(), 1)
+	}
 }
 
 // rowAt returns the row of rows at y, or -1.

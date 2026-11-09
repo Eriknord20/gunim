@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin && !js
 
 package vst3
 
@@ -50,3 +50,6 @@ func callFunc(fn uintptr) uintptr {
 	r, _, _ := purego.SyscallN(fn)
 	return r
 }
+
+// base is nothing here: only Windows on x64 lives through a plugin's crash.
+func (l library) base() uintptr { return 0 }

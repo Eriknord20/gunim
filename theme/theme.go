@@ -307,14 +307,29 @@ func (t Token[T]) slotAt(v T) stepper {
 }
 
 // slot animates a token's value itself.
+//
+// It keeps the value it last gave out, since putting a colour back
+// together from Oklab is costly and a widget reads its tokens every
+// time it paints. Only step and retarget move the value, and both
+// drop what it keeps.
 type slot[T any] struct {
 	a     *anim.Animated[T]
 	token Token[T]
+	// kept is the value last read, good while ok is set.
+	kept T
+	ok   bool
 }
 
-func (s *slot[T]) step(dt time.Duration) bool { return s.a.Step(dt) }
+func (s *slot[T]) step(dt time.Duration) bool {
+	if !s.a.Active() {
+		return false
+	}
+	s.ok = false
+	return s.a.Step(dt)
+}
 
 func (s *slot[T]) retarget(th Theme, parent *Live, m anim.Motion) {
+	s.ok = false
 	s.a.Animate(s.token.target(th, parent), m)
 }
 
@@ -322,7 +337,12 @@ func (s *slot[T]) follow(th Theme, parent *Live, m anim.Motion) { s.retarget(th,
 
 func (s *slot[T]) moving() bool { return s.a.Active() }
 
-func (s *slot[T]) value() T { return s.a.Value() }
+func (s *slot[T]) value() T {
+	if !s.ok {
+		s.kept, s.ok = s.a.Value(), true
+	}
+	return s.kept
+}
 
 // blendSlot animates a switch's progress, and draws the token's value
 // from it with the token's blend.

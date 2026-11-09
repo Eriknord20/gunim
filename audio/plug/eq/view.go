@@ -48,7 +48,7 @@ func bandColor(th *theme.Live, i int) color.NRGBA {
 	case 1:
 		return audioui.Near.Get(th)
 	case 2:
-		return audioui.Mix(audioui.Near.Get(th), audioui.Sound.Get(th), 0.5)
+		return anim.MixColor(audioui.Near.Get(th), audioui.Sound.Get(th), 0.5)
 	case 3:
 		return audioui.Sound.Get(th)
 	case 4:
@@ -56,7 +56,7 @@ func bandColor(th *theme.Live, i int) color.NRGBA {
 	case 5:
 		return widget.Accent.Get(th)
 	case 6:
-		return audioui.Mix(audioui.Spread.Get(th), audioui.Short.Get(th), 0.5)
+		return anim.MixColor(audioui.Spread.Get(th), audioui.Short.Get(th), 0.5)
 	default:
 		return audioui.Short.Get(th)
 	}
@@ -229,7 +229,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	width := CurveWidth.Get(th)
 	mid := box.H / 2
 	half := max(mid-width, 1)
-	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.15)))
+	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.15)))
 	var prev geom.Point
 	for i, db := range c.curve {
 		if c.bypass {

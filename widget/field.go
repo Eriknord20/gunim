@@ -235,7 +235,7 @@ func (t *TextField) Handle(e input.Event, u *gunim.UI) bool {
 		t.press(t.indexAt(e.Pos, u), e.Clicks, e.Mods.Has(input.ModShift))
 		t.held = true
 	case input.PointerMove:
-		t.clearHot.Animate(value(t.overClear(e.Pos)), Quick.Get(u.Theme()))
+		t.clearHot.Animate(anim.OnOff(t.overClear(e.Pos)), Quick.Get(u.Theme()))
 		if t.wording {
 			t.dragWords(t.indexAt(e.Pos, u))
 			break
@@ -284,6 +284,8 @@ func (t *TextField) Handle(e input.Event, u *gunim.UI) bool {
 			t.insert(ghost, u)
 			break
 		}
+		// Keys come faster than frames: a key moves through the text as it is now.
+		t.run(u.Theme())
 		if !t.key(e, u, fieldNav{t}) {
 			return false
 		}
@@ -395,7 +397,7 @@ func (t *TextField) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children)
 	run := t.run(th)
 	t.lead, t.trail = t.room(th)
 	inner := own.W - t.lead - t.trail
-	if on := value(t.clearable()); on != t.clearOn.Target() {
+	if on := anim.OnOff(t.clearable()); on != t.clearOn.Target() {
 		if on == 1 {
 			t.clearOn.Animate(1, Bounce.Get(th))
 		} else {

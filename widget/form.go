@@ -11,9 +11,9 @@ import (
 // its field.
 var FormGap = theme.Length("form.gap", 12)
 
-// Form lines up labelled fields: each label beside its field, the
-// labels in a column of their own as wide as the longest, the fields
-// taking the rest. Put one in a [Dialog]'s Body, and Tab moves through
+// Form lines up labelled fields: each label beside its field, level
+// with the field's first line, the labels in a column of their own as
+// wide as the longest, the fields taking the rest. Put one in a [Dialog]'s Body, and Tab moves through
 // its fields and the dialog's buttons in turn.
 type Form struct {
 	rows []formRow
@@ -79,8 +79,13 @@ func (f *Form) Layout(c gunim.Constraints, fr gunim.Frame, kids gunim.Children) 
 		ls := label.Layout(gunim.Constraints{Max: geom.Sz(labelW, 0)})
 		h := max(fs.H, ls.H)
 		field.Place(geom.Pt(labelW+gap, y+(h-fs.H)/2))
-		// Labels line up at the right, against their fields.
-		label.Place(geom.Pt(labelW-ls.W, y+(h-ls.H)/2))
+		// Labels line up at the right, against their fields: beside one control, at its middle, and beside a field
+		// taller than any one control, as a column of them, level with its first line
+		line := h
+		if h > max(ControlHeight.Get(fr.Theme), FieldHeight.Get(fr.Theme), ls.H) {
+			line = max(ControlHeight.Get(fr.Theme), ls.H)
+		}
+		label.Place(geom.Pt(labelW-ls.W, y+(line-ls.H)/2))
 		f.rows[i].labelRight, f.rows[i].fieldLeft = labelW, labelW+gap
 		y += h + gap
 	}

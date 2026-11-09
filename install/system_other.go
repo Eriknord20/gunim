@@ -26,10 +26,12 @@ func removeWhenEnded(string)                     {}
 func freeSpace(string) (int64, error)            { return 0, ErrUnsupported }
 func running(string) ([]int, error)              { return nil, ErrUnsupported }
 func runningParents(string) (map[int]int, error) { return nil, ErrUnsupported }
-func watchProcess(int) (func() bool, func())     { return func() bool { return false }, func() {} }
+func watchProcess(int) (alive func() bool, stop func()) {
+	return func() bool { return false }, func() {}
+}
 
 func launch(exe string, args []string, env ...string) error {
-	cmd := exec.Command(exe, args...)
+	cmd := exec.Command(exe, args...) //nolint:noctx
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

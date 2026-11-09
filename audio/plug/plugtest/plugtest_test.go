@@ -46,6 +46,7 @@ func (r *recorder) Process(b *plug.Block) {
 			case plug.NoteOff:
 				r.down--
 			case plug.Expression, plug.Pedal:
+			case plug.PastStart, plug.PastNote:
 			}
 		}
 		for _, ch := range b.Out {
@@ -512,6 +513,16 @@ func TestAnnounceTellsANotesTurn(t *testing.T) {
 	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, Turn: 7})
 	if len(ahead) != 1 || ahead[0].Turn != 7 {
 		t.Fatalf("Announce gave %+v, want news of note 1 with turn 7", ahead)
+	}
+}
+
+// TestAnnounceTellsANotesKeyTurnAndMod checks that the news Announce
+// makes of a note carries the KeyTurn and Mod its NoteOn does.
+func TestAnnounceTellsANotesKeyTurnAndMod(t *testing.T) {
+	s := plug.Setup{Rate: 48000, MaxBlock: 64, Channels: 1}
+	ahead := Announce(s, 100, plug.Event{Frame: 300, Kind: plug.NoteOn, Note: 1, Pitch: 60, Velocity: 0.5, KeyTurn: 3, Mod: 0.25})
+	if len(ahead) != 1 || ahead[0].KeyTurn != 3 || ahead[0].Mod != 0.25 {
+		t.Fatalf("Announce gave %+v, want news of note 1 with key turn 3 and mod 0.25", ahead)
 	}
 }
 

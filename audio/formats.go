@@ -204,6 +204,10 @@ type flacDecoder struct {
 }
 
 func newFLAC(r io.ReadSeeker) (*flacDecoder, error) {
+	r, err := healFLACSeeker(r)
+	if err != nil {
+		return nil, err
+	}
 	s, err := flac.NewSeek(r)
 	if err != nil {
 		return nil, err

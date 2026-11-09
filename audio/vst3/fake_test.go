@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -47,6 +49,10 @@ type fakePlugin struct {
 	processing []bool
 	active     map[[3]int]bool
 	setStates  int
+	// terminates counts the component's terminate calls, and late the
+	// calls into its objects after that, as a host makes of a plugin it
+	// let go.
+	terminates, late int
 }
 
 // fakeBlock is a block as the fake heard it.
@@ -65,6 +71,17 @@ type fakeObject struct {
 }
 
 func fakeOf(this uintptr) *fakePlugin { return self[fakeObject](this).f }
+
+// touch notes a call into the fake's object at this: one after its
+// component terminated is late.
+func touch(this uintptr) {
+	f := fakeOf(this)
+	f.mu.Lock()
+	if f.terminates > 0 {
+		f.late++
+	}
+	f.mu.Unlock()
+}
 
 // other returns the fake's object id, for a query of one of its others.
 func (f *fakePlugin) other(id uid) uintptr {
@@ -104,7 +121,13 @@ func arrangement(n int) uint64 {
 var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func() []uintptr {
 	return []uintptr{
 		newCallback(func(this, ctx uintptr) uintptr { return ok() }),
-		newCallback(func(this uintptr) uintptr { return ok() }),
+		newCallback(func(this uintptr) uintptr {
+			f := fakeOf(this)
+			f.mu.Lock()
+			f.terminates++
+			f.mu.Unlock()
+			return ok()
+		}),
 		newCallback(func(this, cid uintptr) uintptr { return resultOf(resultFalse) }),
 		newCallback(func(this, mode uintptr) uintptr { return ok() }),
 		newCallback(func(this, media, dir uintptr) uintptr {
@@ -145,8 +168,12 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 			f.mu.Unlock()
 			return ok()
 		}),
-		newCallback(func(this, state uintptr) uintptr { return ok() }),
+		newCallback(func(this, state uintptr) uintptr {
+			touch(this)
+			return ok()
+		}),
 		newCallback(func(this, stream uintptr) uintptr {
+			touch(this)
 			f := fakeOf(this)
 			buf := make([]byte, 256)
 			var n int32
@@ -166,6 +193,7 @@ var fakeCompKind = &kind{iids: []uid{iidComponent}, other: fakeOther, make: func
 			return ok()
 		}),
 		newCallback(func(this, stream uintptr) uintptr {
+			touch(this)
 			f := fakeOf(this)
 			f.mu.Lock()
 			st := append([]byte(nil), f.state...)
@@ -208,7 +236,10 @@ var fakeProcKind = &kind{iids: []uid{iidAudioProcessor}, other: fakeOther, make:
 			return ok()
 		}),
 		newCallback(func(this, size uintptr) uintptr { return ok() }),
-		newCallback(func(this uintptr) uintptr { return uintptr(fakeOf(this).latency) }),
+		newCallback(func(this uintptr) uintptr {
+			touch(this)
+			return uintptr(fakeOf(this).latency)
+		}),
 		newCallback(func(this, setup uintptr) uintptr { return ok() }),
 		newCallback(func(this, state uintptr) uintptr {
 			f := fakeOf(this)
@@ -289,28 +320,58 @@ func (f *fakePlugin) process(d *processData) {
 }
 
 var fakeCtrlKind = &kind{iids: []uid{iidEditController}, other: fakeOther, make: func() []uintptr {
-	none := func(this uintptr) uintptr { return resultOf(resultFalse) }
+	none := func(this uintptr) uintptr {
+		touch(this)
+		return resultOf(resultFalse)
+	}
 	return []uintptr{
 		newCallback(func(this, ctx uintptr) uintptr { return ok() }),
 		newCallback(func(this uintptr) uintptr { return ok() }),
-		newCallback(func(this, stream uintptr) uintptr { return ok() }),
-		newCallback(func(this, stream uintptr) uintptr { return ok() }),
-		newCallback(func(this, stream uintptr) uintptr { return ok() }),
-		newCallback(func(this uintptr) uintptr { return 0 }),
-		newCallback(func(this, index, info uintptr) uintptr { return resultOf(resultFalse) }),
-		newFloatCallback4(func(this, id uintptr, v float64, s uintptr) uintptr { return resultOf(resultFalse) }),
-		newCallback(func(this, id, s, v uintptr) uintptr { return resultOf(resultFalse) }),
+		newCallback(func(this, stream uintptr) uintptr {
+			touch(this)
+			return ok()
+		}),
+		newCallback(func(this, stream uintptr) uintptr {
+			touch(this)
+			return ok()
+		}),
+		newCallback(func(this, stream uintptr) uintptr {
+			touch(this)
+			return ok()
+		}),
+		newCallback(func(this uintptr) uintptr {
+			touch(this)
+			return 0
+		}),
+		newCallback(func(this, index, info uintptr) uintptr {
+			touch(this)
+			return resultOf(resultFalse)
+		}),
+		newFloatCallback4(func(this, id uintptr, v float64, s uintptr) uintptr {
+			touch(this)
+			return resultOf(resultFalse)
+		}),
+		newCallback(func(this, id, s, v uintptr) uintptr {
+			touch(this)
+			return resultOf(resultFalse)
+		}),
 		// normalizedParamToPlain, plainParamToNormalized and
 		// getParamNormalized return doubles, of parameters it has none of.
 		newCallback(none),
 		newCallback(none),
 		newCallback(none),
-		newFloatCallback(func(this, id uintptr, v float64) uintptr { return ok() }),
+		newFloatCallback(func(this, id uintptr, v float64) uintptr {
+			touch(this)
+			return ok()
+		}),
 		newCallback(func(this, h uintptr) uintptr {
 			fakeOf(this).handler = h
 			return ok()
 		}),
-		newCallback(func(this, name uintptr) uintptr { return 0 }),
+		newCallback(func(this, name uintptr) uintptr {
+			touch(this)
+			return 0
+		}),
 	}
 }}
 

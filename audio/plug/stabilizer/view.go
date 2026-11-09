@@ -290,15 +290,15 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	defer end()
 	for _, hz := range []float64{50, 100, 200, 500, 1000, 2000, 5000, 10000} {
 		x := d.xOf(hz)
-		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(audioui.Faded(ink, 0.06)))
+		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		label := audioui.Shaped(gridHz(hz), 9, false, true)
-		label.Paint(p, geom.Pt(x+4, 8), audioui.Faded(ink, 0.35))
+		label.Paint(p, geom.Pt(x+4, 8), paint.Faded(ink, 0.35))
 	}
 	for _, g := range []float32{-gainFull, -gainFull / 2, gainFull / 2, gainFull} {
 		y := d.gainY(g)
-		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.04)))
+		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.04)))
 		label := audioui.Shaped(fmt.Sprintf("%+.0f", g), 9, false, true)
-		label.Paint(p, geom.Pt(box.W-label.Advance-6, y-11), audioui.Faded(ink, 0.3))
+		label.Paint(p, geom.Pt(box.W-label.Advance-6, y-11), paint.Faded(ink, 0.3))
 	}
 	// The sound going out, filled; and coming in, a faint line.
 	n := len(d.freqs)
@@ -306,7 +306,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	for i, fz := range d.freqs {
 		x0, x1 := d.xOf(float64(fz)/step), d.xOf(float64(fz)*step)
 		if y := d.specY(d.isSm[i]); y < d.line {
-			p.RRect(geom.Rc(x0, y, x1-x0+0.5, d.line-y), 0, paint.Solid(audioui.Faded(accent, 0.12)))
+			p.RRect(geom.Rc(x0, y, x1-x0+0.5, d.line-y), 0, paint.Solid(paint.Faded(accent, 0.12)))
 		}
 	}
 	plugui.Darken(p, whole, 1)
@@ -318,9 +318,9 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		o, in := geom.Pt(x, d.specY(d.isSm[i])), geom.Pt(x, d.specY(d.wasSm[i]))
 		if i > 0 {
 			if in.Y < d.line || prevI.Y < d.line {
-				audioui.Segment(p, prevI, in, 1, audioui.Faded(ink, 0.3))
+				audioui.Segment(p, prevI, in, 1, paint.Faded(ink, 0.3))
 			}
-			audioui.Segment(p, prevO, o, 1.5, audioui.Faded(accent, 0.7))
+			audioui.Segment(p, prevO, o, 1.5, paint.Faded(accent, 0.7))
 		}
 		prevO, prevI = o, in
 	}
@@ -339,16 +339,16 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	// The gain: lifts filled in the accent up from the line of none,
 	// cuts in red down from it, and the curve over them.
 	zero := d.zeroY()
-	p.RRect(geom.Rc(0, zero, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.25)))
+	p.RRect(geom.Rc(0, zero, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.25)))
 	const strip = 3
 	for x := float32(0); x < box.W; x += strip {
 		g := d.gainAt(d.hzAt(x + strip/2))
 		y := d.gainY(g)
 		switch {
 		case y < zero-0.25:
-			p.RRect(geom.Rc(x, y, strip, zero-y), 0, paint.Solid(audioui.Faded(accent, 0.25)))
+			p.RRect(geom.Rc(x, y, strip, zero-y), 0, paint.Solid(paint.Faded(accent, 0.25)))
 		case y > zero+0.25:
-			p.RRect(geom.Rc(x, zero, strip, y-zero), 0, paint.Solid(audioui.Faded(cutColor, 0.25)))
+			p.RRect(geom.Rc(x, zero, strip, y-zero), 0, paint.Solid(paint.Faded(cutColor, 0.25)))
 		}
 	}
 	var prev geom.Point
@@ -366,18 +366,18 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		lit := d.lit[k].Value()
 		a := 0.45 + 0.5*lit
 		w, r := 1.5+lit, 5+2*lit
-		p.RRect(geom.Rc(x-w/2, 0, w, d.line), 0, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-w/2, 0, w, d.line), 0, paint.Solid(paint.Faded(ink, a)))
 		if lit > 0.01 {
-			p.ShadowRRect(geom.Rc(x-r, zero-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, 0)),
-				paint.Shadow{Blur: 10 * lit, Color: audioui.Faded(ink, 0.4*lit)})
+			p.ShadowRRect(geom.Rc(x-r, zero-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, 0)),
+				paint.Shadow{Blur: 10 * lit, Color: paint.Faded(ink, 0.4*lit)})
 		}
-		p.RRect(geom.Rc(x-r, zero-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-r, zero-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, a)))
 		label := audioui.Shaped(param(id).Name+"  "+hz(d.v[id]), 10, true, false)
 		lx := x + 8
 		if id == HighID {
 			lx = x - 8 - label.Advance
 		}
-		label.Paint(p, geom.Pt(lx, 24), audioui.Faded(ink, 0.5+0.4*lit))
+		label.Paint(p, geom.Pt(lx, 24), paint.Faded(ink, 0.5+0.4*lit))
 	}
 }
 
@@ -405,7 +405,7 @@ func (d *display) paintTarget(p *paint.Painter, ink color.NRGBA) {
 	at := func(f float64) geom.Point {
 		return geom.Pt(d.xOf(f), d.specY(float32(mean+shape(f)-mid)))
 	}
-	c := audioui.Faded(ink, 0.55)
+	c := paint.Faded(ink, 0.55)
 	// Dashed, so it reads as a guide, not a sound.
 	const dashes = 40
 	for i := 0; i < dashes; i += 2 {
@@ -706,7 +706,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	const width = 2
 	mid := box.H / 2
 	half := max(mid-width, 1)
-	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.15)))
+	p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.15)))
 	var prev geom.Point
 	for i, s := range c.shown {
 		y := mid - plugui.ChipScale(float64(s.Value()), chipFull)*half

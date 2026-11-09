@@ -9,7 +9,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -47,6 +49,9 @@ var (
 	procDCompositionCreateDevice = dcompdll.NewProc("DCompositionCreateDevice")
 	procWglGetProcAddress        = opengl32dll.NewProc("wglGetProcAddress")
 	procWglGetCurrentDC          = opengl32dll.NewProc("wglGetCurrentDC")
+	kernel32dll                  = windows.NewLazySystemDLL("kernel32.dll")
+	procQueryPerfCounter         = kernel32dll.NewProc("QueryPerformanceCounter")
+	procQueryPerfFrequency       = kernel32dll.NewProc("QueryPerformanceFrequency")
 	iidIDXGIDevice               = windows.GUID{Data1: 0x54ec77fa, Data2: 0x1377, Data3: 0x44e6, Data4: [8]byte{0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c}}
 	iidIDXGIFactory2             = windows.GUID{Data1: 0x50c83a1c, Data2: 0xe072, Data3: 0x4c48, Data4: [8]byte{0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0}}
 	iidIDCompositionDevice       = windows.GUID{Data1: 0xc37ea93a, Data2: 0xe7aa, Data3: 0x450d, Data4: [8]byte{0xb1, 0x6f, 0x97, 0x46, 0xcb, 0x04, 0x07, 0xf3}}
@@ -79,7 +84,10 @@ const (
 	dxgiSwapChainPresent         = 8
 	dxgiSwapChainGetBuffer       = 9
 	dxgiSwapChainResizeBuffers   = 13
+	dxgiSwapChainGetFrameStats   = 16
+	dxgiSwapChainGetLastPresent  = 17
 	dxgiSwapChain1Present1       = 22
+	dxgiStatusOccluded           = 0x087A0001
 	d3d11DeviceCreateTexture2D   = 5
 	d3d11ContextCopyResource     = 47
 	d3d11ContextFlush            = 111
@@ -198,6 +206,10 @@ type presenter struct {
 	w, h     int
 	// whole is set until a frame of the swap chain's size has been shown, which must cover all of it.
 	whole bool
+	// rects are the dirty rectangles of the frame presented last, kept for their room.
+	rects [][4]int32
+	// shown matches the frames presented with DXGI's reports of them.
+	shown shownLog
 
 	wglDXOpenDevice, wglDXCloseDevice       uintptr
 	wglDXRegisterObject, wglDXUnregisterObj uintptr
@@ -339,9 +351,9 @@ func (p *presenter) begin(w, h int) (uint32, error) {
 	return p.fbo, nil
 }
 
-// present hands the frame drawn since begin to the window, where it differs from the last one within dirty, in
-// device pixels from the top left.
-func (p *presenter) present(dirty geom.Rect) error {
+// present hands the frame drawn since begin to the window, where it differs from the last one within the boxes
+// of dirty, in device pixels from the top left.
+func (p *presenter) present(dirty []geom.Rect) error {
 	obj := p.object
 	if r, _, _ := syscall.SyscallN(p.wglDXUnlockObjects, p.share, 1, uintptr(unsafe.Pointer(&obj))); r == 0 {
 		return errors.New("desktop: wglDXUnlockObjectsNV failed")
@@ -353,27 +365,67 @@ func (p *presenter) present(dirty geom.Rect) error {
 	call(p.context, d3d11ContextCopyResource, back, p.texture)
 	release(back)
 	// The pacing is the vertical blank wait's, so present at once.
-	rect := &[4]int32{
-		max(int32(dirty.Min.X), 0), max(int32(dirty.Min.Y), 0),
-		min(int32(math.Ceil(float64(dirty.Max.X))), int32(p.w)), min(int32(math.Ceil(float64(dirty.Max.Y))), int32(p.h)),
+	rects := p.rects[:0]
+	for _, d := range dirty {
+		rect := [4]int32{
+			max(int32(d.Min.X), 0), max(int32(d.Min.Y), 0),
+			min(int32(math.Ceil(float64(d.Max.X))), int32(p.w)), min(int32(math.Ceil(float64(d.Max.Y))), int32(p.h)),
+		}
+		if rect[2] > rect[0] && rect[3] > rect[1] {
+			rects = append(rects, rect)
+		}
 	}
-	if p.whole || rect[2] <= rect[0] || rect[3] <= rect[1] {
-		if hr := call(p.swap, dxgiSwapChainPresent, 0, 0); failed(hr) {
+	p.rects = rects
+	if p.whole || len(rects) == 0 {
+		hr := call(p.swap, dxgiSwapChainPresent, 0, 0)
+		if failed(hr) {
 			return fmt.Errorf("desktop: Present: HRESULT %#x", uint32(hr))
 		}
 		p.whole = false
+		p.stamp(hr)
 		return nil
 	}
-	// Tells the compositor which part of the window changed.
-	// The rectangle is on the heap, which Go does not move, and kept alive past the call.
-	params := presentParameters{DirtyRectsCount: 1, DirtyRects: uintptr(unsafe.Pointer(rect))}
+	// Tells the compositor which parts of the window changed.
+	// The rectangles are on the heap, which Go does not move, and kept alive past the call.
+	params := presentParameters{DirtyRectsCount: uint32(len(rects)), DirtyRects: uintptr(unsafe.Pointer(&rects[0]))}
 	hr := call(p.swap, dxgiSwapChain1Present1, 0, 0, uintptr(unsafe.Pointer(&params)))
-	runtime.KeepAlive(rect)
+	runtime.KeepAlive(rects)
 	if failed(hr) {
 		return fmt.Errorf("desktop: Present1: HRESULT %#x", uint32(hr))
 	}
+	p.stamp(hr)
 	return nil
 }
+
+// stamp notes the frame just presented, whose Present returned hr, and
+// reads DXGI's frame statistics for when the last frame shown lit the
+// screen; see shownLog.
+func (p *presenter) stamp(hr uintptr) {
+	var count uint32
+	if hr := call(p.swap, dxgiSwapChainGetLastPresent, uintptr(unsafe.Pointer(&count))); failed(hr) {
+		return
+	}
+	var now int64
+	_, _, _ = procQueryPerfCounter.Call(uintptr(unsafe.Pointer(&now)))
+	p.shown.presented(count, now, uint32(hr) == dxgiStatusOccluded)
+	var st frameStatistics
+	if hr := call(p.swap, dxgiSwapChainGetFrameStats, uintptr(unsafe.Pointer(&st))); failed(hr) {
+		return
+	}
+	qpcFreqOnce.Do(func() {
+		_, _, _ = procQueryPerfFrequency.Call(uintptr(unsafe.Pointer(&qpcFreq)))
+	})
+	p.shown.learn(st, qpcFreq)
+}
+
+// lag returns how long the last frame DXGI reported shown took from
+// Present to the screen, and false before it has reported one.
+func (p *presenter) lag() (time.Duration, bool) { return p.shown.lag, p.shown.has }
+
+var (
+	qpcFreqOnce sync.Once
+	qpcFreq     int64
+)
 
 // presentParameters is DXGI_PRESENT_PARAMETERS.
 type presentParameters struct {

@@ -3,6 +3,7 @@ package audio
 import (
 	"math"
 	"math/cmplx"
+	"time"
 )
 
 // An Analyzer measures the sound a [Mixer] is playing as it is heard:
@@ -31,6 +32,13 @@ type Analyzer struct {
 	// tilt of 3 to 4.5 shows them as tall as the bass; zero, the
 	// default, shows each band as loud as it is.
 	Tilt float32
+	// At is the time the analyzer measures the sound heard at, as
+	// [Mixer.HeardAt] takes it. Set it each frame of the display to the
+	// time the frame lights the screen, gunim's Frame.Present, so what
+	// it shows matches what is heard as it shows. The zero time, the
+	// default, measures what is heard now. It reads no further than the
+	// mixer has mixed.
+	At time.Time
 }
 
 // NewAnalyzer returns an analyzer of m's sound that splits it into
@@ -81,7 +89,7 @@ func (a *Analyzer) Bands(out []float32) (level float32) {
 	if r := a.m.Rate(); r != a.rate {
 		a.place(r)
 	}
-	a.m.recent(a.in)
+	a.m.recent(a.in, a.At)
 	var sum float64
 	for i, s := range a.in {
 		sum += float64(s) * float64(s)
@@ -146,7 +154,7 @@ func (a *Analyzer) Spectrum(freqs, heard, before []float32) {
 
 func (a *Analyzer) spectrumOf(freqs, out []float32, before bool) {
 	sp := a.spec
-	a.m.recentOf(sp.in, before)
+	a.m.recentOf(sp.in, before, a.At)
 	for i, s := range sp.in {
 		sp.fft[i] = complex(float64(s*sp.window[i]), 0)
 	}
@@ -197,11 +205,11 @@ func (a *Analyzer) scale(amp float64) float32 {
 // Wave fills out with the last len(out) samples heard, mono, oldest
 // first, for drawing the wave itself. It holds at most a little under
 // a second.
-func (a *Analyzer) Wave(out []float32) { a.m.recent(out[:min(len(out), historyFrames/2)]) }
+func (a *Analyzer) Wave(out []float32) { a.m.recent(out[:min(len(out), historyFrames/2)], a.At) }
 
 // Heard appends to dst the frames heard since frame from, both
 // channels, interleaved, and returns them with the count of frames
-// heard so far, to pass as from next time: so a meter that reads each
+// heard so far, by At, to pass as from next time: so a meter that reads each
 // frame once, as a loudness meter must, reads every frame heard. It
 // keeps up to a little under a second; a caller that looks less often
 // misses the frames before that. The first call starts the mixer
@@ -219,7 +227,9 @@ func (a *Analyzer) HeardBefore(dst []float32, from int64) (frames []float32, now
 
 func (a *Analyzer) heardOf(dst []float32, from int64, before bool) (frames []float32, now int64) {
 	m := a.m
-	now = m.Heard()
+	// A time a little before the last one reads up to where the last
+	// read ended, so no frame is read twice.
+	now = max(m.heardBy(a.At), min(from, m.played.Load()))
 	rings := m.rings.Load()
 	ring := rings.stereo
 	if before {
@@ -239,17 +249,23 @@ func (a *Analyzer) heardOf(dst []float32, from int64, before bool) (frames []flo
 	return dst, now
 }
 
-// recent fills out with the last len(out) frames heard, as mono.
-func (m *Mixer) recent(out []float32) { m.recentOf(out, false) }
+// heardBy returns the frame heard at t, as [Mixer.HeardAt] has it, as
+// far as the mixer has mixed: the frames an analyzer can read.
+func (m *Mixer) heardBy(t time.Time) int64 {
+	return min(m.HeardAt(t), m.played.Load())
+}
 
-// recentOf fills out with the last len(out) frames heard, as mono: as
-// they were before the voices' inserts, with before.
-func (m *Mixer) recentOf(out []float32, before bool) {
+// recent fills out with the last len(out) frames heard by t, as mono.
+func (m *Mixer) recent(out []float32, t time.Time) { m.recentOf(out, false, t) }
+
+// recentOf fills out with the last len(out) frames heard by t, as mono:
+// as they were before the voices' inserts, with before.
+func (m *Mixer) recentOf(out []float32, before bool, t time.Time) {
 	history := m.history
 	if dry := m.rings.Load().dryHistory; before && dry != nil {
 		history = dry
 	}
-	end := m.Heard()
+	end := m.heardBy(t)
 	start := end - int64(len(out))
 	played := m.played.Load()
 	for i := range out {

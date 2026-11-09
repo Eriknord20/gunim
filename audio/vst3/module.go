@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -75,6 +77,9 @@ func binaryPath(path string) (string, error) {
 		}
 		lib = filepath.Join(path, "Contents", arch+"-win", name+".vst3")
 	case "darwin":
+		if exe := bundleExecutable(path); exe != "" {
+			name = exe
+		}
 		lib = filepath.Join(path, "Contents", "MacOS", name)
 	default:
 		lib = filepath.Join(path, "Contents", arch+"-linux", name+".so")
@@ -83,6 +88,42 @@ func binaryPath(path string) (string, error) {
 		return "", fmt.Errorf("vst3: %s holds no library for this platform: %w", path, err)
 	}
 	return lib, nil
+}
+
+// bundleExecutable returns the library a macOS bundle names in its
+// Info.plist, as CFBundleExecutable, which may differ from the bundle's
+// own name, as iZotope's do; or "" where it names none.
+func bundleExecutable(bundle string) string {
+	b, err := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist"))
+	if err != nil {
+		return ""
+	}
+	_, rest, ok := strings.Cut(string(b), "<key>CFBundleExecutable</key>")
+	if !ok {
+		return ""
+	}
+	rest = strings.TrimSpace(rest)
+	v, ok := strings.CutPrefix(rest, "<string>")
+	if !ok {
+		return ""
+	}
+	v, _, ok = strings.Cut(v, "</string>")
+	v = strings.TrimSpace(v)
+	if !ok || v == "" || strings.ContainsAny(v, "/\\") {
+		return ""
+	}
+	return v
+}
+
+// bundleOf returns the .vst3 folder that holds the macOS library bin, at
+// Contents/MacOS/<name>, or "" where bin is a bare file.
+func bundleOf(bin string) string {
+	macOS := filepath.Dir(bin)
+	contents := filepath.Dir(macOS)
+	if filepath.Base(macOS) != "MacOS" || filepath.Base(contents) != "Contents" {
+		return ""
+	}
+	return filepath.Dir(contents)
 }
 
 // Open loads the plugin at path, a .vst3 bundle or file, and reads the
@@ -100,10 +141,17 @@ func Open(path string) (*Module, error) {
 // loadModule loads the library bin of the plugin at path, on the
 // plugins' thread, as a module expects to be loaded.
 func loadModule(path, bin string) (*Module, error) {
+	// A plugin that catches its own faults is to go on doing so.
+	if err := installGuard(); err != nil {
+		return nil, fmt.Errorf("vst3: keeping a plugin's faults from ending the program: %w", err)
+	}
+	setUIOwner(path)
+	defer setUIOwner("")
 	lib, err := openLibrary(bin)
 	if err != nil {
 		return nil, fmt.Errorf("vst3: %s: %w", path, err)
 	}
+	ownFn(lib.base(), path)
 	m := &Module{Path: path, lib: lib}
 	getFactory, err := lib.symbol("GetPluginFactory")
 	if err != nil {
@@ -216,6 +264,11 @@ func (m *Module) create(id, iid uid) uintptr {
 		uintptr(unsafe.Pointer(&obj)))) != resultOK {
 		return 0
 	}
+	if obj == 0 {
+		// It said it made one.
+		return 0
+	}
+	ownFn(method(obj, 0), m.Path)
 	return obj
 }
 
@@ -224,7 +277,7 @@ func (m *Module) create(id, iid uid) uintptr {
 // nothing.
 func (m *Module) Close() error {
 	var err error
-	onUI(func() {
+	onExit(func() {
 		if m.factory != 0 {
 			release(m.factory)
 			m.factory = 0
@@ -233,6 +286,7 @@ func (m *Module) Close() error {
 		m.lib = library{}
 	})
 	forgetARAFactories(m)
+	forgetOwned(m.Path)
 	return err
 }
 

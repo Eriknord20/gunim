@@ -25,7 +25,7 @@ func (u *UI) shapePointer(root *state, p geom.Point) {
 			continue
 		}
 		named := input.CursorInherit
-		u.on(s, func() { named = cs.Cursor(u.local(s, p)) })
+		u.ask(s, func() { named = cs.Cursor(u.local(s, p)) })
 		if named != input.CursorInherit {
 			c = named
 			break

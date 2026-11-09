@@ -227,3 +227,111 @@ func TestADefaultFirstDialogTabsToOKFirst(t *testing.T) {
 		t.Fatalf("intents %v, want leave", got)
 	}
 }
+
+// A label stands level with its field's first line: beside a field as tall as a control, at its middle; beside a tall
+// field, as a column of controls, at its top, not halfway down.
+func TestAFormLabelStandsLevelWithItsFieldsFirstLine(t *testing.T) {
+	short := NewTextField()
+	tall := Column(NewCheckbox("One"), NewCheckbox("Two"), NewCheckbox("Three"), NewCheckbox("Four"))
+	form := NewForm().Add("Name", short).Add("Options", tall)
+	w, run := stage(t, &frame{child: form, size: geom.Sz(500, 300)})
+	run(10)
+	u := stageUI(t, w, run)
+	mid := func(n gunim.Node) float32 {
+		r, ok := u.Bounds(n)
+		if !ok {
+			t.Fatal("a part of the form does not show")
+		}
+		return r.Center().Y
+	}
+	if d := mid(form.rows[0].label) - mid(short); d < -1 || d > 1 {
+		t.Errorf("the label stands %v off its field's middle", d)
+	}
+	first, ok := u.Bounds(tall.Children()[0])
+	if !ok {
+		t.Fatal("the column does not show")
+	}
+	if d := mid(form.rows[1].label) - first.Center().Y; d < -2 || d > 2 {
+		t.Errorf("the label beside a tall field stands %v off its first line", d)
+	}
+}
+
+// Check's words fade in as the panel grows to hold them, frame by frame.
+// Other words fade the last ones out first, and the panel holds its height
+// as they change.
+func TestADialogsProblemGlidesIn(t *testing.T) {
+	host := NewTextField()
+	d := NewDialog("Connect to a server")
+	d.Body = NewForm().Add("Host", host)
+	say := "Say which server."
+	d.Check = func() string { return say }
+	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
+	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Client().Focus("d"); err != nil {
+		t.Fatal(err)
+	}
+	run := func(n int) {
+		for range n {
+			w.Frame(time.Second / 60)
+		}
+	}
+	run(120)
+	before := d.height
+
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	heights := make([]float32, 0, 90)
+	sawFade := false
+	for i := range 90 {
+		w.Frame(time.Second / 60)
+		heights = append(heights, d.height)
+		if i == 0 && d.problemClear != 0 {
+			t.Fatalf("the words show over the buttons, cleared %v, before the panel has grown", d.problemClear)
+		}
+		if v := d.problemIn.Value(); v > 0.1 && v < 0.9 {
+			sawFade = true
+		}
+	}
+	after := d.height
+	if after <= before {
+		t.Fatalf("the panel stayed %v tall with words to hold, was %v", after, before)
+	}
+	if d.problemClear != 1 {
+		t.Fatalf("the words stopped short of clearing the buttons: %v", d.problemClear)
+	}
+	if !sawFade {
+		t.Fatal("the words never showed part way faded in")
+	}
+	between, last := false, before
+	for _, h := range heights {
+		if h > before+1 && h < after-1 {
+			between = true
+		}
+		if h-last > (after-before)*0.6 {
+			t.Fatalf("the panel jumped from %v to %v on the way to %v", last, h, after)
+		}
+		last = h
+	}
+	if !between {
+		t.Fatalf("the panel never stood between %v and %v: %v", before, after, heights)
+	}
+
+	// Other words, of the same height: the last fade out, then the new in.
+	say = "That server is not known."
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(1)
+	if d.problem.Text != "Say which server." {
+		t.Fatalf("the words changed at once, to %q", d.problem.Text)
+	}
+	for range 90 {
+		w.Frame(time.Second / 60)
+		if d.height < after-1 || d.height > after+1 {
+			t.Fatalf("the panel moved to %v, from %v, as the words changed", d.height, after)
+		}
+	}
+	if d.problem.Text != say || d.problemIn.Value() != 1 {
+		t.Fatalf("the dialog says %q, faded in to %v", d.problem.Text, d.problemIn.Value())
+	}
+}

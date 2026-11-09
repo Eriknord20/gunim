@@ -5,7 +5,7 @@ the display's refresh rate.
 
 ## Status
 
-gunim runs on Windows 11, on Linux under X11, and on Android. On Windows
+gunim runs on Windows 11, on Linux under X11, on Android, and in a browser. On Windows
 each window draws at its own monitor's rate, with 60 Hz and 120 Hz
 monitors side by side. macOS builds and is still untested. The API
 still changes as the examples ask more of it.
@@ -187,13 +187,13 @@ album as one.
 Through an ASIO driver, the speakers play on any of its outputs, not
 just the first two: `Options.Outputs` picks them, the mixer plays on
 the first two picked, and `Options.Aux` fills the rest, such as a
-monitor mix on outputs 3 and 4, in step with the mixer. `asio.Channels`
+monitor mix on outputs 3 and 4, in step with the mixer. `driver.Channels`
 lists a driver's inputs and outputs by name.
 
 Package `audio/capture` records the computer's inputs: a microphone, a
 guitar through an audio interface, a synth's output. It records through
 PulseAudio or PipeWire on Linux and WASAPI on Windows, and through the
-ASIO driver the speakers play through, in step with its buffers. Each
+driver the speakers play through, ASIO or JACK, in step with its buffers. Each
 block it records is stamped with the mixer frame heard as it came in,
 so a recording lines up with what was playing. `Measure` plays a click
 and finds it in the recording, to tell how far the stamps are off.
@@ -203,7 +203,9 @@ effects and instruments in the system's folders and loads one. It runs
 sound through an effect in realtime or offline, plays notes on an
 instrument, with each note's own bend where the plugin takes VST3's
 note expression and the sustain pedal through the plugin's MIDI
-mapping, and carries sidechain inputs and extra outputs. It saves and
+mapping, and carries sidechain inputs and extra outputs. A note struck
+on a key already sounding on its channel ends the note before, as on a
+MIDI keyboard, since most plugins keep their notes by key. It saves and
 restores a plugin's state, and shows its own editor in a window, on
 Windows and Linux. A VST3 plugin also runs behind `audio/plug`'s
 interfaces, so a host plays VST3 and Go plugins through the same
@@ -245,12 +247,17 @@ Package `audioui` draws sound for audio programs: level meters and
 faders, a spectrum and a spectrogram, a waveform, and loudness readings
 and curves, in the colours of a dark studio.
 
-`audio/speaker` plays through a fork of oto,
-[marrasen/oto](https://github.com/marrasen/oto), which keeps a
+`audio/speaker` plays through gunim's own WASAPI, Core Audio, AAudio,
+PipeWire and ALSA code. Where that code fails to open on Windows, macOS
+or Android 8.1 and newer, `speaker.Open` returns the error. Linux plays
+on amd64 and arm64, through PipeWire or the first sound card. The
+browser and Android 8.0, which has no AAudio, play through a fork of
+oto, [marrasen/oto](https://github.com/marrasen/oto), which keeps a
 Bluetooth headset on Android from crackling and says how long the
 device takes to play what it is handed, so visuals keep time with the
 sound as heard. gunim requires the fork by its own module path, so a
-program built on gunim plays through it too.
+program built on gunim plays through it too. On any other system
+`speaker.Open` returns an error: there is no sound there yet.
 
 Widgets play cues as the user works them: a press, a switch turning on
 or off, a menu opening. They are silent until an application chooses
@@ -416,6 +423,52 @@ window for it, and ends. An update's window says when other copies are
 running, which would go on as the release before, and lets the user
 close them first.
 
+## In a browser
+
+The same programs build for a browser, drawing with WebGL2 into a canvas:
+
+```sh
+GOOS=js GOARCH=wasm go build -o app.wasm ./example/widgets
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
+```
+
+Serve those with a page that has a canvas and starts Go:
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<body style="margin:0">
+<canvas id="gunim" style="display:block;width:100%;height:100vh;height:100dvh"></canvas>
+<script src="wasm_exec.js"></script>
+<script>
+  const go = new Go();
+  WebAssembly.instantiateStreaming(fetch("app.wasm"), go.importObject).then(r => go.run(r.instance));
+</script>
+```
+
+The viewport tag has a phone lay the page out at its own width. Without it, the phone lays out about 980 px wide, and the canvas draws at less than the phone's full resolution where it passes what the GPU can draw. `100dvh` follows a phone's address bar as it comes and goes, and a browser without `dvh` uses the `100vh` before it.
+
+The canvas's CSS size is the window's size. One with no CSS size stays the size it starts at. With `height:auto` and a width, or the other way round, the free side follows at the ratio of the canvas's `width` and `height` attributes. If the page has no element with the id `gunim`, the driver makes a canvas that fills it, and sets the body's margin to 0.
+
+If the browser loses the GPU context, the canvas waits for it to come back. After 5 s with no context the page shows a short note with a Reload button, in English, in an element with the id `gunim-context-lost`, and the canvas's `data-gunim-context` attribute is `gone`. A page can style or hide the note and show its own.
+
+A canvas past what the GPU can draw stays whole and in its place. It draws at a lower scale, the browser stretches it to fit, and the log says so once.
+
+gunim takes every touch on the canvas and scrolls for itself. For the browser to have some, as vertical swipes to scroll the page, set `touch-action` on the canvas, in its `style` attribute or a stylesheet. Elements laid over the canvas keep their own events.
+
+Each key has one owner. The browser keeps reloading, zooming, the developer tools, going back and forward, tabs, the address bar, full screen and its settings, the system keeps Command+H, Command+M and Command+\`, and the program never hears those keys. Every other key with Control or Command goes to the program alone, so the browser's own find and print don't run in it. Cut, copy and paste in a text field stay the browser's.
+
+`driver/web`'s tests need a real browser. This builds them, runs them in headless Chrome and exits with their result:
+
+```sh
+go run ./tools/webtest
+```
+
+A test that skips fails the run. Name a browser with `-chrome path`. On Windows, or for another browser or a phone, `go run ./tools/webtest -serve 127.0.0.1:8784` serves the test page to open there. The result is on the page and in `window.testResult`.
+
+A browser holds sound back until the user's first click, key or touch. `speaker.Open` returns at once all the same, and what plays meanwhile sounds from that first gesture on.
+
+Host files, plugins, native audio drivers and other windows of the system aren't there.
+
 ## Android
 
 The same programs build for Android. `tools/gunimapk` turns one into an
@@ -476,10 +529,22 @@ what the APK may ask for. `App.UserFolder` finds the user's Music
 folder, on a phone or a desktop, and a folder chooser picks a folder on
 the phone's storage or a card as a path.
 
+`Client.ChooseFiles` shows Android's document picker and returns paths
+to copies of the files chosen, in the app's cache. `gunimapk -opens
+.hej,.hejprop` puts the program under "Open with" and in the share sheet
+for those extensions, and a node hears the files as `input.FilesOpened`,
+copied the same way, whether they start the program or reach it while
+it runs. The window holds them until a node takes them, so they wait
+for a view that mounts late. gunim clears these copies as the program
+next starts, and Android may clear them sooner, so copy what should
+last. `example/openfiles` shows both ways in.
+
 `Client.Share` hands text and files to other apps through Android's
 share sheet, and `Client.CanShare` says where there is one to show.
 `Client.Vibrate` runs the phone's vibration motor in a pattern of on
 and off times, as the web's `navigator.vibrate` does.
+`Client.KeepAwake(true)` keeps the screen on while the window shows, as
+during a recording, until `Client.KeepAwake(false)` or the window closes.
 `Client.TakeFingers(true)` lets a window take more than one finger at
 once, as a game steered with one thumb while the other taps: every
 finger reaches the node it came down on as `input.Finger`, a second one
@@ -850,7 +915,7 @@ path data.
 | `gunim` | `Node`, the presence lifecycle, the window and its frame loop, and its zoom with Ctrl and +, - and 0 or the wheel |
 | `gunim/anim` | `Animated[T]`, springs, tweens, easings |
 | `gunim/audio` | A mixer, voices with animated volume and pan, clips, decoders for WAV, MP3, Ogg Vorbis and FLAC, and an analyzer for visuals |
-| `gunim/audio/speaker` | Plays a mixer through the speakers, with oto |
+| `gunim/audio/speaker` | Plays a mixer through the speakers, by gunim's own WASAPI, Core Audio, AAudio, PipeWire and ALSA code, and by oto in the browser and on Android 8.0 |
 | `gunim/audio/capture` | Records the computer's inputs, stamped in the speaker's frames, and measures the round trip |
 | `gunim/audio/cues` | Quiet sounds made in code for the widgets' cues |
 | `gunim/audio/band` | Plays songs made for programs, as a game's music, such as looping parts that come and go |

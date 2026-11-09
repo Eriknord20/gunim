@@ -39,8 +39,8 @@ func TestAChromelessWindowReportsItsTitleBar(t *testing.T) {
 	if !w.ui.Chromeless() {
 		t.Fatal("the window says it has the system's title bar")
 	}
-	if !slices.Equal(fr.Caption, []geom.Rect{geom.Rc(100, 0, 200, 30)}) || fr.Maximize != geom.Rc(300, 0, 46, 30) {
-		t.Fatalf("the system was told the caption is %v and the maximize button %v", fr.Caption, fr.Maximize)
+	if !slices.Equal(fr.Caption(), []geom.Rect{geom.Rc(100, 0, 200, 30)}) || fr.MaximizeButton() != geom.Rc(300, 0, 46, 30) {
+		t.Fatalf("the system was told the caption is %v and the maximize button %v", fr.Caption(), fr.MaximizeButton())
 	}
 }
 
@@ -85,8 +85,8 @@ func TestATitleBarWithoutMaximizeKeepsTheWindowsSize(t *testing.T) {
 	strip := &fixedStrip{}
 	w.ui.Insert(w.ui.Root(), strip)
 	run(w, 1)
-	if !fr.Maximize.Empty() || len(fr.Caption) != 1 {
-		t.Fatalf("the system was told the caption is %v and the maximize button %v, want no button", fr.Caption, fr.Maximize)
+	if !fr.MaximizeButton().Empty() || len(fr.Caption()) != 1 {
+		t.Fatalf("the system was told the caption is %v and the maximize button %v, want no button", fr.Caption(), fr.MaximizeButton())
 	}
 	w.Input(input.PointerDown{Pos: geom.Pt(150, 15), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
 	w.Input(input.PointerDown{Pos: geom.Pt(150, 15), Button: input.ButtonPrimary, Clicks: 2, Time: time.Now()})
@@ -132,8 +132,8 @@ func TestAFixedWindowKeepsItsSize(t *testing.T) {
 	strip := &titleStrip{}
 	w.ui.Insert(w.ui.Root(), strip)
 	run(w, 1)
-	if !fr.Maximize.Empty() || len(fr.Caption) != 1 {
-		t.Fatalf("the system was told the caption is %v and the maximize button %v, want no button", fr.Caption, fr.Maximize)
+	if !fr.MaximizeButton().Empty() || len(fr.Caption()) != 1 {
+		t.Fatalf("the system was told the caption is %v and the maximize button %v, want no button", fr.Caption(), fr.MaximizeButton())
 	}
 	w.Input(input.PointerDown{Pos: geom.Pt(799, 599), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
 	if len(fr.Resizes) != 0 {
@@ -144,5 +144,35 @@ func TestAFixedWindowKeepsItsSize(t *testing.T) {
 	w.ui.ToggleMaximize()
 	if fr.IsMaximized || fr.Moves != 1 {
 		t.Fatalf("maximized %v after %d moves; want 1 move and no maximize", fr.IsMaximized, fr.Moves)
+	}
+}
+
+// While a popup a press outside dismisses is open, the system is told
+// of no caption, so a press on it reaches the window and dismisses the
+// popup; a popup that stays, as a tooltip, leaves the caption as it is.
+func TestAPopupOpenTakesTheCaptionAway(t *testing.T) {
+	w, fr, strip := chromelessStage(t, true)
+	caption := []geom.Rect{geom.Rc(100, 0, 200, 30)}
+	tip := w.ui.OpenPopup(strip, newMenu(), PopupOptions{Anchor: geom.Rect{Max: geom.Pt(100, 30)}})
+	run(w, 2)
+	if !slices.Equal(fr.Caption(), caption) {
+		t.Fatalf("with a tooltip open, the system was told the caption is %v", fr.Caption())
+	}
+	tip.Close()
+	dismissed := 0
+	pop := w.ui.OpenPopup(strip, newMenu(), PopupOptions{Anchor: geom.Rect{Max: geom.Pt(100, 30)},
+		Dismiss: func(*UI) { dismissed++ }})
+	run(w, 2)
+	if len(fr.Caption()) != 0 || fr.MaximizeButton() != geom.Rc(300, 0, 46, 30) {
+		t.Fatalf("with a menu open, the system was told the caption is %v and the maximize button %v", fr.Caption(), fr.MaximizeButton())
+	}
+	w.Input(input.PointerDown{Pos: geom.Pt(150, 15), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	if dismissed != 1 {
+		t.Fatalf("a press where the caption was dismissed the menu %d times", dismissed)
+	}
+	pop.Close()
+	run(w, 30)
+	if !slices.Equal(fr.Caption(), caption) {
+		t.Fatalf("with the menu closed, the system was told the caption is %v", fr.Caption())
 	}
 }

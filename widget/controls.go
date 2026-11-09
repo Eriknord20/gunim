@@ -57,10 +57,10 @@ func (t *toggle) SetChecked(on bool, u *gunim.UI) {
 	}
 	t.checked = on
 	if !t.laid || u == nil {
-		t.lit.Jump(value(on))
+		t.lit.Jump(anim.OnOff(on))
 		return
 	}
-	t.lit.Animate(value(on), Bounce.Get(u.Theme()))
+	t.lit.Animate(anim.OnOff(on), Bounce.Get(u.Theme()))
 }
 
 func (t *toggle) flip(n gunim.Node, u *gunim.UI) {
@@ -70,7 +70,7 @@ func (t *toggle) flip(n gunim.Node, u *gunim.UI) {
 	} else {
 		u.Cue(gunim.CueToggleOff, n)
 	}
-	t.lit.Animate(value(t.checked), Bounce.Get(u.Theme()))
+	t.lit.Animate(anim.OnOff(t.checked), Bounce.Get(u.Theme()))
 	if t.OnChange != nil {
 		send(u, n, t.OnChange(t.checked, u))
 	}
@@ -124,7 +124,7 @@ func (t *toggle) handle(n gunim.Node, e input.Event, u *gunim.UI) bool {
 // layout sizes the control: its mark, a gap, and its label.
 func (t *toggle) layout(c gunim.Constraints, f gunim.Frame, mark geom.Size) geom.Size {
 	if !t.laid {
-		t.lit.Jump(value(t.checked))
+		t.lit.Jump(anim.OnOff(t.checked))
 	}
 	t.follow(f.Theme)
 	w, h := mark.W, mark.H
@@ -508,6 +508,11 @@ func (s *Slider) Handle(e input.Event, u *gunim.UI) bool {
 			s.commit(u)
 		}
 	case input.KeyPress:
+		// Ctrl, Alt or Super with a key is the window's shortcut, such as
+		// Alt+Left to the loop's start: the slider leaves it be.
+		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
+			return false
+		}
 		// Shift steps ten times as far.
 		if e.Mods.Has(input.ModShift) {
 			step *= 10
@@ -836,6 +841,11 @@ func (b *tabBar) Handle(e input.Event, u *gunim.UI) bool {
 		t.scrollTo(to, Quick.Get(th))
 		u.Invalidate()
 	case input.KeyPress:
+		// Ctrl, Alt or Super with a key is the window's shortcut, such as
+		// Alt+Left to the loop's start: the tab strip leaves it be.
+		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
+			return false
+		}
 		switch e.Key {
 		case input.KeyLeft:
 			t.choose(t.enabled(t.selected-1, -1), u)
@@ -1104,13 +1114,6 @@ func bar(p *paint.Painter, a, b geom.Point, thick float32, c color.NRGBA) {
 
 func lerpPt(a, b geom.Point, t float32) geom.Point {
 	return geom.Pt(a.X+(b.X-a.X)*t, a.Y+(b.Y-a.Y)*t)
-}
-
-func value(on bool) float32 {
-	if on {
-		return 1
-	}
-	return 0
 }
 
 // enabled returns the first tab from i on, going by dir, that can be
