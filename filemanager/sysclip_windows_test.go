@@ -275,3 +275,24 @@ func TestAStreamThatFailsAsTheClipboardChangesSaysTheClipboardChanged(t *testing
 		t.Fatalf("a stream that failed as the clipboard changed ends with %v", err)
 	}
 }
+
+func TestAStreamSlowToAnswerIsPacedByWhatItMoved(t *testing.T) {
+	var asked []uintptr
+	// The stream hands over a quarter of what it is asked for.
+	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
+		asked = append(asked, size)
+		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size / 4)
+		return 0
+	})}
+	s.piece = maxPiece
+	s.since = func(time.Time) time.Duration { return 2 * time.Second }
+	for range 2 {
+		if _, err := s.Read(make([]byte, maxPiece)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// It moved maxPiece/4 in 2 s, so maxPiece/8 in a second.
+	if asked[1] != maxPiece/8 {
+		t.Fatalf("a slow stream that moved a quarter of what it was asked was then asked for %d", asked)
+	}
+}
