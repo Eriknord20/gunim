@@ -149,11 +149,45 @@ func (t xdgTrash) Restore(original, trashed string, _ time.Time, to string) erro
 	if err := mkdirAll(fsys, ps.Dir(to), 0o755); err != nil {
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
-	if err := fsys.Rename(trashed, to); err != nil {
+	if err := t.renameAbsent(trashed, to); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("%s exists again; move it away to restore the one in the trash", to)
+		}
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
 	if err := fsys.Remove(record); err != nil {
 		return fmt.Errorf("restored %s, but removing its trash record failed: %w", to, err)
+	}
+	return nil
+}
+
+// renameAbsent moves an item to a path where nothing is. On a file system
+// that renames so in one step, an item that turns up at the path
+// meanwhile is never replaced; on another, Restore's look at the path just
+// before is all there is.
+func (t xdgTrash) renameAbsent(from, to string) error {
+	fsys, _ := t.on()
+	if r, ok := fsys.(NoReplaceRenamer); ok {
+		return r.RenameNoReplace(from, to)
+	}
+	return fsys.Rename(from, to)
+}
+
+// sameItem checks that the trash keeps at it.ID the item it was listed as:
+// its record still says it came from the same place at the same time. A
+// name in the trash freed by a restore is taken by the next item of that
+// name deleted.
+func (t xdgTrash) sameItem(it TrashItem) error {
+	_, ps := t.on()
+	if !ps.Same(ps.Dir(it.ID), ps.Join(t.dir, "files")) {
+		return fmt.Errorf("%s is not in the trash", it.ID)
+	}
+	from, deleted, err := t.read(t.recordOf(it.ID))
+	if err != nil {
+		return err
+	}
+	if !ps.Same(from, it.Original) || !deleted.Equal(it.Deleted) {
+		return fmt.Errorf("the trash no longer holds the %s listed; read it again", it.Name)
 	}
 	return nil
 }
@@ -190,8 +224,13 @@ func (t xdgTrash) read(path string) (from string, deleted time.Time, err error) 
 			p = filepath.FromSlash(p)
 		}
 		if !t.absolute(p) {
-			// A trash on another volume keeps paths from the volume's top.
-			p = ps.Join(ps.Dir(t.dir), p)
+			// A trash on another volume keeps paths from the volume's top,
+			// and a path that climbs out of it is no record's.
+			top := ps.Dir(t.dir)
+			p = ps.Join(top, p)
+			if !ps.inside(p, top) || ps.Same(p, top) {
+				return "", time.Time{}, fmt.Errorf("the trash record %s says the item came from outside its volume: %w", path, errBadRecord)
+			}
 		}
 		from = p
 	}
@@ -291,15 +330,18 @@ func (t xdgTrash) TrashItems(ctx context.Context) ([]TrashItem, error) {
 
 // RestoreItem implements [TrashCan].
 func (t xdgTrash) RestoreItem(it TrashItem) error {
+	if err := t.sameItem(it); err != nil {
+		return err
+	}
 	return t.Restore(it.Original, it.ID, it.Deleted, it.Original)
 }
 
 // PurgeItem implements [TrashCan]: the item goes, and then its record, so
 // an item that goes only in part is still listed.
 func (t xdgTrash) PurgeItem(ctx context.Context, it TrashItem) error {
-	fsys, ps := t.on()
-	if !ps.Same(ps.Dir(it.ID), ps.Join(t.dir, "files")) {
-		return fmt.Errorf("%s is not in the trash", it.ID)
+	fsys, _ := t.on()
+	if err := t.sameItem(it); err != nil {
+		return err
 	}
 	if err := removeAll(ctx, fsys, it.ID); err != nil {
 		return fmt.Errorf("deleting %s: %w", it.Name, err)

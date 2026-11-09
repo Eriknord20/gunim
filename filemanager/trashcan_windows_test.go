@@ -4,9 +4,13 @@ package filemanager
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // binItemFrom finds the item that came from path in the real Recycle Bin.
@@ -103,4 +107,92 @@ func TestTheRecycleBinTouchesNothingOutsideIt(t *testing.T) {
 			t.Fatalf("%s holds %q", name, got)
 		}
 	}
+}
+
+func TestTheRecycleBinsRecordsRead(t *testing.T) {
+	dir := t.TempDir()
+	kept := filepath.Join(dir, "$RABC123.txt")
+	at := time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
+	ft := windows.NsecToFiletime(at.UnixNano())
+	path := `C:\Users\me\notes.txt`
+	units, err := windows.UTF16FromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := func(version uint64) []byte {
+		b := binary.LittleEndian.AppendUint64(nil, version)
+		b = binary.LittleEndian.AppendUint64(b, 42)
+		b = binary.LittleEndian.AppendUint32(b, ft.LowDateTime)
+		return binary.LittleEndian.AppendUint32(b, ft.HighDateTime)
+	}
+	v1 := head(1)
+	for i := range 260 {
+		var u uint16
+		if i < len(units) {
+			u = units[i]
+		}
+		v1 = binary.LittleEndian.AppendUint16(v1, u)
+	}
+	v2 := binary.LittleEndian.AppendUint32(head(2), uint32(len(units)))
+	for _, u := range units {
+		v2 = binary.LittleEndian.AppendUint16(v2, u)
+	}
+	for name, b := range map[string][]byte{"version 1": v1, "version 2": v2} {
+		if err := os.WriteFile(recordOf(kept), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		from, deleted, err := readBinRecord(kept)
+		if err != nil || from != path || !deleted.Equal(at) {
+			t.Errorf("a %s record reads as %q, %v, %v", name, from, deleted, err)
+		}
+	}
+	for name, b := range map[string][]byte{"short": v2[:20], "cut": v2[:30], "unknown": head(3)} {
+		if err := os.WriteFile(recordOf(kept), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := readBinRecord(kept); err == nil {
+			t.Errorf("a %s record read", name)
+		}
+	}
+}
+
+// TestTheRecycleBinActsOnlyOnTheItemListed lists an item of the real
+// Recycle Bin, changes its record as another deletion that took its name
+// would, and checks the row listed before is refused. It runs only with
+// GUNIM_FILES_RECYCLE_TEST=1.
+func TestTheRecycleBinActsOnlyOnTheItemListed(t *testing.T) {
+	if os.Getenv("GUNIM_FILES_RECYCLE_TEST") != "1" {
+		t.Skip("set GUNIM_FILES_RECYCLE_TEST=1 to use the real Recycle Bin")
+	}
+	if n, err := binItems(); err != nil {
+		t.Fatal(err)
+	} else if n < 0 {
+		t.Fatalf("the bin holds %d items", n)
+	}
+	root := t.TempDir()
+	p := filepath.Join(root, "gunim-bin-listed.txt")
+	if err := os.WriteFile(p, []byte("listed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (recycleBin{}).Trash(p); err != nil {
+		t.Fatal(err)
+	}
+	listed, ok := binItemFrom(t, p)
+	if !ok {
+		t.Fatalf("the Recycle Bin does not list %s", p)
+	}
+	stale := listed
+	stale.Deleted = stale.Deleted.Add(-time.Minute)
+	if err := (recycleBin{}).PurgeItem(context.Background(), stale); err == nil {
+		t.Fatal("deleting a row whose record says another time worked")
+	}
+	stale = listed
+	stale.Original = filepath.Join(root, "elsewhere.txt")
+	if err := (recycleBin{}).RestoreItem(stale); err == nil {
+		t.Fatal("restoring a row whose record says another place worked")
+	}
+	if err := (recycleBin{}).PurgeItem(context.Background(), listed); err != nil {
+		t.Fatal(err)
+	}
+	noRecord(t, listed)
 }

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -424,16 +425,22 @@ func TestANarrowTrashPageLeavesItsTitleOut(t *testing.T) {
 	h := newTrashHarness(t, nil, "a.txt")
 	pg := h.openTrashPage(Command{Name: CmdTrashCan})
 	h.frames(20)
-	if pg.title.Text == "" {
-		t.Fatal("a wide page shows no title")
+	if pg.title.Text == "" || pg.titleFade.alpha() != 1 {
+		t.Fatalf("a wide page shows the title %q at %v", pg.title.Text, pg.titleFade.alpha())
 	}
 	h.w.Offscreen().Resize(geom.Sz(480, 500))
-	h.frames(20)
-	var title, restore geom.Rect
-	h.ui(func(_ *browser, u *gunim.UI) { title, _ = u.Bounds(pg.title); restore, _ = u.Bounds(pg.restore) })
-	if pg.title.Text != "" && title.Max.X > restore.Min.X {
-		t.Fatalf("the title %v runs under Restore %v", title, restore)
+	h.frames(5)
+	if a := pg.titleFade.alpha(); a == 0 || a == 1 {
+		t.Errorf("the title is at %v a moment after the page narrowed, not on its way out", a)
 	}
+	h.until("the title has faded out", func() bool { return pg.titleFade.alpha() == 0 })
+	var title geom.Rect
+	h.ui(func(_ *browser, u *gunim.UI) { title, _ = u.Bounds(pg.title) })
+	if title.Size().W > 1 {
+		t.Fatalf("the faded title still takes %v", title)
+	}
+	h.w.Offscreen().Resize(geom.Sz(1100, 700))
+	h.until("the title comes back", func() bool { return pg.titleFade.alpha() == 1 })
 }
 
 // slowList is a trash whose listing waits for the gate to open.
@@ -478,4 +485,53 @@ func TestTheTrashStillOpensOnAFileSystemGoneBackTo(t *testing.T) {
 	if _, ok := h.a.trashCan(); !ok || h.a.shell.NoTrashCan != !canOpen(LocalFS().(Trasher)) {
 		t.Fatalf("gone back to, the trash opens %v, and Go › Trash is dimmed %v", ok, h.a.shell.NoTrashCan)
 	}
+}
+
+// secondFails is a trash whose second restore fails.
+type secondFails struct {
+	xdgTrash
+	calls *atomic.Int32
+}
+
+func (s secondFails) RestoreItem(it TrashItem) error {
+	if s.calls.Add(1) == 2 {
+		return errors.New("the disk said no")
+	}
+	return s.xdgTrash.RestoreItem(it)
+}
+
+func TestARestoreStopsAtTheFirstItemThatFails(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt", "c.txt"}, "a.txt", "b.txt", "c.txt")
+	var calls atomic.Int32
+	h.a.trash = secondFails{xdgTrash: h.a.trash.(xdgTrash), calls: &calls}
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.pickTrash(pg, "a.txt", "b.txt", "c.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("the restore ends", func() bool { return pg.state.Note != "" && !pg.state.Busy && !pg.state.Reading })
+	if calls.Load() != 2 {
+		t.Fatalf("the restore tried %d items, want it to stop at the second", calls.Load())
+	}
+	if back := btoi(h.exists("a.txt")) + btoi(h.exists("b.txt")) + btoi(h.exists("c.txt")); back != 1 {
+		t.Fatalf("%d items came back, want the one before the failure", back)
+	}
+	if !pg.state.NoteErr || !strings.Contains(pg.state.Note, "1 item restored; stopped at") || !strings.Contains(pg.state.Note, "the disk said no") {
+		t.Fatalf("the page says %q", pg.state.Note)
+	}
+	if len(pg.rows) != 2 {
+		t.Fatalf("the trash lists %d items, want the two not restored", len(pg.rows))
+	}
+}
+
+func TestRestoredRowsLeaveAndTheNoteFadesIn(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt", "b.txt"}, "a.txt", "b.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.frames(30)
+	h.pickTrash(pg, "a.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("a.txt's row leaves", func() bool { return pg.grid.Leaving() > 0 })
+	h.until("the note that it was restored shows", func() bool { return strings.Contains(pg.foot.Text, "restored") })
+	if a := pg.footFade.alpha(); a >= 1 {
+		t.Errorf("the note showed at once, at %v, rather than fading in", a)
+	}
+	h.until("the note has faded in", func() bool { return pg.footFade.alpha() == 1 })
 }

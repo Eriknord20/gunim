@@ -145,8 +145,8 @@ func (a *app) defaultPlaces() ([]Place, error) {
 			out[1].Free, out[1].Total = free, total
 		}
 	}
-	if _, ok := a.trashCan(); ok {
-		out = append(out, Place{Name: "Trash", Path: TrashPath, Kind: "trash", FS: a.fs.ID()})
+	if p, ok := TrashPlace(a.fs); ok {
+		out = append(out, p)
 	}
 	return out, nil
 }

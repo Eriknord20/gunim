@@ -3,6 +3,7 @@
 package filemanager
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -108,58 +109,134 @@ func onCOM(fn func() error) error {
 }
 
 // Restore implements [Trasher]: it finds the item that came from original
-// closest to time at in the Recycle Bin, and moves it to the path to with
-// the shell, which clears its record.
+// closest to time at in the Recycle Bin, and moves it to the path to.
 func (recycleBin) Restore(original, _ string, at time.Time, to string) error {
-	return restoreTo(to, func() (unsafe.Pointer, error) { return findRecycled(original, at) })
-}
-
-// restoreTo moves the item find returns out of the Recycle Bin to the
-// path to, where nothing may be.
-func restoreTo(to string, find func() (unsafe.Pointer, error)) error {
-	if _, err := os.Lstat(to); err == nil {
-		return fmt.Errorf("%s exists again; move it away to restore the one in the Recycle Bin", to)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("restoring %s: %w", to, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
-		return fmt.Errorf("restoring %s: %w", to, err)
-	}
 	var kept string
 	err := onCOM(func() error {
-		item, err := find()
+		item, err := findRecycled(original, at)
 		if err != nil {
 			return err
 		}
 		defer release(item)
-		kept, _ = shellName(item, sigdnFileSysPath)
-		return shellMove(item, to)
+		kept, err = shellName(item, sigdnFileSysPath)
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := os.Lstat(to); err != nil {
-		return fmt.Errorf("the Recycle Bin did not put %s back: %w", to, err)
+	if err := inBin(kept); err != nil {
+		return err
 	}
-	dropRecord(kept)
+	return restoreKept(kept, to)
+}
+
+// inBin checks that kept is a file the Recycle Bin keeps an item as: $R
+// and a few letters, in a folder of $Recycle.Bin, and that it is there.
+func inBin(kept string) error {
+	if !strings.HasPrefix(filepath.Base(kept), "$R") ||
+		!strings.EqualFold(filepath.Base(filepath.Dir(filepath.Dir(kept))), "$Recycle.Bin") {
+		return fmt.Errorf("%s is not an item of the Recycle Bin", kept)
+	}
+	if _, err := os.Lstat(kept); err != nil {
+		return fmt.Errorf("the Recycle Bin no longer holds %s; it may have been restored or emptied: %w", kept, err)
+	}
 	return nil
 }
 
-// dropRecord removes the record the Recycle Bin keeps of the item it kept
-// at kept, the $I file beside the $R one, once the item is gone from
-// there. The shell's file operations move or delete the $R file alone,
-// and the record left would stay in the bin's folder until it is
-// emptied. A record that will not go is left: the bin lists nothing for
-// it.
-func dropRecord(kept string) {
-	base := filepath.Base(kept)
-	if !strings.HasPrefix(base, "$R") {
-		return
+// restoreKept moves the item the Recycle Bin keeps at kept to the path to,
+// in one step that fails where anything is at to, so nothing that turns
+// up there is replaced, and then removes its record. The bin keeps an
+// item on the volume it came from, so the move is a rename.
+func restoreKept(kept, to string) error {
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return fmt.Errorf("restoring %s: %w", to, err)
 	}
-	if _, err := os.Lstat(kept); !errors.Is(err, fs.ErrNotExist) {
-		return
+	from, err := windows.UTF16PtrFromString(kept)
+	if err != nil {
+		return fmt.Errorf("restoring %s: %w", to, err)
 	}
-	_ = os.Remove(filepath.Join(filepath.Dir(kept), "$I"+base[2:]))
+	dest, err := windows.UTF16PtrFromString(to)
+	if err != nil {
+		return fmt.Errorf("restoring %s: %w", to, err)
+	}
+	// No MOVEFILE_REPLACE_EXISTING: the move fails where something is at to.
+	if err := windows.MoveFileEx(from, dest, windows.MOVEFILE_COPY_ALLOWED); err != nil {
+		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
+			return fmt.Errorf("%s exists again; move it away to restore the one in the Recycle Bin", to)
+		}
+		return fmt.Errorf("restoring %s: %w", to, err)
+	}
+	if err := dropRecord(kept); err != nil {
+		return fmt.Errorf("restored %s, but %w", to, err)
+	}
+	return nil
+}
+
+// recordOf is the record the Recycle Bin keeps of the item it keeps at
+// kept: the $I file beside the $R one.
+func recordOf(kept string) string {
+	return filepath.Join(filepath.Dir(kept), "$I"+strings.TrimPrefix(filepath.Base(kept), "$R"))
+}
+
+// readBinRecord reads the record the Recycle Bin keeps of the item at
+// kept: where the item came from, and when it was deleted. A record is a
+// version, the item's size and the time as a FILETIME, eight bytes each,
+// then the path in UTF-16: in 260 units in version 1, and after its
+// length in units, four bytes, in version 2.
+func readBinRecord(kept string) (string, time.Time, error) {
+	b, err := os.ReadFile(recordOf(kept))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("reading the Recycle Bin's record of %s: %w", kept, err)
+	}
+	bad := fmt.Errorf("the Recycle Bin's record of %s cannot be read", kept)
+	if len(b) < 24 {
+		return "", time.Time{}, bad
+	}
+	ft := windows.Filetime{LowDateTime: binary.LittleEndian.Uint32(b[16:]), HighDateTime: binary.LittleEndian.Uint32(b[20:])}
+	var name []byte
+	switch binary.LittleEndian.Uint64(b) {
+	case 1:
+		if len(b) < 24+520 {
+			return "", time.Time{}, bad
+		}
+		name = b[24 : 24+520]
+	case 2:
+		if len(b) < 28 {
+			return "", time.Time{}, bad
+		}
+		n := int(binary.LittleEndian.Uint32(b[24:]))
+		if n <= 0 || len(b) < 28+2*n {
+			return "", time.Time{}, bad
+		}
+		name = b[28 : 28+2*n]
+	default:
+		return "", time.Time{}, bad
+	}
+	units := make([]uint16, len(name)/2)
+	for i := range units {
+		units[i] = binary.LittleEndian.Uint16(name[2*i:])
+	}
+	path := windows.UTF16ToString(units)
+	if path == "" {
+		return "", time.Time{}, bad
+	}
+	return path, time.Unix(0, ft.Nanoseconds()), nil
+}
+
+// dropRecord removes the record of the item the Recycle Bin kept at kept,
+// once the item is gone from there. A move or a delete takes the $R file
+// alone, and the record left would stay in the bin's folder until it is
+// emptied.
+func dropRecord(kept string) error {
+	if _, err := os.Lstat(kept); err == nil {
+		return fmt.Errorf("the Recycle Bin still keeps %s", kept)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("looking for %s in the Recycle Bin: %w", kept, err)
+	}
+	if err := os.Remove(recordOf(kept)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing the Recycle Bin's record of it failed: %w", err)
+	}
+	return nil
 }
 
 // Describe implements [Trasher].
@@ -187,7 +264,7 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 			}
 		}
 	}()
-	err := eachRecycled(false, func(r recycled) bool {
+	err := eachRecycled(func(r recycled) bool {
 		if rankRecycled(r.binItem, original, at) == 0 {
 			release(r.item)
 			return true
@@ -215,8 +292,8 @@ func findRecycled(original string, at time.Time) (unsafe.Pointer, error) {
 
 // eachRecycled hands fn each item in the Recycle Bin, as readRecycled
 // reads it, until fn returns false. fn releases the item it is handed. An
-// item that cannot be read fails it, or with skip is passed by.
-func eachRecycled(skip bool, fn func(r recycled) bool) error {
+// item that cannot be read fails it.
+func eachRecycled(fn func(r recycled) bool) error {
 	var bin unsafe.Pointer
 	hr, _, _ := procSHGetKnownFolderItem.Call(uintptr(unsafe.Pointer(&folderRecycleBin)), 0, 0,
 		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&bin)))
@@ -242,9 +319,6 @@ func eachRecycled(skip bool, fn func(r recycled) bool) error {
 		}
 		r, err := readRecycled(child)
 		release(child)
-		if err != nil && skip {
-			continue
-		}
 		if err != nil {
 			return err
 		}
@@ -312,29 +386,6 @@ func shellName(item unsafe.Pointer, sigdn uint32) (string, error) {
 	}
 	defer func() { _, _, _ = procCoTaskMemFree.Call(uintptr(unsafe.Pointer(p))) }()
 	return windows.UTF16PtrToString(p), nil
-}
-
-// shellMove moves item to the path to with IFileOperation, without any
-// window of its own.
-func shellMove(item unsafe.Pointer, to string) error {
-	dir, err := windows.UTF16PtrFromString(filepath.Dir(to))
-	if err != nil {
-		return fmt.Errorf("restoring %s: %w", to, err)
-	}
-	name, err := windows.UTF16PtrFromString(filepath.Base(to))
-	if err != nil {
-		return fmt.Errorf("restoring %s: %w", to, err)
-	}
-	var dest unsafe.Pointer
-	hr, _, _ := procSHCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(dir)), 0,
-		uintptr(unsafe.Pointer(&iidShellItem)), uintptr(unsafe.Pointer(&dest)))
-	if failed(uint32(hr)) {
-		return fmt.Errorf("finding the folder %s: HRESULT %#x", filepath.Dir(to), uint32(hr))
-	}
-	defer release(dest)
-	return fileOp("restoring "+to, func(op unsafe.Pointer) uint32 {
-		return comCall(op, vtMoveItem, uintptr(item), uintptr(dest), uintptr(unsafe.Pointer(name)), 0)
-	})
 }
 
 // fileOp runs the operation add puts on an IFileOperation, without any

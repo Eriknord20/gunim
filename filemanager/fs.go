@@ -108,6 +108,16 @@ type TrashItem struct {
 	Dir  bool
 }
 
+// NoReplaceRenamer is a file system that renames in one step that fails
+// where something is at the new path. The trash restores through it where
+// the file system has it, so an item that turns up where another is
+// restored is never replaced.
+type NoReplaceRenamer interface {
+	// RenameNoReplace moves the item at from to to, and fails with an
+	// error that matches fs.ErrExist where something is at to.
+	RenameNoReplace(from, to string) error
+}
+
 // SpaceReporter is a file system that knows how much room its volumes
 // have. Without one, or when Space fails with an error that matches
 // errors.ErrUnsupported, the window says nothing of free space.

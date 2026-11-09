@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"cmp"
+	"image/color"
 	"slices"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -60,6 +62,9 @@ type trashPage struct {
 	menuActs []string
 	// heading is the title, which a narrow page leaves out.
 	heading string
+	// msgFade, footFade and titleFade fade the page's words as they
+	// change.
+	msgFade, footFade, titleFade *fader
 }
 
 func newTrashPage() *trashPage {
@@ -125,14 +130,61 @@ func newTrashPage() *trashPage {
 	pg.msg.Color, pg.msg.Align = Faint, text.AlignCenter
 	pg.foot = widget.NewLabel("")
 	pg.foot.Size, pg.foot.MaxLines = SmallText, 2
+	pg.msgFade, pg.footFade, pg.titleFade = newFader(pg.msg), newFader(pg.foot), newFader(pg.title)
+	pg.Add(pg.msgFade.in, pg.footFade.in, pg.titleFade.in)
 	return pg
 }
+
+// fader fades a label's text as it changes: a new text comes in from
+// nothing, and a text that goes fades out where it was.
+type fader struct {
+	label *widget.Label
+	in    *anim.Float
+	// to is the text it shows or is fading to, and ink its colour.
+	to  string
+	ink theme.Token[color.NRGBA]
+}
+
+func newFader(l *widget.Label) *fader { return &fader{label: l, in: anim.NewFloat(0), ink: l.Color} }
+
+// show fades words in, in ink, or the words showing out where words is
+// empty. Without th, before the page is laid out, it shows at once.
+func (f *fader) show(words string, ink theme.Token[color.NRGBA], th *theme.Live) {
+	if words == f.to && ink.Key() == f.ink.Key() {
+		return
+	}
+	f.to, f.ink = words, ink
+	if th == nil {
+		f.label.Text, f.label.Color = words, ink
+		f.in.Jump(map[bool]float32{false: 0, true: 1}[words != ""])
+		return
+	}
+	if words == "" {
+		f.in.Animate(0, widget.Settle.Get(th))
+		return
+	}
+	f.label.Text, f.label.Color = words, ink
+	f.in.Jump(0)
+	f.in.Animate(1, widget.Quick.Get(th))
+}
+
+// alpha is how far the text shows, from 0 to 1.
+func (f *fader) alpha() float32 { return min(max(f.in.Value(), 0), 1) }
 
 // set takes the page's state.
 func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	first := pg.state.Seq == 0
 	fresh := first || s.RowsGen != pg.state.RowsGen
 	keep := keySet(pg.selectedKeys())
+	var th *theme.Live
+	if !first {
+		th = u.Theme()
+	}
+	if fresh && !first {
+		// The rows that went, as restored or deleted, leave while the
+		// grid still draws them as they were.
+		pg.grid.Leave(pg.gone(s.Rows), u)
+	}
 	pg.state = s
 	title := s.Title
 	if s.Where != "" {
@@ -148,20 +200,24 @@ func (pg *trashPage) set(s Trash, u *gunim.UI) {
 	}
 	switch {
 	case s.Err != "":
-		pg.msg.Color, pg.msg.Text = ErrorInk, s.Err
+		pg.msgFade.show(s.Err, ErrorInk, th)
 	case s.Reading && len(s.Rows) == 0:
-		pg.msg.Color, pg.msg.Text = Faint, "Reading the "+trashNoun(s.Title)+"…"
+		pg.msgFade.show("Reading the "+trashNoun(s.Title)+"…", Faint, th)
 	case len(s.Rows) == 0:
-		pg.msg.Color, pg.msg.Text = Faint, "The "+trashNoun(s.Title)+" is empty."
+		pg.msgFade.show("The "+trashNoun(s.Title)+" is empty.", Faint, th)
 	default:
-		pg.msg.Text = ""
+		pg.msgFade.show("", Faint, th)
 	}
-	pg.foot.Color, pg.foot.Text = Faint, pg.summary()
-	if s.Note != "" {
-		pg.foot.Color, pg.foot.Text = Faint, s.Note
-		if s.NoteErr {
-			pg.foot.Color = ErrorInk
-		}
+	switch {
+	case s.Note == "":
+		pg.footFade.show(pg.summary(), Faint, th)
+	case s.NoteErr:
+		pg.footFade.show(s.Note, ErrorInk, th)
+	default:
+		pg.footFade.show(s.Note, Faint, th)
+	}
+	if first {
+		pg.titleFade.show(pg.heading, widget.Ink, nil)
 	}
 	pg.enable()
 	if first {
@@ -282,6 +338,21 @@ func (pg *trashPage) row(i int) (widget.GridRow, bool) {
 		{{Text: r.Deleted, Ink: Faint}},
 		{{Text: r.Size, Ink: Faint}},
 	}}, true
+}
+
+// gone are the indexes of the rows shown whose items rows no longer has.
+func (pg *trashPage) gone(rows []TrashRow) []int {
+	have := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		have[r.Key] = true
+	}
+	var out []int
+	for i, r := range pg.rows {
+		if !have[r.Key] {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // keySet is keys as a set.
@@ -463,13 +534,15 @@ func (pg *trashPage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(40, 40)})
 			k.Place(geom.Pt(usageMargin-6, (trashHeadH-s.H)/2))
 		case gunim.Node(pg.title):
-			// Narrow, the title gives its room to the buttons.
+			// Narrow, the title fades out and gives its room to the
+			// buttons; a width of 0 would be no limit.
 			room := right - left
-			pg.title.Text = pg.heading
 			if room < trashTitleLeast {
-				pg.title.Text, room = "", 1
+				pg.titleFade.show("", widget.Ink, f.Theme)
+			} else {
+				pg.titleFade.show(pg.heading, widget.Ink, f.Theme)
 			}
-			s := k.Layout(gunim.Constraints{Max: geom.Sz(room, 0)})
+			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(room, 1), 0)})
 			k.Place(geom.Pt(left, (trashHeadH-s.H)/2))
 		case gunim.Node(pg.menu):
 			k.Layout(gunim.Tight(geom.Sz(w, bodyH)))
@@ -494,6 +567,23 @@ func (pg *trashPage) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids 
 	defer p.Push(paint.Translate(geom.Pt(0, 14*(1-in))))()
 	p.RRect(r, 0, paint.Solid(PaneFill.Get(f.Theme)))
 	for k := range kids.All {
-		k.Paint(p)
+		var fade *fader
+		switch k.Node() {
+		case gunim.Node(pg.msg):
+			fade = pg.msgFade
+		case gunim.Node(pg.foot):
+			fade = pg.footFade
+		case gunim.Node(pg.title):
+			fade = pg.titleFade
+		}
+		if fade == nil {
+			k.Paint(p)
+			continue
+		}
+		if a := fade.alpha(); a > 0 {
+			done := p.Layer(paint.LayerOpts{Bounds: r, Opacity: a})
+			k.Paint(p)
+			done()
+		}
 	}
 }

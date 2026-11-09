@@ -46,14 +46,27 @@ func LocalPlaces() ([]Place, error) {
 		}
 		out = append(out, v)
 	}
-	if _, err := systemTrashCan(); err == nil {
-		name := "Trash"
-		if runtime.GOOS == "windows" {
-			name = "Recycle Bin"
-		}
-		out = append(out, Place{Name: name, Path: TrashPath, Kind: "trash"})
+	if p, ok := TrashPlace(LocalFS()); ok {
+		out = append(out, p)
 	}
 	return out, nil
+}
+
+// TrashPlace is the sidebar's place for the trash of fsys, and false where
+// a window cannot open a trash there. LocalPlaces has it for the
+// computer's own file system, and a window that is given no places has it
+// for any; a program that gives the places itself, with Options.Places or
+// PlacesOn, adds it where it wants the trash among them.
+func TrashPlace(fsys FS) (Place, bool) {
+	t, _ := optional[Trasher](fsys)
+	if !canOpen(t) {
+		return Place{}, false
+	}
+	name := "Trash"
+	if _, local := bareTrash(t).(localFS); local && runtime.GOOS == "windows" {
+		name = "Recycle Bin"
+	}
+	return Place{Name: name, Path: TrashPath, Kind: "trash", FS: fsys.ID()}, true
 }
 
 // rootCause returns the innermost error err wraps.

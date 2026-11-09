@@ -326,3 +326,98 @@ func TestTheTrashListsItsItemsInOneRead(t *testing.T) {
 		t.Fatalf("listing the trash looked at its items one by one, %d times", n.Load())
 	}
 }
+
+func TestTheTrashActsOnlyOnTheItemListed(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a/notes.txt", "b/notes.txt")
+	tr := xdgTrash{dir: filepath.Join(root, "Trash")}
+	if _, err := tr.Trash(at(root, "a/notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	listed := trashItems(t, tr)[0]
+	// Another window restores it, and then deletes b's notes.txt, which
+	// takes the name in the trash that a's had.
+	if err := tr.RestoreItem(listed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Trash(at(root, "b/notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if listed.ID != trashItems(t, tr)[0].ID {
+		t.Fatal("the second notes.txt took another name in the trash; the test needs the same")
+	}
+	if err := tr.PurgeItem(context.Background(), listed); err == nil || !strings.Contains(err.Error(), "no longer holds") {
+		t.Fatalf("deleting the row listed before deleted what took its name: %v", err)
+	}
+	if err := tr.RestoreItem(listed); err == nil {
+		t.Fatal("restoring the row listed before restored what took its name")
+	}
+	if contents(t, listed.ID) != "b/notes.txt" {
+		t.Fatal("b's notes.txt is gone from the trash")
+	}
+}
+
+func TestARecordThatClimbsOutOfItsVolumeIsNoRecord(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "vol/.Trash-1000/files/x.txt")
+	tr := xdgTrash{dir: filepath.Join(root, "vol", ".Trash-1000")}
+	record := filepath.Join(tr.dir, "info", "x.txt.trashinfo")
+	for _, path := range []string{"../../elsewhere/x.txt", ".."} {
+		if err := os.MkdirAll(filepath.Dir(record), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(record, []byte("[Trash Info]\nPath="+path+"\nDeletionDate=2026-11-09T10:00:00\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if its := trashItems(t, tr); len(its) != 0 {
+			t.Fatalf("a record of %q lists %+v", path, its)
+		}
+	}
+	if err := os.WriteFile(record, []byte("[Trash Info]\nPath=docs/x.txt\nDeletionDate=2026-11-09T10:00:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if its := trashItems(t, tr); len(its) != 1 || its[0].Original != filepath.Join(root, "vol", "docs", "x.txt") {
+		t.Fatalf("a record of a path in its volume lists %+v", its)
+	}
+}
+
+func TestARenameThatMustNotReplaceRefusesANameTaken(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt", "b.txt", "d/x.txt", "e/y.txt")
+	r := LocalFS().(NoReplaceRenamer)
+	if err := r.RenameNoReplace(at(root, "a.txt"), at(root, "b.txt")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("a rename over a file made %v", err)
+	}
+	if err := r.RenameNoReplace(at(root, "d"), at(root, "e")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("a rename of a folder over one made %v", err)
+	}
+	if contents(t, at(root, "a.txt")) != "a.txt" || contents(t, at(root, "b.txt")) != "b.txt" ||
+		contents(t, at(root, "e/y.txt")) != "e/y.txt" || contents(t, at(root, "d/x.txt")) != "d/x.txt" {
+		t.Fatal("a refused rename changed a file")
+	}
+	if err := r.RenameNoReplace(at(root, "a.txt"), at(root, "c.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RenameNoReplace(at(root, "d"), at(root, "f")); err != nil {
+		t.Fatal(err)
+	}
+	if contents(t, at(root, "c.txt")) != "a.txt" || contents(t, at(root, "f/x.txt")) != "d/x.txt" {
+		t.Fatal("a rename to a free name did not move the item")
+	}
+}
+
+func TestTheTrashHasAPlaceOnlyWhereItOpens(t *testing.T) {
+	if _, ok := TrashPlace(bareFS{LocalFS()}); ok {
+		t.Error("a file system with no trash has a place for one")
+	}
+	if _, ok := TrashPlace(slashFS{root: t.TempDir()}); ok {
+		t.Error("a file system with no trash has a place for one")
+	}
+	p, ok := TrashPlace(LocalFS())
+	if _, err := systemTrashCan(); ok != (err == nil) {
+		t.Fatalf("the computer's own trash has a place %v, though the system's trash says %v", ok, err)
+	}
+	if ok && (p.Path != TrashPath || p.Kind != "trash" || p.FS != "" || p.Name == "") {
+		t.Fatalf("the computer's own trash has the place %+v", p)
+	}
+}

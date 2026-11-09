@@ -1,7 +1,6 @@
 package filemanager
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"runtime"
@@ -326,7 +325,7 @@ func trashWhat(items []TrashItem) string {
 
 // trashRun does do to each of items in the background, one at a time,
 // and says on the page what came of it, in the words of doing and done.
-// An item that fails is passed by, and the window closing stops it at the
+// The first item that fails stops it, as the window closing does at the
 // next item, as closing waits for it. One thing at a time: a second asked
 // for while the first runs is refused.
 func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx context.Context, it TrashItem) error) {
@@ -343,43 +342,41 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 	s.acting = cancel
 	a.ops.wg.Go(func() {
 		defer cancel()
-		var failed []string
-		var first error
+		// worked counts the items done, up to the first that fails, where
+		// the act stops: what failed may fail the rest the same way.
+		worked := 0
+		var failed error
 		for _, it := range items {
 			if ctx.Err() != nil {
 				break
 			}
 			if err := do(ctx, it); err != nil {
-				failed = append(failed, it.Name)
-				first = cmp.Or(first, err)
+				failed = err
+				break
 			}
+			worked++
 		}
 		a.post(func() {
-			if first != nil {
-				a.logLine(doing+" "+trashWhat(items)+" from the trash", first.Error())
+			if failed != nil {
+				a.logLine(doing+" "+items[worked].Name+" from the trash", failed.Error())
 			}
 			s.busy, s.acting = false, nil
 			if !s.open {
 				return
 			}
-			worked := len(items) - len(failed)
 			switch {
 			case seq != s.seq:
 				// The page closed and opened again since: it says only
 				// what the trash holds now.
-			case first == nil:
+			case failed == nil:
 				s.note, s.noteErr = upperFirst(trashWhat(items))+" "+done+".", false
 				if len(items) == 1 {
 					s.note = "“" + items[0].Name + "” " + done + "."
 				}
 			case worked == 0:
-				s.note, s.noteErr = upperFirst(trashWhat(items))+" could not be "+done+": "+first.Error(), true
-				if len(items) == 1 {
-					s.note = "“" + items[0].Name + "” could not be " + done + ": " + first.Error()
-				}
+				s.note, s.noteErr = "“"+items[0].Name+"” could not be "+done+": "+failed.Error(), true
 			default:
-				s.note, s.noteErr = plural(worked, "item")+" "+done+", but "+plural(len(failed), "item")+
-					" could not be, the first “"+failed[0]+"”: "+first.Error(), true
+				s.note, s.noteErr = plural(worked, "item")+" "+done+"; stopped at “"+items[worked].Name+"”: "+failed.Error(), true
 			}
 			a.readTrashCan()
 			// The folder showing may have an item back.
