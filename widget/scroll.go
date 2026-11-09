@@ -39,9 +39,19 @@ func (s *Scroll) Children() []gunim.Node { return []gunim.Node{s.child} }
 func (s *Scroll) Handle(e input.Event, u *gunim.UI) bool { return s.handle(e, u) }
 
 // Reveal implements [gunim.Revealer]: it scrolls just far enough to
-// bring r, in the Scroll's own space, fully into view, with a little
-// room around it.
-func (s *Scroll) Reveal(r geom.Rect, u *gunim.UI) { s.reveal(r, u) }
+// bring inView fully into view, with a little room around it. inView is
+// in the Scroll's own space: measured from the top of what shows, scrolled
+// already, as [gunim.UI.Bounds] of a node inside less the Scroll's own
+// gives it. For a box in the content, measured from the content's top,
+// as a list's row is, use [Scroll.RevealContent]: passed here, it reads
+// as further down than it is by how far the Scroll is scrolled, and the
+// Scroll scrolls past it.
+func (s *Scroll) Reveal(inView geom.Rect, u *gunim.UI) { s.reveal(inView, u) }
+
+// RevealContent is [Scroll.Reveal] for inContent in the content's space,
+// measured from the top of the content however far it is scrolled, as
+// a list keeps its rows' boxes.
+func (s *Scroll) RevealContent(inContent geom.Rect, u *gunim.UI) { s.revealContent(inContent, u) }
 
 // EdgeScroll implements [gunim.EdgeScroller]: a drag held near the top
 // or the bottom scrolls the view.
@@ -66,7 +76,7 @@ func (s *Scroll) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		kid.Place(geom.Pt(0, -onPixels(s.offset.Value(), f.Scale)))
 		return geom.Sz(own.W, max(size.H, c.Min.H))
 	}
-	s.fit(size.H, own, f.Theme)
+	s.fit(size.H, own, f)
 	kid.Place(geom.Pt(0, -onPixels(s.offset.Value(), f.Scale)))
 	return own
 }

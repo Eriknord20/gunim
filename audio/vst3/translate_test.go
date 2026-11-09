@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -113,6 +115,52 @@ func TestNotesReachAPluginAsItsEvents(t *testing.T) {
 	p.ProcessBlock(stereoBlock(64))
 	if got = f.last(t); len(got.events) != 0 || len(got.changes) != 0 {
 		t.Fatalf("two blocks after a reset, the fake heard %+v and %v", got.events, got.changes)
+	}
+}
+
+// TestANoteOnAKeySoundingStrikesItAnew plays two notes of one group on one key, overlapping, as a plugin that keeps
+// its notes by key hears them: the first ends where the second starts, and its own NoteOff ends nothing, so the
+// second plays to its end, unbent by the first's bend. A note of another group, on a channel of its own, sounds on.
+func TestANoteOnAKeySoundingStrikesItAnew(t *testing.T) {
+	f := fakeSynth()
+	p, err := f.open(t, Config{Rate: 48000, Block: 256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	b := stereoBlock(128)
+	b.Events = []plug.Event{
+		{Frame: 10, Kind: plug.NoteOn, Note: 7, Group: 3, Pitch: 60, Velocity: 1},
+		{Frame: 12, Kind: plug.Expression, Note: 7, Expr: plug.Bend, Value: 2},
+		{Frame: 15, Kind: plug.NoteOn, Note: 9, Group: 4, Pitch: 60, Velocity: 1},
+		{Frame: 20, Kind: plug.NoteOn, Note: 8, Group: 3, Pitch: 60, Velocity: 0.5},
+		{Frame: 30, Kind: plug.NoteOff, Note: 7},
+		{Frame: 40, Kind: plug.NoteOff, Note: 8},
+		{Frame: 50, Kind: plug.NoteOff, Note: 9},
+	}
+	p.ProcessBlock(b)
+	if bend := f.last(t).changes[900]; !slices.Equal(bend, []point{{12, 1}, {20, 0.5}}) {
+		t.Errorf("the bend moved as %v, want to 1 at 12 and back to rest at 20", bend)
+	}
+	type ev struct {
+		kind    uint16
+		at      int32
+		ch, key int16
+		note    int32
+	}
+	events := f.last(t).events
+	got := make([]ev, 0, len(events))
+	for _, e := range events {
+		id := e.i32(16)
+		if e.kind == evNoteOff {
+			id = e.i32(8)
+		}
+		got = append(got, ev{e.kind, e.offset, e.channel(), e.pitch(), id})
+	}
+	want := []ev{{evNoteOn, 10, 0, 60, 7}, {evNoteOn, 15, 1, 60, 9}, {evNoteOff, 20, 0, 60, 7}, {evNoteOn, 20, 0, 60, 8},
+		{evNoteOff, 40, 0, 60, 8}, {evNoteOff, 50, 1, 60, 9}}
+	if !slices.Equal(got, want) {
+		t.Errorf("the fake heard %+v, want %+v", got, want)
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 )
 
 // TestTakingManyChannelsAllocatesNothing takes a buffer of four
@@ -35,7 +35,7 @@ func TestTakingManyChannelsAllocatesNothing(t *testing.T) {
 // direct output, four channels of them, as the driver's thread does:
 // mixing them allocates nothing.
 func TestMixingOnTheDriversThreadAllocatesNothing(t *testing.T) {
-	useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32, Outputs: 8})
+	useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32, Outputs: 8})
 	m := audio.NewMixer()
 	m.Play(steady(0.25), audio.Options{})
 	var aux frameAux

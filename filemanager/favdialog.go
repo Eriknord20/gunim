@@ -3,7 +3,6 @@ package filemanager
 import (
 	"image/color"
 	"slices"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/marrasen/gunim"
@@ -39,24 +38,8 @@ func newFavouriteDialog(s FavouriteEdit) *favDialog {
 	d.name.SetText(s.Name, nil)
 	d.name.Select(0, utf8.RuneCountInString(s.Name))
 	d.name.Placeholder = s.Folder
-	d.colors = newPickGrid(FavouriteColors, s.Color, func(p *paint.Painter, th *theme.Live, i int, r geom.Rect) {
-		c := r.Center()
-		p.RRect(geom.Rc(c.X-10, c.Y-10, 20, 20), 10, paint.Solid(favColor(FavouriteColors[i]).Get(th)))
-	})
-	d.colors.Names = []string{"Red", "Orange", "Yellow", "Green", "Teal", "Blue", "Indigo", "Purple", "Pink", "Gray"}
-	d.icons = newPickGrid(FavouriteIcons, s.Icon, func(p *paint.Painter, th *theme.Live, i int, r geom.Rect) {
-		// The icons show in the colour picked.
-		paintFavMark(p, th, d.colors.picked(), FavouriteIcons[i], r.Center())
-	})
-	if s.Icon == "" {
-		// A favourite without an icon draws a folder.
-		d.icons.sel = slices.Index(FavouriteIcons, "folder")
-	}
-	d.icons.Names = make([]string, len(FavouriteIcons))
-	for i, n := range FavouriteIcons {
-		d.icons.Names[i] = strings.ReplaceAll(n, "-", " ")
-	}
-	d.colors.changed = func(u *gunim.UI) { u.Invalidate() }
+	look := NewFavouriteLook(s.Color, s.Icon)
+	d.colors, d.icons = look.colors, look.icons
 	form := widget.NewForm().Add("Name", d.name).Add("Colour", d.colors).Add("Icon", d.icons)
 	d.Body = &favEditBody{Form: form, focus: []gunim.Node{d.name, d.colors, d.icons}}
 	d.Width = 500

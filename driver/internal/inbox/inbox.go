@@ -1,7 +1,11 @@
 // Package inbox queues a window's input for the engine.
 package inbox
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/marrasen/gunim/input"
+)
 
 // An Inbox carries input from the thread a platform delivers it on to
 // the engine.
@@ -9,7 +13,8 @@ import "sync"
 // It queues without bound, and a goroutine of its own feeds the
 // channel. So the platform's thread, which pumps events for every
 // window, always hands input over at once, and a window slow to read
-// its input leaves the others running.
+// its input leaves the others running. Pointer moves queued back to back
+// with the same modifiers arrive as the last of them.
 type Inbox struct {
 	out  chan any
 	quit <-chan struct{}
@@ -18,6 +23,8 @@ type Inbox struct {
 	mu     sync.Mutex
 	items  []any
 	closed bool
+	// sending says an item is on its way out, taken from items but not yet read.
+	sending bool
 }
 
 // New returns an inbox that stops feeding when quit closes.
@@ -47,6 +54,13 @@ func (q *Inbox) Close() {
 	q.nudge()
 }
 
+// Waiting reports whether anything pushed has yet to be read from Out.
+func (q *Inbox) Waiting() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.sending || len(q.items) > 0
+}
+
 func (q *Inbox) nudge() {
 	select {
 	case q.wake <- struct{}{}:
@@ -73,13 +87,50 @@ func (q *Inbox) feed() {
 		}
 		ev := q.items[0]
 		q.items = q.items[1:]
+		ev = q.lastMove(ev)
+		q.sending = true
 		q.mu.Unlock()
-		select {
-		case q.out <- ev:
-		case <-q.quit:
+		if !q.send(ev) {
 			return
 		}
+		q.mu.Lock()
+		q.sending = false
+		q.mu.Unlock()
 	}
+}
+
+// send delivers ev, swapping a pointer move for a newer one queued while it waits, and reports false on quit.
+func (q *Inbox) send(ev any) bool {
+	for {
+		select {
+		case q.out <- ev:
+			return true
+		case <-q.quit:
+			return false
+		case <-q.wake:
+			q.mu.Lock()
+			ev = q.lastMove(ev)
+			q.mu.Unlock()
+		}
+	}
+}
+
+// lastMove returns the newest of the pointer moves queued right after ev, dropping the ones before it, or ev itself
+// when ev is not a pointer move. It runs with q.mu held.
+func (q *Inbox) lastMove(ev any) any {
+	m, ok := ev.(input.PointerMove)
+	if !ok {
+		return ev
+	}
+	for len(q.items) > 0 {
+		next, ok := q.items[0].(input.PointerMove)
+		if !ok || next.Mods != m.Mods || next.Touch != m.Touch {
+			break
+		}
+		m = next
+		q.items = q.items[1:]
+	}
+	return m
 }
 
 // Out is the channel the input arrives on, closed after Close once

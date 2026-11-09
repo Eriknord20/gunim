@@ -1,8 +1,13 @@
 // Package capture records sound from the computer's inputs: a
 // microphone, a guitar plugged into an audio interface, a synth's
 // output. It records through PulseAudio or PipeWire on Linux, WASAPI
-// on Windows, and on Windows through the ASIO driver the speakers play
-// through too, as package audio/speaker opens it.
+// on Windows, Core Audio on macOS, and through the driver the speakers
+// play through too, as package audio/speaker opens it: on Windows an
+// ASIO driver, and on Linux JACK. On Android it records the microphone
+// through AAudio, where the speakers play through it, as a driver's
+// inputs: its device is [DriverInputs]'s, and the
+// application asks for the permission to record first, with gunim's
+// App.Ask.
 //
 // Each block recorded carries a stamp: the mixer frame of the speakers
 // that was being heard as the block's first frame reached the input.
@@ -14,7 +19,8 @@
 //	b := in.Read(buf)
 //	// b.Frames came in as mixer frame b.Heard played.
 //
-// Through ASIO the stamps are exact, from the driver's own buffers.
+// Through ASIO and JACK the stamps are exact, from the driver's own
+// buffers; through AAudio, from the two streams' timestamps.
 // Elsewhere they are reckoned from the system's latencies and
 // smoothed; [Measure] plays a click and finds it in the recording, to
 // tell how far they are off. They settle over a stream's first
@@ -22,6 +28,10 @@
 //
 // A stream ends as its device goes away: [Stream.Done] closes, and
 // [Stream.Err] returns [ErrLost].
+//
+// On macOS an application that records must have
+// NSMicrophoneUsageDescription in its Info.plist: without it, macOS
+// ends the application as it asks for the microphone.
 //
 // A stream hands its blocks to a function on the device's thread, or
 // keeps them in a ring a goroutine reads. Either way the recording
@@ -58,31 +68,36 @@ type Device struct {
 	// Monitor marks a device that records what an output plays, as
 	// PulseAudio's monitor of each sink.
 	Monitor bool
-	// Driver is the ASIO driver whose inputs the device is, or empty
+	// Driver is the driver whose inputs the device is, as package
+	// audio/driver names it, or empty
 	// for the system's own sound.
 	Driver string
 }
 
-// asioPrefix starts the ID of an ASIO driver's inputs.
-const asioPrefix = "asio:"
+// driverPrefix starts the ID of a driver's inputs. It reads "asio:"
+// for every driver, JACK's and AAudio's too, so IDs saved before the
+// other drivers came still open.
+const driverPrefix = "asio:"
 
-// Devices lists the inputs: the system's, and the inputs of the ASIO
-// driver the speakers play through, where they play through one. To
-// record from an ASIO driver, play through it with its inputs open: set
+// Devices lists the inputs: the system's, and the inputs of the driver
+// the speakers play through, where they play through one. To record
+// from a driver, play through it with its inputs open: set
 // [speaker.Options].Driver and Record.
 func Devices() ([]Device, error) {
 	var out []Device
 	if t := duplex.Current(); t != nil {
-		out = append(out, Device{ID: asioPrefix + t.Driver, Name: t.Driver, Channels: len(t.Names),
+		out = append(out, Device{ID: driverPrefix + t.Driver, Name: t.Driver, Channels: len(t.Names),
 			ChannelNames: t.Names, Rate: t.Rate, Driver: t.Driver})
 	}
 	sys, err := systemDevices()
 	return append(out, sys...), err
 }
 
-// DriverInputs returns the inputs of the ASIO driver spk plays through,
+// DriverInputs returns the inputs of the driver spk plays through,
 // as a device to pick before they are open, and false where spk plays
-// through the system's own sound, or the driver has no inputs. Its ID
+// through no driver, or the driver has no inputs. Where a driver plays
+// as the system's own sound, as Core Audio does on macOS with
+// [speaker.Options].Driver empty, its inputs count too. Its ID
 // opens them once spk plays with [speaker.Options].Record set; until
 // then the device has every input the driver has, and ChannelNames is
 // empty. [Devices] lists it once its inputs are open.
@@ -96,15 +111,22 @@ func DriverInputs(spk *speaker.Speaker) (Device, bool) {
 // driverDevice is DriverInputs for a speaker playing as st, t the tap
 // of the driver whose inputs are open, or nil.
 func driverDevice(st speaker.State, t *duplex.Tap) (Device, bool) {
-	if st.Driver == "" || st.ASIO == nil {
+	if st.Info == nil {
 		return Device{}, false
 	}
-	if t != nil && t.Driver == st.Driver {
-		return Device{ID: asioPrefix + t.Driver, Name: t.Driver, Channels: len(t.Names), ChannelNames: t.Names,
+	name := st.Driver
+	if name == "" {
+		name = st.Info.Driver
+	}
+	if name == "" {
+		return Device{}, false
+	}
+	if t != nil && t.Driver == name {
+		return Device{ID: driverPrefix + t.Driver, Name: t.Driver, Channels: len(t.Names), ChannelNames: t.Names,
 			Rate: t.Rate, Driver: t.Driver}, len(t.Names) > 0
 	}
-	return Device{ID: asioPrefix + st.Driver, Name: st.Driver, Channels: st.ASIO.Inputs, Rate: st.Rate,
-		Driver: st.Driver}, st.ASIO.Inputs > 0
+	return Device{ID: driverPrefix + name, Name: name, Channels: st.Info.Inputs, Rate: st.Rate,
+		Driver: name}, st.Info.Inputs > 0
 }
 
 // Options says how to open an input.
@@ -178,18 +200,32 @@ type Info struct {
 	// that holds it, as the device reports it.
 	Latency time.Duration
 	// Exact says the stamps are exact, from the buffers of an ASIO
-	// driver that plays and records in one; otherwise they are
-	// reckoned from the latencies the system reports.
+	// driver that plays and records in one, or from AAudio's
+	// timestamps; otherwise they are reckoned from the latencies the
+	// system reports.
 	Exact bool
+	// Problem is why the stream records otherwise than asked, and nil
+	// where it records as asked. On macOS it tells of a device that
+	// keeps another rate, which the stream converts from, or refuses the
+	// buffer asked for; PulseAudio and WASAPI convert themselves.
+	Problem error
 }
 
 // ErrLost is the error of a stream whose device went away: unplugged,
 // taken by the system, or an ASIO driver the speakers opened again.
 var ErrLost = errors.New("capture: the input went away")
 
+// ErrDenied is returned by [Open] for an input the system lets the
+// application record nothing from: on macOS, until the application is
+// allowed the microphone in System Settings, under Privacy & Security.
+// The first time an application records there, the system asks whether
+// it may; until it is answered, what comes in is silent.
+var ErrDenied = errors.New("capture: this application may not record: allow it in System Settings, " +
+	"under Privacy & Security, Microphone")
+
 // lost is how long a device may hand on nothing before the stream
 // counts it gone.
-const lost = 2 * time.Second
+const lost = 2 * time.Second //nolint:unused // Not every system has a stream that can go.
 
 // ErrBusy was returned by [Open] for an ASIO driver's inputs that
 // another stream recorded. Streams share them now, and none returns it.
@@ -253,6 +289,7 @@ type format struct {
 	rate     int
 	buffer   int
 	latency  int
+	problem  error
 }
 
 // Open opens an input and starts recording.
@@ -274,8 +311,8 @@ func Open(o Options) (*Stream, error) {
 		f   format
 		err error
 	)
-	if len(o.Device) > len(asioPrefix) && o.Device[:len(asioPrefix)] == asioPrefix {
-		f, err = openTap(s, o.Device[len(asioPrefix):])
+	if len(o.Device) > len(driverPrefix) && o.Device[:len(driverPrefix)] == driverPrefix {
+		f, err = openTap(s, o.Device[len(driverPrefix):])
 	} else {
 		f, err = openSystem(s, o.Device, rate, buffer)
 	}
@@ -316,6 +353,7 @@ func (s *Stream) ready(f format, mixRate int) error {
 	}
 	s.info.Device, s.info.Name = o.Device, f.name
 	s.info.Rate, s.info.Channels, s.info.Buffer = f.rate, len(s.sel), f.buffer
+	s.info.Problem = f.problem
 	s.latency.Store(int64(f.latency))
 	s.info.Latency = audio.DurationAt(int64(f.latency), f.rate)
 	if o.OnBlock != nil {

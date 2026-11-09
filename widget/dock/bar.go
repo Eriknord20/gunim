@@ -108,6 +108,9 @@ type Bar struct {
 	plusBox geom.Rect
 	end     float32
 	reserve float32
+	// lead is room kept free before the tabs, for what the application
+	// stands there.
+	lead float32
 	// hot is the tab under the pointer, and pressed the one the pointer
 	// went down on, at pressAt, on its × with pressedCross; -1 for none.
 	hot, pressed           int
@@ -300,6 +303,21 @@ func makeBar(d *Dock, group string, win int) *Bar {
 	b := &Bar{d: d, group: group, Win: win, hot: -1, pressed: -1, landing: -1,
 		moves: map[string]*tabMove{}, arriving: map[string]bool{}, lit: anim.NewFloat(1), mark: anim.NewFloat(0)}
 	b.Add(b.lit, b.mark)
+	if d != nil {
+		b.OnPlusMenu = func(at geom.Rect, u *gunim.UI) gunim.Intent {
+			if d.OnPlusMenu != nil {
+				return d.OnPlusMenu(b, at, u)
+			}
+			return nil
+		}
+		b.Takes = func(data any) bool { return d.Takes != nil && d.Takes(data) }
+		b.OnDrop = func(dr Dropped, u *gunim.UI) gunim.Intent {
+			if d.OnDrop != nil {
+				return d.OnDrop(b.group, dr, u)
+			}
+			return nil
+		}
+	}
 	return b
 }
 
@@ -328,9 +346,9 @@ func (b *Bar) set(tabs []tab, front string, mark bool, u *gunim.UI) {
 // and reports whether the tabs or the tab in front moved.
 func (b *Bar) setStill(tabs []tab, front string, mark, still bool, u *gunim.UI) bool {
 	if !b.laid || u == nil {
-		b.mark.Jump(onOff(mark))
+		b.mark.Jump(anim.OnOff(mark))
 	} else {
-		b.mark.Animate(onOff(mark), widget.Quick.Get(u.Theme()))
+		b.mark.Animate(anim.OnOff(mark), widget.Quick.Get(u.Theme()))
 	}
 	sameTabs := slices.EqualFunc(tabs, b.tabs, func(a, c tab) bool { return a == c })
 	if sameTabs && front == b.front {
@@ -588,11 +606,14 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 		want[i] = min(max(w, least), widest)
 		total += want[i] + gap
 	}
-	room := c.Max.W - 2*inset - b.reserve
+	room := c.Max.W - 2*inset - b.reserve - b.lead
 	if b.Plus {
 		room -= tabPlus
 	}
-	if b.Caption {
+	if n := float32(len(b.tabs)); b.Caption && n > 1 && (room-captionLeast)/n-gap >= least {
+		// Tabs too narrow to say anything keep their room before the
+		// window keeps room to move by here, as does a lone tab its whole
+		// title: it moves by a bar beside this one too.
 		room -= captionLeast
 	}
 	if c.Max.W > 0 && total > room && len(b.tabs) > 0 {
@@ -601,7 +622,7 @@ func (b *Bar) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.
 			want[i] = min(want[i], each)
 		}
 	}
-	x := inset
+	x := inset + b.lead
 	for i := range b.tabs {
 		b.boxes = append(b.boxes, geom.Rc(x, inset, want[i], h-2*inset))
 		x += want[i] + gap
@@ -856,6 +877,12 @@ func (b *Bar) Handle(e input.Event, u *gunim.UI) bool {
 		case i == len(b.tabs):
 			b.plusPressed = true
 			return true
+		case i >= 0 && e.Clicks == 2 && b.d != nil && b.d.Maximize && !b.onCross(i, e.Pos):
+			// Fills the window, or puts the panes back. The press ends
+			// here: the tab may not be where it was by its release.
+			b.d.ToggleMax(b.tabs[i].id, u)
+			b.pressed = -1
+			return true
 		case i >= 0:
 			b.pressed, b.pressAt = i, e.Pos
 			b.pressedCross = b.onCross(i, e.Pos)
@@ -959,7 +986,7 @@ func (b *Bar) lands(d Drag, landing int) bool {
 		return false
 	}
 	if b.d != nil {
-		if n := b.d.l.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
+		if n := b.d.whole.Node(d.ID); n != nil && n.path(b.group, nil) != nil {
 			// The bar is in the tab dragged.
 			return false
 		}
@@ -1121,11 +1148,4 @@ func (t *tabPicture) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		x += tabIcon + 6
 	}
 	t.title.PaintFaded(p, geom.Pt(x, mid-t.title.Height()/2), ink, box.W-x-pad, widget.TextFade.Get(th))
-}
-
-func onOff(on bool) float32 {
-	if on {
-		return 1
-	}
-	return 0
 }

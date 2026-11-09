@@ -375,3 +375,160 @@ func TestShowOfTheFolderShowingKeepsTheHistoryAsItIs(t *testing.T) {
 type failFS struct{ FS }
 
 func (failFS) ID() string { return "fail" }
+
+// A window asks for the places of the file system it shows, and its
+// group's heading says the title they give, the section staying one.
+func TestTheWindowShowsThePlacesOfItsFileSystem(t *testing.T) {
+	var mu sync.Mutex
+	var asked []string
+	h := newHarnessWith(t, func(o *Options) {
+		dir := o.Dir
+		o.PlacesOn = func(fs string) ([]Place, error) {
+			mu.Lock()
+			asked = append(asked, fs)
+			mu.Unlock()
+			if fs == "" {
+				return []Place{{Name: "Home", Path: dir, Kind: "home", Group: "Here", Title: "This computer"}}, nil
+			}
+			return []Place{{Name: "Root", Path: "/", Kind: "home", Group: "Here", Title: "Slashbox", FS: fs},
+				{Name: "Etc", Path: "/etc", Kind: "folder", Group: "Here", Title: "Slashbox", FS: fs}}, nil
+		}
+	}, "a.txt")
+	h.until("this computer's places arrive", func() bool { return len(h.b.side.placeKeys()) == 1 })
+	if got := h.b.side.titles(); !slices.Equal(got, []string{"THIS COMPUTER", "FAVOURITES"}) {
+		t.Fatalf("the headings say %q", got)
+	}
+	other := t.TempDir()
+	h.a.showFS(slashFS{root: other}, "/")
+	h.until("slashbox's places arrive", func() bool { return len(h.b.side.placeKeys()) == 2 })
+	if got := h.b.side.titles(); !slices.Equal(got, []string{"SLASHBOX", "FAVOURITES"}) {
+		t.Fatalf("on slashbox the headings say %q", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(asked[len(asked)-1:], []string{"slash"}) || asked[0] != "" {
+		t.Fatalf("the places were asked for on %q", asked)
+	}
+}
+
+// A heading changing fades from the old title to the new, on every
+// frame, rather than swapping at once.
+func TestAHeadingFadesToItsNewTitle(t *testing.T) {
+	var mu sync.Mutex
+	title := "This computer"
+	h := newHarnessWith(t, func(o *Options) {
+		dir := o.Dir
+		o.PlacesOn = func(string) ([]Place, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return []Place{{Name: "Home", Path: dir, Kind: "home", Group: "Here", Title: title}}, nil
+		}
+	}, "a.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.until("the places arrive", func() bool { return len(h.b.side.placeKeys()) == 1 })
+	h.frames(30)
+	mu.Lock()
+	title = "Picard"
+	mu.Unlock()
+	h.a.hub.Refresh()
+	h.until("the heading changes", func() bool { return h.b.side.titles()[0] == "PICARD" })
+	head := h.b.side.byID[GroupSection("Here")].head
+	h.frames(1)
+	var seen []float32
+	for range 20 {
+		h.frames(1)
+		// As painted, the spring's overshoot held at 1.
+		h.ui(func(*browser, *gunim.UI) { seen = append(seen, min(head.fade.Value(), 1)) })
+	}
+	if seen[0] >= 0.99 || seen[len(seen)-1] < 0.99 {
+		t.Fatalf("the fade went %v, want from below 1 to 1", seen)
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] < seen[i-1]-1e-6 {
+			t.Fatalf("the fade went back at frame %d: %v", i, seen)
+		}
+	}
+}
+
+// Movable places move among themselves: a drag puts them in a new order
+// at once and tells the program, and a place not movable keeps its own.
+func TestMovablePlacesAreArranged(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	var group string
+	h := newHarnessWith(t, func(o *Options) {
+		o.PlacesOn = func(fs string) ([]Place, error) {
+			return []Place{{Name: "A", Path: "/a", Group: "Here", Movable: true},
+				{Name: "B", Path: "/b", Group: "Here", Movable: true},
+				{Name: "C", Path: "/c", Group: "Here", Movable: true},
+				{Name: "Far", Path: "/far", Group: "Machines", FS: "sftp://far"}}, nil
+		}
+		o.PlacesArranged = func(_ *Window, g string, places []Place) {
+			mu.Lock()
+			defer mu.Unlock()
+			group, got = g, make([]string, 0, len(places))
+			for _, p := range places {
+				got = append(got, p.Name)
+			}
+		}
+	}, "a.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.until("the places arrive", func() bool { return len(h.b.side.placeKeys()) == 4 })
+	var reorder gunim.Intent
+	h.ui(func(b *browser, u *gunim.UI) {
+		l := b.side.byID[GroupSection("Here")].list
+		if l.ReorderGroup == nil || l.ReorderGroup(l.Keys()[0]) == "" {
+			t.Fatal("a movable place cannot be dragged")
+		}
+		if far := b.side.byID[GroupSection("Machines")].list; far.ReorderGroup != nil && far.ReorderGroup(far.Keys()[0]) != "" {
+			t.Fatal("a place not movable can be dragged")
+		}
+		keys := l.Keys()
+		keys[0], keys[2] = keys[2], keys[0]
+		reorder = l.OnReorder(keys, u)
+	})
+	h.do(reorder)
+	h.until("the program hears the new order", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return group == "Here" && slices.Equal(got, []string{"C", "B", "A"})
+	})
+	var names []string
+	h.ui(func(*browser, *gunim.UI) {
+		for _, p := range h.a.places {
+			names = append(names, p.Name)
+		}
+	})
+	if !slices.Equal(names, []string{"C", "B", "A", "Far"}) {
+		t.Fatalf("the window holds the places as %q", names)
+	}
+}
+
+// A FavouriteLook starts at the look given, a folder for no icon, and a
+// pick tells OnChange the colour and icon.
+func TestAFavouriteLookPicksAColourAndAnIcon(t *testing.T) {
+	l := NewFavouriteLook("blue", "")
+	if l.Color() != "blue" || l.Icon() != "folder" {
+		t.Fatalf("the look starts as %q %q", l.Color(), l.Icon())
+	}
+	l.SetLook("red", "star", nil)
+	if l.Color() != "red" || l.Icon() != "star" {
+		t.Fatalf("set, the look is %q %q", l.Color(), l.Icon())
+	}
+	var heard []FavouriteEdit
+	l.OnChange = func(look FavouriteEdit, _ *gunim.UI) gunim.Intent {
+		heard = append(heard, look)
+		return nil
+	}
+	h := newHarness(t, "a.txt")
+	gunim.RegisterPatch(h.w, "browser", func(b *browser, p inUI, u *gunim.UI) { p.fn(b, u) })
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	h.ui(func(_ *browser, u *gunim.UI) {
+		l.colors.choose(slices.Index(FavouriteColors, "green"), u)
+		l.icons.choose(0, u)
+	})
+	want := []FavouriteEdit{{Color: "green", Icon: "star"}, {Color: "green", Icon: FavouriteIcons[0]}}
+	if !slices.Equal(heard, want) {
+		t.Fatalf("OnChange heard %+v, want %+v", heard, want)
+	}
+}

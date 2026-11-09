@@ -312,6 +312,23 @@ func (m *Mixer) Heard() int64 {
 	}
 }
 
+// HeardAt returns the mixer frame heard at t: [Mixer.Heard], moved on
+// at the mixer's rate by the time from now to t. A visual asks for the
+// frame heard as its frame of the display lights the screen, at
+// gunim's Frame.Present, a few refreshes after it is drawn. The time
+// from now is taken as a second at most either way, so a time long
+// past or far off reads as one a second away, and the zero time reads
+// as now. It is never below zero. Where the speakers count the frames
+// heard a buffer at a time, as through oto, it steps as Heard does.
+func (m *Mixer) HeardAt(t time.Time) int64 {
+	h := m.Heard()
+	if t.IsZero() {
+		return h
+	}
+	d := min(max(time.Until(t), -time.Second), time.Second)
+	return max(0, h+FramesAt(d, m.Rate()))
+}
+
 // Mix fills dst, len(dst)/2 frames, with the sounds playing, and
 // silence where none plays. One goroutine at a time mixes.
 func (m *Mixer) Mix(dst []float32) {
@@ -981,7 +998,13 @@ func (v *Voice) Turned() <-chan struct{} { return v.turned }
 // frames the speakers hold back are not counted yet. Just after a turn
 // to the source Then gave, while the speakers still play the source
 // before, it is zero.
-func (v *Voice) Position() time.Duration {
+func (v *Voice) Position() time.Duration { return v.PositionAt(time.Time{}) }
+
+// PositionAt is [Voice.Position] as heard at t, as [Mixer.HeardAt]
+// takes it: for a playhead drawn at the time its frame of the display
+// lights the screen. The position stops at the end of the last block
+// mixed; the zero time is now.
+func (v *Voice) PositionAt(t time.Time) time.Duration {
 	rate := v.m.Rate()
 	if v.seeks.Load() != v.seeked.Load() {
 		// A seek the mixer has yet to make: heard from there.
@@ -993,15 +1016,15 @@ func (v *Voice) Position() time.Duration {
 		if seq&1 == 1 {
 			continue
 		}
-		at := v.positionAt(v.m.Heard(), rate)
+		at := v.positionOf(v.m.HeardAt(t), rate)
 		if v.markSeq.Load() == seq {
 			return at
 		}
 	}
 }
 
-// positionAt reads the marks for the position of the frame heard.
-func (v *Voice) positionAt(heard int64, rate int) time.Duration {
+// positionOf reads the marks for the position of the frame heard.
+func (v *Voice) positionOf(heard int64, rate int) time.Duration {
 	gen := v.gens.Load()
 	n, next := v.nmarks.Load(), v.markAt.Load()
 	// The latest block mixed at or before the frame being heard says

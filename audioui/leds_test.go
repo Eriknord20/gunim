@@ -75,3 +75,49 @@ func TestATallMeterIsLit(t *testing.T) {
 		t.Fatal("a meter of a sine at 0.5 lights no lights")
 	}
 }
+
+// Each light a meter lights is in LEDColour's colour for the level it
+// stands for, fainter where only the peak reaches it, however many
+// lights the meter has.
+func TestEachLightTakesTheColourOfItsLevel(t *testing.T) {
+	th := theme.NewLive(widget.Dark())
+	lv := &Levels{RMS: [2]float32{-6, -20}, Peak: [2]float32{-0.5, -4}, Hold: [2]float32{-0.5, -2}}
+	for _, long := range []float32{200, 600} {
+		s := LEDs{Pitch: 4, Gap: 1, Sep: 2, Upright: true}
+		var p paint.Painter
+		s.Paint(&p, th, geom.Rc(0, 0, 20, long), lv)
+		n := int((long + s.Gap) / s.Pitch)
+		ops := p.Ops()
+		if len(ops) != 2*n {
+			t.Fatalf("a meter of %d lights a channel drew %d ops", n, len(ops))
+		}
+		dark := paint.Faded(widget.Ink.Get(th), 0.07)
+		for k, op := range ops {
+			ch, i := k/n, k%n
+			mid := (float32(i) + 0.5) / float32(n)
+			want := dark
+			held := min(int(MeterAt(lv.Hold[ch])*float32(n)), n-1)
+			switch {
+			case mid <= MeterAt(lv.RMS[ch]), i == held:
+				want = LEDColour(th, LEDAt(mid))
+			case mid <= MeterAt(lv.Peak[ch]):
+				want = paint.Faded(LEDColour(th, LEDAt(mid)), 0.4)
+			}
+			if got := op.(*paint.RRectOp).Fill.Solid; got != want {
+				t.Fatalf("in a meter of %d lights, light %d of channel %d is %v, want %v", n, i, ch, got, want)
+			}
+		}
+	}
+}
+
+// BenchmarkAMeterOfLights times painting a mixer's meter, loud.
+func BenchmarkAMeterOfLights(b *testing.B) {
+	th := theme.NewLive(widget.Dark())
+	lv := &Levels{RMS: [2]float32{-6, -8}, Peak: [2]float32{-1, -2}, Hold: [2]float32{-0.5, -1}}
+	s := LEDs{Pitch: 4, Gap: 1, Sep: 2, Upright: true}
+	var p paint.Painter
+	for range b.N {
+		p.Reset()
+		s.Paint(&p, th, geom.Rc(0, 0, 46, 124), lv)
+	}
+}

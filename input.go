@@ -26,10 +26,16 @@ func (u *UI) handlePlatform(ev any) { u.handleOn(u.root, ev) }
 // press in a popup leaves focus where it is, so the node that opened a
 // menu keeps the keyboard while the menu is clicked.
 func (u *UI) handleOn(root *state, ev any) {
-	if u.touchEvent(root, ev) {
-		return
+	if !u.touchEvent(root, ev) {
+		u.handleRaw(root, ev)
 	}
-	u.handleRaw(root, ev)
+	// A driver that keeps a copy of the text hears what a key or a press did at
+	// once, not at the next frame, which may be some way off. An input method
+	// working on the copy meanwhile would work on old text. See TextStater.
+	switch ev.(type) {
+	case input.KeyPress, input.TextInput, input.Composing, input.TextEdit, input.PointerDown, input.PointerUp:
+		u.syncText(u.focus, false)
+	}
 }
 
 // handleRaw is handleOn past the reading of a finger's moves in
@@ -44,7 +50,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 	if u.fadeOut {
 		// Nor does one fading out, or out, save word of the keyboard.
 		switch ev.(type) {
-		case driver.WindowFocus, driver.WindowShown, driver.WindowCovered:
+		case driver.WindowFocus, driver.WindowShown, driver.WindowCovered, driver.FilesOpened:
 		default:
 			return
 		}
@@ -91,6 +97,13 @@ func (u *UI) handleRaw(root *state, ev any) {
 		}
 		u.bubble(target, e)
 		return
+	case driver.FilesOpened:
+		if root != u.root {
+			return
+		}
+		u.opened = append(u.opened, input.FilesOpened{Paths: e.Paths, Time: u.Clock()})
+		u.offerOpened()
+		return
 	case driver.WindowCovered:
 		if root != u.root {
 			return
@@ -117,9 +130,9 @@ func (u *UI) handleRaw(root *state, ev any) {
 			u.watchHeading()
 			u.keepEdgeSwipes()
 		}
-		var ev input.Event = input.WindowShown{Time: time.Now()}
+		var ev input.Event = input.WindowShown{Time: u.Clock()}
 		if !e.Shown {
-			ev = input.WindowHidden{Time: time.Now()}
+			ev = input.WindowHidden{Time: u.Clock()}
 		}
 		target := u.focus
 		if target == nil {
@@ -143,7 +156,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 		return
 	case driver.FilesLeft:
 		if root == u.root && u.dragAt != nil {
-			u.deliver(u.dragAt, input.DragLeave{Time: time.Now()})
+			u.deliver(u.dragAt, input.DragLeave{Time: u.Clock()})
 			u.dragAt = nil
 		}
 		return
@@ -162,9 +175,9 @@ func (u *UI) handleRaw(root *state, ev any) {
 		} else if u.w.app != nil {
 			u.w.app.windows.focus(u.w)
 		}
-		var ev input.Event = input.WindowFocusGained{Time: time.Now()}
+		var ev input.Event = input.WindowFocusGained{Time: u.Clock()}
 		if !e.Focused {
-			ev = input.WindowFocusLost{Time: time.Now()}
+			ev = input.WindowFocusLost{Time: u.Clock()}
 		}
 		target := u.focus
 		if target == nil {
@@ -206,6 +219,9 @@ func (u *UI) handleRaw(root *state, ev any) {
 			return
 		}
 		u.dispatchTouch(root, e.Pos, mk, e.Touch)
+		if e.Touch {
+			u.fingerOn = u.hit(root, e.Pos)
+		}
 		u.shapePointer(root, e.Pos)
 		if root == u.root {
 			u.movedAt(e.Mods)
@@ -309,6 +325,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 		if root == u.root {
 			u.pointerIn = false
 		}
+		u.fingerGone(e.Time)
 		u.updateHover(root, geom.Pt(-1, -1), e.Time)
 	case input.Drop:
 		data := e.Data
@@ -341,7 +358,7 @@ func (u *UI) handleRaw(root *state, ev any) {
 		}
 		u.keyEvent(ev)
 		if tapped {
-			u.keyEvent(input.AltTapped{Time: time.Now()})
+			u.keyEvent(input.AltTapped{Time: u.Clock()})
 		}
 	default:
 		u.keyEvent(ev)
@@ -420,20 +437,68 @@ func (u *UI) keyEvent(ev any) {
 		if _, ok := ev.(input.KeyPress); ok {
 			u.keyed = true
 			defer func() { u.keyed = false }()
+			u.firstTyped = nil
+		}
+		if _, ok := ev.(input.TextInput); ok && u.firstTyped != nil {
+			s := u.firstTyped
+			u.firstTyped = nil
+			if h, ok := s.node.(Handler); ok && s.presence != Exiting {
+				u.on(s, func() { h.Handle(ev, u) })
+			}
+			return
 		}
 		if m := u.stopsAtModal(ev); m != nil {
 			// A modal holds the keys: what it and its contents leave
 			// goes no further, to the window's shortcuts or the
 			// catchers behind it. Tab still walks it.
-			if !u.bubbleTo(target, ev, m) && !u.catchKeyIn(ev, m) {
+			if !u.keyFirst(ev, m) && !u.bubbleTo(target, ev, m) && !u.catchKeyIn(ev, m) {
 				u.tab(ev)
 			}
 			return
 		}
-		if !u.bubble(target, ev) && !u.catchKey(ev) {
+		if !u.keyFirst(ev, nil) && !u.bubble(target, ev) && !u.catchKey(ev) {
 			u.tab(ev)
 		}
 	}
+}
+
+// keyFirst offers a key press to the [KeyFirst] nodes above the focused node, the outermost first, unless the
+// focused node is a [KeyKeeper] that keeps it, keeping to those
+// inside top when top is not nil, and reports whether one took it. The text a typing press taken types goes to the
+// KeyFirst that took it, as a [Handler], and to no one else.
+func (u *UI) keyFirst(ev input.Event, top *state) bool {
+	k, ok := ev.(input.KeyPress)
+	if !ok || u.focus == nil {
+		return false
+	}
+	if kk, ok := u.focus.node.(KeyKeeper); ok {
+		var keeps bool
+		u.on(u.focus, func() { keeps = kk.KeepsKey(k, u) })
+		if keeps {
+			return false
+		}
+	}
+	type first struct {
+		s *state
+		n KeyFirst
+	}
+	var above []first
+	for s := u.focus.parent; s != nil && (top == nil || s != top.parent); s = s.parent {
+		if n, ok := s.node.(KeyFirst); ok {
+			above = append(above, first{s, n})
+		}
+	}
+	for i := len(above) - 1; i >= 0; i-- {
+		f, took := above[i], false
+		u.on(f.s, func() { took = f.n.KeyFirst(k, u) })
+		if took {
+			if k.Typed {
+				u.firstTyped = f.s
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // overhear tells the [Overhearer]s the last frame drew of ev, in paint
@@ -505,9 +570,9 @@ func (u *UI) focusAt(p geom.Point, touch bool) {
 				return
 			}
 			if pf, ok := s.node.(PressFocuser); !ok || pf.FocusOnPress() {
-				u.clicking = true
+				u.userFocus = true
 				u.Focus(s.node)
-				u.clicking = false
+				u.userFocus = false
 			}
 			return
 		}
@@ -866,6 +931,20 @@ func (u *UI) updateHover(root *state, p geom.Point, t time.Time) {
 	}
 }
 
+// fingerGone tells the nodes a finger's move last reached that it has gone. A finger
+// has no hover, so none hears it enter. But a move reaches them all the same, and a
+// node that follows moves, to light the part under the pointer, would stay lit.
+func (u *UI) fingerGone(t time.Time) {
+	s := u.fingerOn
+	u.fingerOn = nil
+	for ; s != nil && s.parent != nil; s = s.parent {
+		if u.hover != nil && u.hover.within(s) {
+			return
+		}
+		u.deliver(s, input.PointerLeave{Time: t})
+	}
+}
+
 // dispatchAt finds the topmost node under p and offers it the event
 // built by mk, with the position translated into that node's space. A
 // node that declines it passes the event on to its ancestors. It
@@ -920,15 +999,53 @@ func (u *UI) bubbleTo(s *state, e input.Event, top *state) bool {
 // up from start did not pass, so every view in the window hears it
 // once. A view on its way out hears nothing.
 func (u *UI) tellViews(start *state, e input.Event) {
+	for _, k := range u.viewsPast(start) {
+		u.deliver(k, e)
+	}
+}
+
+// viewsPast returns the views mounted at the root that bubbling up from
+// start does not pass, leaving out those on their way out.
+func (u *UI) viewsPast(start *state) []*state {
 	passed := map[*state]bool{}
 	for s := start; s != nil; s = s.parent {
 		passed[s] = true
 	}
-	for _, k := range slices.Clone(u.appRoot().kids) {
+	var views []*state
+	for _, k := range u.appRoot().kids {
 		if !passed[k] && k.presence != Exiting {
-			u.deliver(k, e)
+			views = append(views, k)
 		}
 	}
+	return views
+}
+
+// offerOpened offers the files waiting for a node, oldest first. The
+// first that no node takes stays, with those behind it, for the next
+// frame.
+func (u *UI) offerOpened() {
+	for len(u.opened) > 0 && u.offerFiles(u.opened[0]) {
+		u.opened = u.opened[1:]
+		u.invalid, u.calm = true, false
+	}
+}
+
+// offerFiles offers e to the focused node and up from it, then to each
+// view mounted at the root it did not pass, until one takes it.
+func (u *UI) offerFiles(e input.FilesOpened) bool {
+	target := u.focus
+	if target == nil {
+		target = u.appRoot()
+	}
+	if u.bubble(target, e) {
+		return true
+	}
+	for _, k := range u.viewsPast(target) {
+		if u.bubbleTo(k, e, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // deliver hands e to exactly one node and stops there. Enter, leave and

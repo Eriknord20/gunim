@@ -69,7 +69,7 @@ func (l *List) Handle(e input.Event, u *gunim.UI) bool {
 		if !l.drag.pressed {
 			return false
 		}
-		if l.OnReorder != nil && !l.drag.active && abs32(e.Pos.Y-l.drag.from) >= pickUp {
+		if l.OnReorder != nil && !l.drag.active && abs32(e.Pos.Y-l.drag.from) >= pickUp && l.movable(l.drag.key) {
 			l.drag.active = true
 			l.lift.Animate(1, Quick.Get(th))
 		}
@@ -130,8 +130,65 @@ func (l *List) rowAt(y float32) (Key, float32, bool) {
 	return key, top, found
 }
 
+// movable reports whether row k can be moved: with ReorderGroup set,
+// only a row in a group.
+func (l *List) movable(k Key) bool {
+	return l.ReorderGroup == nil || l.ReorderGroup(k) != ""
+}
+
+// keepInGroup puts k, taken out of rest, back at at, or as near it as
+// its group lets: within the run of the rows of its group.
+func (l *List) keepInGroup(rest []Key, k Key, at int) []Key {
+	if l.ReorderGroup != nil {
+		g := l.ReorderGroup(k)
+		lo, hi := -1, -1
+		for i, o := range rest {
+			if l.ReorderGroup(o) == g {
+				if lo < 0 {
+					lo = i
+				}
+				hi = i + 1
+			}
+		}
+		if lo < 0 {
+			// Alone in its group: it stays where it was.
+			return slices.Clone(l.order)
+		}
+		at = min(max(at, lo), hi)
+	}
+	return slices.Insert(slices.Clone(rest), at, k)
+}
+
+// moveRow moves the cursor's row a place down, or up, within its group,
+// and tells the application, as Alt and an arrow key do.
+func (l *List) moveRow(down bool, u *gunim.UI) bool {
+	k := l.cursor
+	at := slices.Index(l.order, k)
+	if at < 0 || !l.movable(k) {
+		return false
+	}
+	rest := slices.Delete(slices.Clone(l.order), at, at+1)
+	to := at - 1
+	if down {
+		to = at + 1
+	}
+	if to < 0 || to > len(rest) {
+		return true
+	}
+	next := l.keepInGroup(rest, k, to)
+	if slices.Equal(next, l.order) {
+		return true
+	}
+	l.order = next
+	l.arrange(u)
+	act(u, l, gunim.CueTick, l.OnReorder, slices.Clone(next))
+	u.Invalidate()
+	return true
+}
+
 // dropOrder returns the order a drop now would leave: the dragged row
-// taken out and put back where its middle falls among the others.
+// taken out and put back where its middle falls among the others, kept
+// among the rows of its group.
 func (l *List) dropOrder() []Key {
 	k := l.drag.key
 	h := l.slots[k][1]
@@ -154,7 +211,11 @@ func (l *List) dropOrder() []Key {
 	if !placed {
 		out = append(out, k)
 	}
-	return out
+	if l.ReorderGroup == nil {
+		return out
+	}
+	at := slices.Index(out, k)
+	return l.keepInGroup(slices.Delete(out, at, at+1), k, at)
 }
 
 // paintLifted draws a lifted row: a little larger, over a shadow that

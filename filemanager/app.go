@@ -35,6 +35,15 @@ type Options struct {
 	// When nil, they are those LocalPlaces finds on the computer's own
 	// file system, and the home folder and the top on another.
 	Places func() ([]Place, error)
+	// PlacesOn, when set, finds the places as Places does, for the file
+	// system of ID fs the window shows: so the sidebar can show the
+	// places of the machine the window is on. It is asked again as the
+	// window turns to another file system. It goes before Places.
+	PlacesOn func(fs string) ([]Place, error)
+	// PlacesArranged hears the places of group in the order a drag, or
+	// Alt and an arrow, left them in, for the program to keep, on the
+	// window's serve loop. The window shows them so at once.
+	PlacesArranged func(w *Window, group string, places []Place)
 	// Favourites keeps the favourites. When nil, they are kept in the
 	// settings file on the computer's own file system, and for as long
 	// as the window is open on another. An AnyFSFavourites keeps them

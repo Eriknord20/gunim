@@ -159,8 +159,14 @@ func sectionOrder(groups, saved []string) []string {
 	return out
 }
 
-// groupTitle is the heading of the section of group.
-func groupTitle(group string) string {
+// groupTitle is the heading of the section of group: the title its
+// places give it, or else its name.
+func groupTitle(group string, places []Place) string {
+	for _, p := range places {
+		if p.Title != "" {
+			return strings.ToUpper(p.Title)
+		}
+	}
 	if group == "" {
 		return "PLACES"
 	}
@@ -211,7 +217,7 @@ func (s *sidebar) set(p Places, u *gunim.UI) {
 	}
 	titles := map[string]string{FavouritesSection: "FAVOURITES"}
 	for _, g := range groups {
-		titles[GroupSection(g)] = groupTitle(g)
+		titles[GroupSection(g)] = groupTitle(g, byGroup[g])
 	}
 	secs := make([]sectionItem, len(s.order))
 	for i, id := range s.order {
@@ -293,6 +299,24 @@ func (s *sidebar) newSection(it sectionItem) *section {
 	// one window, as Explorer's do.
 	c.list.ClickOnce = true
 	c.head = newSectionHead(c, it.title)
+	if group, ok := strings.CutPrefix(it.id, GroupSection("")); ok {
+		// Its movable places move among themselves.
+		c.list.ReorderGroup = func(k widget.Key) string {
+			if s.items[k].Movable {
+				return it.id
+			}
+			return ""
+		}
+		c.list.OnReorder = func(keys []widget.Key, _ *gunim.UI) gunim.Intent {
+			var places []FavouriteAt
+			for _, k := range keys {
+				if p, ok := s.items[k]; ok && p.Movable {
+					places = append(places, FavouriteAt{FS: p.FS, Path: p.Path})
+				}
+			}
+			return PlacesArranged{Group: group, Places: places}
+		}
+	}
 	c.body = c.list
 	if it.id == FavouritesSection {
 		c.body = &favBody{list: c.list, hint: s.hint}
@@ -423,8 +447,8 @@ func (b *favBody) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim
 // headHeight is the height of a section's heading.
 const headHeight = 26
 
-// sectionHead is the heading of a section: its title, and a chevron
-// that turns as the section closes. A click or Enter opens or closes the
+// sectionHead is the heading of a section: its title, which fades to a
+// new one as it changes, and a chevron that turns as the section closes. A click or Enter opens or closes the
 // section, and a drag moves it.
 type sectionHead struct {
 	anim.Group
@@ -433,6 +457,9 @@ type sectionHead struct {
 	run   text.Run
 	shown string
 	size  float32
+	// was is the title shown before, fading out as fade goes to 1.
+	was   text.Run
+	fade  *anim.Float
 	hover *anim.Float
 	// lit shows the heading has the keyboard in the sidebar's group, and
 	// ring that it has it alone.
@@ -441,8 +468,9 @@ type sectionHead struct {
 }
 
 func newSectionHead(c *section, title string) *sectionHead {
-	h := &sectionHead{sec: c, title: title, hover: anim.NewFloat(0), lit: anim.NewFloat(0), ring: anim.NewFloat(0)}
-	h.Add(h.hover, h.lit, h.ring)
+	h := &sectionHead{sec: c, title: title, fade: anim.NewFloat(1), hover: anim.NewFloat(0), lit: anim.NewFloat(0),
+		ring: anim.NewFloat(0)}
+	h.Add(h.fade, h.hover, h.lit, h.ring)
 	return h
 }
 
@@ -458,6 +486,12 @@ func (h *sectionHead) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Childre
 		face := text.Default()
 		if bold := widget.BoldFont.Get(f.Theme); bold != nil {
 			face = bold
+		}
+		if h.shown != "" && h.shown != h.title {
+			// A new title fades in over the one before.
+			h.was = h.run
+			h.fade.Jump(0)
+			h.fade.Animate(1, widget.Quick.Get(f.Theme))
 		}
 		h.run, h.shown, h.size = face.Shape(h.title, size), h.title, size
 	}
@@ -481,7 +515,15 @@ func (h *sectionHead) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gu
 		p.RRectStroke(all.Inset(geom.Uniform(1)), 5, paint.Fill{}, paint.Stroke{Width: 2, Color: c})
 	}
 	ink := Caption.Get(th)
-	h.run.Paint(p, geom.Pt(6, (box.H-h.run.Height())/2), ink)
+	if t := min(max(h.fade.Value(), 0), 1); t < 0.99 {
+		was, now := ink, ink
+		was.A = uint8(float32(ink.A) * (1 - t))
+		now.A = uint8(float32(ink.A) * t)
+		h.was.Paint(p, geom.Pt(6, (box.H-h.was.Height())/2), was)
+		h.run.Paint(p, geom.Pt(6, (box.H-h.run.Height())/2), now)
+	} else {
+		h.run.Paint(p, geom.Pt(6, (box.H-h.run.Height())/2), ink)
+	}
 	// The chevron points down while the section is open, and turns to
 	// point at the heading as it closes.
 	const s = 14
@@ -725,7 +767,8 @@ func (r *placeRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		p.RRect(bar, 1.5, paint.Solid(widget.Accent.Get(th)))
 	}
 	line := float32(30)
-	if r.item.Kind == "favourite" {
+	if r.item.Kind == "favourite" || r.item.Color != "" || r.item.Icon != "" {
+		// A favourite, or a place given a look, shows its icon.
 		paintFavMark(p, th, r.item.Color, r.item.Icon, geom.Pt(18, t+line/2))
 	} else {
 		mark := placeMark(r.item.Place).Get(th)

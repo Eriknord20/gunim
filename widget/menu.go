@@ -843,7 +843,7 @@ func (m *Menu) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom
 		w = min(w, wide)
 	}
 	m.card = geom.Rc(m.margin, m.margin, w, h)
-	m.scroll.fit(y, geom.Sz(m.card.Max.X, h-2*m.pad), th)
+	m.scroll.fit(y, geom.Sz(m.card.Max.X, h-2*m.pad), f)
 	if m.fresh {
 		m.newRows()
 	}
@@ -1432,6 +1432,10 @@ type ContextMenu struct {
 	list  *menuList
 	// back is what had focus before the menu opened.
 	back gunim.Node
+	// anchor is what the menu open stands by, in the context menu's space.
+	anchor geom.Rect
+	// size is the context menu's size, as it was laid out last.
+	size geom.Size
 }
 
 // NewContextMenu returns child with a context menu of items.
@@ -1469,7 +1473,7 @@ func (c *ContextMenu) Handle(e input.Event, u *gunim.UI) bool {
 		if c.Prepare != nil && !c.Prepare(e.Pos, u) {
 			return false
 		}
-		c.show(e.Pos, u)
+		c.show(geom.Rect{Min: e.Pos, Max: e.Pos}, u)
 	case input.KeyPress:
 		if !c.Focusable() {
 			return false
@@ -1499,10 +1503,41 @@ func (c *ContextMenu) Open(at geom.Point, u *gunim.UI) {
 	if c.Prepare != nil && !c.Prepare(at, u) {
 		return
 	}
-	c.show(at, u)
+	c.show(geom.Rect{Min: at, Max: at}, u)
 }
 
-func (c *ContextMenu) show(at geom.Point, u *gunim.UI) {
+// Toggle closes the menu where it is open, and opens it otherwise, as a
+// drop-down's button does. The menu opens at at, in the context menu's
+// space, below the context menu; a press on the context menu is left to
+// the button, so a second press closes the menu. The button must leave
+// the focus where it is as it is pressed, as [Control.KeepFocus] does:
+// the menu closes as it loses the focus.
+func (c *ContextMenu) Toggle(at geom.Point, u *gunim.UI) {
+	if c.popup != nil && c.popup.Open() {
+		c.close(u)
+		return
+	}
+	if c.Prepare != nil && !c.Prepare(at, u) {
+		return
+	}
+	c.show(geom.Rect{Min: geom.Pt(at.X, 0), Max: geom.Pt(max(at.X, c.size.W), at.Y)}, u)
+}
+
+// ToggleFrom closes the menu where anchor opened it, and otherwise opens it below anchor, in the context menu's space,
+// for one of several buttons inside the context menu. A press on anchor is left to the button, so a second press
+// closes the menu.
+func (c *ContextMenu) ToggleFrom(anchor geom.Rect, u *gunim.UI) {
+	if c.popup != nil && c.popup.Open() && c.anchor == anchor {
+		c.close(u)
+		return
+	}
+	if c.Prepare != nil && !c.Prepare(geom.Pt(anchor.Min.X, anchor.Max.Y), u) {
+		return
+	}
+	c.show(anchor, u)
+}
+
+func (c *ContextMenu) show(anchor geom.Rect, u *gunim.UI) {
 	c.close(u)
 	m := NewMenu(nil)
 	m.setList(c.list)
@@ -1521,10 +1556,10 @@ func (c *ContextMenu) show(at geom.Point, u *gunim.UI) {
 		}
 		return nil
 	}
-	c.menu = m
+	c.menu, c.anchor = m, anchor
 	u.Cue(gunim.CueOpen, c)
 	c.popup = u.OpenPopup(c, m, gunim.PopupOptions{
-		Anchor: geom.Rect{Min: at, Max: at},
+		Anchor: anchor,
 		// As tall as the screen lets it be: the menu slides up to show all its items, and scrolls only past that.
 		Max:     geom.Sz(600, 4096),
 		Dismiss: dismissed(c, c.close),
@@ -1553,6 +1588,7 @@ func (c *ContextMenu) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Chi
 	k := kids.At(0)
 	s := k.Layout(cs)
 	k.Place(geom.Point{})
+	c.size = s
 	return s
 }
 

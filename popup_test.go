@@ -452,7 +452,7 @@ type watched struct {
 	given, copies [][]paint.Op
 }
 
-func (w *watched) Present(ops []paint.Op, damage geom.Rect) error {
+func (w *watched) Present(ops []paint.Op, damage []geom.Rect) error {
 	err := w.OffscreenWindow.Present(ops, damage)
 	w.given, w.copies = append(w.given, ops), append(w.copies, w.Ops())
 	return err
@@ -529,6 +529,29 @@ func TestAnInjectedClickOnAPopupReachesThePopup(t *testing.T) {
 	}
 	if !pop.Open() {
 		t.Fatal("the popup closed")
+	}
+}
+
+func TestAnInjectedMoveOntoAPopupKeepsItHovered(t *testing.T) {
+	w, _, m, _ := openMenu(t, nil)
+	pw := popupWindow(t, w)
+	main := w.dw.(*driver.OffscreenWindow)
+	// The pointer rests in the window first, as after a click there, then moves onto the popup.
+	w.Inject(input.PointerMove{Pos: geom.Pt(500, 500), Time: time.Now()})
+	run(w, 1)
+	w.Inject(input.PointerMove{Pos: main.FromScreen(pw.ToScreen(geom.Pt(30, 20))), Time: time.Now()})
+	run(w, 3)
+	if !m.got(input.PointerEnter{}) {
+		t.Fatal("the menu never heard the pointer come")
+	}
+	if m.got(input.PointerLeave{}) {
+		t.Fatal("the menu heard the pointer leave, though it rests over it")
+	}
+	// Back on the window, the menu hears it go.
+	w.Inject(input.PointerMove{Pos: geom.Pt(500, 500), Time: time.Now()})
+	run(w, 1)
+	if !m.got(input.PointerLeave{}) {
+		t.Fatal("the menu never heard the pointer go back to the window")
 	}
 }
 

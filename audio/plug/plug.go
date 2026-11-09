@@ -21,6 +21,7 @@ package plug
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"image/color"
 	"math"
@@ -65,6 +66,14 @@ type Descriptor struct {
 	// the note comes within LookAhead, in [Block.Upcoming]. Zero asks
 	// for none. It needs Notes.
 	LookAhead time.Duration
+	// Past asks to hear of the music's earlier notes where playing
+	// starts, jumps or wraps, or an edit lands, with [PastStart] and
+	// [PastNote] in [Block.Events], for an instrument whose sound hangs
+	// on notes gone by: a key switch, or a one shot ringing on. Each
+	// pitch's latest earlier note comes, and every note the instrument's
+	// [Processor.Tail] may still hold. A host leaves these events out
+	// for any other plugin. It needs Notes.
+	Past bool
 	// ChordAhead is how long before a chord starts the plugin asks to
 	// hear of it, for an instrument that plays to the chords under its
 	// notes: a sub on the chord's bass, unison on its tones, a riser
@@ -104,6 +113,11 @@ type Descriptor struct {
 	// Patches are the patches the plugin comes with, as starting points.
 	// The host keeps those a user saves beside them.
 	Patches []Patch
+	// Actions are what the plugin does at a click, beyond setting a
+	// parameter, as an Auto that sets a part of it from the track it
+	// reads. A host offers them where it shows the plugin, and runs
+	// them through its [Actor].
+	Actions []Action
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
 }
@@ -240,6 +254,36 @@ type ControlPort struct {
 	// falls past the block's end. A host joins a trigger output only to
 	// a trigger input, and the other way round.
 	Trigger bool
+	// Measures says what an output reports of the plugin's processing,
+	// for a host to draw as a meter. A measuring port runs in dB, at
+	// most 0.
+	Measures Measure
+}
+
+// Measure is what a control output reports of the plugin's processing.
+type Measure uint8
+
+// The measures.
+const (
+	// MeasureNone is a plain control.
+	MeasureNone Measure = iota
+	// MeasureCompression is a compressor's gain reduction.
+	MeasureCompression
+	// MeasureLimiting is a limiter's gain reduction.
+	MeasureLimiting
+	// MeasureGate is a gate's or expander's gain reduction: 0 open.
+	MeasureGate
+)
+
+var measureNames = [...]string{MeasureNone: "none", MeasureCompression: "compression", MeasureLimiting: "limiting",
+	MeasureGate: "gate"}
+
+// String returns the measure's name, as "compression".
+func (m Measure) String() string {
+	if int(m) < len(measureNames) {
+		return measureNames[m]
+	}
+	return fmt.Sprintf("Measure(%d)", m)
 }
 
 // PortKey is the key a project names p by: its Key, or its Name.
@@ -517,6 +561,24 @@ func Register(d Descriptor) {
 	registry[d.ID] = d
 }
 
+// Action is what a plugin does at a click: its ID, for good; what a
+// button says, Name; and the part of the plugin it sets, Group, as a
+// section's name, or empty for the whole plugin.
+type Action struct {
+	ID, Name, Group string
+}
+
+// Actor is a plugin that does its [Descriptor.Actions].
+type Actor interface {
+	Plugin
+	// Act does action id and returns the parameters it sets, which the
+	// host sets as one edit. It runs on a goroutine of the host's, on
+	// the plugin made for the views, and may take long: it stops, with
+	// ctx's error, as ctx ends. params reads a parameter's value as the
+	// host has it, and progress tells how far it has got, from 0 to 1.
+	Act(ctx context.Context, id string, params func(id uint32) float64, progress func(float64)) (map[uint32]float64, error)
+}
+
 // check returns what is wrong with d, if anything.
 func check(d *Descriptor) error {
 	if d.ID == "" || d.Name == "" || d.New == nil {
@@ -531,6 +593,9 @@ func check(d *Descriptor) error {
 	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead || d.ChordAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration from zero to %v", d.ID,
 			d.ChordAhead, MaxChordAhead)
+	}
+	if d.Past && !d.Notes {
+		return fmt.Errorf("%s asks for past notes, which takes Notes", d.ID)
 	}
 	if d.Generator() && len(d.ControlOut) == 0 {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)
@@ -550,6 +615,13 @@ func check(d *Descriptor) error {
 		if p.Log && p.Min <= 0 {
 			return fmt.Errorf("%s: parameter %q runs by ratios from %g, not above zero", d.ID, p.Name, p.Min)
 		}
+	}
+	acts := map[string]bool{}
+	for _, a := range d.Actions {
+		if a.ID == "" || a.Name == "" || acts[a.ID] {
+			return fmt.Errorf("%s has an action of ID %q twice, or unnamed", d.ID, a.ID)
+		}
+		acts[a.ID] = true
 	}
 	names := map[string]bool{}
 	for _, pt := range d.Patches {
@@ -594,6 +666,23 @@ func checkPorts(d *Descriptor) error {
 				return fmt.Errorf("%s: %s %q is a trigger, so runs from 0 to 1, from 0, not from %g to %g, from %g",
 					d.ID, way, p.Name, p.Min, p.Max, p.Default)
 			}
+		}
+	}
+	for _, p := range d.ControlIn {
+		if p.Measures != MeasureNone {
+			return fmt.Errorf("%s: control input %q measures %v, which only an output may", d.ID, p.Name, p.Measures)
+		}
+	}
+	for _, p := range d.ControlOut {
+		if p.Measures == MeasureNone {
+			continue
+		}
+		if int(p.Measures) >= len(measureNames) {
+			return fmt.Errorf("%s: control output %q measures %v, which is no measure", d.ID, p.Name, p.Measures)
+		}
+		if p.Trigger || p.Unit != "dB" || p.Max != 0 {
+			return fmt.Errorf("%s: control output %q measures %v, so runs in dB up to 0 and is no trigger", d.ID,
+				p.Name, p.Measures)
 		}
 	}
 	return nil

@@ -1,5 +1,7 @@
 package paint
 
+import "github.com/marrasen/gunim/geom"
+
 // A Run is a stretch of one frame's commands, which a node that draws
 // the same again next frame can hand on with [Painter.Again] rather
 // than drawing it anew: a terminal of thousands of cells, still while
@@ -70,7 +72,7 @@ func (p *Painter) Again(run Run) bool {
 		return false
 	}
 	at := len(p.ops)
-	for i, op := range p.prev[run.from:run.to] {
+	for _, op := range p.prev[run.from:run.to] {
 		switch op := op.(type) {
 		case *RRectOp:
 			p.ops = append(p.ops, p.takeRRect(*op))
@@ -94,17 +96,31 @@ func (p *Painter) Again(run Run) bool {
 			c := *op
 			p.ops = append(p.ops, &c)
 		case *LayerEndOp:
-			// The layer it ends closes, as Layer's end closes it.
-			p.open = p.open[:len(p.open)-1]
 			p.ops = append(p.ops, &LayerEndOp{})
 		}
-		b := p.prevBounds[run.from+i]
-		p.bounds = append(p.bounds, b)
+	}
+	// The bounds come as they were: a layer in the run already holds
+	// all it held. The layers open round the run take in the run, once,
+	// from the ops at its own depth, which hold the rest.
+	p.bounds = append(p.bounds, p.prevBounds[run.from:run.to]...)
+	p.shows = append(p.shows, p.prevShows[run.from:run.to]...)
+	if len(p.open) > 0 {
+		var b, sh geom.Rect
+		depth := 0
+		for i, op := range p.prev[run.from:run.to] {
+			if depth == 0 {
+				b, sh = b.Union(p.prevBounds[run.from+i]), sh.Union(p.prevShows[run.from+i])
+			}
+			switch op.(type) {
+			case *LayerOp:
+				depth++
+			case *LayerEndOp:
+				depth--
+			}
+		}
 		for _, j := range p.open {
 			p.bounds[j] = p.bounds[j].Union(b)
-		}
-		if _, ok := p.ops[len(p.ops)-1].(*LayerOp); ok {
-			p.open = append(p.open, len(p.ops)-1)
+			p.shows[j] = p.shows[j].Union(sh)
 		}
 	}
 	if n := run.to - run.from; n > 0 {

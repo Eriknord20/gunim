@@ -98,6 +98,72 @@ func TestTheDriverHearsTheFocusedTextAndTheEditsItHolds(t *testing.T) {
 	}
 }
 
+// keysText is a text node that a key changes, with what keys it heard.
+type keysText struct {
+	recorder
+	text  string
+	caret int
+}
+
+func (*keysText) TakesText() bool { return true }
+
+func (n *keysText) TextState() input.TextState {
+	return input.TextState{Text: n.text, Selection: [2]int{n.caret, n.caret}, Composing: [2]int{n.caret, n.caret}}
+}
+
+func (n *keysText) Handle(e input.Event, u *UI) bool {
+	switch e := e.(type) {
+	case input.KeyPress:
+		if e.Key == input.KeyBackspace {
+			n.text = n.text[:len(n.text)-1]
+			n.caret = len(n.text)
+		}
+		if e.Key == input.KeyLeft {
+			n.caret--
+		}
+	case input.TextInput:
+		n.text += e.Text
+		n.caret = len(n.text)
+	case input.PointerDown:
+		n.caret = 0
+	}
+	return n.recorder.Handle(e, u)
+}
+
+// TestTheDriverHearsAChangeBeforeTheNextFrame: a browser's mirror of the text stands
+// in for it to what the browser types next, and that can come before any frame.
+func TestTheDriverHearsAChangeBeforeTheNextFrame(t *testing.T) {
+	sw := &stateWindow{OffscreenWindow: driver.Offscreen(geom.Sz(800, 600))}
+	w := newWindow(sw, nil)
+	field := &keysText{text: "abc", caret: 3}
+	w.ui.Insert(w.ui.Root(), field)
+	w.Frame(time.Second / 60)
+	w.ui.Focus(field)
+	sw.take()
+	check := func(what, text string, caret int) {
+		t.Helper()
+		got := sw.take()
+		if len(got) != 1 || got[0].state == nil || got[0].state.Text != text || got[0].state.Selection != [2]int{caret, caret} {
+			t.Fatalf("%s, with no frame, told the driver %+v, want %q at %d", what, got, text, caret)
+		}
+	}
+	w.Input(input.KeyPress{Key: input.KeyBackspace})
+	check("a backspace", "ab", 2)
+	w.Input(input.KeyPress{Key: input.KeyLeft})
+	check("an arrow", "ab", 1)
+	w.Input(input.TextInput{Text: "d"})
+	check("typing", "abd", 3)
+	w.Input(input.KeyPress{Key: input.KeyEnd})
+	if got := sw.take(); len(got) != 0 {
+		t.Fatalf("a key that changed nothing told the driver %+v", got)
+	}
+	// A pointer's moves don't cost the state of the text each.
+	w.Input(input.PointerMove{Pos: geom.Pt(5, 5)})
+	if got := sw.take(); len(got) != 0 {
+		t.Fatalf("a pointer's move told the driver %+v", got)
+	}
+}
+
 func TestEachTextNodeTakingTheFocusStartsTheKeyboardOver(t *testing.T) {
 	// Two empty fields have the same state, and the second still has to
 	// reach the driver, as a field of its own.

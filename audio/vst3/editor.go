@@ -1,8 +1,11 @@
+//go:build !js
+
 package vst3
 
 import (
 	"fmt"
 	"image"
+	"math"
 	"unsafe"
 
 	"github.com/marrasen/gunim/audio/plug"
@@ -13,6 +16,11 @@ import (
 // host's window, which the host places.
 
 type viewRect struct{ left, top, right, bottom int32 }
+
+// toPixels and fromPixels turn a size in the view's units, points on
+// macOS, into the host's pixels at scale s, and back.
+func toPixels(n int, s float64) int   { return int(math.Round(float64(n) * s)) }
+func fromPixels(n int, s float64) int { return int(math.Round(float64(n) / s)) }
 
 func (r viewRect) size() (w, h int) { return int(r.right - r.left), int(r.bottom - r.top) }
 
@@ -53,7 +61,8 @@ var frameKind = &kind{
 				f.e.w, f.e.h = w, h
 				call(view, mOnSize, uintptr(unsafe.Pointer(&r)))
 				if f.e.sized != nil && !f.e.placing {
-					f.e.sized(w, h)
+					s := f.e.win.scale()
+					f.e.sized(toPixels(w, s), toPixels(h, s))
 				}
 				return resultOf(resultOK)
 			}),
@@ -71,10 +80,11 @@ var frameKind = &kind{
 // show it.
 func (p *Plugin) createView() uintptr {
 	name := []byte("editor\x00")
-	v := call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0])))
+	v := pointerOf(call(p.ctrl, mCreateView, uintptr(unsafe.Pointer(&name[0]))))
 	if v == 0 {
 		return 0
 	}
+	ownFn(method(v, 0), p.owner)
 	pt := []byte(platformType + "\x00")
 	if result(call(v, mIsPlatformTypeSupported, uintptr(unsafe.Pointer(&pt[0])))) != resultOK {
 		release(v)
@@ -83,13 +93,23 @@ func (p *Plugin) createView() uintptr {
 	return v
 }
 
+// viewSize asks the view v its size. What a crash left part written is no size.
+func viewSize(v uintptr) viewRect {
+	var r viewRect
+	if result(call(v, mGetSize, uintptr(unsafe.Pointer(&r)))) == resultCrashed {
+		return viewRect{}
+	}
+	return r
+}
+
 // EditorSize returns the size the plugin's editor opens at, in pixels,
 // without opening it, or its size now where it is open; ok is false
 // where it has no editor here.
 func (p *Plugin) EditorSize() (w, h int, ok bool) {
-	onUI(func() {
+	p.whileOpen(func() {
 		if p.ed != nil {
-			w, h, ok = p.ed.w, p.ed.h, true
+			s := p.ed.win.scale()
+			w, h, ok = toPixels(p.ed.w, s), toPixels(p.ed.h, s), true
 			return
 		}
 		if p.ctrl == 0 {
@@ -99,11 +119,12 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 		if v == 0 {
 			return
 		}
-		var r viewRect
-		call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+		r := viewSize(v)
 		release(v)
 		w, h = r.size()
 		ok = w > 0 && h > 0
+		s := (*window)(nil).scale()
+		w, h = toPixels(w, s), toPixels(h, s)
 	})
 	return w, h, ok
 }
@@ -115,7 +136,7 @@ func (p *Plugin) EditorSize() (w, h int, ok bool) {
 // open, or else one made for the question.
 func (p *Plugin) EditorResizable() bool {
 	var ok bool
-	onUI(func() {
+	p.whileOpen(func() {
 		if p.ed != nil {
 			ok = p.ed.resizable
 			return
@@ -137,7 +158,7 @@ func (p *Plugin) EditorResizable() bool {
 // brings it to the front where it is open.
 func (p *Plugin) OpenEditor(title string) error {
 	var err error
-	onUI(func() {
+	if !p.whileOpen(func() {
 		if p.ed != nil {
 			if !p.ed.win.child {
 				p.ed.win.raise()
@@ -145,12 +166,15 @@ func (p *Plugin) OpenEditor(title string) error {
 			return
 		}
 		err = p.attachEditor(title, 0, nil)
-	})
+	}) {
+		return ErrClosed
+	}
 	return err
 }
 
 // EmbedEditor shows the plugin's editor in parent, a window of the
-// system's: an HWND on Windows, and an X11 window's ID on Linux. It
+// system's: an HWND on Windows, an X11 window's ID on Linux, and an
+// NSView on macOS, which the editor's view is a subview of. It
 // opens hidden, for the host to put it in place with PlaceEditor, and
 // returns its size in pixels, which the host makes room for. sized
 // hears each size the editor takes of itself after, in turn, on the
@@ -162,14 +186,17 @@ func (p *Plugin) EmbedEditor(parent uintptr, sized func(w, h int)) (w, h int, er
 	if parent == 0 {
 		return 0, 0, fmt.Errorf("vst3: %s: no window to embed its editor in", p.Class.Name)
 	}
-	onUI(func() {
+	if !p.whileOpen(func() {
 		if p.ed != nil {
 			p.ed.close()
 		}
 		if err = p.attachEditor("", parent, sized); err == nil {
-			w, h = p.ed.w, p.ed.h
+			s := p.ed.win.scale()
+			w, h = toPixels(p.ed.w, s), toPixels(p.ed.h, s)
 		}
-	})
+	}) {
+		return 0, 0, ErrClosed
+	}
 	return w, h, err
 }
 
@@ -191,15 +218,16 @@ func (p *Plugin) PlaceEditor(r image.Rectangle) (w, h int) {
 		if e == nil || !e.win.child {
 			return
 		}
+		s := e.win.scale()
 		if r.Empty() {
 			e.win.hide()
 		} else {
-			if cw, ch := r.Dx(), r.Dy(); e.resizable && (cw != e.w || ch != e.h) {
+			if cw, ch := fromPixels(r.Dx(), s), fromPixels(r.Dy(), s); e.resizable && (cw != e.w || ch != e.h) {
 				e.sizeTo(cw, ch)
 			}
 			e.win.place(r.Min.X, r.Min.Y)
 		}
-		w, h = e.w, e.h
+		w, h = toPixels(e.w, s), toPixels(e.h, s)
 	})
 	return w, h
 }
@@ -229,8 +257,7 @@ func (p *Plugin) attachEditor(title string, parent uintptr, sized func(w, h int)
 	if v == 0 {
 		return fmt.Errorf("vst3: %s: %w", p.Class.Name, plug.ErrNoEditor)
 	}
-	var r viewRect
-	call(v, mGetSize, uintptr(unsafe.Pointer(&r)))
+	r := viewSize(v)
 	w, h := r.size()
 	if w <= 0 || h <= 0 {
 		w, h = 640, 480

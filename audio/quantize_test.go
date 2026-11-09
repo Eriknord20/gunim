@@ -27,7 +27,7 @@ func TestQuantizerRoundsAsTheWAVWriter(t *testing.T) {
 		q := Quantizer{Bits: bits}
 		got := append([]float32(nil), frames...)
 		q.Process(got)
-		data := f.Bytes()[44:]
+		data := f.Bytes()[WAVHeaderSize(WAVSpec{Bits: bits}):]
 		scale := math.Ldexp(1, bits-1)
 		for i, v := range got {
 			var x int32

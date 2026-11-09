@@ -116,6 +116,11 @@ func ShowWhatsNew(ctx context.Context, app *gunim.App, a App, from string) error
 type About struct {
 	Quit func() error
 	Exe  string
+	// Ready is the version of a release in place already, waiting for
+	// the next start, as [App.Updated] told of it: found again, it is
+	// offered for the restart alone, as [Update.Ready] does. A release
+	// put in place on the installed program is noticed without it.
+	Ready string
 }
 
 // ShowAbout opens a window on app about the program a describes, in the
@@ -329,16 +334,38 @@ func (r *updater) checkNow() {
 
 // found turns the window to the newer release rel, to update now.
 func (r *updater) found(rel Release) {
-	r.u = Update{Release: rel, Quit: r.about.Quit, Exe: r.about.Exe}
+	r.u = Update{Release: rel, Quit: r.about.Quit, Exe: r.about.Exe, Ready: r.inPlace(rel)}
 	if !supported {
 		r.u.Quit = nil
 	}
 	r.sc.Page, r.sc.Status = pageUpdate, ""
 	r.sc.Have, r.sc.Version = strings.TrimPrefix(r.a.Version, "v"), strings.TrimPrefix(rel.Version, "v")
-	r.sc.Ready, r.sc.Restart = false, r.u.Quit != nil
+	r.sc.Ready, r.sc.Restart = r.u.Ready, r.u.Quit != nil
 	r.sc.NotesLoading, r.sc.Notes, r.sc.NotesErr = true, "", ""
 	r.show()
 	r.readNotes(r.a.Version, rel.Version)
+}
+
+// inPlace reports whether rel waits in place already for the next
+// start: as the program said, or, for the installed one, as the trial
+// the update left beside it says, or the install, which a start of rel
+// finished while this program still ran. Stage refuses such a release.
+func (r *updater) inPlace(rel Release) bool {
+	if r.about.Ready != "" && r.about.Ready == rel.Version {
+		return true
+	}
+	if r.about.Exe != "" {
+		return false
+	}
+	dir, err := r.a.dir()
+	if err != nil {
+		return false
+	}
+	if m, err := readManifest(dir, r.a.id()); err == nil && m != nil && !newerThanInstalled(rel, m.Version) {
+		return true
+	}
+	t, ok := readTrial(filepath.Join(dir, r.a.exe()))
+	return ok && t.Version == rel.Version
 }
 
 // joinNotes is the notes of releases, newest first, as one document,
@@ -475,7 +502,7 @@ func openLink(c gunim.Client, addr string) {
 	if u, err := url.Parse(addr); err != nil || u.Scheme != "https" {
 		return
 	}
-	go func() { _ = c.Open(addr) }()
+	go func() { _ = c.OpenLink(addr) }()
 }
 
 // restarted is the run of the copy an update started in place of the

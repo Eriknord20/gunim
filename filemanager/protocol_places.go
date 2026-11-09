@@ -27,8 +27,18 @@ type Place struct {
 	// Lit draws the place's icon green, as a machine connected is.
 	Lit bool
 	// Color and Icon are a favourite's colour and icon, by name, as
-	// Favourite has them.
+	// Favourite has them; a place given either shows them as a
+	// favourite does.
 	Color, Icon string
+	// Title, when set, is the heading of the place's group in place of
+	// the group's own name: as the name of the machine a window shows,
+	// over its places, for a group that keeps one name, and its place
+	// in the sidebar, whichever machine it is.
+	Title string
+	// Movable lets a drag, or Alt and an arrow, move the place among the
+	// places of its group that are movable too: the new order goes to
+	// Options.PlacesArranged.
+	Movable bool
 }
 
 // PlaceItem is an item of the program's own in a place's context menu.
@@ -100,6 +110,13 @@ type SectionCollapsed struct {
 	Collapsed bool
 }
 
+// PlacesArranged carries the places of Group in the order a drag left
+// them in.
+type PlacesArranged struct {
+	Group  string
+	Places []FavouriteAt
+}
+
 // FavouritesReordered carries the favourites in the order a drag left
 // them in.
 type FavouritesReordered struct {
@@ -130,6 +147,7 @@ func init() {
 	gunim.RegisterType[Places]("files.places")
 	gunim.RegisterType[FavouritesReordered]("files.favourites-reordered")
 	gunim.RegisterType[SectionsArranged]("files.sections-arranged")
+	gunim.RegisterType[PlacesArranged]("files.places-arranged")
 	gunim.RegisterType[SectionCollapsed]("files.section-collapsed")
 	gunim.RegisterType[Unpin]("files.unpin")
 	gunim.RegisterType[Visit]("files.visit")

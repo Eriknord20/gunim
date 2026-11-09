@@ -56,7 +56,7 @@ func TestAWindowConvertsToTheX11ScreensProfile(t *testing.T) {
 	shot := func() *image.RGBA {
 		got := make(chan *image.RGBA, 1)
 		w.Shoot(func(m *image.RGBA) { got <- m })
-		if err := w.Present(ops, paint.Everything); err != nil {
+		if err := w.Present(ops, []geom.Rect{paint.Everything}); err != nil {
 			t.Fatal(err)
 		}
 		<-w.Presented()

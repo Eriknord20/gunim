@@ -20,7 +20,7 @@ func startShadow(w *Window) {
 	if drawnShadowMode == "0" || !w.d.dxgi {
 		return
 	}
-	if err := w.gw.SetDrawnShadow(drawnShadowMode == "measure"); err != nil {
+	if err := w.gw.SetDrawnShadow(drawnShadowMode == "measure", float64(w.cornerLogical())); err != nil {
 		w.debugf("shadow left to the system: %v", err)
 		return
 	}

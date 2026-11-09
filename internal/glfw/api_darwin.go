@@ -98,7 +98,9 @@ const (
 // NSTrackingArea options.
 const (
 	NSTrackingMouseEnteredAndExited  = 0x01
+	NSTrackingMouseMoved             = 0x02
 	NSTrackingActiveInKeyWindow      = 0x20
+	NSTrackingActiveAlways           = 0x80
 	NSTrackingEnabledDuringMouseDrag = 0x400
 	NSTrackingCursorUpdate           = 0x04
 	NSTrackingInVisibleRect          = 0x200

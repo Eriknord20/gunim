@@ -44,8 +44,9 @@ type OffscreenWindow struct {
 	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
 	drawnSize             geom.Size
 	drawnScale, drawnZoom float32
-	// damage is the part of the window the last frame changed.
-	damage geom.Rect
+	// damage is the part of the window the last frame changed, as
+	// rectangles apart.
+	damage []geom.Rect
 	// cursor is the pointer's shape last set.
 	cursor input.Cursor
 	clip   string
@@ -61,10 +62,11 @@ type OffscreenWindow struct {
 	open, reveal func(string) error
 	// link answers OpenLink; see SetLinkOpener.
 	link func(string) error
-	// share and vibrate answer Share and Vibrate; see SetSharer and
-	// SetVibrator.
+	// share, vibrate and awake answer Share, Vibrate and KeepAwake; see
+	// SetSharer, SetVibrator and SetAwaker.
 	share   func(Share) error
 	vibrate func([]time.Duration) error
+	awake   func(bool) error
 	// fingers is what TakeFingers last said.
 	fingers bool
 	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
@@ -114,8 +116,32 @@ type OffscreenWindow struct {
 	raised    int
 	border    Border
 
+	// look runs before what the window drew is read; see OnLook.
+	look func()
+
 	presented chan Frame
 	input     chan any
+}
+
+// OnLook has fn run before each read of what the window drew: its ops,
+// damage, cursor, accessibility tree, pointer region, edge swipe bands,
+// pixels, and its pretend frame's caption and maximize button. A window that paints only when looked at paints then; nil
+// stops it. The reads then belong on the goroutine that steps the window.
+func (w *OffscreenWindow) OnLook(fn func()) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.look = fn
+}
+
+// looked runs the function OnLook set, outside the lock, as it may
+// present a frame.
+func (w *OffscreenWindow) looked() {
+	w.mu.Lock()
+	fn := w.look
+	w.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // SetTitle implements [Titler].
@@ -220,20 +246,24 @@ func (w *OffscreenWindow) Input() <-chan any { return w.input }
 // A real driver reports each frame as its swap returns. This one waits
 // for the test, so a test decides exactly when the display is ready for
 // the next frame.
-func (w *OffscreenWindow) Tick() { w.presented <- Frame{Shown: time.Now()} }
+func (w *OffscreenWindow) Tick() { w.TickWith(Frame{Shown: time.Now()}) }
+
+// TickWith is [OffscreenWindow.Tick] with the report f: for a test that
+// says when the frame was shown, and how late it lit the screen.
+func (w *OffscreenWindow) TickWith(f Frame) { w.presented <- f }
 
 // Post delivers a platform event, blocking until the window reads it.
 func (w *OffscreenWindow) Post(ev any) { w.input <- ev }
 
 // Present implements [Window] by keeping the op list and the damage.
-func (w *OffscreenWindow) Present(ops []paint.Op, damage geom.Rect) error {
+func (w *OffscreenWindow) Present(ops []paint.Op, damage []geom.Rect) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	// The engine reuses its buffers, the ops themselves among them, two
 	// frames on, so keep a copy for Ops to return.
 	w.ops = keepOps(ops)
 	w.drawnSize, w.drawnScale, w.drawnZoom = w.size, w.scale, w.zoom
-	w.damage = damage
+	w.damage = append(w.damage[:0], damage...)
 	return nil
 }
 
@@ -290,6 +320,7 @@ func (w *OffscreenWindow) SetCursor(c input.Cursor) {
 
 // Cursor returns the pointer's shape last set.
 func (w *OffscreenWindow) Cursor() input.Cursor {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.cursor
@@ -298,13 +329,29 @@ func (w *OffscreenWindow) Cursor() input.Cursor {
 // Damage returns the part of the window the last frame changed, in
 // logical pixels: empty when it changed nothing.
 func (w *OffscreenWindow) Damage() geom.Rect {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.damage
+	var all geom.Rect
+	for _, r := range w.damage {
+		all = all.Union(r)
+	}
+	return all
+}
+
+// DamageRects returns the rectangles apart the last frame changed in,
+// in logical pixels, as the engine gave them: none when it changed
+// nothing.
+func (w *OffscreenWindow) DamageRects() []geom.Rect {
+	w.looked()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.damage)
 }
 
 // Ops returns the commands recorded by the last frame.
 func (w *OffscreenWindow) Ops() []paint.Op {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.ops
@@ -432,6 +479,7 @@ func (w *OffscreenWindow) PublishAccess(t *access.Tree) {
 
 // AccessTree returns the last accessibility tree published.
 func (w *OffscreenWindow) AccessTree() *access.Tree {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.tree
@@ -470,6 +518,8 @@ func (w *OffscreenWindow) Placement() (Placement, bool) {
 	return Placement{
 		Bounds:    geom.Rect{Min: w.origin, Max: w.origin.Add(size)},
 		Maximized: w.frame != nil && w.frame.IsMaximized,
+		// The pretend screen is in device pixels.
+		CoordsPerLogical: w.scale,
 	}, true
 }
 
@@ -653,6 +703,7 @@ func (w *OffscreenWindow) SetPointerRegion(rects []geom.Rect) {
 // PointerRegion returns where the window was last told it takes the pointer, in its logical pixels, and nil where
 // it takes it all over.
 func (w *OffscreenWindow) PointerRegion() []geom.Rect {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return slices.Clone(w.region)
@@ -671,9 +722,11 @@ type OffscreenFrame struct {
 	// Native says the pretend system moves and sizes the window itself,
 	// as Windows does.
 	Native bool
-	// Caption and Maximize are the title bar last reported.
-	Caption  []geom.Rect
-	Maximize geom.Rect
+	// caption and maximize are the title bar last reported, and w the
+	// window that reports it; see Caption and MaximizeButton.
+	caption  []geom.Rect
+	maximize geom.Rect
+	w        *OffscreenWindow
 	// Moves counts the moves started, Resizes the edges sized by, and
 	// Minimized the minimizes.
 	Moves     int
@@ -683,13 +736,32 @@ type OffscreenFrame struct {
 	IsMaximized bool
 }
 
+// Caption is the part of the title bar that moves the window, as last
+// reported. Reading it is a look; see [OffscreenWindow.OnLook].
+func (f *OffscreenFrame) Caption() []geom.Rect {
+	f.w.looked()
+	f.w.mu.Lock()
+	defer f.w.mu.Unlock()
+	return slices.Clone(f.caption)
+}
+
+// MaximizeButton is where the title bar's maximize button is, as last
+// reported, empty for none. Reading it is a look; see
+// [OffscreenWindow.OnLook].
+func (f *OffscreenFrame) MaximizeButton() geom.Rect {
+	f.w.looked()
+	f.w.mu.Lock()
+	defer f.w.mu.Unlock()
+	return f.maximize
+}
+
 // MakeChromeless makes the window one whose application draws its
 // title bar, with a pretend system that moves and sizes it itself when
 // native, and leaves that to the engine otherwise.
 func (w *OffscreenWindow) MakeChromeless(native bool) *OffscreenFrame {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.frame = &OffscreenFrame{Native: native}
+	w.frame = &OffscreenFrame{Native: native, w: w}
 	return w.frame
 }
 
@@ -705,7 +777,7 @@ func (w *OffscreenWindow) SetTitleBar(caption []geom.Rect, maximize geom.Rect) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.frame != nil {
-		w.frame.Caption, w.frame.Maximize = slices.Clone(caption), maximize
+		w.frame.caption, w.frame.maximize = slices.Clone(caption), maximize
 	}
 }
 
@@ -909,6 +981,26 @@ func (w *OffscreenWindow) Vibrate(pattern ...time.Duration) error {
 	return fn(pattern)
 }
 
+// SetAwaker sets what KeepAwake does, for a test standing in for the
+// device.
+func (w *OffscreenWindow) SetAwaker(fn func(on bool) error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.awake = fn
+}
+
+// KeepAwake implements [Awaker] with the function SetAwaker set, and
+// returns [ErrNoAwaker] without one.
+func (w *OffscreenWindow) KeepAwake(on bool) error {
+	w.mu.Lock()
+	fn := w.awake
+	w.mu.Unlock()
+	if fn == nil {
+		return ErrNoAwaker
+	}
+	return fn(on)
+}
+
 // TakeFingers implements [FingerTaker] by keeping on, for a test to read
 // with FingersTaken; a test hands the window its fingers as
 // [input.Finger].
@@ -936,6 +1028,7 @@ func (w *OffscreenWindow) KeepEdgeSwipes(bands []geom.Rect) {
 
 // EdgeSwipesKept returns the bands KeepEdgeSwipes last kept, and how many times it has been called.
 func (w *OffscreenWindow) EdgeSwipesKept() (bands []geom.Rect, calls int) {
+	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]geom.Rect(nil), w.edgeSwipes...), w.edgeSwipeCalls

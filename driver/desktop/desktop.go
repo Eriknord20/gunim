@@ -28,6 +28,7 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/internal/gl"
 	"github.com/marrasen/gunim/internal/glfw"
+	"github.com/marrasen/gunim/internal/mainthread"
 )
 
 // init pins the main goroutine to the main thread, which is where
@@ -116,6 +117,9 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 	stopHang := watchHang(d, hangEvery, hangAfter)
 	defer stopHang()
 
+	// Work that must run on the main thread, as macOS's plugin editors
+	// must, runs among the driver's own.
+	mainthread.Set(d.post)
 	ready()
 	var err error
 	for !d.quit {
@@ -131,6 +135,7 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 
 	// Refuse new work, finish what was already queued, and take down
 	// whatever windows are still open.
+	mainthread.Set(nil)
 	d.mu.Lock()
 	d.stopped = true
 	d.mu.Unlock()
@@ -478,8 +483,7 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 	case driver.KindPopup:
 		hints = append(hints,
 			[2]int{int(glfw.Popup), glfw.True},
-			// Cocoa has no popup hint yet; there, a popup is a borderless
-			// window floating above the rest.
+			// Floating keeps a Cocoa popup above its parent.
 			[2]int{int(glfw.Floating), glfw.True},
 			[2]int{int(glfw.Decorated), glfw.False},
 			[2]int{int(glfw.FocusOnShow), glfw.False})
@@ -504,6 +508,11 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 	}
 	for _, h := range hints {
 		if err := glfw.WindowHint(glfw.Hint(h[0]), h[1]); err != nil {
+			return nil, err
+		}
+	}
+	for _, hint := range []glfw.Hint{glfw.X11ClassName, glfw.X11InstanceName} {
+		if err := glfw.WindowHintString(hint, o.Class); err != nil {
 			return nil, err
 		}
 	}
@@ -569,7 +578,7 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 	}
 	if o.Chromeless && o.Kind == driver.KindNormal {
 		w.mu.Lock()
-		w.border = o.Border
+		w.border, w.corner = o.Border, o.Corner
 		w.mu.Unlock()
 		w.setChromeless()
 		if err := applyBorder(w); err != nil {
@@ -626,6 +635,7 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		// again for a monitor's scale as it showed noted those too.
 		w.applyBounds(bounds)
 		w.normals = append(w.normals[:0], bounds)
+		w.normalScales = append(w.normalScales[:0], w.coordsPerLogicalNow())
 	}
 	if place && placed.Maximized && !maximizeHidden {
 		_ = gw.Maximize()

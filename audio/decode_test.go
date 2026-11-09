@@ -45,7 +45,7 @@ func pitch(frames []float32, ch int) float64 {
 func near(got, want, tol float64) bool { return math.Abs(got-want) <= tol }
 
 func TestEachFormatPlaysItsPitchesInTheirChannelsAtTheMixersRate(t *testing.T) {
-	for _, name := range []string{"tone.mp3", "tone.ogg", "tone.flac"} {
+	for _, name := range []string{"tone.mp3", "tone.ogg", "tone.flac", "tone.aiff"} {
 		t.Run(name, func(t *testing.T) {
 			f, err := os.Open("testdata/" + name)
 			if err != nil {
@@ -85,7 +85,7 @@ func TestEachFormatPlaysItsPitchesInTheirChannelsAtTheMixersRate(t *testing.T) {
 }
 
 func TestSeekingPlaysOnFromThere(t *testing.T) {
-	for _, name := range []string{"tone.mp3", "tone.ogg", "tone.flac"} {
+	for _, name := range []string{"tone.mp3", "tone.ogg", "tone.flac", "tone.aiff"} {
 		t.Run(name, func(t *testing.T) {
 			data, err := os.ReadFile("testdata/" + name)
 			if err != nil {

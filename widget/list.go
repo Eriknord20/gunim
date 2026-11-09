@@ -29,6 +29,8 @@ type Key string
 //
 // With OnActivate set, the list takes focus and keeps a cursor on a row:
 // Up, Down, Home and End move it, and Enter or Space clicks its row.
+// With OnReorder set too, Alt+Up and Alt+Down move the cursor's row a
+// place, as a drag would.
 //
 // Its look and motion come from the theme: [ListSpacing] between rows,
 // [Quick] to carry rows in and to their new places, and [Settle] to
@@ -41,6 +43,11 @@ type List struct {
 	// and runs on the UI goroutine with the order a drop leaves. See
 	// [List.Handle].
 	OnReorder func(keys []Key, u *gunim.UI) gunim.Intent
+	// ReorderGroup, when set with OnReorder, says which rows move
+	// together, as a list's profiles under their heading: a row moves
+	// only among the rows of its own group, and one whose group is ""
+	// does not move. Unset, every row moves anywhere.
+	ReorderGroup func(key Key) string
 	// OnActivate, when set, runs on a click on a row that nothing inside
 	// the row takes, so a row can be both clicked and dragged, and on
 	// Enter or Space on the cursor's row. Like OnReorder, a non-nil
@@ -79,13 +86,22 @@ type List struct {
 	// walk shows the cursor while the arrow keys move it, with no focus ring showing, until a click.
 	walk *anim.Float
 	mark *anim.Rect
+	// selected is the row shown as picked; sel is where the selection's
+	// fill is, gliding to selected's row, and selShown how far it has
+	// faded in.
+	selected Key
+	// laidOut says the list has been laid out once: rows that come
+	// after it grow in.
+	laidOut  bool
+	sel      *anim.Rect
+	selShown *anim.Float
 }
 
 // NewList returns an empty list.
 func NewList() *List {
 	l := &List{rows: map[Key]*row{}, slots: map[Key][2]float32{}, lift: anim.NewFloat(0), ring: anim.NewFloat(0),
-		walk: anim.NewFloat(0), mark: anim.NewRect(geom.Rect{})}
-	l.Add(l.lift, l.ring, l.walk, l.mark)
+		walk: anim.NewFloat(0), mark: anim.NewRect(geom.Rect{}), sel: anim.NewRect(geom.Rect{}), selShown: anim.NewFloat(0)}
+	l.Add(l.lift, l.ring, l.walk, l.mark, l.sel, l.selShown)
 	return l
 }
 
@@ -168,6 +184,9 @@ func Sync[T any, N gunim.Node](l *List, u *gunim.UI, items []T,
 		}
 
 		r := newRow(k, build(item))
+		// What the list holds as it is first shown is there at once, as
+		// a widget's first layout jumps; what comes after grows in.
+		r.instant = !l.laidOut
 		l.rows[k] = r
 		u.Insert(l, r)
 	}
@@ -179,6 +198,8 @@ func Sync[T any, N gunim.Node](l *List, u *gunim.UI, items []T,
 		}
 		leaving[k] = true
 		if r, ok := l.rows[k]; ok {
+			// A row that came at once still goes as any row does.
+			r.instant = false
 			u.Remove(r)
 		}
 	}
@@ -301,6 +322,20 @@ func (l *List) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		y -= spacing
 	}
 	l.height = y
+	l.laidOut = true
+	if s, ok := l.slots[l.selected]; ok && l.selected != "" {
+		// The first time, and coming back after none, it is there at
+		// once and fades in; after that it glides.
+		to := geom.Rc(0, s[0], width, s[1])
+		if l.selShown.Value() < 0.01 {
+			l.sel.Jump(to)
+		} else {
+			l.sel.Animate(to, move)
+		}
+		l.selShown.Animate(1, move)
+	} else {
+		l.selShown.Animate(0, Settle.Get(f.Theme))
+	}
 	if s, ok := l.slots[l.cursor]; ok {
 		to := geom.Rc(0, s[0], width, s[1])
 		if l.cursorShown() < 0.01 {
@@ -315,6 +350,11 @@ func (l *List) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 // Paint implements [gunim.Node]. A row that is lifted, being dragged or
 // settling from a drop, is drawn last, over the rest, with a shadow.
 func (l *List) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	if t := l.selShown.Value(); t > 0.001 {
+		c := ListSelected.Get(f.Theme)
+		c.A = uint8(float32(c.A) * min(t, 1))
+		p.RRect(l.sel.Value(), RowRadius.Get(f.Theme), paint.Solid(c))
+	}
 	var lifted gunim.Child
 	up := false
 	for kid := range kids.All {
@@ -335,6 +375,22 @@ func (l *List) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	if l.whole {
 		GroupRing(p, geom.Rect{Max: box.Point()}, RowRadius.Get(f.Theme), l.ring.Value(), f.Theme)
 	}
+}
+
+// Selected returns the row shown as picked, or the empty key for none.
+func (l *List) Selected() Key { return l.selected }
+
+// SetSelected shows row k as picked, as a sidebar's page is, and sends
+// no intent. Once the list is laid out, a fill under the row glides from
+// the row picked before, stretching from one to the other, and fades in
+// as a row is picked after none and out as the empty key picks none.
+// Before, it is there at once. u may be nil.
+func (l *List) SetSelected(k Key, u *gunim.UI) {
+	if l.selected == k {
+		return
+	}
+	l.selected = k
+	u.Invalidate()
 }
 
 // Focusable implements [gunim.Focusable]: a list with OnActivate set takes focus.
@@ -378,6 +434,9 @@ func (l *List) moveCursor(keys []Key, i int, u *gunim.UI) {
 
 // key works the cursor: Up, Down, Home and End move it, and Enter or Space clicks its row.
 func (l *List) key(e input.KeyPress, u *gunim.UI) bool {
+	if e.Mods == input.ModAlt && (e.Key == input.KeyUp || e.Key == input.KeyDown) && l.OnReorder != nil {
+		return l.moveRow(e.Key == input.KeyDown, u)
+	}
 	if l.OnActivate == nil || l.SkipFocus || e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) {
 		return false
 	}

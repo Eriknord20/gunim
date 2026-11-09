@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -265,9 +267,6 @@ const (
 	EverythingChanged ContentFlags = 0
 )
 
-// ErrClosed is the error of a document closed.
-var ErrClosed = errors.New("vst3: the ARA document is closed")
-
 // The document controller's functions, by their place in its table.
 const (
 	dcDestroy = iota
@@ -397,7 +396,7 @@ type Edit struct {
 
 // pause stops p, a renderer, until the edit ends, once.
 func (e *Edit) pause(p *Plugin) {
-	if p.active && !p.closed {
+	if p.active.Load() && !p.closed.Load() {
 		p.deactivate()
 		e.paused = append(e.paused, p)
 	}
@@ -406,7 +405,7 @@ func (e *Edit) pause(p *Plugin) {
 // resume starts the renderers the edit stopped again.
 func (e *Edit) resume() {
 	for _, p := range e.paused {
-		if !p.closed {
+		if !p.closed.Load() {
 			_ = p.activate()
 		}
 	}

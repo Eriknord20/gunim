@@ -16,6 +16,7 @@ type platformWindowState struct {
 	maximized bool
 	occluded  bool
 	retina    bool
+	popup     bool // made with the Popup hint; a gunim change
 
 	width, height     int
 	fbWidth, fbHeight int

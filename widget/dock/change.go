@@ -9,7 +9,8 @@ import "github.com/marrasen/gunim/geom"
 type Change interface{ change() }
 
 type (
-	// Show brings a tab to the front: the user picked it.
+	// Show brings a tab to the front: the user picked it, which may be
+	// the tab in front already, of a pane the keys are not in.
 	Show struct{ ID string }
 	// Move moves a node, with all it holds, as Layout.Move does: the
 	// user dragged its tab there.

@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -93,9 +95,13 @@ func NewLibraryAt(journal string, dirs ...string) *Library {
 	j.Loading = ""
 	l.crashed = j.Crashed
 	l.write(j)
-	go l.scan(append(Dirs(), dirs...))
+	go l.scan(append(systemDirs(), dirs...))
 	return l
 }
+
+// systemDirs gives the system's folders a library scans: [Dirs], or a
+// test's own.
+var systemDirs = Dirs
 
 // read reads the journal, or an empty one.
 func (l *Library) read() journalFile {

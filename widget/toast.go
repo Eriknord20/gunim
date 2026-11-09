@@ -270,7 +270,7 @@ func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	for i := len(t.cards) - 1; i >= 0; i-- {
 		card := t.cards[i]
 		shown := i >= from && i < to
-		card.shown.Animate(value(shown), motion)
+		card.shown.Animate(anim.OnOff(shown), motion)
 		if !shown {
 			continue
 		}
@@ -284,7 +284,7 @@ func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	}
 	if t.more != nil {
 		t.more.count = hidden
-		t.more.in.Animate(value(hidden > 0), motion)
+		t.more.in.Animate(anim.OnOff(hidden > 0), motion)
 	}
 	height := total
 	for k := range kids.All {
@@ -459,7 +459,7 @@ type toastCard struct {
 	// key is the toast's key. A toast that asks has buttons, a close
 	// button, and check, its tick box, or nil. An error has a close button.
 	key     string
-	buttons *Flex
+	buttons *Wrap
 	close   *IconButton
 	check   *Checkbox
 	in      *anim.Float
@@ -527,6 +527,8 @@ func (c *toastCard) ask(to Toast) {
 	for i, tb := range to.Buttons {
 		b := NewButton(tb.Label)
 		b.KeepFocus = true
+		// A label wider than the card still cuts, and this shows the whole of it.
+		b.Tooltip = tb.Label
 		if i == 0 {
 			b.Kind = ButtonPrimary
 		}
@@ -540,9 +542,9 @@ func (c *toastCard) ask(to Toast) {
 		}
 		kids = append(kids, b)
 	}
-	c.buttons = Row(kids...)
+	// They wrap: squeezed into a row, their words would clip.
+	c.buttons = NewWrap(kids...)
 	c.buttons.Justify = JustifyEnd
-	c.buttons.Gap = Gap
 	dismiss := to.OnDismiss
 	c.closer(func(u *gunim.UI) gunim.Intent {
 		if dismiss == nil {

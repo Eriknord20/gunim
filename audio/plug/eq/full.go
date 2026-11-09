@@ -558,7 +558,7 @@ func (v *full) paintHint(p *paint.Painter, th *theme.Live, box geom.Size, t floa
 		room := card.Size().W - 2*hintPad
 		x := at.X - min(run.Advance, room)/2
 		paintFit(p, hintLines[i], size, i == 0, geom.Pt(x, card.Min.Y+hintPad+float32(i)*(size+6)), room,
-			audioui.Faded(ink, alpha))
+			paint.Faded(ink, alpha))
 	}
 }
 

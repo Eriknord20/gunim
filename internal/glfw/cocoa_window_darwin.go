@@ -31,6 +31,7 @@ var nsCalibratedRGBColorSpace = cocoa.NSString_alloc().InitWithUTF8String("NSCal
 // Registered ObjC class references.
 var (
 	class_GLFWWindow         objc.Class
+	class_GLFWPopupWindow    objc.Class
 	class_GLFWWindowDelegate objc.Class
 	class_GLFWContentView    objc.Class
 )
@@ -190,6 +191,31 @@ func registerGLFWClasses() error {
 		return fmt.Errorf("glfw: failed to register GLFWWindow class: %w", err)
 	}
 
+	// GLFWPopupWindow — GLFWWindow subclass for the Popup hint that never becomes key or main.
+	class_GLFWPopupWindow, err = objc.RegisterClass(
+		"GLFWPopupWindow",
+		class_GLFWWindow,
+		nil,
+		nil,
+		[]objc.MethodDef{
+			{
+				Cmd: objc.RegisterName("canBecomeKeyWindow"),
+				Fn: func(_ objc.ID, _ objc.SEL) bool {
+					return false
+				},
+			},
+			{
+				Cmd: objc.RegisterName("canBecomeMainWindow"),
+				Fn: func(_ objc.ID, _ objc.SEL) bool {
+					return false
+				},
+			},
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("glfw: failed to register GLFWPopupWindow class: %w", err)
+	}
+
 	// GLFWWindowDelegate — NSObject subclass conforming to NSWindowDelegate.
 	class_GLFWWindowDelegate, err = objc.RegisterClass(
 		"GLFWWindowDelegate",
@@ -269,9 +295,12 @@ func registerGLFWClasses() error {
 					if window == nil {
 						return
 					}
-					const visible = 1 << 1 // NSWindowOcclusionStateVisible
-					state := objc.Send[uint](window.platform.object, objc.RegisterName("occlusionState"))
-					window.inputCovered(state&visible == 0)
+					if window.platform.object == 0 {
+						return
+					}
+					state := uintptr(window.platform.object.Send(sel_occlusionState))
+					window.platform.occluded = (state & NSWindowOcclusionStateVisible) == 0
+					window.inputCovered(window.platform.occluded)
 				},
 			},
 			{
@@ -325,20 +354,6 @@ func registerGLFWClasses() error {
 						window.platformIconifyWindow()
 					}
 					window.inputWindowFocus(false)
-				},
-			},
-			{
-				Cmd: objc.RegisterName("windowDidChangeOcclusionState:"),
-				Fn: func(self objc.ID, _ objc.SEL, notification objc.ID) {
-					window := getGoWindow(self)
-					if window == nil {
-						return
-					}
-					if window.platform.object == 0 {
-						return
-					}
-					state := uintptr(window.platform.object.Send(sel_occlusionState))
-					window.platform.occluded = (state & NSWindowOcclusionStateVisible) == 0
 				},
 			},
 		},
@@ -648,11 +663,16 @@ func registerGLFWClasses() error {
 					// Create new tracking area.
 					bounds := objc.Send[cocoa.NSRect](self, sel_bounds)
 					options := uintptr(NSTrackingMouseEnteredAndExited |
-						NSTrackingActiveInKeyWindow |
 						NSTrackingEnabledDuringMouseDrag |
 						NSTrackingCursorUpdate |
 						NSTrackingInVisibleRect |
 						NSTrackingAssumeInside)
+					if window := getGoWindow(self); window != nil && window.platform.popup {
+						// A popup is never key, so it tracks the pointer whenever it is over it.
+						options |= NSTrackingActiveAlways | NSTrackingMouseMoved
+					} else {
+						options |= NSTrackingActiveInKeyWindow
+					}
 
 					trackingArea := objc.ID(class_NSTrackingArea).Send(sel_alloc).Send(
 						sel_initWithRect_options_owner_userInfo,
@@ -1050,7 +1070,12 @@ func createNativeWindow(window *Window, wndconfig *wndconfig, fbconfig_ *fbconfi
 	}
 
 	// Create the GLFWWindow instance.
-	nsWindow := objc.ID(class_GLFWWindow).Send(sel_alloc).Send(sel_initWithContentRect_styleMask_backing_defer,
+	window.platform.popup = wndconfig.popup
+	class := class_GLFWWindow
+	if wndconfig.popup {
+		class = class_GLFWPopupWindow
+	}
+	nsWindow := objc.ID(class).Send(sel_alloc).Send(sel_initWithContentRect_styleMask_backing_defer,
 		contentRect, styleMask, uintptr(NSBackingStoreBuffered), false)
 	if nsWindow == 0 {
 		return fmt.Errorf("glfw: failed to create Cocoa window: %w", PlatformError)
@@ -1205,6 +1230,7 @@ func (w *Window) platformDestroyWindow() error {
 	}
 
 	if w.platform.object != 0 {
+		w.endAttachedSheet()
 		w.platform.object.Send(sel_orderOut, 0)
 	}
 
@@ -1449,6 +1475,12 @@ func (w *Window) platformRequestWindowAttention() {
 func (w *Window) platformFocusWindow() error {
 	pool := cocoa.NSAutoreleasePool_new()
 	defer pool.Release()
+
+	if w.platform.popup {
+		// A popup comes to the front but leaves the keyboard with its parent.
+		w.platform.object.Send(sel_orderFront, 0)
+		return nil
+	}
 
 	nsApp().Send(sel_activateIgnoringOtherApps, true)
 	w.platform.object.Send(sel_makeKeyAndOrderFront, 0)

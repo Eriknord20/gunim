@@ -125,3 +125,14 @@ func TestSectionsSplitIntoEvenRows(t *testing.T) {
 		}
 	}
 }
+
+// TestArrowsWithCtrlAltOrSuperPassTheSelectorBy checks the selector leaves
+// those keys to the window's shortcuts.
+func TestArrowsWithCtrlAltOrSuperPassTheSelectorBy(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	for _, m := range []input.Mods{input.ModAlt, input.ModControl, input.ModSuper} {
+		if s.Handle(input.KeyPress{Key: input.KeyRight, Mods: m}, nil) || s.Selected() != 0 {
+			t.Errorf("Right with %v took the selector to %d", m, s.Selected())
+		}
+	}
+}

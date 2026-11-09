@@ -328,7 +328,7 @@ func (r *reader) part(n *node, subs []vecpath.Subpath, st style, ctm vecpath.Aff
 				pt.Fill = color.NRGBA{A: 0xff}
 			}
 		} else {
-			pt.Fill = faded(st.fill.col, st.fillOpacity*st.opacity)
+			pt.Fill = paint.Faded(st.fill.col, st.fillOpacity*st.opacity)
 		}
 	}
 	if !st.stroke.none && st.strokeWidth > 0 {
@@ -339,7 +339,7 @@ func (r *reader) part(n *node, subs []vecpath.Subpath, st style, ctm vecpath.Aff
 				c = g.Start
 			}
 		}
-		pt.Stroke = faded(c, st.strokeOp*st.opacity)
+		pt.Stroke = paint.Faded(c, st.strokeOp*st.opacity)
 		// The stroke grows with the transform, as the mean of its two scales.
 		pt.Width = st.strokeWidth * float32(math.Sqrt(math.Abs(float64(ctm.A*ctm.D-ctm.B*ctm.C))))
 		if !finite(pt.Width) {
@@ -409,7 +409,7 @@ func (r *reader) gradient(id string, box geom.Rect, ctm vecpath.Affine, op float
 			if len(stops) > 0 {
 				off = max(off, stops[len(stops)-1].At)
 			}
-			stops = append(stops, paint.Stop{At: off, Color: faded(col, o*op)})
+			stops = append(stops, paint.Stop{At: off, Color: paint.Faded(col, o*op)})
 		}
 		if len(stops) > 0 {
 			break
@@ -667,12 +667,6 @@ func opacity(v string) (float32, error) {
 		f /= 100
 	}
 	return min(max(f, 0), 1), nil
-}
-
-// faded is c with its alpha times o.
-func faded(c color.NRGBA, o float32) color.NRGBA {
-	c.A = uint8(float32(c.A)*min(max(o, 0), 1) + 0.5)
-	return c
 }
 
 // named are the colours an SVG may name that drawings use most.

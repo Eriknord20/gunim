@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/driver/internal/inbox"
-	"github.com/marrasen/gunim/driver/internal/render"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -44,6 +44,12 @@ type Window struct {
 	size   geom.Size
 	hidden bool
 	closed bool
+	// stale says the window was hidden and has presented nothing since,
+	// so its last frame is the popup's before, and it stays out of sight.
+	stale bool
+	// held keeps the window where its frame showed it, until its frame
+	// at a new size comes.
+	held compose.Held
 	// next is the frame waiting for the render thread, and under the
 	// colour under the window's frames.
 	next  *frame
@@ -68,28 +74,20 @@ type Window struct {
 	// touch that starts in the window is a finger of its own, and a
 	// second one starts no pinch.
 	takesFingers bool
+	// keepsAwake is what KeepAwake last said.
+	keepsAwake bool
 	// excluded is the bands KeepEdgeSwipes last kept from the system's
 	// edge gestures, in the window's logical pixels.
 	excluded []geom.Rect
 
-	// The fields below belong to the render thread.
-
-	r          *render.Renderer
-	tex, fbo   uint32
-	texW, texH int
-	// last is the last frame drawn, at lastW by lastH, for drawing
-	// again where the window moves between the surface and its texture;
-	// onTex says its texture holds it, as it does unless the window
-	// drew alone, straight onto the surface.
-	last         []paint.Op
-	lastW, lastH int
-	onTex        bool
+	// pane belongs to the render thread.
+	pane compose.Pane
 }
 
 // frame is one frame for the render thread.
 type frame struct {
 	ops    []paint.Op
-	damage geom.Rect
+	damage []geom.Rect
 }
 
 func newWindow(d *Driver, o driver.Options) *Window {
@@ -103,6 +101,8 @@ func newWindow(d *Driver, o driver.Options) *Window {
 		transparent: o.Kind == driver.KindPopup,
 	}
 	w.in = inbox.New(w.quit)
+	w.pane.Transparent = w.transparent
+	w.pane.Sharp = func(at time.Time) { d.sharpenAt(w, at) }
 	return w
 }
 
@@ -123,13 +123,14 @@ func (w *Window) Input() <-chan any { return w.in.Out() }
 
 // Present implements [driver.Window]. It leaves the frame for the
 // render thread, which draws it with the next frame of the surface.
-func (w *Window) Present(ops []paint.Op, damage geom.Rect) error {
+func (w *Window) Present(ops []paint.Op, damage []geom.Rect) error {
 	w.d.mu.Lock()
 	if w.closed {
 		w.d.mu.Unlock()
 		return errClosed
 	}
 	w.next = &frame{ops: ops, damage: damage}
+	w.stale = false
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -165,6 +166,16 @@ func (w *Window) Shoot(fn func(*image.RGBA)) {
 	w.d.kick()
 }
 
+// keepShot puts back a shot whose frame could not draw, for a later
+// frame, unless a newer shot has taken its place.
+func (w *Window) keepShot(fn func(*image.RGBA)) {
+	w.d.mu.Lock()
+	if w.shot == nil {
+		w.shot = fn
+	}
+	w.d.mu.Unlock()
+}
+
 // ContentOrigin implements [driver.Positioner]: where the window lies
 // on the screen, in device pixels, as it would with the windows slid
 // down from over the keyboard.
@@ -198,16 +209,23 @@ func (w *Window) Close() error {
 	return nil
 }
 
-// Place implements [driver.Placer].
+// Place implements [driver.Placer]. A new size takes effect on the
+// screen with the frame the engine presents next, which wakes the render
+// thread.
 func (w *Window) Place(anchor geom.Rect, size geom.Size) error {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
 	if w.parent == nil || w.fills {
 		return nil
 	}
+	was, resized := w.rectLocked(), size != w.size
 	w.size = size
 	w.d.placeLocked(w, anchor)
-	w.d.kick()
+	if resized {
+		w.held.Resized(was)
+	} else {
+		w.d.kick()
+	}
 	return nil
 }
 
@@ -217,14 +235,7 @@ func (w *Window) Place(anchor geom.Rect, size geom.Size) error {
 func (w *Window) PopupRoom(anchor geom.Rect) driver.Room {
 	w.d.mu.Lock()
 	defer w.d.mu.Unlock()
-	s := w.d.visibleLocked()
-	a := anchor.Add(w.rectLocked().Min)
-	return driver.Room{
-		Below: s.Max.Y - a.Max.Y,
-		Above: a.Min.Y - s.Min.Y,
-		Left:  a.Min.X - s.Min.X,
-		Right: s.Max.X - a.Min.X,
-	}
+	return compose.PopupRoom(anchor.Add(w.rectLocked().Min), w.d.visibleLocked())
 }
 
 // ToScreen implements [driver.Screener]. The screen's coordinates are
@@ -256,18 +267,21 @@ func (w *Window) SetBackground(c color.NRGBA) {
 // Hide implements [driver.Recycler].
 func (w *Window) Hide() error {
 	w.d.mu.Lock()
-	w.hidden = true
+	w.hidden, w.stale = true, true
 	w.d.excludeGesturesLocked()
+	w.d.keepAwakeLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
 }
 
-// Show implements [driver.Recycler].
+// Show implements [driver.Recycler]. The window shows from its next
+// frame, as the last one it drew was for the popup before.
 func (w *Window) Show() error {
 	w.d.mu.Lock()
 	w.hidden = false
 	w.d.excludeGesturesLocked()
+	w.d.keepAwakeLocked()
 	w.d.mu.Unlock()
 	w.d.kick()
 	return nil
@@ -405,6 +419,33 @@ func (w *Window) OpenLink(url string) error { return openLink(url) }
 // Vibrate implements [driver.Vibrator] with the phone's vibration motor.
 func (w *Window) Vibrate(pattern ...time.Duration) error { return vibrate(pattern) }
 
+// KeepAwake implements [driver.Awaker] with the activity's flag to keep
+// the screen on, which Android honours only while the activity shows.
+// The screen stays on while any open window that shows asks.
+func (w *Window) KeepAwake(on bool) error {
+	w.d.mu.Lock()
+	defer w.d.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.keepsAwake = on
+	w.d.keepAwakeLocked()
+	return nil
+}
+
+// keepAwakeLocked hands Java whether any open window that shows asks for
+// the screen to stay on, where that differs from the last it handed. It
+// runs with mu held, so the calls reach Java in order; Java queues the
+// change for its UI thread and returns at once.
+func (d *Driver) keepAwakeLocked() {
+	on := slices.ContainsFunc(d.windows, func(w *Window) bool { return !w.closed && !w.hidden && w.keepsAwake })
+	if on == d.awakeSent {
+		return
+	}
+	d.awakeSent = on
+	keepAwake(on)
+}
+
 // TakeFingers implements [driver.FingerTaker]: each finger of a touch
 // that starts in w is a finger of its own, and a second one starts no
 // pinch. The view holds one setting for the whole app, so the driver
@@ -460,14 +501,27 @@ func (d *Driver) excludeGesturesLocked() {
 	excludeGestures(xy)
 }
 
-// ChooseFiles implements [driver.FileChooser] for folders: the system's
-// chooser of folders, for a folder on the phone's storage or a card,
-// which a program reads once it has the permission for what it reads,
-// as [driver.PermissionMusic]. For files it returns
-// [driver.ErrNoChooser], for now.
+// ChooseFiles implements [driver.FileChooser].
+//
+// Files go through the system's document picker. It hands over content
+// addresses, so each file chosen is copied into the application's cache
+// and the paths are those copies, which need no permission to read. The
+// system may clear that cache when storage runs low, and gunim clears it
+// as the application next starts, so read them soon and copy what should
+// last. A file that fails to copy gives an error, along with the paths
+// of those that copied.
+//
+// The picker narrows files by MIME type, and takes no title or starting
+// folder. o.Filters' patterns of the form *.ext narrow it where Android
+// knows a type for every extension. It shows every file otherwise, so
+// a program with an extension of its own checks what comes back.
+//
+// Folders go through the system's chooser of folders, for a folder on
+// the phone's storage or a card, which a program reads once it has the
+// permission for what it reads, as [driver.PermissionMusic].
 func (w *Window) ChooseFiles(o driver.ChooseOptions) ([]string, error) {
 	if !o.Folders {
-		return nil, driver.ErrNoChooser
+		return chooseFiles(o)
 	}
 	if p := chooseFolder(); p != "" {
 		return []string{p}, nil
@@ -491,6 +545,7 @@ var (
 	_ driver.Sharer          = (*Window)(nil)
 	_ driver.LinkOpener      = (*Window)(nil)
 	_ driver.Vibrator        = (*Window)(nil)
+	_ driver.Awaker          = (*Window)(nil)
 	_ driver.FingerTaker     = (*Window)(nil)
 	_ driver.EdgeSwipeKeeper = (*Window)(nil)
 	_ driver.Compass         = (*Window)(nil)

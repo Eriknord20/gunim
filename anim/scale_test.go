@@ -1,6 +1,7 @@
 package anim
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -99,5 +100,39 @@ func TestScaleReadsBackAndRefusesLessThanNought(t *testing.T) {
 	SetScale(1)
 	if Scale() != 1 {
 		t.Fatalf("Scale is %v after 1", Scale())
+	}
+}
+
+// FollowScaled stretches and shrinks with the scale, and lands at once at
+// 0; Follow keeps real time whatever the scale.
+func TestFollowScaledGoesWithTheScale(t *testing.T) {
+	sp := Spring{Response: 0.3, Damping: 1}
+	const frame = time.Second / 60
+	frames := func(f func(x, v, to float64, dt time.Duration) (float64, float64)) int {
+		x, v := 0.0, 0.0
+		for n := 1; n < 2000; n++ {
+			x, v = f(x, v, 100, frame)
+			if math.Abs(x-100) < 0.01 && math.Abs(v) < 0.1 {
+				return n
+			}
+		}
+		t.Fatal("it never landed")
+		return 0
+	}
+	normal := frames(sp.FollowScaled)
+	scaledTo(t, 2)
+	if slow := frames(sp.FollowScaled); slow < normal*2-3 || slow > normal*2+3 {
+		t.Errorf("at scale 2 it took %d frames, from %d", slow, normal)
+	}
+	if kept := frames(sp.Follow); kept != normal {
+		t.Errorf("Follow at scale 2 took %d frames, from %d", kept, normal)
+	}
+	scaledTo(t, 0.25)
+	if quick := frames(sp.FollowScaled); quick > normal/4+2 {
+		t.Errorf("at scale 0.25 it took %d frames, from %d", quick, normal)
+	}
+	scaledTo(t, 0)
+	if x, v := sp.FollowScaled(0, 5, 100, frame); x != 100 || v != 0 {
+		t.Errorf("at scale 0 it is at %v, moving %v", x, v)
 	}
 }

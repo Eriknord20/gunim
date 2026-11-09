@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -93,7 +95,7 @@ var extensionFields = []int{fPtr, fPtr, fPtr, fPtr, fPtr, fPtr, fPtr, fPtr, fPtr
 // the plugins' thread.
 func (d *Document) bind(comp uintptr, roles Roles) (*Extension, error) {
 	if entry := query(comp, iidARAPlugInEntry); entry != 0 {
-		f := call(entry, mARAGetFactory)
+		f := pointerOf(call(entry, mARAGetFactory))
 		release(entry)
 		if f != d.f.ptr {
 			return nil, fmt.Errorf("vst3: %s: the instance's ARA factory is another than the document's", d.f.Name)
@@ -103,7 +105,7 @@ func (d *Document) bind(comp uintptr, roles Roles) (*Extension, error) {
 	if entry2 == 0 {
 		return nil, fmt.Errorf("%w: %s binds to no ARA 2 document", ErrNoARA, d.f.Name)
 	}
-	p := call(entry2, mARABindWithRoles, d.dc.ref, uintptr(allRoles), uintptr(roles))
+	p := pointerOf(call(entry2, mARABindWithRoles, d.dc.ref, uintptr(allRoles), uintptr(roles)))
 	release(entry2)
 	if p == 0 {
 		return nil, fmt.Errorf("vst3: %s would not bind to its document", d.f.Name)
@@ -146,11 +148,11 @@ func (x *Extension) SetRegions(regions ...*PlaybackRegion) error {
 	var err error
 	onUI(func() {
 		p := x.p
-		if x.d.closed || p.closed {
+		if x.d.closed || p.closed.Load() {
 			err = ErrClosed
 			return
 		}
-		was := p.active
+		was := p.active.Load()
 		if was {
 			p.deactivate()
 		}

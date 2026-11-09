@@ -271,9 +271,9 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	defer end()
 	for db := float32(historyTop - 6); db > historyBottom; db -= 6 {
 		y := float32(math.Round(float64(hs.y(db))))
-		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.06)))
+		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		label := audioui.Shaped(fmt.Sprintf("%.0f", db), 9, false, true)
-		label.Paint(p, geom.Pt(box.W-label.Advance-6, y+2), audioui.Faded(ink, 0.35))
+		label.Paint(p, geom.Pt(box.W-label.Advance-6, y+2), paint.Faded(ink, 0.35))
 	}
 	in := HistoryIn.Get(th)
 	// each runs fn over the columns shown, with where each is.
@@ -290,14 +290,14 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	// hanging from the top.
 	each(func(c *historyColumn, x0, w float32) {
 		if y := hs.y(float32(dbOf(float64(c.in)))); y < box.H {
-			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(audioui.Faded(in, 0.35)))
+			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(paint.Faded(in, 0.35)))
 		}
 		if y := hs.y(float32(dbOf(float64(c.out)))); y < box.H {
-			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(audioui.Faded(accent, 0.22)))
+			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(paint.Faded(accent, 0.22)))
 		}
 		for r, red := range hs.Reductions {
 			if c.down[r] < -0.1 {
-				p.RRect(geom.Rc(x0, 0, w, hs.y(c.down[r])), 0, paint.Solid(audioui.Faded(red.Color.Get(th), 0.27)))
+				p.RRect(geom.Rc(x0, 0, w, hs.y(c.down[r])), 0, paint.Solid(paint.Faded(red.Color.Get(th), 0.27)))
 			}
 		}
 	})
@@ -314,7 +314,7 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			p.RRect(geom.Rc(x0, y, w, 1.5), 0, paint.Solid(in))
 		}
 		if y := hs.y(float32(dbOf(float64(c.out)))); y < box.H {
-			p.RRect(geom.Rc(x0, y, w, 1.5), 0, paint.Solid(audioui.Faded(accent, 0.9)))
+			p.RRect(geom.Rc(x0, y, w, 1.5), 0, paint.Solid(paint.Faded(accent, 0.9)))
 		}
 		for r, red := range hs.Reductions {
 			if red.Line && c.down[r] < -0.1 {
@@ -339,7 +339,7 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		c := m.Color.Get(th)
 		y := hs.y(float32(db))
 		for x := float32(0); x < box.W-40; x += 8 {
-			p.RRect(geom.Rc(x, y, 4, 1), 0, paint.Solid(audioui.Faded(c, 0.6)))
+			p.RRect(geom.Rc(x, y, 4, 1), 0, paint.Solid(paint.Faded(c, 0.6)))
 		}
 		label := audioui.Shaped(m.Name, 9, true, false)
 		// Over its line, or under it where there is no room over.
@@ -347,6 +347,6 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		if ly < 2 {
 			ly = y + 3
 		}
-		label.Paint(p, geom.Pt(6, ly), audioui.Faded(c, 0.8))
+		label.Paint(p, geom.Pt(6, ly), paint.Faded(c, 0.8))
 	}
 }

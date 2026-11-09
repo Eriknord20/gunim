@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/asio"
+	"github.com/marrasen/gunim/audio/driver"
 	"github.com/marrasen/gunim/audio/internal/duplex"
 )
 
@@ -17,7 +17,7 @@ import (
 // to fill first, and the speaker works the driver's latency ahead and
 // no further, whatever Latency asks.
 func TestADirectDriverMixesAsItTakes(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
 	s, err := Open(m, Options{Driver: "Fake", Buffer: 64, Direct: true, Latency: 50 * time.Millisecond})
@@ -53,7 +53,7 @@ func TestADirectDriverMixesAsItTakes(t *testing.T) {
 // buffers the driver takes are silent, and the mixer is left unread
 // until it resumes.
 func TestADirectDriverIsSilentSuspended(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32})
 	m := audio.NewMixer()
 	m.Play(steady(0.5), audio.Options{})
 	s, err := Open(m, Options{Driver: "Fake", Direct: true})
@@ -82,7 +82,7 @@ func TestADirectDriverIsSilentSuspended(t *testing.T) {
 // they come stamped as the ring's do, with the first frame of the
 // buffer the driver takes next, less its output and input latencies.
 func TestADirectDriverStampsItsInputs(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32,
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32,
 		Inputs: 2, Recorded: 2, InputNames: []string{"Mic", "Guitar"}, InputLatency: 107})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
@@ -110,7 +110,7 @@ func TestADirectDriverStampsItsInputs(t *testing.T) {
 // TestADirectDriverPlaysAux opens a direct driver on four outputs: Aux
 // fills the two past the mixer's, frame for frame in step with it.
 func TestADirectDriverPlaysAux(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32, Outputs: 8})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32, Outputs: 8})
 	m := audio.NewMixer()
 	m.Play(&ramp{}, audio.Options{})
 	var aux frameAux
@@ -140,7 +140,7 @@ func TestADirectDriverPlaysAux(t *testing.T) {
 // TestSetChangesDirect sets Direct on a driver playing through the
 // ring, and finds it opened again, mixing on its own thread; and back.
 func TestSetChangesDirect(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
 	m := audio.NewMixer()
 	o := Options{Driver: "Fake", Buffer: 64, Latency: 20 * time.Millisecond, Fixed: true}
 	s, err := Open(m, o)
@@ -189,7 +189,7 @@ func (g *gate) Read(dst []float32) (int, error) {
 // done, and a buffer the driver takes after it is silent, the mixer
 // left unread, so no two threads ever mix at once.
 func TestClosingADirectDriverWaitsOutItsMix(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Bits: 32})
 	m := audio.NewMixer()
 	g := &gate{in: make(chan struct{}), out: make(chan struct{})}
 	m.Play(g, audio.Options{})
@@ -239,7 +239,7 @@ func (s *slow) Read(dst []float32) (int, error) {
 // a buffer plays to mix one: it counts as a dropout, and the speaker
 // works no further ahead for it.
 func TestADirectBufferMixedLateIsADropout(t *testing.T) {
-	f := useFake(t, asio.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
+	f := useFake(t, driver.Info{Driver: "Fake", Rate: 48000, Buffer: 64, Latency: 180, Bits: 32})
 	m := audio.NewMixer()
 	src := &slow{}
 	m.Play(src, audio.Options{})

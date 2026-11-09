@@ -17,6 +17,11 @@ func (w *Window) GetCocoaWindow() (uintptr, error) {
 	return uintptr(w.platform.object), nil
 }
 
+// GetCocoaView returns the window's content view, an NSView.
+func (w *Window) GetCocoaView() (uintptr, error) {
+	return uintptr(w.platform.view), nil
+}
+
 func (w *Window) GetNSGLContext() (unsafe.Pointer, error) {
 	if w.context.source != NativeContextAPI {
 		return nil, fmt.Errorf("glfw: window has no NSGL context: %w", NoWindowContext)

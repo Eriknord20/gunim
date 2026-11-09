@@ -17,6 +17,7 @@ void gunim_set_clipboard(const uint16_t *s, int n);
 void gunim_finish(void);
 void gunim_buzz(void);
 void gunim_take_fingers(int on);
+void gunim_keep_awake(int on);
 int gunim_share(const uint16_t *text, int nt, const uint16_t *subject, int ns, const uint16_t *paths, int np);
 int gunim_vibrate(const long long *ms, int n);
 void gunim_exclude_gestures(const int *xy, int n);
@@ -26,13 +27,30 @@ int gunim_open_link(const uint16_t *url, int n);
 int gunim_permitted(int p);
 void gunim_ask(int p, int code);
 void gunim_choose_folder(int code);
+void gunim_choose_files(int code, int multiple, const uint16_t *patterns, int n);
 uint16_t *gunim_user_folder(int f, int *n);
+
+// For package audio/internal/aaudio, which calls them where the driver
+// is linked in: what GunimAudio.route and GunimAudio.probe return, into
+// r, n ints at most. Each returns how many it wrote, or 0.
+int gunim_audio_route(int device, int *r, int n);
+int gunim_audio_probe(int usage, int *r, int n);
+// gunim_audio_watch has GunimAudio tell of audio devices coming and
+// going, and returns 1 once it does; gunim_audio_changes writes how many
+// times it told of an output, and of an input.
+int gunim_audio_watch(void);
+void gunim_audio_changes(long long *out, long long *in);
 
 // EGL, from the render thread. Each returns 0, or the EGL error.
 int gunim_egl_init(void);
 int gunim_egl_attach(ANativeWindow *w);
 void gunim_egl_detach(void);
 int gunim_egl_swap(void);
+// gunim_egl_stamps says the surface keeps frame timestamps, and
+// gunim_egl_lag returns how long the last frame they told of took from
+// its swap's return to the screen, in nanoseconds, or -1 before one has.
+int gunim_egl_stamps(void);
+long long gunim_egl_lag(void);
 void gunim_window_release(ANativeWindow *w);
 
 // gunim_log writes a line to the system log.

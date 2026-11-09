@@ -370,6 +370,9 @@ func createContextGLX(window *Window, ctxconfig *ctxconfig, fbconfig *fbconfig) 
 		}
 	}
 
+	// Before the handler goes in: it is the whole process's, and waiting here
+	// with it in would catch the X errors of the threads drawing.
+	done := creatingContext(share != 0)
 	grabErrorHandlerX11()
 
 	if glx.ARB_create_context {
@@ -468,6 +471,7 @@ func createContextGLX(window *Window, ctxconfig *ctxconfig, fbconfig *fbconfig) 
 	}
 
 	releaseErrorHandlerX11()
+	done()
 
 	if window.context.platform.glx.handle == 0 {
 		return inputErrorX11(VersionUnavailable, "GLX: Failed to create context")

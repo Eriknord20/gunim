@@ -2,6 +2,7 @@ package widget
 
 import (
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/input"
@@ -84,4 +85,16 @@ func TestUndoSendsTheChange(t *testing.T) {
 	if len(got) != 1 || got[0] != (changed{""}) {
 		t.Fatalf("intents %v after undo, want a change to nothing", got)
 	}
+}
+
+func TestOnFrameTimeTypingFramesApartIsTwoStepsOfUndo(t *testing.T) {
+	wr := newWriter(t, 400)
+	wr.w.TimeByFrames(true)
+	wr.typeEach("ab")
+	// Frames longer than the pause that ends a step pass in far less
+	// wall time: the window goes by its frames.
+	wr.run(int(undoPause/(time.Second/60)) + 1)
+	wr.typeEach("cd")
+	wr.key(input.KeyZ, input.ModControl)
+	wr.want("ab", 2)
 }

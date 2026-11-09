@@ -107,6 +107,8 @@ var (
 	ListSpacing = theme.Length("list.spacing", 6)
 	// RowRadius rounds a row's clip.
 	RowRadius = theme.Length("list.row.radius", 4)
+	// ListSelected fills the row a [List] shows as picked.
+	ListSelected = theme.Color("list.selected", color.NRGBA{R: 0x2b, G: 0x3b, B: 0x5c, A: 0xff})
 )
 
 // Light is a light theme. It changes more than colour: padding and
@@ -115,6 +117,11 @@ var (
 func Light() theme.Theme {
 	return theme.Make("light",
 		theme.Set(Ink, color.NRGBA{R: 0x1c, G: 0x20, B: 0x28, A: 0xff}),
+		theme.Set(ChipCap, color.NRGBA{R: 0xf4, G: 0xf5, B: 0xf8, A: 0xff}),
+		theme.Set(ChipCapEdge, color.NRGBA{R: 0xc4, G: 0xc9, B: 0xd3, A: 0xff}),
+		theme.Set(ChordInputRefused, color.NRGBA{R: 0xd0, G: 0x3a, B: 0x3a, A: 0xff}),
+		theme.Set(ChordInputFill, color.NRGBA{R: 0xe4, G: 0xe7, B: 0xed, A: 0xff}),
+		theme.Set(ChordInputPrompt, color.NRGBA{R: 0x5a, G: 0x63, B: 0x74, A: 0xff}),
 		theme.Set(Accent, color.NRGBA{R: 0x2f, G: 0x6f, B: 0xe0, A: 0xff}),
 		theme.Set(TextSize, 15),
 		theme.Set(Quick, anim.Spring{Response: 0.35, Damping: 0.9}),
@@ -136,6 +143,8 @@ func Light() theme.Theme {
 		theme.Set(DialogWidth, 460),
 		theme.Set(DialogHeight, 220),
 		theme.Set(ListSpacing, 10),
+		theme.Set(ListSelected, color.NRGBA{R: 0xdc, G: 0xe6, B: 0xf7, A: 0xff}),
+		theme.Set(LogViewLead, color.NRGBA{R: 0x6b, G: 0x73, B: 0x85, A: 0xff}),
 		theme.Set(RowRadius, 10),
 		theme.Set(Background, color.NRGBA{R: 0xf3, G: 0xf5, B: 0xf9, A: 0xff}),
 		theme.Set(Margin, geom.Uniform(24)),

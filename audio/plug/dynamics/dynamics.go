@@ -94,6 +94,13 @@ func hz(v float64) string {
 // SidechainPort is the sidechain's place in the plugin's aux inputs.
 const SidechainPort = 0
 
+// GateOut, CompOut and LimitOut are the places in the plugin's control outputs of each part's reduction, in dB.
+const (
+	GateOut = iota
+	CompOut
+	LimitOut
+)
+
 // The sidechain's modes: the whole sound, or what is under, about or
 // over its frequency.
 const (
@@ -134,6 +141,11 @@ var Descriptor = plug.Descriptor{
 	Tagline:  "Gate, compressor & limiter",
 	Keywords: []string{"compressor", "compression", "limiter", "gate", "noise gate", "sidechain", "ducking", "threshold", "ratio", "loudness"},
 	AuxIn:    []plug.AudioPort{{Name: "Sidechain"}},
+	ControlOut: []plug.ControlPort{
+		GateOut:  {Name: "Gate reduction", Key: "gate", Unit: "dB", Min: -90, Measures: plug.MeasureGate},
+		CompOut:  {Name: "Compression", Key: "compression", Unit: "dB", Min: -60, Measures: plug.MeasureCompression},
+		LimitOut: {Name: "Limiting", Key: "limiting", Unit: "dB", Min: -24, Measures: plug.MeasureLimiting},
+	},
 	Params: []plug.Param{
 		{ID: InputID, Name: "Input", Unit: "dB", Min: -24, Max: 24, Flags: plug.Automatable, Format: signed},
 		{ID: OutputID, Name: "Output", Unit: "dB", Min: -24, Max: 24, Flags: plug.Automatable, Format: signed},
@@ -481,6 +493,7 @@ func (p *processor) Process(b *plug.Block) {
 	if key := b.AuxInput(SidechainPort); key != nil {
 		keyL, keyR = key[0], key[min(1, len(key)-1)]
 	}
+	ctl := [3][]float32{b.ControlOutput(GateOut), b.ControlOutput(CompOut), b.ControlOutput(LimitOut)}
 	next := 0
 	p.gateLeast, p.compLeast, p.limLeast = 0, 0, 1
 	for i := 0; i < b.Frames; {
@@ -500,7 +513,13 @@ func (p *processor) Process(b *plug.Block) {
 		if stereo {
 			or = outR[i:e]
 		}
-		p.stages(inL[i:e], inR[i:e], kl, kr, outL[i:e], or, b.Position.Frame+int64(i))
+		var run [3][]float32
+		for c, v := range ctl {
+			if v != nil {
+				run[c] = v[i:e]
+			}
+		}
+		p.stages(inL[i:e], inR[i:e], kl, kr, outL[i:e], or, run, b.Position.Frame+int64(i))
 		i = e
 	}
 	for ; next < len(b.Changes); next++ {
@@ -531,8 +550,10 @@ func (r *runs) make(n int) {
 
 // stages runs a run of frames, inL and inR, through each part in turn
 // into outL and outR, outR nil where the plugin is mono; keyL and keyR
-// are the sidechain's, or nil; f is the run's first frame.
-func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, f int64) {
+// are the sidechain's, or nil; ctl the control outputs' frames, by
+// GateOut, CompOut and LimitOut, each nil where unconnected; f is the
+// run's first frame.
+func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, ctl [3][]float32, f int64) {
 	n := len(inL)
 	r := &p.run
 	xl, xr, key, heard := r.xl[:n], r.xr[:n], r.key[:n], r.heard[:n]
@@ -598,9 +619,19 @@ func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, f int64) 
 		p.pending[at], p.pending[at+1] = float32(gdb[i]), float32(cdb[i])
 
 		dl, dr, lg := l.step(xl[i], xr[i])
+		lOut := float32(fastDB(lg))
 		p.gateTrace.Put(f+int64(i), gOut)
 		p.compTrace.Put(f+int64(i), cOut)
-		p.limitTrace.Put(f+int64(i), float32(fastDB(lg)))
+		p.limitTrace.Put(f+int64(i), lOut)
+		if ctl[GateOut] != nil {
+			ctl[GateOut][i] = max(gOut, -90)
+		}
+		if ctl[CompOut] != nil {
+			ctl[CompOut][i] = max(cOut, -60)
+		}
+		if ctl[LimitOut] != nil {
+			ctl[LimitOut][i] = max(lOut, -24)
+		}
 		outL[i] = float32(dl * out[i])
 		if outR != nil {
 			outR[i] = float32(dr * out[i])

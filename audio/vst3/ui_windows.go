@@ -112,6 +112,7 @@ var editorClass *uint16
 
 // uiRun runs the plugins' thread: a loop of its windows' messages.
 func uiRun(ready chan struct{}) {
+	noteUIThread()
 	instance, _, _ = getModuleHandle.Call(0)
 	cls := register("gunimVST3Work")
 	editorClass = register("gunimVST3Editor")
@@ -153,6 +154,10 @@ type window struct {
 	sizing        bool
 	child         bool
 }
+
+// scale is how many of the host's pixels make one of the view's:
+// Windows' views size in pixels.
+func (w *window) scale() float64 { return 1 }
 
 const (
 	wsCaption      = 0x00C00000

@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -560,8 +562,8 @@ func TestADocumentClosesItsPluginsAndObjects(t *testing.T) {
 	x.d.Close()
 	x.d.Close()
 	fd := x.a.docs[0]
-	if !fd.destroyed || !p.closed {
-		t.Fatalf("destroyed %v, plugin closed %v", fd.destroyed, p.closed)
+	if !fd.destroyed || !p.closed.Load() {
+		t.Fatalf("destroyed %v, plugin closed %v", fd.destroyed, p.closed.Load())
 	}
 	if err := x.d.Edit(func(e *Edit) {}); err == nil {
 		t.Fatal("a closed document took an edit")

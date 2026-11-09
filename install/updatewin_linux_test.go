@@ -399,10 +399,67 @@ func TestAboutChecksForUpdatesInPlace(t *testing.T) {
 	}
 	r.handle(checkNow{})
 	until(t, func() bool { updateFrames(w, r, 1); return r.sc.Page == pageUpdate })
-	if r.sc.Have != "1.0.0" || r.sc.Version != "1.1.0" || !r.sc.Restart || r.u.Release.Version != "v1.1.0" {
+	if r.sc.Have != "1.0.0" || r.sc.Version != "1.1.0" || !r.sc.Restart || r.u.Release.Version != "v1.1.0" || r.sc.Ready {
 		t.Fatalf("a newer release shows as %+v", r.sc)
 	}
 	updateFrames(w, r, 30)
+}
+
+// A newer release the window about the program finds in place already,
+// as the program says or as the installed program's trial says, is
+// offered for the restart alone, not downloaded again.
+func TestAboutFindsAReleaseInPlace(t *testing.T) {
+	dir := t.TempDir()
+	a := App{Name: "studio", Version: "v1.0.0", Updates: GitHub{Repo: "marrasen/studio", API: "http://127.0.0.1:1"},
+		Dir: func() (string, error) { return dir, nil }}
+	for _, c := range []struct {
+		name      string
+		about     About
+		trial     string
+		installed string
+		ready     bool
+	}{
+		{name: "told", about: About{Ready: "v1.1.0"}, ready: true},
+		{name: "on trial", trial: "v1.1.0", ready: true},
+		{name: "an older one on trial", trial: "v1.0.5"},
+		{name: "installed", installed: "v1.1.0", ready: true},
+		{name: "an older one installed", installed: "v1.0.0"},
+		{name: "a copy not installed", about: About{Exe: filepath.Join(dir, "copy")}, trial: "v1.1.0", installed: "v1.1.0"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_ = os.Remove(trialPath(filepath.Join(dir, a.exe())))
+			_ = os.Remove(filepath.Join(dir, manifestName))
+			if c.installed != "" {
+				if err := (&manifest{ID: a.id(), Version: c.installed, Exe: a.exe()}).write(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.trial != "" {
+				if err := (trial{Version: c.trial}).write(filepath.Join(dir, a.exe())); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := gunimtest.New(t, geom.Sz(640, updateHeight), &gunim.Box{})
+			sc := updateScene(&a, pageAbout, "", a.Version)
+			st, err := mountStage(w, &a, nil, accentFor(&a), sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := newUpdater(a, st, sc)
+			c.about.Quit = func() error { return nil }
+			r.about = &c.about
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			r.ctx = ctx
+			r.check = func(context.Context, App) (Release, bool, error) { return Release{Version: "v1.1.0"}, true, nil }
+			r.handle(checkNow{})
+			until(t, func() bool { updateFrames(w, r, 1); return r.sc.Page == pageUpdate })
+			if r.sc.Ready != c.ready || r.u.Ready != c.ready {
+				t.Fatalf("the release in place shows ready %v, want %v", r.sc.Ready, c.ready)
+			}
+			updateFrames(w, r, 30)
+		})
+	}
 }
 
 // countingNotes counts the times its notes are read.

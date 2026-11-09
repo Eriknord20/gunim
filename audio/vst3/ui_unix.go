@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !js
 
 package vst3
 
@@ -25,7 +25,9 @@ func uiRun(ready chan struct{}) {
 				return
 			}
 		case <-t.C:
-			runTickers()
+			if !ticksElsewhere() {
+				runTickers()
+			}
 		}
 	}
 }

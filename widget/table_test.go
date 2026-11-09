@@ -319,3 +319,22 @@ func TestJumpToShowsNewRowsInPlace(t *testing.T) {
 		t.Fatalf("the cursor is on %q, want b", k)
 	}
 }
+
+// A table keeps a Space from the window's keys while a name is being found, so it goes into the name; alone, or after
+// a pause, the Space is the window's.
+func TestATableKeepsASpaceWhileFinding(t *testing.T) {
+	w, tbl, _, run := newTableStage(t, 300)
+	now := time.Now()
+	space := func(at time.Time) input.KeyPress { return input.KeyPress{Key: input.KeySpace, Typed: true, Time: at} }
+	if tbl.KeepsKey(space(now), nil) {
+		t.Fatal("a table finding nothing keeps a Space")
+	}
+	w.Input(input.TextInput{Text: "row", Time: now})
+	run(1)
+	if !tbl.KeepsKey(space(now.Add(200*time.Millisecond)), nil) {
+		t.Fatal("a table finding \"row\" leaves a Space to the window")
+	}
+	if tbl.KeepsKey(space(now.Add(3*time.Second)), nil) {
+		t.Fatal("a table keeps a Space after a pause in typing")
+	}
+}

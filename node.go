@@ -103,6 +103,9 @@ type Waker interface {
 // frame, as a container that measures it first, is laid out and drawn
 // as usual.
 //
+// [widget.NewSteady] and [widget.NewSteadyPaint] make one from a child or
+// a paint function and a key, and [anim.Moves] counts a view's springs for it.
+//
 // GUNIM_DEBUG_STEADY=1 paints every Steady node's subtree anew, laid out
 // as carried, and logs each one whose key said it would draw the same,
 // and did not.
@@ -245,12 +248,34 @@ type KeyCatcher interface {
 	CatchKey(e input.Event, u *UI) bool
 }
 
+// A KeyFirst is a node that hears each key press in it before the focused node does: a window whose Space plays
+// and stops whatever control has the focus. The engine offers the press to the KeyFirsts above the focused node,
+// the outermost first, until one returns true; what none takes goes to the focused node and bubbles as ever. A
+// modal that holds the keys keeps the KeyFirsts outside it out, and a popup's nodes have only the KeyFirsts inside
+// the popup above them. The text a press taken types, such as Space's, goes to the KeyFirst that took it, through
+// its Handle if it is a [Handler], and to no one else, so a list's type-ahead does not find it. A KeyFirst that takes a press should leave alone a focused node that takes text, which
+// [UI.FocusTakesText] reports.
+type KeyFirst interface {
+	Node
+	KeyFirst(e input.KeyPress, u *UI) bool
+}
+
+// A KeyKeeper is a node that keeps a key press from the [KeyFirst]s above it for now, while it has the focus: a
+// list keeps Space while the user types a name to find in it, so the Space goes into the name. The engine asks it
+// before it offers the press to the KeyFirsts.
+type KeyKeeper interface {
+	Node
+	KeepsKey(e input.KeyPress, u *UI) bool
+}
+
 // A CursorShaper is a node that names the pointer's shape over it, such
 // as a text field's I-beam or a divider's resize arrows. The engine asks
 // the node the pointer is over, and the nodes around it in turn, and
 // takes the first answer other than [input.CursorInherit]; while a node
 // holds the pointer, as during a drag, it asks that node. p is the
-// pointer, in the node's space.
+// pointer, in the node's space. Cursor only answers: it is asked after
+// every frame the pointer rests in, and those frames carry [Steady]
+// nodes, so what it changed might not be drawn.
 type CursorShaper interface {
 	Node
 	Cursor(p geom.Point) input.Cursor
@@ -385,10 +410,21 @@ func (c Constraints) Constrain(s geom.Size) geom.Size {
 
 // Frame is the per-frame context handed to layout and paint.
 type Frame struct {
-	// Now is when this frame is predicted to reach the screen. Every
-	// node in a frame sees the same value, so two animations started
-	// together stay together.
+	// Now is the frame's time: the refresh it is drawn for, in step
+	// with the frames before. Every node in a frame sees the same value,
+	// so two animations started together stay together. Timers and
+	// [UI.Now] count by it.
 	Now time.Time
+	// Present is when the frame is expected to light the screen: Now,
+	// plus how late the frames before lit it, which the system's
+	// compositor and the display add. Where the platform says when
+	// frames lit the screen it is measured; elsewhere it is estimated, a
+	// refresh or two late. A node that shows something on another clock
+	// draws it as it is at Present: a playhead or a level as heard then
+	// ([audio.Mixer.HeardAt]), or a video's frame shown then. It is
+	// never before the frame was built. In a window stepped by
+	// [Window.Frame] it is Now.
+	Present time.Time
 	// Delta is how long since the previous frame.
 	Delta time.Duration
 	// Scale is device pixels per logical pixel, from the monitor this

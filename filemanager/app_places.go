@@ -20,6 +20,8 @@ func (a *app) handlePlaces(in gunim.Intent) bool {
 			favs = append(favs, f)
 		}
 		a.setFavourites(favs)
+	case PlacesArranged:
+		a.arrangePlaces(v)
 	case SectionsArranged:
 		a.arrangeSidebar(func(p *prefs) { p.SidebarOrder = keepAbsent(p.SidebarOrder, v.Order) })
 	case SectionCollapsed:
@@ -94,6 +96,10 @@ func (a *app) visit(v Visit) {
 // to answer.
 func (a *app) loadPlaces() {
 	find := a.opts.Places
+	if on := a.opts.PlacesOn; on != nil {
+		fs := a.fs.ID()
+		find = func() ([]Place, error) { return on(fs) }
+	}
 	if find == nil {
 		find = a.defaultPlaces
 	}
@@ -198,5 +204,38 @@ func (a *app) logPlaceErrs(ps []Place) {
 		if p.Err != "" && was[p.FS+"\x00"+p.Path] != p.Err {
 			a.logLine("Reading "+p.Name, p.Err)
 		}
+	}
+}
+
+// arrangePlaces puts the places of a group in the order a drag left
+// them in, at once, and tells the program.
+func (a *app) arrangePlaces(v PlacesArranged) {
+	var in []Place
+	at := -1
+	for i, p := range a.places {
+		if p.Group == v.Group {
+			if at < 0 {
+				at = i
+			}
+			in = append(in, p)
+		}
+	}
+	if at < 0 {
+		return
+	}
+	var ordered []Place
+	for _, want := range v.Places {
+		if i := slices.IndexFunc(in, func(p Place) bool { return p.FS == want.FS && p.Path == want.Path }); i >= 0 {
+			ordered = append(ordered, in[i])
+			in = slices.Delete(in, i, i+1)
+		}
+	}
+	// Any the drag did not name keep their places after.
+	ordered = append(ordered, in...)
+	rest := slices.DeleteFunc(slices.Clone(a.places), func(p Place) bool { return p.Group == v.Group })
+	a.places = slices.Concat(rest[:at], ordered, rest[at:])
+	a.publishPlaces()
+	if a.opts.PlacesArranged != nil {
+		a.opts.PlacesArranged(a.win, v.Group, slices.Clone(ordered))
 	}
 }

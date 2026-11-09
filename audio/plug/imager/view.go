@@ -235,9 +235,9 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	defer end()
 	for _, hz := range []float64{50, 100, 200, 500, 1000, 2000, 5000, 10000} {
 		x := d.xOf(hz)
-		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(audioui.Faded(ink, 0.06)))
+		p.RRect(geom.Rc(x, 0, 1, box.H), 0, paint.Solid(paint.Faded(ink, 0.06)))
 		label := audioui.Shaped(hz2(hz), 9, false, true)
-		label.Paint(p, geom.Pt(x+4, 8), audioui.Faded(ink, 0.35))
+		label.Paint(p, geom.Pt(x+4, 8), paint.Faded(ink, 0.35))
 	}
 	// The middle, filled, and the sides over it, a line.
 	n := len(d.freqs)
@@ -245,7 +245,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		x0 := d.xOf(float64(fz) / math.Pow(viewHigh/viewLow, 0.5/float64(n-1)))
 		x1 := d.xOf(float64(fz) * math.Pow(viewHigh/viewLow, 0.5/float64(n-1)))
 		if y := d.specY(d.midSm[i]); y < box.H {
-			p.RRect(geom.Rc(x0, y, x1-x0+0.5, box.H-y), 0, paint.Solid(audioui.Faded(accent, 0.16)))
+			p.RRect(geom.Rc(x0, y, x1-x0+0.5, box.H-y), 0, paint.Solid(paint.Faded(accent, 0.16)))
 		}
 	}
 	plugui.Darken(p, whole, 1)
@@ -256,13 +256,13 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		x := d.xOf(float64(fz))
 		m, s := geom.Pt(x, d.specY(d.midSm[i])), geom.Pt(x, d.specY(d.sideSm[i]))
 		if i > 0 {
-			audioui.Segment(p, prevM, m, 1.5, audioui.Faded(accent, 0.7))
-			audioui.Segment(p, prevS, s, 1.5, audioui.Faded(side, 0.85))
+			audioui.Segment(p, prevM, m, 1.5, paint.Faded(accent, 0.7))
+			audioui.Segment(p, prevS, s, 1.5, paint.Faded(side, 0.85))
 		}
 		prevM, prevS = m, s
 	}
 	// The bands: the middle line, each band's bar, and the crossovers.
-	p.RRect(geom.Rc(0, d.line, box.W, 1), 0, paint.Solid(audioui.Faded(ink, 0.18)))
+	p.RRect(geom.Rc(0, d.line, box.W, 1), 0, paint.Solid(paint.Faded(ink, 0.18)))
 	for b, span := range d.bandsAt() {
 		w := float32(d.v[WidthID+uint32(b)] / 100)
 		c := accent
@@ -272,7 +272,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		top := d.line - w*d.reach()
 		r := geom.Rc(span[0]+3, min(top, d.line), span[1]-span[0]-6, float32(math.Abs(float64(top-d.line))))
 		lit := d.bandLit[b].Value()
-		p.RRect(r, 4, paint.Solid(audioui.Faded(c, 0.18+0.12*lit)))
+		p.RRect(r, 4, paint.Solid(paint.Faded(c, 0.18+0.12*lit)))
 		p.RRect(geom.Rc(r.Min.X, top-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(c))
 		words := param(WidthID).Text(d.v[WidthID+uint32(b)])
 		if st := d.v[StereoizeID+uint32(b)]; st > 0.5 {
@@ -288,7 +288,7 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		}
 		name := audioui.Shaped(bandNames[b], 10, false, false)
 		if name.Advance < span[1]-span[0]-8 {
-			name.Paint(p, geom.Pt((span[0]+span[1]-name.Advance)/2, 26), audioui.Faded(ink, 0.5))
+			name.Paint(p, geom.Pt((span[0]+span[1]-name.Advance)/2, 26), paint.Faded(ink, 0.5))
 		}
 	}
 	for i, hz := range d.v.crossovers() {
@@ -296,12 +296,12 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		lit := d.xLit[i].Value()
 		a := 0.35 + 0.55*lit
 		w, r := 1.5+lit, 5+2*lit
-		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(paint.Faded(ink, a)))
 		if lit > 0.01 {
-			p.ShadowRRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, 0)),
-				paint.Shadow{Blur: 10 * lit, Color: audioui.Faded(ink, 0.4*lit)})
+			p.ShadowRRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, 0)),
+				paint.Shadow{Blur: 10 * lit, Color: paint.Faded(ink, 0.4*lit)})
 		}
-		p.RRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, a)))
 	}
 }
 
@@ -510,8 +510,8 @@ func (s *scope) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	c := sq.Center()
 	half := sq.Size().H / 2
 	// The cross the middle and the sides run along.
-	p.RRect(geom.Rc(c.X-0.5, sq.Min.Y, 1, sq.Size().H), 0, paint.Solid(audioui.Faded(ink, 0.12)))
-	p.RRect(geom.Rc(sq.Min.X, c.Y-0.5, sq.Size().W, 1), 0, paint.Solid(audioui.Faded(ink, 0.12)))
+	p.RRect(geom.Rc(c.X-0.5, sq.Min.Y, 1, sq.Size().H), 0, paint.Solid(paint.Faded(ink, 0.12)))
+	p.RRect(geom.Rc(sq.Min.X, c.Y-0.5, sq.Size().W, 1), 0, paint.Solid(paint.Faded(ink, 0.12)))
 	for i := range s.points {
 		l, r := s.frames[2*i], s.frames[2*i+1]
 		x := c.X + (l-r)*half*0.7
@@ -519,11 +519,11 @@ func (s *scope) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 		if x < sq.Min.X || x > sq.Max.X || y < sq.Min.Y || y > sq.Max.Y {
 			continue
 		}
-		p.RRect(geom.Rc(x-0.75, y-0.75, 1.5, 1.5), 0.75, paint.Solid(audioui.Faded(accent, 0.45)))
+		p.RRect(geom.Rc(x-0.75, y-0.75, 1.5, 1.5), 0.75, paint.Solid(paint.Faded(accent, 0.45)))
 	}
 	// The correlation: a bar from -1 to +1, a mark where it is.
 	bar := geom.Rc(scopePad, sq.Max.Y+16, side, 4)
-	p.RRect(bar, 2, paint.Solid(audioui.Faded(ink, 0.12)))
+	p.RRect(bar, 2, paint.Solid(paint.Faded(ink, 0.12)))
 	v := min(max(s.corr.Value(), -1), 1)
 	mark := bar.Min.X + bar.Size().W*(v+1)/2
 	col := accent
@@ -532,7 +532,7 @@ func (s *scope) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	}
 	p.RRect(geom.Rc(mark-3, bar.Min.Y-4, 6, 12), 3, paint.Solid(col))
 	words := audioui.Shaped(fmt.Sprintf("Correlation %+.2f", v), 10, true, false)
-	words.Paint(p, geom.Pt((box.W-words.Advance)/2, bar.Max.Y+4), audioui.Faded(ink, 0.7))
+	words.Paint(p, geom.Pt((box.W-words.Advance)/2, bar.Max.Y+4), paint.Faded(ink, 0.7))
 }
 
 // Access implements [gunim.Accessible].
@@ -646,7 +646,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	ink := widget.Ink.Get(th)
 	mid := box.H / 2
 	w := min(box.W/bands, 12)
-	p.RRect(geom.Rc(0, mid, w*bands, 1), 0, paint.Solid(audioui.Faded(ink, 0.25)))
+	p.RRect(geom.Rc(0, mid, w*bands, 1), 0, paint.Solid(paint.Faded(ink, 0.25)))
 	for b := range bands {
 		v := plugui.ChipScale(c.v[WidthID+uint32(b)], 100)
 		col := widget.Accent.Get(th)

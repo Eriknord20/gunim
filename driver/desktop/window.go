@@ -63,8 +63,11 @@ type Window struct {
 	in        *inbox.Inbox
 	presented chan driver.Frame
 	frames    chan frame
-	quit      chan struct{}
-	done      chan struct{}
+	// released carries a token for each frame whose ops the render
+	// thread is done with ([driver.Releaser]).
+	released chan struct{}
+	quit     chan struct{}
+	done     chan struct{}
 	// closeOnce runs Close once; quitOnce closes quit once, whichever
 	// of Close and shutdown gets there first. They are separate so that
 	// shutdown, run on the main thread while Close waits for it, waits on
@@ -98,14 +101,18 @@ type Window struct {
 	// fading says the window is last drawn partly there; see SetFade.
 	fading bool
 	// shadow says gunim draws the window's shadow, and shadowAt and shadowScale are the opacity and scale it was last
-	// given; see startShadow.
+	// given; see startShadow. shadowOwed says a task to show them is waiting on the main thread; see SetFade.
 	shadow      bool
 	shadowAt    float32
 	shadowScale float32
+	shadowOwed  bool
 	// border is the line round a chromeless window's edge the application asked for, and edge the width, in device
 	// pixels, a drawn one is drawn at now; see applyBorder.
 	border driver.Border
 	edge   float32
+	// corner is the radius of the corners, in logical pixels, a window with a drawn shadow cuts, set once as the
+	// window opens; see cornerLogical.
+	corner float32
 	// covered says the window is cloaked, which the drawn shadow follows. It is used on the main thread.
 	covered bool
 	// focusUncovered asks for the keyboard again as the window is
@@ -220,6 +227,9 @@ type Window struct {
 	// in screen coordinates as x, y, width, height. The latest is where
 	// the window goes back to; see noteNormal.
 	normals [][4]int
+	// normalScales are the screen coordinates per logical pixel the window had
+	// at each of normals, so that a place is told with the scale it was saved at.
+	normalScales []float32
 	// gone says the window has been destroyed, and final where it was
 	// as it was, kept says whether it could say. They are held by mu, for
 	// Placement asks of them from any goroutine.
@@ -232,8 +242,9 @@ func newWindow(d *Driver, gw *glfw.Window) *Window {
 		d:         d,
 		opened:    time.Now(),
 		gw:        gw,
-		presented: make(chan driver.Frame, 1),
-		frames:    make(chan frame, 1),
+		presented: make(chan driver.Frame, 2),
+		frames:    make(chan frame, 2),
+		released:  make(chan struct{}, 2),
 		quit:      make(chan struct{}),
 		drew:      make(chan struct{}, 1),
 		done:      make(chan struct{}),
@@ -250,12 +261,17 @@ func newWindow(d *Driver, gw *glfw.Window) *Window {
 // Presented implements [driver.Window].
 func (w *Window) Presented() <-chan driver.Frame { return w.presented }
 
+// Released implements [driver.Releaser]: a frame's ops are let go once
+// it is drawn, before it waits for the vertical blank, so the engine
+// builds the next frame while this one waits to be shown.
+func (w *Window) Released() <-chan struct{} { return w.released }
+
 // Input implements [driver.Window].
 func (w *Window) Input() <-chan any { return w.in.Out() }
 
 // Present implements [driver.Window]. It hands ops to the render thread
 // and returns at once.
-func (w *Window) Present(ops []paint.Op, damage geom.Rect) error {
+func (w *Window) Present(ops []paint.Op, damage []geom.Rect) error {
 	w.mu.Lock()
 	err := w.err
 	w.mu.Unlock()
@@ -293,15 +309,30 @@ func (w *Window) SetFade(opacity, scale float32) {
 	w.mu.Lock()
 	changed := fading != w.fading
 	w.fading = fading
-	shadow := w.shadow && (opacity != w.shadowAt || scale != w.shadowScale)
+	// One task at a time shows the shadow at the newest fade. Drawing it takes the main thread a few milliseconds,
+	// and a task a frame would queue up behind each other: the shadow would trail the window by seconds, and the
+	// main thread would hear no input till they had run.
+	post := w.shadow && !w.shadowOwed && (opacity != w.shadowAt || scale != w.shadowScale)
 	w.shadowAt, w.shadowScale = opacity, scale
+	if post {
+		w.shadowOwed = true
+	}
 	w.mu.Unlock()
-	if shadow {
-		w.d.post(func() {
+	if post {
+		posted := w.d.post(func() {
+			w.mu.Lock()
+			o, sc := w.shadowAt, w.shadowScale
+			w.shadowOwed = false
+			w.mu.Unlock()
 			if !w.closed && !w.covered {
-				fadeShadow(w, opacity, scale)
+				fadeShadow(w, o, sc)
 			}
 		})
+		if !posted {
+			w.mu.Lock()
+			w.shadowOwed = false
+			w.mu.Unlock()
+		}
 	}
 	if !changed {
 		return
@@ -1121,7 +1152,7 @@ func shotBack(was func([]byte, int, int), shot func(*image.RGBA)) func([]byte, i
 // the window that changed since the frame before.
 type frame struct {
 	ops    []paint.Op
-	damage geom.Rect
+	damage []geom.Rect
 }
 
 // render is the window's render thread. It owns the GL context: it
@@ -1147,7 +1178,7 @@ func (w *Window) render() {
 			if w.pres != nil {
 				w.pres.close()
 			}
-			r.Release()
+			releaseRenderer(r)
 			_ = (*glfw.Window)(nil).MakeContextCurrent()
 		}()
 	}
@@ -1172,6 +1203,19 @@ func (w *Window) render() {
 	// frame after, so they hold.
 	var sharpen <-chan time.Time
 	var again frame
+	// held says the ops of the frame drawn last are held for again,
+	// and not yet released: the engine records into them two frames on.
+	held := false
+	// release lets the ops go. The engine holds at most two frames
+	// unreleased, so the channel always has room for its tokens; a
+	// caller that hands frames and reads no tokens, as a test, has them
+	// dropped rather than holding up the render thread.
+	release := func() {
+		select {
+		case w.released <- struct{}{}:
+		default:
+		}
+	}
 	for {
 		var f frame
 		redraw := false
@@ -1181,8 +1225,21 @@ func (w *Window) render() {
 		case f = <-w.frames:
 		case <-sharpen:
 			f, redraw = again, true
+			// A frame come meanwhile is drawn instead: the engine may
+			// already be recording into the ops of the one held.
+			select {
+			case f = <-w.frames:
+				redraw = false
+			default:
+			}
 		}
 		sharpen = nil
+		taken := time.Now()
+		if !redraw && held {
+			// The frame held for again gives way to this one.
+			held, again = false, frame{}
+			release()
+		}
 		if r != nil {
 			r.Corner, r.Edge = w.cornerRadius()
 			w.mu.Lock()
@@ -1208,7 +1265,7 @@ func (w *Window) render() {
 				log.Printf("gunim frames %p colour: %v", w, colorInfo)
 			}
 			if readback == nil && !redraw && !lost && r.Corner == shownCorner && r.Edge == shownEdge &&
-				r.Under == shownUnder && r.Unchanged(f.damage, fbW, fbH, scale) {
+				r.Under == shownUnder && r.Unchanged(damageBounds(f.damage), fbW, fbH, scale) {
 				// Nothing on screen would change: the window keeps the
 				// frame it shows, and this one is neither drawn nor
 				// presented. It still waits for the vertical blank, so
@@ -1222,8 +1279,9 @@ func (w *Window) render() {
 				if framesDebug {
 					ft.skip(w, rate, fbW, fbH)
 				}
+				release()
 				select {
-				case w.presented <- driver.Frame{Shown: last}:
+				case w.presented <- driver.Frame{Shown: last, Lag: w.lag()}:
 				case <-w.quit:
 					return
 				}
@@ -1238,7 +1296,11 @@ func (w *Window) render() {
 				}
 				r.WindowFBO = fbo
 			}
-			r.Draw(f.ops, f.damage, fbW, fbH, scale)
+			// See ContextCreation: a frame's buffers go while no window's
+			// context is being made.
+			glfw.ContextCreation.RLock()
+			r.DrawRects(f.ops, f.damage, fbW, fbH, scale)
+			buffersDone(r.GL)
 			if !r.Stretched.Empty() {
 				again = frame{ops: f.ops}
 				sharpen = time.After(time.Until(r.SharpAt))
@@ -1264,18 +1326,32 @@ func (w *Window) render() {
 				}
 				readback(pix, fbW, fbH)
 			}
+			// Drawn, the frame's ops are let go, unless they are held to
+			// draw it again sharp. The engine builds the next frame while
+			// this one waits for the vertical blank.
+			switch {
+			case sharpen != nil:
+				held = true
+			case redraw:
+				held = false
+				again = frame{}
+				release()
+			default:
+				release()
+			}
 			t1 := time.Now()
 			synced := vb.wait()
 			t2 := time.Now()
 			if w.pres != nil {
-				if err := w.pres.present(r.Redrawn); err != nil {
+				if err := w.pres.present(r.Boxes); err != nil {
 					w.fail(err)
 				}
 			} else if err := w.gw.SwapBuffers(); err != nil {
 				w.fail(fmt.Errorf("desktop: swap buffers: %w", err))
 			}
 			if framesDebug {
-				ft.add(w, t1.Sub(t0), t2.Sub(t1), time.Since(t2), gpu, &r.Stats, rate, fbW, fbH, r.Converting())
+				ft.boxes = append(ft.boxes[:0], r.Boxes...)
+				ft.add(w, taken, t1.Sub(t0), t2.Sub(t1), time.Since(t2), gpu, &r.Stats, rate, fbW, fbH, r.Converting())
 			}
 			w.uncover()
 			if r.Edge != shownEdge {
@@ -1297,12 +1373,16 @@ func (w *Window) render() {
 				last = pace(last, rate)
 			}
 		}
+		if r == nil && !redraw {
+			// No renderer drew the frame, and none holds its ops.
+			release()
+		}
 		if redraw {
 			// The engine waits for none.
 			continue
 		}
 		select {
-		case w.presented <- driver.Frame{Shown: last}:
+		case w.presented <- driver.Frame{Shown: last, Lag: w.lag()}:
 		case <-w.quit:
 			return
 		}
@@ -1331,13 +1411,22 @@ type frameTimes struct {
 	waitMax             time.Duration
 	gpu, gpuMax         time.Duration
 	sent                render.Stats
+	// shown is when the frame before was presented.
+	shown time.Time
+	// boxes are the device-pixel boxes the last frame redrew.
+	boxes []geom.Rect
 }
 
 // add counts a frame that took draw, wait and present, and logs the
 // second's sums once one has passed, with how many frames were left
-// undrawn meanwhile as unchanged. A frame is late where the three
-// together took longer than a refresh at rate.
-func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int, converting bool) {
+// undrawn meanwhile as unchanged. A frame is late where it missed a
+// refresh it was there in time for: shown more than a refresh and a half
+// after the frame before, though the render thread had it, taken at
+// taken, less than a refresh after that one was shown. The three
+// together may take longer than a refresh with none late, as a frame
+// built while the one before waits for the screen waits for its own
+// refresh in turn.
+func (ft *frameTimes) add(w *Window, taken time.Time, draw, wait, present, gpu time.Duration, sent *render.Stats, rate float64, fbW, fbH int, converting bool) {
 	ft.gpu += gpu
 	ft.gpuMax = max(ft.gpuMax, gpu)
 	ft.sent.Flushes += sent.Flushes
@@ -1345,6 +1434,8 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	ft.sent.Bytes += sent.Bytes
 	ft.sent.Layers += sent.Layers
 	ft.sent.FlushTime += sent.FlushTime
+	ft.sent.Boxes += sent.Boxes
+	ft.sent.Redrawn += sent.Redrawn
 	*sent = render.Stats{}
 	now := time.Now()
 	if ft.from.IsZero() {
@@ -1357,9 +1448,13 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	ft.drawMax = max(ft.drawMax, draw)
 	ft.waitMax = max(ft.waitMax, wait)
 	ft.presentMax = max(ft.presentMax, present)
-	if rate > 0 && draw+wait+present > time.Duration(float64(time.Second)/rate)*11/10 {
-		ft.late++
+	if rate > 0 && !ft.shown.IsZero() {
+		interval := time.Duration(float64(time.Second) / rate)
+		if now.Sub(ft.shown) > interval*3/2 && taken.Sub(ft.shown) < interval {
+			ft.late++
+		}
 	}
+	ft.shown = now
 	if now.Sub(ft.from) < time.Second {
 		return
 	}
@@ -1371,16 +1466,20 @@ func (ft *frameTimes) add(w *Window, draw, wait, present, gpu time.Duration, sen
 	if converting {
 		colour = "converted to the display's profile"
 	}
-	log.Printf("gunim frames %p sent each frame: %d quads, %.1f MB in %d draws, %d layers; handing them over took %.1f ms; gpu %.1f ms (max %.1f); colour %s",
+	log.Printf("gunim frames %p sent each frame: %d quads, %.1f MB in %d draws, %d layers; redrawn %.1f%% in %.1f boxes; handing them over took %.1f ms; gpu %.1f ms (max %.1f); colour %s",
 		w, ft.sent.Quads/ft.n, float64(ft.sent.Bytes)/float64(ft.n)/1e6, ft.sent.Flushes/ft.n, ft.sent.Layers/ft.n,
+		100*ft.sent.Redrawn/float64(ft.n), float64(ft.sent.Boxes)/float64(ft.n),
 		ms(ft.sent.FlushTime/n), ms(ft.gpu/n), ms(ft.gpuMax), colour)
-	*ft = frameTimes{from: now}
+	log.Printf("gunim frames %p redrew last: %v", w, ft.boxes)
+	*ft = frameTimes{from: now, boxes: ft.boxes, shown: ft.shown}
 }
 
 // skip counts a frame left undrawn as unchanged, and logs once a second
 // has passed with none drawn.
 func (ft *frameTimes) skip(w *Window, rate float64, fbW, fbH int) {
 	now := time.Now()
+	// It waited for its refresh as a frame shown does.
+	ft.shown = now
 	if ft.from.IsZero() {
 		ft.from = now
 	}
@@ -1390,6 +1489,32 @@ func (ft *frameTimes) skip(w *Window, rate float64, fbW, fbH int) {
 	}
 	log.Printf("gunim frames %p %dx%d at %.0f Hz: no frame drawn, %d unchanged and not drawn", w, fbW, fbH, rate, ft.skipped)
 	*ft = frameTimes{from: now}
+}
+
+// lag returns how long after its Shown a frame lights the screen: as
+// DXGI measured it, where the window presents through DXGI and DXGI has
+// said; elsewhere one refresh of the window's monitor. Shown is the
+// vertical blank the frame went out on, or the swap's return, and a
+// compositor shows what a window hands it at the vertical blank after:
+// Windows' DWM, macOS's WindowServer, and the compositor of a Linux
+// desktop.
+//
+// It is an estimate on Linux and macOS. GLX_OML_sync_control tells when
+// the X server took a swap, but not when the compositor showed it; a
+// display link tells when the display refreshes, but not which frame.
+func (w *Window) lag() time.Duration {
+	if w.pres != nil {
+		if d, ok := w.pres.lag(); ok {
+			return d
+		}
+	}
+	w.mu.Lock()
+	rate := w.rate
+	w.mu.Unlock()
+	if rate <= 0 {
+		rate = 60
+	}
+	return time.Duration(float64(time.Second) / rate)
 }
 
 // pace returns the time a frame reached the screen, given when the
@@ -1457,19 +1582,35 @@ func (w *Window) startGL() (*render.Renderer, error) {
 	if err = ctx.LoadFunctions(); err != nil {
 		return nil, fmt.Errorf("desktop: %w", err)
 	}
+	glfw.ContextCreation.RLock()
 	r, err := render.New(ctx, w.d.isES, &w.d.shared)
+	buffersDone(ctx)
 	if err != nil {
 		return nil, err
 	}
 	r.SetText(w.textRendering, w.transparent)
 	if w.ctx != nil {
 		if w.pres, err = w.startPresenter(ctx); err != nil {
-			r.Release()
+			releaseRenderer(r)
 			return nil, err
 		}
 		r.FlipWindow = true
 	}
 	return r, nil
+}
+
+// buffersDone lets go of glfw.ContextCreation, once g's queued calls have run.
+func buffersDone(g gl.Context) {
+	g.GetError()
+	glfw.ContextCreation.RUnlock()
+}
+
+// releaseRenderer lets r go, its buffers with it, while no window's context
+// is being made.
+func releaseRenderer(r *render.Renderer) {
+	glfw.ContextCreation.RLock()
+	r.Release()
+	buffersDone(r.GL)
 }
 
 // fail records an error for the next Present to return.
@@ -1545,12 +1686,24 @@ func (w *Window) cornerRadius() (radius, edge float32) {
 		return 0, 0
 	}
 	w.mu.Lock()
-	on, k, edge := w.shadow, w.content, w.edge
+	on, k, edge, corner := w.shadow, w.content, w.edge, w.cornerLogical()
 	w.mu.Unlock()
 	if !on {
 		return 0, 0
 	}
-	return 8 * k, edge
+	return corner * k, edge
+}
+
+// cornerLogical is the radius of the corners in logical pixels: the one asked for, none for a negative one, or else
+// Windows 11's.
+func (w *Window) cornerLogical() float32 {
+	switch {
+	case w.corner < 0:
+		return 0
+	case w.corner > 0:
+		return w.corner
+	}
+	return 8
 }
 
 // Outline implements [driver.Outliner].
@@ -1615,4 +1768,13 @@ func (w *Window) debugf(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "gunim window %p %6.1f ms: %s\n", w, float64(time.Since(w.opened).Microseconds())/1000, fmt.Sprintf(format, args...))
+}
+
+// damageBounds is the rectangle round rs, empty for none.
+func damageBounds(rs []geom.Rect) geom.Rect {
+	var all geom.Rect
+	for _, r := range rs {
+		all = all.Union(r)
+	}
+	return all
 }

@@ -1,3 +1,5 @@
+//go:build !js
+
 package vst3
 
 import (
@@ -6,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -193,9 +196,17 @@ type Plugin struct {
 	// gestures counts the editor's gestures under way.
 	gestures atomic.Int32
 
-	closed bool
+	// closed says Close has run. It and active are read on the audio's
+	// goroutine, the app's and the plugins' thread, so they are atomic.
+	closed atomic.Bool
 	// active says the plugin is set up to process, as New leaves it.
-	active bool
+	active atomic.Bool
+	// crashed says the plugin crashed as it processed, and processFn is the
+	// function that does that, whose module going dead takes the plugin with it.
+	crashed   atomic.Bool
+	processFn atomic.Uintptr
+	// owner is the file of the module that made it, which a crash in it, or in a library of its, is told of by.
+	owner string
 	// ed is the editor, open, on the plugins' thread.
 	ed         *editor
 	editorOpen atomic.Bool
@@ -230,6 +241,10 @@ func start(c Class, cfg Config, build func(p *Plugin) error) (*Plugin, error) {
 	if cfg.Channels > 2 {
 		return nil, fmt.Errorf("vst3: %d channels, of the 1 or 2 a plugin runs in", cfg.Channels)
 	}
+	// A plugin's crash in a call is not to end the program, from its first call on.
+	if err := installGuard(); err != nil {
+		return nil, fmt.Errorf("vst3: keeping a plugin's faults from ending the program: %w", err)
+	}
 	p := &Plugin{Class: c, cfg: cfg, edits: newParamBox(nil), outputs: newParamBox(nil)}
 	var err error
 	onUI(func() { err = build(p) })
@@ -242,6 +257,9 @@ func start(c Class, cfg Config, build func(p *Plugin) error) (*Plugin, error) {
 }
 
 func (p *Plugin) create(m *Module) error {
+	p.owner = m.Path
+	setUIOwner(p.owner)
+	defer setUIOwner("")
 	comp := m.create(p.Class.ID, iidComponent)
 	if comp == 0 {
 		return fmt.Errorf("vst3: %s: the module made no component", p.Class.Name)
@@ -268,6 +286,8 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 	if p.proc == 0 {
 		return fmt.Errorf("vst3: %s: no audio processor", p.Class.Name)
 	}
+	p.processFn.Store(method(p.proc, mProcess))
+	ownFn(p.processFn.Load(), p.owner)
 	// The controller: the component itself, or one of its own class.
 	if ctrl := query(p.comp, iidEditController); ctrl != 0 {
 		p.ctrl, p.single = ctrl, true
@@ -304,7 +324,7 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 	if p.ctrl != 0 {
 		// A slot for each parameter, each way, made now, so that
 		// processing makes none.
-		n := int(i32(call(p.ctrl, mGetParameterCount)))
+		n := max(int(i32(call(p.ctrl, mGetParameterCount))), 0)
 		ids = make([]uint32, 0, n)
 		for i := range n {
 			var info paramInfo
@@ -333,6 +353,10 @@ func (p *Plugin) build(comp uintptr, m *Module) error {
 func (p *Plugin) readValues() {
 	for i := range p.edits.slots {
 		v := callFloatOut(p.ctrl, mGetParamNormalized, uintptr(p.edits.slots[i].id))
+		if p.Gone() {
+			// That is no value, and those not read yet stay what they were last known to be.
+			return
+		}
 		p.values[i].Store(math.Float64bits(v))
 	}
 }
@@ -341,7 +365,10 @@ func (p *Plugin) readValues() {
 // and the aux buses as the plugin has them, turns every bus on, and
 // makes the buffers for each.
 func (p *Plugin) setupBuses() error {
-	count := func(media, dir int) int { return int(i32(call(p.comp, mGetBusCount, uintptr(media), uintptr(dir)))) }
+	// A call that crashed gives a number below zero.
+	count := func(media, dir int) int {
+		return max(int(i32(call(p.comp, mGetBusCount, uintptr(media), uintptr(dir)))), 0)
+	}
 	nIn, nOut := count(mediaAudio, dirInput), count(mediaAudio, dirOutput)
 	if nOut == 0 {
 		return fmt.Errorf("vst3: %s: no audio out", p.Class.Name)
@@ -353,7 +380,10 @@ func (p *Plugin) setupBuses() error {
 	infos := func(dir, n int) []busInfo {
 		out := make([]busInfo, n)
 		for i := range n {
-			call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&out[i])))
+			if result(call(p.comp, mGetBusInfo, mediaAudio, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&out[i])))) == resultCrashed {
+				// What it wrote before it did is no bus.
+				out[i] = busInfo{}
+			}
 		}
 		return out
 	}
@@ -380,7 +410,7 @@ func (p *Plugin) setupBuses() error {
 			call(p.proc, mGetBusArrangement, uintptr(dir), uintptr(i), uintptr(unsafe.Pointer(&a)))
 			ch := bits.OnesCount64(a)
 			if ch == 0 {
-				ch = int(info[i].channels)
+				ch = min(max(int(info[i].channels), 0), maxBusChannels)
 			}
 			b := &out[i]
 			b.Name, b.Channels, b.Main = utf16String(info[i].name[:]), ch, info[i].busType == busMain
@@ -459,10 +489,10 @@ func (p *Plugin) activate() error {
 	if r := result(call(p.comp, mSetActive, 1)); r != resultOK {
 		return fmt.Errorf("vst3: %s: setActive failed (%d)", p.Class.Name, r)
 	}
-	p.latency.Store(int32(call(p.proc, mGetLatencySamples)))
+	p.readLatency()
 	p.readTail()
 	call(p.proc, mSetProcessing, 1)
-	p.active = true
+	p.active.Store(true)
 	return nil
 }
 
@@ -470,23 +500,56 @@ func (p *Plugin) activate() error {
 func (p *Plugin) deactivate() {
 	call(p.proc, mSetProcessing, 0)
 	call(p.comp, mSetActive, 0)
-	p.active = false
+	p.active.Store(false)
 }
 
 // SetActive starts or stops the plugin's processing. A plugin stopped
 // takes no time of the computer's, nor sound; started again, it starts
-// from silence. Process must not run meanwhile.
+// from silence. Process must not run meanwhile. A plugin closed stays
+// as it is, and starting it gives ErrClosed.
 func (p *Plugin) SetActive(on bool) error {
 	var err error
-	onUI(func() {
+	if !p.whileOpen(func() {
 		switch {
-		case on && !p.active:
+		case on && !p.active.Load():
 			err = p.activate()
-		case !on && p.active:
+		case !on && p.active.Load():
 			p.deactivate()
 		}
-	})
+	}) && on {
+		return ErrClosed
+	}
 	return err
+}
+
+// Gone reports whether the plugin crashed, or another of its module did: it is then called no more, and plays silence. Its
+// latency stays what it was, so what it plays into stays in time. It is safe to call from any goroutine.
+func (p *Plugin) Gone() bool { return p.crashed.Load() || moduleDead(p.processFn.Load()) }
+
+// ErrClosed is the error of a plugin, or an ARA document, closed.
+var ErrClosed = errors.New("vst3: closed")
+
+// whileOpen runs job on the plugins' thread, unless the plugin is closed
+// by then, and reports whether it ran. Close lets the plugin's objects
+// go on that thread too, after it marks the plugin closed, so a job that
+// runs finds them all there.
+//
+// A plugin gone needs nothing of the thread, so asking it waits on nothing, whatever the crash left the thread doing.
+func (p *Plugin) whileOpen(job func()) bool {
+	if p.Gone() {
+		return false
+	}
+	ran := false
+	onUI(func() {
+		if p.closed.Load() || p.Gone() {
+			return
+		}
+		ran = true
+		setUIOwner(p.owner)
+		defer setUIOwner("")
+		job()
+	})
+	return ran
 }
 
 // Configure sets the plugin up to run as cfg says, keeping its state:
@@ -501,31 +564,45 @@ func (p *Plugin) Configure(cfg Config) error {
 	if cfg.Rate <= 0 || cfg.Channels > 2 {
 		return fmt.Errorf("vst3: %s: no plugin runs at %d frames a second in %d channels", p.Class.Name, cfg.Rate, cfg.Channels)
 	}
-	if cfg == p.cfg || p.closed {
+	if p.closed.Load() {
+		return ErrClosed
+	}
+	if cfg == p.cfg {
 		return nil
 	}
 	var err error
-	onUI(func() {
-		if p.active {
+	if !p.whileOpen(func() {
+		if p.active.Load() {
 			p.deactivate()
 		}
 		p.cfg = cfg
 		if err = p.setupBuses(); err == nil {
 			err = p.activate()
 		}
-	})
+	}) {
+		// Close ran since.
+		return ErrClosed
+	}
 	return err
 }
 
 // Latency is how many frames late the plugin's sound comes out.
 func (p *Plugin) Latency() int {
-	if p.restarts.Load()&restartLatency != 0 {
-		onUI(func() {
+	// One gone is asked nothing, and this runs on every step of the engine's.
+	if p.restarts.Load()&restartLatency != 0 && !p.Gone() {
+		p.whileOpen(func() {
 			p.restarts.And(^int32(restartLatency))
-			p.latency.Store(int32(call(p.proc, mGetLatencySamples)))
+			p.readLatency()
 		})
 	}
 	return int(p.latency.Load())
+}
+
+// readLatency asks the plugin its latency, on the plugins' thread. A call that crashed leaves what it was.
+func (p *Plugin) readLatency() {
+	if r := call(p.proc, mGetLatencySamples); r != crashedResult {
+		p.latency.Store(int32(r))
+	}
 }
 
 // Tail is how many frames of sound come out after the sound going in
@@ -536,7 +613,11 @@ func (p *Plugin) Tail() int { return int(p.tail.Load()) }
 
 // readTail asks the plugin its tail, on the plugins' thread.
 func (p *Plugin) readTail() {
-	t := uint32(call(p.proc, mGetTailSamples))
+	r := call(p.proc, mGetTailSamples)
+	if r == crashedResult {
+		return
+	}
+	t := uint32(r)
 	if t == infiniteTail || t > math.MaxInt32 {
 		p.tail.Store(math.MaxInt32)
 		return
@@ -547,8 +628,8 @@ func (p *Plugin) readTail() {
 // Reset clears what the plugin holds of the sound before, as its
 // filters' and delays' memories, for a jump in the sound.
 func (p *Plugin) Reset() {
-	onUI(func() {
-		if p.active {
+	p.whileOpen(func() {
+		if p.active.Load() {
 			p.deactivate()
 			_ = p.activate()
 		}
@@ -561,7 +642,7 @@ func (p *Plugin) Reset() {
 // audio's goroutine, as VST3 lets processing be stopped and started
 // there: the notes sounding end in the next block, and the pedals lift.
 func (p *Plugin) resetNow() {
-	if p.closed || !p.active {
+	if p.closed.Load() || !p.active.Load() || p.Gone() {
 		return
 	}
 	call(p.proc, mSetProcessing, 0)
@@ -577,7 +658,11 @@ func (p *Plugin) SetPosition(frame int64) { p.ctx.projectTime = frame }
 // place: through its main buses, and into each aux input too, as a
 // sidechain keys on the sound it changes.
 func (p *Plugin) Process(frames []float32) {
-	if p.closed || !p.active {
+	if p.closed.Load() || !p.active.Load() {
+		return
+	}
+	if p.Gone() {
+		clear(frames)
 		return
 	}
 	n := len(frames) / 2
@@ -633,9 +718,13 @@ func (p *Plugin) takeEdits() {
 func (p *Plugin) run(k int) {
 	p.outChanges.clear()
 	p.data.frames = int32(k)
-	if result(callN(method(p.proc, mProcess), p.procArgs[:])) != resultOK {
+	if r := result(callN(p.processFn.Load(), p.procArgs[:])); r != resultOK {
 		// It made no sound: what its buffers hold is the block before.
-		p.failures.Add(1)
+		if r == resultCrashed {
+			p.crashed.Store(true)
+		} else {
+			p.failures.Add(1)
+		}
 		for i := range p.outs {
 			for _, ch := range p.outs[i].chans {
 				clear(ch[:k])
@@ -675,7 +764,7 @@ func (p *Plugin) Value(id uint32) float64 {
 // the controller has them.
 func (p *Plugin) Values() map[uint32]float64 {
 	out := make(map[uint32]float64, len(p.edits.slots))
-	onUI(func() {
+	ran := p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
@@ -684,15 +773,24 @@ func (p *Plugin) Values() map[uint32]float64 {
 			out[id] = callFloatOut(p.ctrl, mGetParamNormalized, uintptr(id))
 		}
 	})
+	if !ran || p.Gone() {
+		// It can't be asked, or crashed as it was, and what it gave then is no value. A song keeps these, so they are
+		// what it was last known to hold.
+		for i := range p.edits.slots {
+			out[p.edits.slots[i].id] = math.Float64frombits(p.values[i].Load())
+		}
+	}
 	return out
 }
 
 // Flush passes the changes waiting for the processor on, as a plugin
 // not processing takes them, so its state holds them: with a moment of
 // silence, as not every plugin takes them without sound, as VST3 allows.
-// It must not run alongside Process.
+// It runs Process on the caller's goroutine, so it must not run
+// alongside Process, nor alongside Close: the atomic closed flag does
+// not make that safe.
 func (p *Plugin) Flush() {
-	if p.closed || !p.active {
+	if p.closed.Load() || !p.active.Load() || p.Gone() {
 		return
 	}
 	if !p.edits.waits() {
@@ -731,7 +829,10 @@ func (p *Plugin) restart(flags int32) {
 // onTick passes the processor's changes to the controller, and asks the
 // plugin its tail, on the plugins' thread.
 func (p *Plugin) onTick() {
-	if p.active {
+	if p.Gone() {
+		return
+	}
+	if p.active.Load() {
 		p.readTail()
 	}
 	if !p.outputs.look() {
@@ -747,7 +848,7 @@ func (p *Plugin) onTick() {
 // Params returns the plugin's parameters.
 func (p *Plugin) Params() []Param {
 	var out []Param
-	onUI(func() {
+	p.whileOpen(func() {
 		if p.ctrl == 0 {
 			return
 		}
@@ -770,8 +871,8 @@ func (p *Plugin) Params() []Param {
 // writes it to show, as "-3.0 dB"; empty where it writes none.
 func (p *Plugin) Text(id uint32, v float64) string {
 	var s [128]uint16
-	onUI(func() {
-		if p.ctrl != 0 && !p.closed {
+	p.whileOpen(func() {
+		if p.ctrl != 0 {
 			callFloatArg(p.ctrl, mGetParamStringByValue, uintptr(id), v, uintptr(unsafe.Pointer(&s[0])))
 		}
 	})
@@ -782,7 +883,7 @@ func (p *Plugin) Text(id uint32, v float64) string {
 // processor. A parameter the controller does not list is not set.
 func (p *Plugin) Set(id uint32, v float64) {
 	if p.ctrl != 0 {
-		onUI(func() { callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v) })
+		p.whileOpen(func() { callFloat(p.ctrl, mSetParamNormalized, uintptr(id), v) })
 	}
 	p.edits.put(id, v)
 }
@@ -816,7 +917,7 @@ const stateMagic = "gVS3"
 func (p *Plugin) State() ([]byte, error) {
 	var comp, ctrl []byte
 	var err error
-	onUI(func() {
+	if !p.whileOpen(func() {
 		if comp, err = p.componentState(); err != nil {
 			return
 		}
@@ -827,9 +928,15 @@ func (p *Plugin) State() ([]byte, error) {
 			}
 			drop(sp)
 		}
-	})
+	}) {
+		return nil, ErrClosed
+	}
 	if err != nil {
 		return nil, err
+	}
+	if p.Gone() {
+		// It crashed as it gave it: what it gave is only a part.
+		return nil, ErrClosed
 	}
 	out := []byte(stateMagic)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(comp)))
@@ -867,7 +974,7 @@ func (p *Plugin) SetState(b []byte) error {
 	if err != nil {
 		return err
 	}
-	onUI(func() {
+	if !p.whileOpen(func() {
 		edits := p.editsMade.Load()
 		defer p.editsMade.Store(edits)
 		s, sp := newStream(append([]byte(nil), comp...))
@@ -876,7 +983,7 @@ func (p *Plugin) SetState(b []byte) error {
 			err = fmt.Errorf("vst3: %s: setState failed (%d)", p.Class.Name, r)
 			return
 		}
-		if p.ctrl == 0 {
+		if p.ctrl == 0 || p.Gone() {
 			return
 		}
 		if !p.single {
@@ -889,17 +996,36 @@ func (p *Plugin) SetState(b []byte) error {
 			}
 		}
 		p.readValues()
-	})
+	}) {
+		return ErrClosed
+	}
+	if err == nil && p.Gone() {
+		return ErrClosed
+	}
 	return err
 }
 
-// Close stops the plugin and lets it go. Process must have returned.
+// Close stops the plugin and lets it go, once: a second Close, at the
+// same time or after, does nothing, and does not wait for the first to
+// finish letting the plugin go. Once it has begun, the methods that ask
+// the plugin on the plugins' thread ask it nothing: Values, Params,
+// Text, Set, State, SetState, Latency, SetActive, Configure, Reset and
+// the editor's EditorSize, EditorResizable, OpenEditor and EmbedEditor. Process, ProcessBlock and Flush must
+// have returned and must not run alongside it, as Close does not wait
+// for a block under way. That closed is atomic only keeps the race
+// detector quiet and stops a double close; it does not make processing
+// while closing safe.
 func (p *Plugin) Close() {
-	if p.closed {
+	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
-	p.closed = true
 	untick(p)
+	if p.Gone() {
+		// It is called no more, not even to let it go, and what it was handed
+		// stays, as threads it started may still read it.
+		keepGone(p)
+		return
+	}
 	if p.ara != nil {
 		p.ara.unbind()
 	}
@@ -907,7 +1033,7 @@ func (p *Plugin) Close() {
 		if p.ed != nil {
 			p.ed.close()
 		}
-		if p.proc != 0 && p.active {
+		if p.proc != 0 && p.active.Load() {
 			p.deactivate()
 		}
 		if p.compCP != 0 && p.ctrlCP != 0 {
@@ -929,6 +1055,10 @@ func (p *Plugin) Close() {
 			release(p.comp)
 		}
 	})
+	if p.Gone() {
+		keepGone(p)
+		return
+	}
 	if p.handler != nil {
 		p.handler.drop()
 	}
@@ -967,3 +1097,20 @@ func (p *Plugin) Prime(wait time.Duration) {
 	}
 	p.Reset()
 }
+
+// goneKept holds the plugins that can't be let go, and with them what they were handed, its buffers and its lists, as
+// threads a plugin started may read those until the program ends.
+var (
+	goneMu   sync.Mutex
+	goneKept []*Plugin
+)
+
+// keepGone keeps p until the program ends.
+func keepGone(p *Plugin) {
+	goneMu.Lock()
+	defer goneMu.Unlock()
+	goneKept = append(goneKept, p)
+}
+
+// maxBusChannels is the most channels a bus is made with, whatever a plugin says.
+const maxBusChannels = 64

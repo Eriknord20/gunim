@@ -34,9 +34,21 @@ type Painter struct {
 	// prevBlurs when one did in the frame before.
 	prev       []Op
 	prevBounds []geom.Rect
-	hasPrev    bool
-	blurs      bool
-	prevBlurs  bool
+	// shows and prevShows are bounds and prevBounds cut to the clips
+	// round each op: the part of the window it can change, which is
+	// what Damage compares.
+	shows, prevShows []geom.Rect
+	hasPrev          bool
+	blurs            bool
+	prevBlurs        bool
+	// dmg gathers the damage [Painter.DamageRects] returns, and
+	// prevDmg holds the frame before's. A driver draws a frame while
+	// the next one paints, so the two take turns, as the ops do.
+	dmg, prevDmg damage
+	// showTable and showNext index the frame before's ops by where they
+	// show, for resync, and indexed says they hold this frame's index.
+	showTable, showNext []int32
+	indexed             bool
 	// open holds the index of each layer open, innermost last.
 	open  []int
 	stack []Transform
@@ -85,8 +97,9 @@ type Painter struct {
 	// done; see Float.
 	floats []func(*Painter)
 	// carried are the stretches of this frame copied from the frame
-	// before with Again.
+	// before with Again, and matched Damage's marks of the ops before.
 	carried []carried
+	matched []bool
 }
 
 // slab hands out ops from blocks it keeps from frame to frame.
@@ -138,6 +151,8 @@ func (p *Painter) Reset() {
 	clear(p.prev[:cap(p.prev)])
 	p.prev, p.ops = p.ops, p.prev[:0]
 	p.prevBounds, p.bounds = p.bounds, p.prevBounds[:0]
+	p.prevShows, p.shows = p.shows, p.prevShows[:0]
+	p.prevDmg, p.dmg = p.dmg, p.prevDmg
 	p.prevBlurs, p.blurs = p.blurs, false
 	p.prevTilts, p.tilts = p.tilts, false
 	p.prevRRects, p.rrects = p.rrects, p.prevRRects
@@ -197,10 +212,15 @@ func (p *Painter) Forget() {
 	p.hasPrev = false
 	p.prev = p.prev[:0]
 	p.prevBounds = p.prevBounds[:0]
+	p.prevShows = p.prevShows[:0]
 }
 
 // Ops returns the recorded commands in draw order.
 func (p *Painter) Ops() []Op { return p.ops }
+
+// lookAhead are how many ops [Painter.Damage] looks past a difference
+// for the ops on either side to match again.
+var lookAhead = [...]int{1, 2, 3, 4, 5, 6, 7, 8}
 
 // Damage returns the part of the window where this frame differs from
 // the one recorded before it: the old and new bounds of every op that
@@ -209,38 +229,265 @@ func (p *Painter) Ops() []Op { return p.ops }
 //
 // It is [Everything] for the first frame, and for a frame that blurs
 // or tilts or followed one that did, since a blur spreads a change past
-// its bounds, and a tilt moves it. Ops are matched in order, so a node added early in the frame
-// damages everything painted after it, which costs time and never
-// correctness.
+// its bounds, and a tilt moves it. Ops are matched in order, so a node
+// that adds ops early in the frame damages what is painted after it, up
+// to the next stretch carried with [Painter.Again]: a carried stretch
+// is the same by making, wherever it now stands among the ops, and the
+// ops after it are matched to those after it the frame before. That
+// costs time and never correctness. Past a difference, it looks a few
+// ops ahead on either side for the two to match again, so a few ops that
+// came or went, as a meter lighting more of its lights draws, damage
+// where they stand, and not every op after them.
+//
+// It is the rectangle round [Painter.DamageRects].
 func (p *Painter) Damage() geom.Rect {
-	if !p.hasPrev || p.blurs || p.prevBlurs || p.tilts || p.prevTilts {
-		return Everything
+	var all geom.Rect
+	for _, r := range p.DamageRects() {
+		all = all.Union(r)
 	}
-	var d geom.Rect
-	n := min(len(p.ops), len(p.prev))
-	next := 0
-	for i := 0; i < n; i++ {
-		// A stretch carried to the place it held is the same by making.
-		for next < len(p.carried) && p.carried[next].at < i {
-			next++
+	return all
+}
+
+// DamageRects returns the damage as at most [MaxDamageRects]
+// rectangles, apart, so a frame that changes two places far from each
+// other, as a playhead at the top of a window and a meter at its
+// bottom, redraws those two and not everything between them. Changes
+// that touch or lie near each other share a rectangle. It returns none
+// for a frame that changed nothing, and [Everything] alone where
+// [Painter.Damage] is Everything.
+//
+// The slice is the painter's, as the ops are. It holds through the
+// next frame, so a driver may draw a frame's damage while the engine
+// paints the next one, and the frame after that reuses it. A second
+// call in the same frame rewrites it.
+func (p *Painter) DamageRects() []geom.Rect {
+	d := &p.dmg
+	d.reset()
+	p.indexed = false
+	if !p.hasPrev || p.blurs || p.prevBlurs || p.tilts || p.prevTilts {
+		d.rs = append(d.rs, Everything)
+		return d.rs
+	}
+	// matched marks the ops of the frame before that this frame's match;
+	// the rest went, and damage where they stood.
+	p.matched = slices.Grow(p.matched[:0], len(p.prev))[:len(p.prev)]
+	clear(p.matched)
+	// A layer is the same where its op is: its bounds hold all it
+	// holds, and what changed inside it damages where it stands.
+	same := func(i, j int) bool {
+		switch p.ops[i].(type) {
+		case *LayerOp, *LayerEndOp:
+			return sameOp(p.ops[i], p.prev[j])
 		}
-		if next < len(p.carried) {
-			if c := p.carried[next]; c.at == i && c.from == i && i+c.n <= n {
-				i += c.n - 1
+		return p.shows[i] == p.prevShows[j] && sameOp(p.ops[i], p.prev[j])
+	}
+	// in reports whether ops i and i+1 match ops j and j+1 before, within
+	// i1 and j1: where they do after a difference, the ops between came
+	// or went, and those after are matched from there.
+	in := func(i, i1, j, j1 int) bool { return i+1 < i1 && j+1 < j1 && same(i, j) && same(i+1, j+1) }
+	// compare matches the ops of this frame from i to i1 in order with
+	// those of the frame before from j to j1.
+	// Where looking ahead failed a few times running, as everything
+	// moved in a scroll, it stops until ops match again.
+	compare := func(i, i1, j, j1 int) {
+		misses := 0
+		// Past the misses, ops are paired as they come; every gap of
+		// them, the pairing tries to find its step again, further
+		// apart each time it fails, so a frame where everything moved
+		// costs little more.
+		gap, wait := resyncGap, resyncGap
+		for i < i1 && j < j1 {
+			if same(i, j) {
+				p.matched[j] = true
+				i, j = i+1, j+1
+				misses = 0
+				gap, wait = resyncGap, resyncGap
 				continue
 			}
+			if misses < 4 {
+				if k := slices.IndexFunc(lookAhead[:], func(k int) bool { return in(i, i1, j+k, j1) }); k >= 0 {
+					j += lookAhead[k]
+					continue
+				}
+				if k := slices.IndexFunc(lookAhead[:], func(k int) bool { return in(i+k, i1, j, j1) }); k >= 0 {
+					for range lookAhead[k] {
+						d.add(p.showsOf(p.ops, p.shows, i))
+						i++
+					}
+					continue
+				}
+				if misses == 0 {
+					// Further than the lookahead: the index finds it.
+					if k, k2, ok := p.resync(i, i1, j, j1, same); ok {
+						for ; i < k; i++ {
+							d.add(p.showsOf(p.ops, p.shows, i))
+						}
+						j = k2
+						continue
+					}
+				}
+				misses++
+			} else {
+				wait--
+			}
+			if misses >= 4 && wait <= 0 {
+				if k, k2, ok := p.resync(i, i1, j, j1, same); ok {
+					// The ops between came, and those before passed by
+					// went: the loop after damages those.
+					for ; i < k; i++ {
+						d.add(p.showsOf(p.ops, p.shows, i))
+					}
+					j = k2
+					continue
+				}
+				gap = min(2*gap, resyncMaxGap)
+				wait = gap
+			}
+			p.matched[j] = true
+			d.add(p.showsOf(p.ops, p.shows, i))
+			d.add(p.showsOf(p.prev, p.prevShows, j))
+			i, j = i+1, j+1
 		}
-		if p.bounds[i] != p.prevBounds[i] || !sameOp(p.ops[i], p.prev[i]) {
-			d = d.Union(p.bounds[i]).Union(p.prevBounds[i])
+		for ; i < i1; i++ {
+			d.add(p.showsOf(p.ops, p.shows, i))
 		}
 	}
-	for _, b := range p.bounds[n:] {
-		d = d.Union(b)
+	i, j := 0, 0
+	for _, c := range p.carried {
+		if c.at < i || c.from < j || c.from+c.n > len(p.prev) {
+			// Out of the order of the frame before: compared as drawn.
+			continue
+		}
+		compare(i, c.at, j, c.from)
+		for k := range c.n {
+			p.matched[c.from+k] = true
+		}
+		i, j = c.at+c.n, c.from+c.n
 	}
-	for _, b := range p.prevBounds[n:] {
-		d = d.Union(b)
+	compare(i, len(p.ops), j, len(p.prev))
+
+	for k, ok := range p.matched {
+		if !ok {
+			d.add(p.showsOf(p.prev, p.prevShows, k))
+		}
 	}
-	return d
+	return d.rects()
+}
+
+// resyncGap is how many ops [Painter.DamageRects] pairs, out of step,
+// before it first looks for its step again, doubling each time it
+// fails up to resyncMaxGap; resyncAhead is how many ops of this frame
+// it looks through each time, a map lookup each where the op changed,
+// and resyncChain how many ops of the frame before that share a place
+// it tries for each. A frame where everything moved costs a lookup or
+// so an op.
+const (
+	resyncGap    = 16
+	resyncMaxGap = 256
+	resyncAhead  = 256
+	resyncChain  = 64
+)
+
+// resync looks for where the ops of this frame from i, before i1, are in
+// step again with those of the frame before from j, before j1: the
+// first op k within [resyncAhead] of i that, with the op after it,
+// matches ops k2 and k2+1 before. It finds them by where they show,
+// through an index of the frame before made once a frame, where
+// first needed. An op that shows nowhere anchors nothing.
+func (p *Painter) resync(i, i1, j, j1 int, same func(i, j int) bool) (k, k2 int, ok bool) {
+	if !p.indexed {
+		p.indexPrev()
+	}
+	for k = i; k < min(i+resyncAhead, i1-1); k++ {
+		r := p.shows[k]
+		if r.Empty() {
+			continue
+		}
+		head := p.lastShowing(r)
+		if head < 0 {
+			continue
+		}
+		// The chain runs from the last op that shows there back; the
+		// first at or after j is the one to step to.
+		best := -1
+		for n, at := 0, head; at >= int32(j) && n < resyncChain; n, at = n+1, p.showNext[at] {
+			if int(at)+1 < j1 && same(k, int(at)) && same(k+1, int(at)+1) {
+				best = int(at)
+			}
+		}
+		if best >= 0 {
+			return k, best, true
+		}
+	}
+	return 0, 0, false
+}
+
+// indexPrev indexes the ops of the frame before by where they show, for
+// resync, in an open table of twice their count: each slot holds the
+// last op at a place, plus one, and showNext the op before each at the
+// same place, or -1.
+func (p *Painter) indexPrev() {
+	p.indexed = true
+	n := 1
+	for n < 2*len(p.prevShows) {
+		n *= 2
+	}
+	p.showTable = slices.Grow(p.showTable[:0], n)[:n]
+	clear(p.showTable)
+	p.showNext = slices.Grow(p.showNext[:0], len(p.prevShows))[:len(p.prevShows)]
+	mask := uint64(n - 1)
+	for k, r := range p.prevShows {
+		p.showNext[k] = -1
+		if r.Empty() {
+			continue
+		}
+		for h := showHash(r) & mask; ; h = (h + 1) & mask {
+			at := p.showTable[h] - 1
+			if at < 0 {
+				p.showTable[h] = int32(k) + 1
+				break
+			}
+			if p.prevShows[at] == r {
+				p.showNext[k] = at
+				p.showTable[h] = int32(k) + 1
+				break
+			}
+		}
+	}
+}
+
+// lastShowing returns the last op of the frame before that shows at r,
+// or -1.
+func (p *Painter) lastShowing(r geom.Rect) int32 {
+	mask := uint64(len(p.showTable) - 1)
+	for h := showHash(r) & mask; ; h = (h + 1) & mask {
+		at := p.showTable[h] - 1
+		if at < 0 || p.prevShows[at] == r {
+			return at
+		}
+	}
+}
+
+// showHash mixes r's four numbers into one.
+func showHash(r geom.Rect) uint64 {
+	h := uint64(math.Float32bits(r.Min.X))<<32 | uint64(math.Float32bits(r.Min.Y))
+	h ^= (uint64(math.Float32bits(r.Max.X))<<32 | uint64(math.Float32bits(r.Max.Y))) * 0x9e3779b97f4a7c15
+	h ^= h >> 29
+	h *= 0xbf58476d1ce4e5b9
+	return h ^ h>>32
+}
+
+// showsOf is the damage op i of ops, of bounds shows, makes where it
+// came, went or changed: where it shows, but nothing for a layer's end.
+// The layer's start damages all it holds where the layer itself
+// changed, and each op inside it damages where it does; an end paired
+// with another op, as the ops of a frame's tail fall out of step,
+// would damage the whole layer, often the whole window.
+func (p *Painter) showsOf(ops []Op, shows []geom.Rect, i int) geom.Rect {
+	if _, ok := ops[i].(*LayerEndOp); ok {
+		return geom.Rect{}
+	}
+	return shows[i]
 }
 
 // sameOp reports whether two ops draw the same thing.
@@ -464,6 +711,7 @@ func (p *Painter) Layer(o LayerOpts) func() {
 	if o.Clip {
 		c := &Clip{outer: outer, proj: p.proj, rect: o.Bounds, radius: o.Radius, ellipse: o.Ellipse}
 		c.inv, c.ok = p.at().Invert()
+		c.window()
 		p.clip = c
 	}
 	return func() {
@@ -474,6 +722,7 @@ func (p *Painter) Layer(o LayerOpts) func() {
 		// draws there.
 		p.ops = append(p.ops, &LayerEndOp{})
 		p.bounds = append(p.bounds, p.bounds[at])
+		p.shows = append(p.shows, p.shows[at])
 		p.clip, p.proj = outer, outerProj
 	}
 }
@@ -529,6 +778,11 @@ type Clip struct {
 	rect    geom.Rect
 	radius  float32
 	ellipse bool
+	// win is the part of the window the clip and those round it let
+	// through, made once with the clip, and winOK says it could be told:
+	// nothing tilts, and every transform turns back.
+	win   geom.Rect
+	winOK bool
 }
 
 // Same reports whether c and o clip alike: the same shapes, in the same
@@ -558,6 +812,17 @@ func (c *Clip) Contains(p geom.Point) bool {
 		}
 	}
 	return true
+}
+
+// window sets c's part of the window, where it can be told.
+func (c *Clip) window() {
+	for o := c; o != nil; o = o.outer {
+		if o.proj != nil {
+			return
+		}
+	}
+	b, clipped := c.Bounds()
+	c.win, c.winOK = b, clipped && c.ok && !b.Empty()
 }
 
 // Bounds returns the rectangle around what c and every clip around it
@@ -893,10 +1158,25 @@ func (p *Painter) record(op Op, bounds geom.Rect) {
 	}
 	const aa = 1.5
 	w = geom.Rect{Min: geom.Pt(w.Min.X-aa, w.Min.Y-aa), Max: geom.Pt(w.Max.X+aa, w.Max.Y+aa)}
+	// What a clip cuts away draws nothing, and damages nothing: a long
+	// list scrolled in a clip, or a plane's far reaches, changing out
+	// of sight, damage only what shows.
+	s := w
+	if c := p.clip; c != nil && c.winOK {
+		s = geom.Rect{
+			Min: geom.Pt(max(w.Min.X, c.win.Min.X-aa), max(w.Min.Y, c.win.Min.Y-aa)),
+			Max: geom.Pt(min(w.Max.X, c.win.Max.X+aa), min(w.Max.Y, c.win.Max.Y+aa)),
+		}
+		if s.Empty() {
+			s = geom.Rect{}
+		}
+	}
 	p.ops = append(p.ops, op)
 	p.bounds = append(p.bounds, w)
+	p.shows = append(p.shows, s)
 	// Every layer open around the op draws where it does.
 	for _, i := range p.open {
 		p.bounds[i] = p.bounds[i].Union(w)
+		p.shows[i] = p.shows[i].Union(s)
 	}
 }

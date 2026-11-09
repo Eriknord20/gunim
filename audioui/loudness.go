@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
@@ -142,7 +143,7 @@ func (l *Loudness) Paint(p *paint.Painter, th *theme.Live, r geom.Rect, target f
 		c = LoudnessColor(th, l.Short-target)
 	}
 	fits(big, geom.Pt(x, y), c)
-	fits(Shaped("LUFS short-term", 10, false, false), geom.Pt(x+4+big.Advance, y+22), Faded(ink, 0.45))
+	fits(Shaped("LUFS short-term", 10, false, false), geom.Pt(x+4+big.Advance, y+22), paint.Faded(ink, 0.45))
 	y += 50
 	for _, row := range []struct {
 		name string
@@ -151,13 +152,13 @@ func (l *Loudness) Paint(p *paint.Painter, th *theme.Live, r geom.Rect, target f
 		if bars {
 			PaintLoudnessBar(p, th, geom.Rc(barX, y, barW, 10), row.v, target)
 		}
-		fits(Shaped(row.name, 11, true, false), geom.Pt(x, y-2), Faded(ink, 0.6))
+		fits(Shaped(row.name, 11, true, false), geom.Pt(x, y-2), paint.Faded(ink, 0.6))
 		if figures {
-			fits(Shaped(LUFSText(row.v), 11, false, true), geom.Pt(right-46, y-2), Faded(ink, 0.8))
+			fits(Shaped(LUFSText(row.v), 11, false, true), geom.Pt(right-46, y-2), paint.Faded(ink, 0.8))
 		}
 		y += 22
 	}
-	fits(Shaped("LRA", 9, true, false), geom.Pt(x, y), Faded(ink, 0.6))
+	fits(Shaped("LRA", 9, true, false), geom.Pt(x, y), paint.Faded(ink, 0.6))
 	if bars {
 		PaintRangeBar(p, th, geom.Rc(barX, y, barW, 10), l.Low, l.High, l.Ranged)
 	}
@@ -166,15 +167,15 @@ func (l *Loudness) Paint(p *paint.Painter, th *theme.Live, r geom.Rect, target f
 		words = fmt.Sprintf("%.1f LU", l.High-l.Low)
 	}
 	if figures {
-		fits(Shaped(words, 11, false, true), geom.Pt(right-46, y-2), Faded(ink, 0.8))
+		fits(Shaped(words, 11, false, true), geom.Pt(right-46, y-2), paint.Faded(ink, 0.8))
 	}
 	y += 22
 	tp := float32(DB(l.TruePeak()))
-	tpColor := Faded(ink, 0.8)
+	tpColor := paint.Faded(ink, 0.8)
 	if tp > -1 {
 		tpColor = over
 	}
-	fits(Shaped("TP", 11, true, false), geom.Pt(x, y), Faded(ink, 0.6))
+	fits(Shaped("TP", 11, true, false), geom.Pt(x, y), paint.Faded(ink, 0.6))
 	tpWords := "—"
 	if l.TruePeak() > 0 {
 		tpWords = fmt.Sprintf("%.1f dBTP", tp)
@@ -201,9 +202,9 @@ func LoudnessColor(th *theme.Live, off float32) color.NRGBA {
 	case a <= 0.5:
 		return sound
 	case a <= 1.5:
-		return Mix(sound, near, float32((a-0.5)/1))
+		return anim.MixColor(sound, near, float32((a-0.5)/1))
 	case a <= 3:
-		return Mix(near, over, float32((a-1.5)/1.5))
+		return anim.MixColor(near, over, float32((a-1.5)/1.5))
 	}
 	return over
 }
@@ -219,7 +220,7 @@ func barX(bar geom.Rect, l float32) float32 {
 // coloured by how far off target it is, the target marked.
 func PaintLoudnessBar(p *paint.Painter, th *theme.Live, bar geom.Rect, v, target float32) {
 	ink := widget.Ink.Get(th)
-	p.RRect(bar, 5, paint.Solid(Faded(ink, 0.08)))
+	p.RRect(bar, 5, paint.Solid(paint.Faded(ink, 0.08)))
 	if v > barLow {
 		fill := bar
 		fill.Max.X = barX(bar, v)
@@ -232,12 +233,12 @@ func PaintLoudnessBar(p *paint.Painter, th *theme.Live, bar geom.Rect, v, target
 // PaintRangeBar draws a loudness range, from low to high LUFS, as a
 // band on a loudness bar's scale, where ranged says there is one.
 func PaintRangeBar(p *paint.Painter, th *theme.Live, bar geom.Rect, low, high float32, ranged bool) {
-	p.RRect(bar, 5, paint.Solid(Faded(widget.Ink.Get(th), 0.08)))
+	p.RRect(bar, 5, paint.Solid(paint.Faded(widget.Ink.Get(th), 0.08)))
 	if !ranged {
 		return
 	}
 	spread := Spread.Get(th)
 	x0, x1 := barX(bar, low), barX(bar, high)
 	band := geom.Rc(x0, bar.Min.Y, max(x1-x0, 3), bar.Size().H)
-	p.ShadowRRect(band, 5, paint.Solid(Faded(spread, 0.85)), paint.Shadow{Blur: 8, Color: Faded(spread, 0.4)})
+	p.ShadowRRect(band, 5, paint.Solid(paint.Faded(spread, 0.85)), paint.Shadow{Blur: 8, Color: paint.Faded(spread, 0.4)})
 }

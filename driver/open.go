@@ -44,6 +44,9 @@ type TextInputter interface {
 // are still on their way to the node. A state with seq level with it
 // that differs from the copy is a change the node made, such as text
 // set by the program, and the input method starts over from it.
+//
+// The engine calls SetTextState as soon as it has handled the event that changed
+// the state, and for a change it makes on its own at the next frame.
 type TextStater interface {
 	SetTextState(s *input.TextState, seq uint64)
 }
@@ -87,6 +90,9 @@ type Permission int
 const (
 	// PermissionMusic reads the user's music and other sound files.
 	PermissionMusic Permission = iota + 1
+	// PermissionMicrophone records from the microphone, as package
+	// audio/speaker does through AAudio with Options.Record set.
+	PermissionMicrophone
 )
 
 // A Permitter is a [Driver] whose system has the user grant
@@ -194,6 +200,21 @@ type Recycler interface {
 	Show() error
 }
 
+// A Releaser is a [Window] that tells when it is done with a frame's
+// ops, apart from when the frame is shown: one token on Released for
+// each frame handed to Present, once it has drawn it, before it waits
+// for the screen, and before the frame's [Frame] on Presented. The
+// engine then builds the next frame while this one waits to be shown,
+// with at most two frames handed and not yet shown, and records into a
+// frame's buffers only once that frame is released. So Present takes a
+// second frame while the first is still on its way, and a frame being
+// built overlaps the one being drawn. A Window that is no Releaser lets
+// a frame's ops go when it shows the frame, and is handed one frame at
+// a time.
+type Releaser interface {
+	Released() <-chan struct{}
+}
+
 // WindowFocus is sent on [Window.Input] when the window gains or loses
 // the keyboard.
 type WindowFocus struct{ Focused bool }
@@ -202,6 +223,13 @@ type WindowFocus struct{ Focused bool }
 // be seen, or can be again: minimized and restored on a desktop, or its
 // application sent to the background and brought back on a phone.
 type WindowShown struct{ Shown bool }
+
+// FilesOpened is sent on [Window.Input] when another application hands
+// this one files to open. The engine turns it into
+// [github.com/marrasen/gunim/input.FilesOpened]. A driver keeps the
+// files that start the application for the first window that opens, so
+// they arrive at start as well as while it runs.
+type FilesOpened struct{ Paths []string }
 
 // WindowCovered is sent on [Window.Input] as the window goes out of
 // sight while it stays open, or comes back: covered whole by other
@@ -390,7 +418,8 @@ type Pinner interface {
 // A NativeWindow is a [Window] that can hand out the system's own window behind it, for a window of the system's to
 // sit inside it, as a plugin's editor does.
 type NativeWindow interface {
-	// NativeHandle returns the system's window: an HWND on Windows, and an X11 window's ID on Linux.
+	// NativeHandle returns the system's window: an HWND on Windows, an X11 window's ID on Linux, and the window's
+	// content view, an NSView, on macOS.
 	NativeHandle() (uintptr, error)
 }
 
