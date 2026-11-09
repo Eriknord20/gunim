@@ -49,8 +49,10 @@ type job struct {
 	password string
 	worked   func()
 	// outside says srcs name items another program put on the system
-	// clipboard as contents, which a copy reads from there.
+	// clipboard as contents, which a copy reads from there, where the
+	// clipboard is still as it was at seq.
 	outside bool
+	seq     uint32
 	// cut, where set, is the cut another program left on the system
 	// clipboard that a move moves.
 	cut *systemCut
@@ -146,7 +148,7 @@ type env struct {
 	pause *pauseGate
 	// outside runs fn with the files the system clipboard holds as
 	// contents, for a copy of them.
-	outside func(fn func(outsideFiles) error) error
+	outside func(seq uint32, fn func(outsideFiles) error) error
 }
 
 // pauseGate holds an operation while it is paused.
@@ -208,7 +210,7 @@ func runJob(ctx context.Context, j job, e env) (record, error) {
 	switch j.kind {
 	case OpCopy:
 		if j.outside {
-			err = r.pasteOutside(j.srcs, j.dest)
+			err = r.pasteOutside(j.srcs, j.seq, j.dest)
 			break
 		}
 		err = r.copyAll(j.srcs, j.dest)

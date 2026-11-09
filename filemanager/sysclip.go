@@ -31,11 +31,26 @@ type sysClip interface {
 	hasFiles() bool
 	// files reads the files the clipboard holds.
 	files() (systemFiles, error)
-	// outside runs fn with the files the clipboard holds as contents.
-	// fn must stay on the goroutine it is called on.
-	outside(fn func(outsideFiles) error) error
+	// outside runs fn with the files the clipboard holds as contents,
+	// where it is still as it was at seq, and fails with
+	// errClipboardChanged where it is not, or stops being so before a
+	// file is opened. fn must stay on the goroutine it is called on.
+	outside(seq uint32, fn func(outsideFiles) error) error
 	// empty empties the clipboard, where it is still as it was at seq.
 	empty(seq uint32)
+}
+
+// errClipboardChanged says the clipboard no longer holds what a paste
+// began with, which another copy, or a retry long after, would find.
+var errClipboardChanged = errors.New("the clipboard changed after the paste began, so what it holds now was not pasted")
+
+// stillHeld says whether a clipboard whose seq is now still holds what it
+// held at seq. A seq of 0 is a system that gives none, which cannot say.
+func stillHeld(seq, now uint32) error {
+	if seq != 0 && now != seq {
+		return errClipboardChanged
+	}
+	return nil
 }
 
 // systemClip is the system's clipboard; a test puts one of its own in.
@@ -244,7 +259,7 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 		return
 	}
 	if len(sf.paths) == 0 {
-		a.startOp(job{kind: OpCopy, srcs: sf.names, dest: here, outside: true},
+		a.startOp(job{kind: OpCopy, srcs: sf.names, dest: here, outside: true, seq: sf.seq},
 			"Copying "+whatIn(a.ps, sf.names)+" to "+a.ps.placeName(here))
 		return
 	}
@@ -277,6 +292,29 @@ func (a *app) pastedSystem(fsID, here string, sf systemFiles, err error) {
 		return
 	}
 	a.startOp(job{kind: OpCopy, srcs: srcs, dest: here}, "Copying "+a.what(srcs)+" to "+a.ps.placeName(here))
+}
+
+// sizedReader reads what r holds, a file called name the clipboard says
+// is size bytes long, and fails where it holds fewer or more: a stream
+// the program cut short, or memory short of what it said, would else be
+// written as the whole file, and replace one there.
+type sizedReader struct {
+	r          io.Reader
+	name       string
+	size, read int64
+}
+
+// Read implements [io.Reader].
+func (s *sizedReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	s.read += int64(n)
+	switch {
+	case s.read > s.size:
+		return n, fmt.Errorf("%s holds more than the %d bytes the clipboard says it does", s.name, s.size)
+	case errors.Is(err, io.EOF) && s.read < s.size:
+		return n, fmt.Errorf("%s ended after %d of its %d bytes", s.name, s.read, s.size)
+	}
+	return n, err
 }
 
 // outsideFacts says what it is, as the dialog that asks whether to
@@ -325,14 +363,14 @@ func (o outsideInfo) IsDir() bool { return o.it.dir }
 func (o outsideInfo) Sys() any { return nil }
 
 // pasteOutside copies the items called names, which another program put
-// on the system clipboard as contents, into dest. Each one that clashes
+// on the system clipboard as contents, as it was at seq, into dest. Each one that clashes
 // with an item there goes as the user says, as in a copy; in a folder
 // merged with one there, so does each item inside.
-func (r *runner) pasteOutside(names []string, dest string) error {
+func (r *runner) pasteOutside(names []string, seq uint32, dest string) error {
 	if r.env.outside == nil {
 		return errors.ErrUnsupported
 	}
-	return r.env.outside(func(of outsideFiles) error {
+	return r.env.outside(seq, func(of outsideFiles) error {
 		ps := r.env.fs.Paths()
 		items := spelledAlike(ps, of.items())
 		found := map[string]bool{}
@@ -491,7 +529,11 @@ func (p *outsidePaste) item(i int) error {
 		if err != nil {
 			return fmt.Errorf("reading %s from the clipboard: %w", it.name, err)
 		}
-		werr := r.writeFile(in, it.name, dst, outsideInfo{it})
+		var src io.Reader = in
+		if it.size >= 0 {
+			src = &sizedReader{r: in, name: it.name, size: it.size}
+		}
+		werr := r.writeFile(src, it.name, dst, outsideInfo{it})
 		if err := errors.Join(werr, in.Close()); err != nil {
 			return err
 		}

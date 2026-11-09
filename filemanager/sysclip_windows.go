@@ -30,6 +30,7 @@ var (
 	procGlobalLock                 = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock               = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize                 = kernel32.NewProc("GlobalSize")
+	procSetLastError               = kernel32.NewProc("SetLastError")
 	procOleInitialize              = ole32.NewProc("OleInitialize")
 	procOleUninitialize            = ole32.NewProc("OleUninitialize")
 	procOleGetClipboard            = ole32.NewProc("OleGetClipboard")
@@ -48,6 +49,11 @@ const (
 
 	vtGetData    = 3
 	vtStreamRead = 3
+
+	// streamPiece is the most asked of a stream at once. Stop is heard
+	// between reads, and Remote Desktop fetches what is asked as it is
+	// asked, so on a slow link a large read keeps a paste from stopping.
+	streamPiece = 64 << 10
 )
 
 // The formats Windows names rather than numbers: the list of files held
@@ -113,15 +119,23 @@ func openClipboard() error {
 
 func closeClipboard() { _, _, _ = procCloseClipboard.Call() }
 
-// globalBytes copies what the global memory h holds.
-func globalBytes(h uintptr) []byte {
-	p, _, _ := procGlobalLock.Call(h)
+// globalBytes copies what the global memory h holds. Memory that cannot
+// be locked, or whose size cannot be read, is an error: no bytes would
+// read as an empty file.
+func globalBytes(h uintptr) ([]byte, error) {
+	p, _, err := procGlobalLock.Call(h)
 	if p == 0 {
-		return nil
+		return nil, fmt.Errorf("reading the memory the program handed over: %w", err)
 	}
 	defer func() { _, _, _ = procGlobalUnlock.Call(h) }()
-	n, _, _ := procGlobalSize.Call(h)
-	return bytes.Clone(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), n))
+	// GlobalSize says 0 both for memory that holds nothing and when it
+	// fails, which only the last error tells apart.
+	_, _, _ = procSetLastError.Call(0)
+	n, _, err := procGlobalSize.Call(h)
+	if n == 0 && !errors.Is(err, windows.ERROR_SUCCESS) {
+		return nil, fmt.Errorf("reading the size of the memory the program handed over: %w", err)
+	}
+	return bytes.Clone(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), n)), nil
 }
 
 func (c osClip) files() (sf systemFiles, err error) {
@@ -144,7 +158,11 @@ func (c osClip) files() (sf systemFiles, err error) {
 			sf.paths = append(sf.paths, windows.UTF16ToString(buf))
 		}
 		if h, _, _ := procGetClipboardData.Call(clipFormats().effect); h != 0 {
-			if b := globalBytes(h); len(b) >= 4 {
+			b, err := globalBytes(h)
+			if err != nil {
+				return sf, fmt.Errorf("reading whether the files were cut: %w", err)
+			}
+			if len(b) >= 4 {
 				effect := binary.LittleEndian.Uint32(b)
 				sf.cut = effect&dropEffectMove != 0 && effect&dropEffectCopy == 0
 			}
@@ -155,7 +173,11 @@ func (c osClip) files() (sf systemFiles, err error) {
 	if h == 0 {
 		return sf, nil
 	}
-	items, err := fileDescriptors(globalBytes(h))
+	b, err := globalBytes(h)
+	if err != nil {
+		return sf, fmt.Errorf("reading the list of files on the clipboard: %w", err)
+	}
+	items, err := fileDescriptors(b)
 	if err != nil {
 		return sf, err
 	}
@@ -178,7 +200,7 @@ func (c osClip) empty(seq uint32) {
 // outside reads the clipboard through OLE, which alone hands over each
 // file held as contents, by its index. The data object it gives works
 // only on the thread that took it, so fn runs on that thread.
-func (osClip) outside(fn func(outsideFiles) error) error {
+func (c osClip) outside(seq uint32, fn func(outsideFiles) error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if hr, _, _ := procOleInitialize.Call(0); failed(uint32(hr)) {
@@ -190,17 +212,23 @@ func (osClip) outside(fn func(outsideFiles) error) error {
 		return fmt.Errorf("reading the clipboard: HRESULT %#x", uint32(hr))
 	}
 	defer release(obj)
+	if err := stillHeld(seq, c.seq()); err != nil {
+		return err
+	}
 	m, err := getData(obj, clipFormats().descriptor, -1, tymedHGlobal)
 	if err != nil {
 		return fmt.Errorf("reading the list of files on the clipboard: %w", err)
 	}
-	b := globalBytes(m.handle)
+	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
+	if err != nil {
+		return fmt.Errorf("reading the list of files on the clipboard: %w", err)
+	}
 	items, err := fileDescriptors(b)
 	if err != nil {
 		return err
 	}
-	return fn(&oleFiles{obj: obj, list: items})
+	return fn(&oleFiles{c: c, seq: seq, obj: obj, list: items})
 }
 
 // getData asks the data object obj for format cf, the item of index i in
@@ -221,8 +249,12 @@ func getData(obj unsafe.Pointer, cf uintptr, i int32, tymed uint32) (stgMedium, 
 func releaseMedium(m *stgMedium) { _, _, _ = procReleaseStgMedium.Call(uintptr(unsafe.Pointer(m))) }
 
 // oleFiles is the files the clipboard's data object obj holds as
-// contents, described by list.
+// contents, described by list, while c is still as it was at seq: the
+// object reads what the clipboard holds now, not what it held when it
+// was taken.
 type oleFiles struct {
+	c    osClip
+	seq  uint32
 	obj  unsafe.Pointer
 	list []outsideItem
 }
@@ -230,6 +262,9 @@ type oleFiles struct {
 func (o *oleFiles) items() []outsideItem { return o.list }
 
 func (o *oleFiles) open(i int) (io.ReadCloser, error) {
+	if err := stillHeld(o.seq, o.c.seq()); err != nil {
+		return nil, err
+	}
 	m, err := getData(o.obj, clipFormats().contents, int32(i), tymedIStream|tymedHGlobal)
 	if err != nil {
 		return nil, err
@@ -238,8 +273,11 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 		// The medium's handle is the stream itself.
 		return &oleStream{m: m, stream: *(*unsafe.Pointer)(unsafe.Pointer(&m.handle))}, nil
 	}
-	b := globalBytes(m.handle)
+	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
+	if err != nil {
+		return nil, err
+	}
 	if size := o.list[i].size; size >= 0 && size < int64(len(b)) {
 		// Global memory may run past what it holds.
 		b = b[:size]
@@ -261,7 +299,7 @@ func (s *oleStream) Read(p []byte) (int, error) {
 	}
 	var n uint32
 	hr := comCall(s.stream, vtStreamRead, uintptr(unsafe.Pointer(&p[0])),
-		uintptr(min(len(p), 1<<30)), uintptr(unsafe.Pointer(&n)))
+		uintptr(min(len(p), streamPiece)), uintptr(unsafe.Pointer(&n)))
 	if failed(hr) {
 		return int(n), fmt.Errorf("HRESULT %#x", hr)
 	}

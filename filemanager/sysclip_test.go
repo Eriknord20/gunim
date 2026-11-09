@@ -90,9 +90,12 @@ func (c *fakeClip) files() (systemFiles, error) {
 	return sf, nil
 }
 
-func (c *fakeClip) outside(fn func(outsideFiles) error) error {
+func (c *fakeClip) outside(seq uint32, fn func(outsideFiles) error) error {
+	if err := stillHeld(seq, c.seq()); err != nil {
+		return err
+	}
 	c.mu.Lock()
-	of := fakeFiles{list: slices.Clone(c.list), data: c.data, broken: c.broken}
+	of := fakeFiles{c: c, seq: seq, list: slices.Clone(c.list), data: c.data, broken: c.broken}
 	c.mu.Unlock()
 	return fn(of)
 }
@@ -107,6 +110,8 @@ func (c *fakeClip) empty(seq uint32) {
 }
 
 type fakeFiles struct {
+	c      *fakeClip
+	seq    uint32
 	list   []outsideItem
 	data   map[string]string
 	broken map[string]bool
@@ -115,6 +120,9 @@ type fakeFiles struct {
 func (f fakeFiles) items() []outsideItem { return f.list }
 
 func (f fakeFiles) open(i int) (io.ReadCloser, error) {
+	if err := stillHeld(f.seq, f.c.seq()); err != nil {
+		return nil, err
+	}
 	if f.broken[f.list[i].name] {
 		return nil, errors.New("the stream broke")
 	}
@@ -1138,5 +1146,79 @@ func TestAnAnswerToAClashAskedAboutAloneHoldsForNoOther(t *testing.T) {
 	h.until("the clash about y.txt is asked", func() bool { return len(h.a.ops.dialogs) == 1 })
 	if ask, ok := h.a.ops.dialogs[0].state.(ClashAsk); !ok || ask.Name != "y.txt" {
 		t.Fatalf("the dialog asks %+v", h.a.ops.dialogs[0].state)
+	}
+}
+
+func TestAFileWhoseLengthIsNotTheOneTheClipboardSaysIsNotWritten(t *testing.T) {
+	for _, tc := range []struct {
+		name, holds string
+		size        int64
+		says        string
+	}{
+		{"cut short", "abc", 10, "ended after 3 of its 10 bytes"},
+		{"too long", "abc", 2, "holds more than the 2 bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := useClip(t)
+			h := newHarness(t, "a.txt")
+			h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+			c.holdContents([]outsideItem{{name: "a.txt", size: tc.size}}, map[string]string{"a.txt": tc.holds})
+			h.do(Command{Name: CmdPaste})
+			// Replacing the file there, so a short file would take its place.
+			h.until("the clash is asked about", func() bool { return len(h.a.ops.dialogs) == 1 })
+			ask := h.a.ops.dialogs[0].state.(ClashAsk)
+			h.answer(ClashAnswered{Op: ask.Op, Choice: ChoiceReplace})
+			h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+			if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !strings.Contains(e.Detail+e.Body, tc.says) {
+				t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+			}
+			if contents(t, filepath.Join(h.dir, "a.txt")) != "a.txt" {
+				t.Fatal("the file there was replaced by one of the wrong length")
+			}
+		})
+	}
+}
+
+func TestARetryAfterTheClipboardChangedPastesNothingNew(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{{name: "report.txt", size: 3}}, map[string]string{"report.txt": "old"})
+	c.breakFiles("report.txt")
+	h.do(Command{Name: CmdPaste})
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !e.Retry {
+		t.Fatalf("the failure shows %+v", h.a.ops.dialogs[0].state)
+	}
+	// Another file of the same name is copied before the user retries.
+	c.holdContents([]outsideItem{{name: "report.txt", size: 3}}, map[string]string{"report.txt": "new"})
+	h.answer(DialogClosed{Retry: true})
+	h.until("the retry fails", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !strings.Contains(e.Detail+e.Body, "clipboard changed") {
+		t.Fatalf("the retry shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("report.txt") {
+		t.Fatal("the retry pasted what the clipboard holds now")
+	}
+}
+
+func TestAPasteOfWhatTheClipboardNoLongerHoldsPastesNothing(t *testing.T) {
+	c := useClip(t)
+	h := newHarness(t, "keep.txt")
+	h.until("the rows arrive", func() bool { return len(h.shown()) == 1 })
+	c.holdContents([]outsideItem{{name: "report.txt", size: 3}}, map[string]string{"report.txt": "old"})
+	read, err := c.files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another copy lands between reading the list and pasting the files.
+	c.holdContents([]outsideItem{{name: "report.txt", size: 3}}, map[string]string{"report.txt": "new"})
+	h.a.pastedSystem(h.a.fs.ID(), h.dir, read, nil)
+	h.until("the failure shows", func() bool { return len(h.a.ops.dialogs) == 1 })
+	if e, ok := h.a.ops.dialogs[0].state.(ErrorBox); !ok || !strings.Contains(e.Detail+e.Body, "clipboard changed") {
+		t.Fatalf("the paste shows %+v", h.a.ops.dialogs[0].state)
+	}
+	if h.exists("report.txt") {
+		t.Fatal("the paste wrote what the clipboard holds now")
 	}
 }

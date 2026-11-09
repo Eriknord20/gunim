@@ -34,7 +34,7 @@ func TestTheSystemClipboardHandsOverItsFiles(t *testing.T) {
 	if len(sf.paths) > 0 {
 		return
 	}
-	err = c.outside(func(of outsideFiles) error {
+	err = c.outside(sf.seq, func(of outsideFiles) error {
 		for i, it := range of.items() {
 			if it.dir {
 				t.Logf("%d: folder %s, changed %v", i, it.name, it.mod)
@@ -60,7 +60,7 @@ func TestTheSystemClipboardHandsOverItsFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	rec, err := runJob(context.Background(), job{kind: OpCopy, srcs: sf.names, dest: dest, outside: true},
+	rec, err := runJob(context.Background(), job{kind: OpCopy, srcs: sf.names, dest: dest, outside: true, seq: sf.seq},
 		env{fs: LocalFS(), outside: c.outside})
 	if err != nil {
 		t.Fatal(err)
@@ -105,5 +105,26 @@ func TestAStreamCountsWhatItReadsWhereTheStackMoves(t *testing.T) {
 	buf := make([]byte, 4096)
 	if n, err := s.Read(buf); n != len(buf) || err != nil {
 		t.Fatalf("the stream filled %d bytes, and Read says %d, %v", len(buf), n, err)
+	}
+}
+
+func TestMemoryThatCannotBeReadIsAnError(t *testing.T) {
+	if b, err := globalBytes(0); err == nil {
+		t.Fatalf("memory that cannot be locked reads as %q", b)
+	}
+}
+
+func TestAStreamIsReadInPiecesStopCanComeBetween(t *testing.T) {
+	var asked uintptr
+	s := &oleStream{stream: newFakeCOM(func(_, _, size, read uintptr) uintptr {
+		asked = max(asked, size)
+		*(*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&read))) = uint32(size)
+		return 0
+	})}
+	if _, err := s.Read(make([]byte, 4<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if asked > streamPiece {
+		t.Fatalf("the stream was asked for %d bytes at once", asked)
 	}
 }
