@@ -146,9 +146,20 @@ func inBin(kept string) error {
 // restoreKept moves the item the Recycle Bin keeps at kept to the path to,
 // in one step that fails where anything is at to, so nothing that turns
 // up there is replaced, and then removes its record. The bin keeps an
-// item on the volume it came from, so the move is a rename.
+// item on the volume it came from, so the move is a rename; where to is on
+// another volume now, as through a folder since made a link to another
+// drive, it refuses, and the folders it made for to go again.
 func restoreKept(kept, to string) error {
+	made := missingDirs(filepath.Dir(to))
+	unmake := func() {
+		for _, dir := range made {
+			// Only an empty folder goes, so one something was put in
+			// since stays, and that is no failure of the restore.
+			_ = os.Remove(dir)
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		unmake()
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
 	from, err := windows.UTF16PtrFromString(kept)
@@ -159,10 +170,16 @@ func restoreKept(kept, to string) error {
 	if err != nil {
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
-	// No MOVEFILE_REPLACE_EXISTING: the move fails where something is at to.
-	if err := windows.MoveFileEx(from, dest, windows.MOVEFILE_COPY_ALLOWED); err != nil {
-		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS) {
+	// No MOVEFILE_REPLACE_EXISTING: the move fails where something is at
+	// to. No MOVEFILE_COPY_ALLOWED either: across volumes it would copy and
+	// then delete, which can leave the item at both.
+	if err := windows.MoveFileEx(from, dest, 0); err != nil {
+		unmake()
+		switch {
+		case errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, windows.ERROR_FILE_EXISTS):
 			return fmt.Errorf("%s exists again; move it away to restore the one in the Recycle Bin", to)
+		case errors.Is(err, windows.ERROR_NOT_SAME_DEVICE):
+			return fmt.Errorf("%s is on another drive than the Recycle Bin that keeps it, which a folder on the way may now link to; restore it from the Recycle Bin in File Explorer, which can copy it across", to)
 		}
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
@@ -171,6 +188,23 @@ func restoreKept(kept, to string) error {
 		return fmt.Errorf("restored %s, but %w", to, err)
 	}
 	return nil
+}
+
+// missingDirs are the folders of dir and above it that are not there,
+// deepest first.
+func missingDirs(dir string) []string {
+	var out []string
+	for {
+		if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+			return out
+		}
+		out = append(out, dir)
+		up := filepath.Dir(dir)
+		if up == dir {
+			return out
+		}
+		dir = up
+	}
 }
 
 // recordOf is the record the Recycle Bin keeps of the item it keeps at

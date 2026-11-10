@@ -155,7 +155,9 @@ func (t xdgTrash) Restore(original, trashed string, _ time.Time, to string) erro
 		}
 		return fmt.Errorf("restoring %s: %w", to, err)
 	}
-	if err := fsys.Remove(record); err != nil {
+	// A record gone already went with a purge of the item in the moment
+	// between, which the restore was quicker than.
+	if err := fsys.Remove(record); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("restored %s, but removing its trash record failed: %w", to, err)
 	}
 	return nil

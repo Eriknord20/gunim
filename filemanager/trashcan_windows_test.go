@@ -5,8 +5,11 @@ package filemanager
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,4 +203,46 @@ func TestTheRecycleBinActsOnlyOnTheItemListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	noRecord(t, listed)
+}
+
+func TestARestoreThatFailsTakesAwayTheFoldersItMade(t *testing.T) {
+	root := t.TempDir()
+	to := filepath.Join(root, "new", "deeper", "a.txt")
+	if err := restoreKept(filepath.Join(root, "$RGONE.txt"), to); err == nil {
+		t.Fatal("restoring an item that is not there worked")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "new")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the folder made for the restore stayed: %v", err)
+	}
+}
+
+func TestARestoreAcrossDrivesSaysWhereToRestoreIt(t *testing.T) {
+	here, err := os.MkdirTemp(".", "across")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(here) })
+	there := t.TempDir()
+	abs, err := filepath.Abs(here)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.EqualFold(filepath.VolumeName(abs), filepath.VolumeName(there)) {
+		t.Skip("the package and the temporary folder are on one drive")
+	}
+	kept := filepath.Join(abs, "$RX.txt")
+	if err := os.WriteFile(kept, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(there, "made", "a.txt")
+	err = restoreKept(kept, to)
+	if err == nil || !strings.Contains(err.Error(), "File Explorer") {
+		t.Fatalf("restoring across drives said %v", err)
+	}
+	if _, err := os.Lstat(kept); err != nil {
+		t.Fatalf("the item left the bin: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(there, "made")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the folder made for the restore stayed: %v", err)
+	}
 }

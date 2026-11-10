@@ -144,14 +144,18 @@ type wordsLabel struct{ *widget.Label }
 // Covers implements [gunim.Shaped]: none of it.
 func (*wordsLabel) Covers(geom.Point) bool { return false }
 
-// fader fades a label's text as it changes: a new text comes in from
-// nothing, and a text that goes fades out where it was.
+// fader fades a label's text as it changes: a text that goes fades out
+// where it was, and only then does the next come in, from nothing.
 type fader struct {
 	label *widget.Label
 	in    *anim.Float
-	// to is the text it shows or is fading to, and ink its colour.
+	// to is the text it shows or is on its way to, and ink its colour.
 	to  string
 	ink theme.Token[color.NRGBA]
+	// swap says the label still shows the words before to, fading out,
+	// and at says where the label paints in the page, for its layer.
+	swap bool
+	at   geom.Rect
 }
 
 func newFader(l *widget.Label) *fader { return &fader{label: l, in: anim.NewFloat(0), ink: l.Color} }
@@ -164,20 +168,40 @@ func (f *fader) show(words string, ink theme.Token[color.NRGBA], th *theme.Live)
 	}
 	f.to, f.ink = words, ink
 	if th == nil {
+		f.swap = false
 		f.label.Text, f.label.Color = words, ink
 		f.in.Jump(map[bool]float32{false: 0, true: 1}[words != ""])
 		return
 	}
+	// Retarget, as words that go slowly can be cut short by others, and
+	// those going quickly for others can be let go slowly after all.
 	if words == "" {
-		f.in.Animate(0, widget.Settle.Get(th))
+		f.swap = false
+		f.in.Retarget(0, widget.Settle.Get(th))
 		return
 	}
-	if words != f.label.Text {
-		// Other words come in from nothing; the same ones, back while
-		// they fade, go on from where they are.
-		f.in.Jump(0)
+	if f.alpha() > 0 && f.label.Text != "" && (f.label.Text != words || f.label.Color.Key() != ink.Key()) {
+		// Other words, or the same in another ink, showing go first; next
+		// takes their place.
+		f.swap = true
+		f.in.Retarget(0, widget.Quick.Get(th))
+		return
 	}
+	// Nothing showing, or the same words back while they fade: on from
+	// where it is.
+	f.swap = false
 	f.label.Text, f.label.Color = words, ink
+	f.in.Retarget(1, widget.Quick.Get(th))
+}
+
+// next brings in the words to, once those before them have faded out.
+// The page asks it each layout, which every frame of a fade has.
+func (f *fader) next(th *theme.Live) {
+	if !f.swap || f.alpha() > 0 {
+		return
+	}
+	f.swap = false
+	f.label.Text, f.label.Color = f.to, f.ink
 	f.in.Animate(1, widget.Quick.Get(th))
 }
 
@@ -533,6 +557,9 @@ const (
 // buttons at its right, the grid under it, and the foot along the bottom.
 // The message, when there is one, goes in the middle of the grid.
 func (pg *trashPage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
+	for _, fade := range []*fader{pg.msgFade, pg.footFade, pg.titleFade} {
+		fade.next(f.Theme)
+	}
 	box := c.Max
 	w := max(0, box.W-2*usageMargin)
 	right := box.W - usageMargin
@@ -570,19 +597,34 @@ func (pg *trashPage) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 				pg.titleFade.show(pg.heading, widget.Ink, th)
 			}
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(room, 1), 0)})
-			k.Place(geom.Pt(left, (trashHeadH-s.H)/2))
+			at := geom.Pt(left, (trashHeadH-s.H)/2)
+			k.Place(at)
+			pg.titleFade.at = inkOf(pg.title.Label, f, at, s)
 		case gunim.Node(pg.menu):
 			k.Layout(gunim.Tight(geom.Sz(w, bodyH)))
 			k.Place(geom.Pt(usageMargin, bodyTop))
 		case gunim.Node(pg.msg):
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(max(0, w-40), bodyH)})
-			k.Place(geom.Pt(usageMargin+(w-s.W)/2, bodyTop+min(bodyH/2, 120)))
+			at := geom.Pt(usageMargin+(w-s.W)/2, bodyTop+min(bodyH/2, 120))
+			k.Place(at)
+			pg.msgFade.at = inkOf(pg.msg.Label, f, at, s)
 		case gunim.Node(pg.foot):
 			s := k.Layout(gunim.Constraints{Max: geom.Sz(w, trashFootH)})
-			k.Place(geom.Pt(usageMargin, box.H-trashFootH+(trashFootH-s.H)/2))
+			at := geom.Pt(usageMargin, box.H-trashFootH+(trashFootH-s.H)/2)
+			k.Place(at)
+			pg.footFade.at = inkOf(pg.foot.Label, f, at, s)
 		}
 	}
 	return box
+}
+
+// inkOf is where label, placed at the point at and laid out at s,
+// paints: all of its lines, which run on below s where the page has less
+// height for them. A fade's layer smaller than that would leave the lines
+// below it drawn at the alpha they first had.
+func inkOf(label *widget.Label, f gunim.Frame, at geom.Point, s geom.Size) geom.Rect {
+	full := label.Layout(gunim.Constraints{Max: geom.Sz(s.W, 0)}, f, gunim.Children{})
+	return geom.Rect{Min: at, Max: at.Add(geom.Sz(s.W, max(s.H, full.H)).Point())}
 }
 
 // Paint implements [gunim.Node]: the page over the browser, rising into
@@ -608,7 +650,8 @@ func (pg *trashPage) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids 
 			continue
 		}
 		if a := fade.alpha(); a > 0 {
-			done := p.Layer(paint.LayerOpts{Bounds: r, Opacity: a})
+			// A layer the size of the words, not of the page.
+			done := p.Layer(paint.LayerOpts{Bounds: fade.at, Opacity: a})
 			k.Paint(p)
 			done()
 		}

@@ -141,8 +141,10 @@ func TestTheTrashPageRestoresAndDeletes(t *testing.T) {
 	if h.exists("b.txt") {
 		t.Fatal("the deleted file came back")
 	}
-	if !pg.empty.Disabled || pg.msg.Text != "The trash is empty." {
-		t.Errorf("an empty trash says %q, with Empty disabled %v", pg.msg.Text, pg.empty.Disabled)
+	// The words before fade out first.
+	h.until("the page says the trash is empty", func() bool { return pg.msg.Text == "The trash is empty." })
+	if !pg.empty.Disabled {
+		t.Error("Empty can be clicked on an empty trash")
 	}
 }
 
@@ -597,5 +599,79 @@ func TestAReadWhileARowLeavesEndsItsLeaving(t *testing.T) {
 	h.until("the trash is read again", func() bool { return pg.state.RowsGen != gen && !pg.state.Reading })
 	if n := pg.grid.Leaving(); n != 0 {
 		t.Fatalf("%d rows still leave over the rows read again", n)
+	}
+}
+
+func TestOtherWordsWaitForTheWordsBeforeToFadeOut(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt"}, "a.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	show := func(words string) {
+		h.ui(func(_ *browser, u *gunim.UI) { pg.footFade.show(words, Faint, u.Theme()) })
+	}
+	show("one")
+	h.until("one shows", func() bool { return pg.foot.Text == "one" && pg.footFade.alpha() == 1 })
+	show("two")
+	h.frames(2)
+	if pg.foot.Text != "one" || pg.footFade.alpha() >= 1 {
+		t.Fatalf("a moment after two came, the foot shows %q at %v, not one fading out", pg.foot.Text, pg.footFade.alpha())
+	}
+	h.until("two takes one's place", func() bool { return pg.foot.Text == "two" })
+	if a := pg.footFade.alpha(); a > 0.5 {
+		t.Fatalf("two came in at %v, not from nothing", a)
+	}
+	h.until("two shows", func() bool { return pg.footFade.alpha() == 1 })
+}
+
+func TestTheSameWordsBackWhileTheyFadeGoOnFromWhereTheyAre(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt"}, "a.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	show := func(words string) {
+		h.ui(func(_ *browser, u *gunim.UI) { pg.footFade.show(words, Faint, u.Theme()) })
+	}
+	show("one")
+	h.until("one shows", func() bool { return pg.foot.Text == "one" && pg.footFade.alpha() == 1 })
+	show("two")
+	h.frames(2)
+	show("one")
+	for range 60 {
+		if pg.foot.Text != "one" {
+			t.Fatalf("with one back before two came in, the foot shows %q", pg.foot.Text)
+		}
+		h.frames(1)
+	}
+	if a := pg.footFade.alpha(); a != 1 {
+		t.Fatalf("one, back, stands at %v", a)
+	}
+}
+
+func TestWordsInAnotherInkFadeOutAndBackIn(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt"}, "a.txt")
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.ui(func(_ *browser, u *gunim.UI) { pg.footFade.show("one", Faint, u.Theme()) })
+	h.until("one shows", func() bool { return pg.foot.Text == "one" && pg.footFade.alpha() == 1 })
+	h.ui(func(_ *browser, u *gunim.UI) { pg.footFade.show("one", ErrorInk, u.Theme()) })
+	h.frames(2)
+	if pg.foot.Color.Key() != Faint.Key() || pg.footFade.alpha() >= 1 {
+		t.Fatalf("a moment after its ink changed, one is in %v at %v, not fading out as it was", pg.foot.Color.Key(), pg.footFade.alpha())
+	}
+	h.until("one comes back in its new ink", func() bool { return pg.foot.Color.Key() == ErrorInk.Key() })
+	h.until("one shows again", func() bool { return pg.footFade.alpha() == 1 })
+}
+
+func TestAFadesLayerHoldsAllTheLinesOfAMessageTooTallForItsBox(t *testing.T) {
+	h := newTrashHarness(t, nil)
+	h.w.Offscreen().Resize(geom.Sz(1100, 100))
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.until("the page says the trash is empty", func() bool {
+		return pg.msg.Text == "The trash is empty." && pg.msgFade.alpha() == 1
+	})
+	box := h.bounds(func(*browser) gunim.Node { return pg.msg })
+	at := pg.msgFade.at
+	if at.Max.Y-at.Min.Y <= box.Max.Y-box.Min.Y {
+		t.Fatalf("the message's layer is %v high, its box %v: the page left it its whole height, so this shows nothing",
+			at.Max.Y-at.Min.Y, box.Max.Y-box.Min.Y)
+	}
+	if at.Max.X-at.Min.X != box.Max.X-box.Min.X {
+		t.Errorf("the message's layer is %v wide, its box %v", at.Max.X-at.Min.X, box.Max.X-box.Min.X)
 	}
 }
