@@ -289,6 +289,7 @@ func (w *Window) MakeChromeless(native bool) *driver.OffscreenFrame {
 	if o == nil {
 		return nil
 	}
+	defer w.drive()()
 	fr := o.MakeChromeless(native)
 	w.ui.startChrome(nil)
 	return fr

@@ -307,6 +307,7 @@ func (c Client) Access(ctx context.Context) (*access.Tree, error) {
 // [Client.Access], and must be called from the goroutine calling Frame:
 // never on a window its loop runs, which answers [Client.Access].
 func (w *Window) Access() *access.Tree {
+	defer w.drive()()
 	w.ui.paintOwed()
 	return w.ui.clientAccess()
 }

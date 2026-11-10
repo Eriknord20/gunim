@@ -532,6 +532,14 @@ type Window struct {
 	uiTimes uiTimes
 
 	closeOnce sync.Once
+	// framing is held by each call that drives an offscreen window, as [Window.Frame] and
+	// [Window.Input], and by Close as it closes the popups. popupsOwed says a Close has yet to close
+	// them, as such a call was in flight.
+	framing    sync.Mutex
+	popupsOwed atomic.Bool
+	// driveDepth counts the calls driving the window that are in flight, one inside another. Only the
+	// goroutine that drives the window reads or writes it.
+	driveDepth int
 	// clock is the synthetic frame time used by [Window.Frame], so an
 	// offscreen window steps at whatever rate the caller chooses.
 	clock time.Time
@@ -1064,6 +1072,7 @@ func (w *Window) Offscreen() *driver.OffscreenWindow {
 // holding an offscreen window can step time. Commands queued through
 // [Client] are applied first, the same way the loop applies them.
 func (w *Window) Frame(delta time.Duration) {
+	defer w.drive()()
 	// What comes before the frame lays out may go by where the last
 	// frame drew things, as a timer asking where a node is: each kind of
 	// work paints a frame owed as it is taken, before it runs.
@@ -1123,13 +1132,20 @@ func (w *Window) PaintWhenLooked(on bool) {
 	if o == nil {
 		return
 	}
+	defer w.drive()()
 	w.ui.lazy = on
 	if !on {
 		w.ui.paintOwed()
 		o.OnLook(nil)
 		return
 	}
-	o.OnLook(w.ui.paintOwed)
+	o.OnLook(w.paintOnLook)
+}
+
+// paintOnLook paints the frame owed before a read of what the offscreen window drew.
+func (w *Window) paintOnLook() {
+	defer w.drive()()
+	w.ui.paintOwed()
 }
 
 // TimeByFrames has a window from [NewOffscreen] keep time by its frames
@@ -1148,6 +1164,7 @@ func (w *Window) TimeByFrames(on bool) {
 	if w.Offscreen() == nil {
 		return
 	}
+	defer w.drive()()
 	w.ui.byFrames = on
 	if w.ui.now.IsZero() {
 		// Before its first frame, the window's time is where its
@@ -1160,7 +1177,10 @@ func (w *Window) TimeByFrames(on bool) {
 // looked at left it unpainted; see [Window.PaintWhenLooked]. It is for a
 // test that reads what the window drew another way, as a chromeless
 // window's title bar. It must be called from the goroutine calling Frame.
-func (w *Window) Paint() { w.ui.paintOwed() }
+func (w *Window) Paint() {
+	defer w.drive()()
+	w.ui.paintOwed()
+}
 
 // Input hands the window a platform event, as a driver would: a pointer
 // move, a click, a key, the close button as [driver.CloseAsked]. It is
@@ -1171,7 +1191,10 @@ func (w *Window) Paint() { w.ui.paintOwed() }
 // this window alone, as a platform's does: a click where a popup shows
 // lands in the window under it. [Window.Inject] hands an event to an
 // open popup where it lands, as a person's click does.
-func (w *Window) Input(ev any) { w.platform(ev) }
+func (w *Window) Input(ev any) {
+	defer w.drive()()
+	w.platform(ev)
+}
 
 // platform handles one of the platform's events. A window out of sight
 // draws no frames, and a frame is where the application's state reaches
@@ -1228,16 +1251,47 @@ func (w *Window) RefreshRate() float64 { return w.dw.RefreshRate() }
 
 // Close shuts the window down at once and drops any queued work. For an
 // animated goodbye, unmount the root's views first and call Close once
-// they have gone. An offscreen window, which has no loop of its own,
-// closes its popups in Close, so call it where the window is driven.
+// they have gone. It is safe from any goroutine. An offscreen window,
+// which has no loop of its own, closes its popups in Close, or at the end
+// of the call driving it that is in flight, as [Window.Frame] or
+// [Window.Input].
 func (w *Window) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
 		if w.app == nil {
 			// An offscreen window has no loop to close its popups.
-			w.ui.closeAllPopups()
+			w.popupsOwed.Store(true)
+			w.closeOwedPopups()
 		}
 	})
+}
+
+// drive locks framing for a call that drives an offscreen window, as [Window.Frame] and [Window.Input] are, and
+// returns what ends the call: it unlocks, then closes the popups a Close left meanwhile.
+// A call made inside another, as a view's Input inside a frame, only counts.
+func (w *Window) drive() (end func()) {
+	if w.driveDepth > 0 {
+		w.driveDepth++
+		return func() { w.driveDepth-- }
+	}
+	w.framing.Lock()
+	w.driveDepth = 1
+	return func() {
+		w.driveDepth = 0
+		w.framing.Unlock()
+		w.closeOwedPopups()
+	}
+}
+
+// closeOwedPopups closes the popups a Close left, unless a call that drives the window is in flight, which closes them
+// as it ends.
+func (w *Window) closeOwedPopups() {
+	for w.popupsOwed.Load() && w.framing.TryLock() {
+		if w.popupsOwed.Swap(false) {
+			w.ui.closeAllPopups()
+		}
+		w.framing.Unlock()
+	}
 }
 
 // loop is the window's whole life.

@@ -104,7 +104,10 @@ func (p *Popup) Offscreen() *driver.OffscreenWindow {
 
 // Input hands the popup a platform event, as its window would, for a window driven with [Window.Frame]. It must be
 // called from the goroutine calling Frame, and positions are in the popup's window's space.
-func (p *Popup) Input(ev any) { p.u.popupEvent(popupEvent{s: p.s, ev: ev}) }
+func (p *Popup) Input(ev any) {
+	defer p.u.w.drive()()
+	p.u.popupEvent(popupEvent{s: p.s, ev: ev})
+}
 
 // Move attaches the popup to a new anchor, in the opener's space.
 func (p *Popup) Move(anchor geom.Rect) {
@@ -885,6 +888,7 @@ func (w *Window) forward(s *surface) {
 // called from the goroutine calling Frame: never on a window its loop
 // runs, which takes [Client.Input].
 func (w *Window) Inject(ev input.Event) {
+	defer w.drive()()
 	w.ui.paintOwed()
 	w.route(ev)
 	w.ui.focusNow()
