@@ -163,12 +163,18 @@ func (c osClip) files() (sf systemFiles, err error) {
 		for i := range count {
 			n, _, _ := procDragQueryFileW.Call(h, i, 0, 0)
 			buf := make([]uint16, n+1)
-			_, _, _ = procDragQueryFileW.Call(h, i, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+			got, _, _ := procDragQueryFileW.Call(h, i, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+			if n == 0 || got == 0 {
+				return sf, fmt.Errorf("reading the path of item %d of the %d on the clipboard", i+1, count)
+			}
 			sf.paths = append(sf.paths, windows.UTF16ToString(buf))
 		}
 		if h, _, _ := procGetClipboardData.Call(clipFormats().effect); h != 0 {
 			// Where it cannot be read, the files are copied rather than
-			// moved, which loses nothing.
+			// moved. That is safe: a copy deletes nothing where they were,
+			// and leaves the clipboard as it is, so the worst is a second
+			// copy the user can delete, where a move taken for a copy
+			// would take the files away.
 			if b, err := globalBytes(h); err == nil && len(b) >= 4 {
 				effect := binary.LittleEndian.Uint32(b)
 				sf.cut = effect&dropEffectMove != 0 && effect&dropEffectCopy == 0
@@ -176,8 +182,14 @@ func (c osClip) files() (sf systemFiles, err error) {
 		}
 		return sf, nil
 	}
-	h, _, _ := procGetClipboardData.Call(clipFormats().descriptor)
+	h, _, err := procGetClipboardData.Call(clipFormats().descriptor)
 	if h == 0 {
+		if c.hasFiles() {
+			// The clipboard says it holds files, and its owner did not
+			// hand them over: one that hands them over only when asked
+			// failed to, or took too long. That is no paste of nothing.
+			return sf, fmt.Errorf("the program that put files on the clipboard did not hand them over: %w", err)
+		}
 		return sf, nil
 	}
 	b, err := globalBytes(h)
@@ -219,23 +231,36 @@ func (c osClip) outside(seq uint32, fn func(outsideFiles) error) error {
 		return fmt.Errorf("reading the clipboard: HRESULT %#x", uint32(hr))
 	}
 	defer release(obj)
-	if err := stillHeld(seq, c.seq()); err != nil {
+	of, err := heldFiles(obj, seq, c.seq)
+	if err != nil {
 		return err
 	}
+	return fn(of)
+}
+
+// heldFiles reads the list of the files the clipboard's data object obj
+// holds as contents, and fails where the clipboard's seq, as now gives
+// it, is no longer seq once the list is read. The look comes after the
+// read, not before: a copy that came between would have its own folders
+// made, which no look before a file is opened reaches.
+func heldFiles(obj unsafe.Pointer, seq uint32, now func() uint32) (*oleFiles, error) {
 	m, err := getData(obj, clipFormats().descriptor, -1, tymedHGlobal)
 	if err != nil {
-		return fmt.Errorf("reading the list of files on the clipboard: %w", err)
+		return nil, fmt.Errorf("reading the list of files on the clipboard: %w", err)
 	}
 	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
 	if err != nil {
-		return fmt.Errorf("reading the list of files on the clipboard: %w", err)
+		return nil, fmt.Errorf("reading the list of files on the clipboard: %w", err)
 	}
 	items, err := fileDescriptors(b)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return fn(&oleFiles{now: c.seq, seq: seq, obj: obj, list: items})
+	if err := stillHeld(seq, now()); err != nil {
+		return nil, err
+	}
+	return &oleFiles{now: now, seq: seq, obj: obj, list: items}, nil
 }
 
 // getData asks the data object obj for format cf, the item of index i in
@@ -281,6 +306,9 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 	}
 	m, err := getData(o.obj, clipFormats().contents, int32(i), tymedIStream|tymedHGlobal)
 	if errors.Is(err, errNoMedium) && o.list[i].size == 0 {
+		// A file the list says is empty, handed over as no memory at
+		// all. The list carries its size, so nothing of what it holds is
+		// lost by writing it empty, and sizedReader checks the same.
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	if err != nil {
@@ -301,8 +329,10 @@ func (o *oleFiles) open(i int) (io.ReadCloser, error) {
 	b, err := globalBytes(m.handle)
 	releaseMedium(&m)
 	if err != nil && o.list[i].size == 0 {
-		// Movable memory of no size cannot be locked: what it holds is
-		// nothing, as the clipboard says, as with no memory above.
+		// Movable memory of no size cannot be locked, which Windows says
+		// of all memory GlobalAlloc gives with GMEM_MOVEABLE and no size.
+		// The list says the file is empty, so writing it empty loses
+		// nothing; a file the list gives a size cannot take this way.
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	if err != nil {

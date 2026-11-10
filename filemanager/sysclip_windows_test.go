@@ -5,6 +5,7 @@ package filemanager
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"io"
 	"io/fs"
@@ -294,5 +295,52 @@ func TestAStreamSlowToAnswerIsPacedByWhatItMoved(t *testing.T) {
 	// It moved maxPiece/4 in 2 s, so maxPiece/8 in a second.
 	if asked[1] != maxPiece/8 {
 		t.Fatalf("a slow stream that moved a quarter of what it was asked was then asked for %d", asked)
+	}
+}
+
+// descriptorObject is a data object whose GetData hands over list, a
+// FILEGROUPDESCRIPTORW, in movable memory, and then calls got.
+func descriptorObject(t *testing.T, list []byte, got func()) unsafe.Pointer {
+	t.Helper()
+	const gmemMoveable = 0x2
+	h, _, err := kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, uintptr(len(list)))
+	if h == 0 {
+		t.Fatal(err)
+	}
+	p, _, err := procGlobalLock.Call(h)
+	if p == 0 {
+		t.Fatal(err)
+	}
+	copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), len(list)), list)
+	_, _, _ = procGlobalUnlock.Call(h)
+	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
+	return unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, nop, syscall.NewCallback(func(_, _, medium uintptr) uintptr {
+		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
+		// What GetData hands over is the caller's to free: a copy each time.
+		c, _, _ := kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, uintptr(len(list)))
+		cp, _, _ := procGlobalLock.Call(c)
+		copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&cp))), len(list)), list)
+		_, _, _ = procGlobalUnlock.Call(c)
+		m.tymed, m.handle = tymedHGlobal, c
+		got()
+		return 0
+	}), nop}})
+}
+
+func TestTheListOfFilesIsNotTakenFromAClipboardThatChangedAsItWasRead(t *testing.T) {
+	// A copy of folders alone: no file is opened, so only the look at the
+	// list stops the paste making them.
+	list := binary.LittleEndian.AppendUint32(nil, 1)
+	list = append(list, descriptor("Reports", true, 0, time.Now())...)
+	// Another copy lands as the list is handed over.
+	seq := uint32(7)
+	obj := descriptorObject(t, list, func() { seq++ })
+	now := func() uint32 { return seq }
+	if _, err := heldFiles(obj, 7, now); !errors.Is(err, errClipboardChanged) {
+		t.Fatalf("a list read as the clipboard changed reads with %v", err)
+	}
+	of, err := heldFiles(descriptorObject(t, list, func() {}), 7, func() uint32 { return 7 })
+	if err != nil || len(of.items()) != 1 || of.items()[0].name != "Reports" {
+		t.Fatalf("a list read from a clipboard as it was reads as %+v, %v", of, err)
 	}
 }
