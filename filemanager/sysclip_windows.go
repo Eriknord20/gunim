@@ -173,7 +173,7 @@ func (c osClip) files() (sf systemFiles, err error) {
 			// Where it cannot be read, the files are copied rather than
 			// moved. That is safe: a copy deletes nothing where they were,
 			// and leaves the clipboard as it is, so the worst is a second
-			// copy the user can delete, where a move taken for a copy
+			// copy the user can delete, where a copy taken for a move
 			// would take the files away.
 			if b, err := globalBytes(h); err == nil && len(b) >= 4 {
 				effect := binary.LittleEndian.Uint32(b)
@@ -188,7 +188,11 @@ func (c osClip) files() (sf systemFiles, err error) {
 			// The clipboard says it holds files, and its owner did not
 			// hand them over: one that hands them over only when asked
 			// failed to, or took too long. That is no paste of nothing.
-			return sf, fmt.Errorf("the program that put files on the clipboard did not hand them over: %w", err)
+			why := errors.New("the program that put files on the clipboard did not hand them over")
+			if !errors.Is(err, windows.ERROR_SUCCESS) {
+				why = fmt.Errorf("%w: %w", why, err)
+			}
+			return sf, why
 		}
 		return sf, nil
 	}

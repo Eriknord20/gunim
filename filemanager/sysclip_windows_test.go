@@ -303,24 +303,17 @@ func TestAStreamSlowToAnswerIsPacedByWhatItMoved(t *testing.T) {
 func descriptorObject(t *testing.T, list []byte, got func()) unsafe.Pointer {
 	t.Helper()
 	const gmemMoveable = 0x2
-	h, _, err := kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, uintptr(len(list)))
-	if h == 0 {
-		t.Fatal(err)
-	}
-	p, _, err := procGlobalLock.Call(h)
-	if p == 0 {
-		t.Fatal(err)
-	}
-	copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), len(list)), list)
-	_, _, _ = procGlobalUnlock.Call(h)
 	nop := syscall.NewCallback(func(uintptr) uintptr { return 0 })
 	return unsafe.Pointer(&fakeCOM{table: &[5]uintptr{nop, nop, nop, syscall.NewCallback(func(_, _, medium uintptr) uintptr {
-		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
 		// What GetData hands over is the caller's to free: a copy each time.
 		c, _, _ := kernel32.NewProc("GlobalAlloc").Call(gmemMoveable, uintptr(len(list)))
-		cp, _, _ := procGlobalLock.Call(c)
-		copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&cp))), len(list)), list)
+		if c == 0 {
+			return 0x8007000e // E_OUTOFMEMORY
+		}
+		p, _, _ := procGlobalLock.Call(c)
+		copy(unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&p))), len(list)), list)
 		_, _, _ = procGlobalUnlock.Call(c)
+		m := (*stgMedium)(*(*unsafe.Pointer)(unsafe.Pointer(&medium)))
 		m.tymed, m.handle = tymedHGlobal, c
 		got()
 		return 0
