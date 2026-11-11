@@ -43,8 +43,8 @@ func (a Anchor) FrameAt(t time.Time) int64 {
 // how long ago the move it sees can have come. Where Heard moves frame
 // by frame, it places a frame 200 ms ahead to within a millisecond once
 // it has run a second, however rarely it is called. Through steps of
-// 256 frames to 4096, it places one to within a millisecond, once it
-// has run a few seconds, where it is called every few milliseconds;
+// 256 frames to 4096, it places one to within 2 ms, once it has run
+// a few seconds, where it is called every few milliseconds;
 // called more rarely, as four times a second, to within 3 ms, or 40%
 // of a step for steps longer than 7.5 ms, once it has run 8 s. Each call teaches it,
 // and the speaker calls it four times a second itself. A host calls it
@@ -116,8 +116,9 @@ type dll struct {
 	// it steps a buffer at a time, and 0 before it moved.
 	grain int64
 	// still is the longest Heard was seen standing still since the
-	// loop started: a step can't have come sooner than that before
-	// the sample that saw it, whatever grain says.
+	// loop started, up to the longest a step lasts: a step can't have
+	// come sooner than that before the sample that saw it, whatever
+	// grain says.
 	still   float64
 	edge    float64 // when the loop last learned from a step
 	started float64 // when it started
@@ -170,7 +171,11 @@ func (d *dll) sample(h int64, t time.Time, rate int) Anchor {
 		}
 		d.learn(h, now-within/2, within, gap)
 	default:
-		d.still = max(d.still, now-d.seen)
+		// Heard standing still longer than a step lasts is the sound
+		// stalled, as while suspended, not a step.
+		if still := now - d.seen; still <= float64(longest) {
+			d.still = max(d.still, still)
+		}
 	}
 	return d.hand(now)
 }

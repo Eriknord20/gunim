@@ -405,3 +405,36 @@ func TestAShortStepLeavesTheAnchor(t *testing.T) {
 		}
 	}
 }
+
+// TestARareCallerFollowsTheSoundThroughAStall: the sound stalls 400 ms,
+// as when it runs dry or the speakers are suspended, and Heard stands
+// still through it; after, the frames are heard 400 ms later. A host
+// calling four times a second sees Heard stand still longer than any
+// step lasts, which says nothing of the steps, so the anchor goes on
+// learning and follows the frames to their new times.
+func TestARareCallerFollowsTheSoundThroughAStall(t *testing.T) {
+	for _, step := range []int64{1, 512, 1024} {
+		var d dll
+		c := newCard(100, step)
+		r := rand.New(rand.NewPCG(9, uint64(step)))
+		stall := c.start.Add(4 * time.Second)
+		var top int64
+		for now := c.start; now.Before(c.start.Add(30 * time.Second)); now = now.Add(250*time.Millisecond + time.Duration(r.IntN(300))*time.Microsecond) {
+			if !now.Before(stall) && c.start.Before(stall) {
+				c.start = c.start.Add(400 * time.Millisecond)
+			}
+			// Heard never goes back: it stands still until the
+			// frames catch up.
+			top = max(top, c.heard(now))
+			a := d.sample(top, now, 48000)
+			if now.Sub(stall) < 12*time.Second {
+				continue
+			}
+			want := max(3*time.Millisecond, time.Duration(float64(step)/c.rate*1e9*0.4))
+			if e := placed(c, a, now).Abs(); e > want {
+				t.Fatalf("%d-frame steps: %v after the stall a frame 200 ms ahead is placed %v off, want within %v",
+					step, now.Sub(stall), e, want)
+			}
+		}
+	}
+}
