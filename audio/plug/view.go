@@ -71,12 +71,16 @@ type DocumentFollower interface {
 // Auditioner is a host that lets a view play a note on the plugin as it
 // sounds, as a sound browser plays one to let the user hear the sound
 // picked. A view asks for it by a type assertion on its [Host].
+//
+// A host that runs the plugin through VST3 inside another program
+// implements neither Auditioner nor [Holder]: a VST3 editor sends its
+// notes straight to its own processor, so such a view plays nothing.
 type Auditioner interface {
 	Host
 	// Audition plays a note on the plugin playing: pitch is a MIDI note
 	// number, as 60 for middle C, velocity runs from 0 to 1, and the
-	// note is let go after length. It runs on the window's goroutine; a
-	// host that plays nothing now plays nothing.
+	// note is let go after length. It runs on the window's goroutine. A
+	// silent host, as one with its output closed, drops the note.
 	Audition(pitch, velocity float64, length time.Duration, u *gunim.UI)
 }
 
@@ -89,12 +93,14 @@ type Holder interface {
 	// Release names key: key is the view's own name for the note, as
 	// the key pressed. pitch is a MIDI note number and velocity runs
 	// from 0 to 1. A key held already lets its note go first. It runs
-	// on the window's goroutine; a host that plays nothing now plays
-	// nothing.
+	// on the window's goroutine. A silent host, as one with its output
+	// closed, drops the note. The host may end a held note early, as on
+	// Stop or a jump in time.
 	Hold(key int, pitch, velocity float64, u *gunim.UI)
 	// Release lets go of the note Hold started for key. A view lets go
 	// of every key it holds as the press that holds them ends, however
-	// it ends.
+	// it ends. Where the host ended the note already, or key holds no
+	// note, Release has nothing to do.
 	Release(key int, u *gunim.UI)
 }
 
