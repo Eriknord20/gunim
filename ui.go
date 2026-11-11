@@ -446,9 +446,9 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.ui.arriving, w.ui.animated = animated, animated
 	w.open = a.drv.NewWindow
 	w.app = a
-	a.windows.add(w)
-	// Opened while the clock is held, the window keeps its time from its first frame.
-	w.held.Store(a.held.Load())
+	// Opened while the clock is held, the window keeps its time from its first frame. Hold and Release change
+	// the clock under the same lock.
+	a.windows.addHeld(w, &a.held)
 	a.loops.Add(1)
 	go w.loop()
 	return w, nil
@@ -553,6 +553,8 @@ type Window struct {
 	held  atomic.Pointer[HeldClock]
 	steps chan heldStep
 	step  *heldStep
+	// heldBy is the clock the loop keeps time by, as it last took it up from held; see followClock.
+	heldBy *HeldClock
 	// popupWait is when a held frame began to wait for a popup to show
 	// the frame before, or zero; see heldFrame.
 	popupWait time.Time
@@ -1325,6 +1327,9 @@ func (w *Window) loop() {
 	if w.app != nil {
 		defer w.app.loops.Done()
 	}
+	// However the loop ends, done says so: as the user closed the window, or its driver window went. A held
+	// clock's Advance waits on it.
+	defer w.Close()
 	defer close(w.out)
 	defer w.ui.closeAllPopups()
 	defer func() {
@@ -1952,6 +1957,8 @@ type UI struct {
 	// onHeld says the window keeps a held clock's time ([HeldClock]), and
 	// wasStepped and wasByFrames are how it kept time before.
 	onHeld, wasStepped, wasByFrames bool
+	// heldSkip says the frame being built under a held clock is laid out and left unpainted; see HoldOptions.PaintEvery.
+	heldSkip bool
 	// everHeld says the window has kept a held clock's time, so its drivers' windows are told when it no longer does.
 	everHeld bool
 	// lazy says the window paints a frame only when something looks at
@@ -2906,6 +2913,9 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	} else {
 		u.owed, u.owedFrame = true, fp
 		u.fadedAway()
+		if u.heldSkip {
+			u.layoutPopups(f)
+		}
 	}
 
 	// 5. Layout and paint may have started animations: a caret aimed at
@@ -3015,6 +3025,9 @@ func (u *UI) fading(now time.Time, f Frame, size geom.Size) (fp framePaint, left
 // where it drew things: a node to bring into view, a popup or a native
 // child to place, and the pointer held, carrying a drag, or flinging.
 func (u *UI) mustPaint() bool {
+	if u.heldSkip {
+		return false
+	}
 	return !u.lazy || u.shotsOwed.Load() > 0 || len(u.revealing) > 0 || len(u.popups) > 0 || len(u.nativeNodes) > 0 ||
 		u.capture != nil || u.drag != nil || u.dragOver || u.fling != nil
 }
@@ -3075,6 +3088,17 @@ func (u *UI) paintFrame(fp framePaint) {
 // the frame as the frame itself would have: nothing has changed since.
 func (u *UI) paintOwed() {
 	if !u.owed || u.painting {
+		return
+	}
+	if u.onHeld && u.w.app != nil {
+		// Held, a frame owed paints only into buffers the driver is done with, else the next painted frame shows
+		// it, and one painted is in flight as a frame drawn is.
+		if !u.w.free() {
+			return
+		}
+		u.paintFrame(u.owedFrame)
+		u.w.unshown++
+		u.w.unreleased++
 		return
 	}
 	u.paintFrame(u.owedFrame)

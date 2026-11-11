@@ -322,12 +322,7 @@ func (u *UI) framePopups(f Frame) {
 
 func (u *UI) framePopup(s *surface, f Frame) {
 	opener := s.root.opener
-	f.Theme = u.themeOf(opener)
-	// A popup's window keeps clear of the system's bars itself.
-	f.Safe = geom.Insets{}
-	f.Keyboard = 0
-	// Until the window opens, guess it blends as the last one did.
-	f.Transparent = u.w.blends
+	f = u.popupFrame(s, f)
 	if s.dw != nil && s.zoom != u.zoom {
 		setZoom(s.dw, u.zoom)
 		// Place the window again at the new zoom
@@ -405,6 +400,31 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		return
 	}
 	s.inFlight, s.stale = true, false
+}
+
+// popupFrame is f as popup s's content sees it.
+func (u *UI) popupFrame(s *surface, f Frame) Frame {
+	f.Theme = u.themeOf(s.root.opener)
+	// A popup's window keeps clear of the system's bars itself.
+	f.Safe = geom.Insets{}
+	f.Keyboard = 0
+	// Until the window opens, guess it blends as the last one did.
+	f.Transparent = u.w.blends
+	return f
+}
+
+// layoutPopups lays out the popups open, for a frame left unpainted, which has them neither painted nor
+// presented: what a popup's layout starts moving moves from the frame it would have, as in a frame painted.
+func (u *UI) layoutPopups(f Frame) {
+	for _, s := range u.popups {
+		if s.dw == nil || s.closing && len(s.root.kids) == 0 {
+			continue
+		}
+		pf := u.popupFrame(s, f)
+		pf.Scale, pf.Transparent = s.dw.Scale(), transparent(s.dw)
+		u.fitPopup(s, u.windowOf(s.root.opener))
+		u.layoutPopup(s, pf)
+	}
 }
 
 // fitPopup tells content that fits itself to the screen how much room there is round its anchor, asking the parent
