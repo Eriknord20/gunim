@@ -74,12 +74,16 @@ func TestSuspendFadesOutWhatPlaysAndResumeFadesItIn(t *testing.T) {
 	if got := level(m); got != 0 {
 		t.Errorf("after the fade the sound is at %v, want silence", got)
 	}
-	time.Sleep(SuspendFade + 50*time.Millisecond)
-	s.smu.Lock()
-	stopped := o.suspends
-	s.smu.Unlock()
-	if stopped != 1 {
-		t.Fatalf("once the fade was heard the device stopped %d times, want 1", stopped)
+	// The device stops once the fade has been heard, a SuspendFade after
+	// it ends. A busy machine can take longer.
+	stops := func() int {
+		s.smu.Lock()
+		defer s.smu.Unlock()
+		return o.suspends
+	}
+	waitFor(t, "the device to stop once the fade was heard", func() bool { return stops() > 0 })
+	if got := stops(); got != 1 {
+		t.Fatalf("once the fade was heard the device stopped %d times, want 1", got)
 	}
 	_ = s.Resume()
 	m.Mix(make([]float32, 2*m.Frames(SuspendFade/2)))
