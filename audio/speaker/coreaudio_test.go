@@ -336,7 +336,12 @@ func TestCoreAudioHeldCountsTheMixer(t *testing.T) {
 		if s == nil {
 			return
 		}
-		u, ok := s.out.Load().output.(*auOutput)
+		// Between opens the speaker holds no output.
+		out := s.out.Load()
+		if out == nil {
+			return
+		}
+		u, ok := out.output.(*auOutput)
 		if !ok {
 			return
 		}
