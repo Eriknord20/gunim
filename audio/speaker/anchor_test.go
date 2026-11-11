@@ -88,7 +88,7 @@ func TestTheAnchorFindsTheCardsClockThroughTheSteps(t *testing.T) {
 		for _, ppm := range []float64{0, 80, -150} {
 			var d dll
 			c := newCard(ppm, step)
-			r := rand.New(rand.NewPCG(16, uint64(step)))
+			r := rand.New(rand.NewPCG(1, uint64(step)))
 			_, now := run(t, &d, c, c.start, time.Second, r)
 			started := d.started
 			a, now := run(t, &d, c, now, 20*time.Second, r)
@@ -326,29 +326,81 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 // The newest step came no longer ago than a step takes, so the anchor
 // places the frames heard as well as Heard's steps let it: within a
 // millisecond where Heard moves frame by frame, as where the device
-// tells when its frames play, once it has run 2 s; within 6 ms or an
-// eighth of a step where it moves a buffer at a time, once it has run
-// 8 s.
+// tells when its frames play, once it has run a second; within 3 ms,
+// or 40% of a step, where it moves a buffer at a time, once it has run
+// 8 s. Each case starts at a dozen offsets, as a caller at a steady
+// pace sees the steps at a phase that changes slowly.
 func TestARareCallerFindsTheCardsClock(t *testing.T) {
 	for _, step := range []int64{1, 256, 1024, 4096} {
 		for _, gap := range []time.Duration{16 * time.Millisecond, 50 * time.Millisecond, 250 * time.Millisecond} {
-			var d dll
 			c := newCard(100, step)
-			r := rand.New(rand.NewPCG(11, uint64(step)))
-			want, from := time.Millisecond, 2*time.Second
+			want, from := time.Millisecond, time.Second
 			if step > 1 {
-				want, from = max(6*time.Millisecond, time.Duration(float64(step)/c.rate*1e9/8)), 8*time.Second
+				want, from = max(3*time.Millisecond, time.Duration(float64(step)/c.rate*1e9*0.4)), 8*time.Second
 			}
-			now := c.start.Add(37 * time.Millisecond)
-			for end := c.start.Add(16 * time.Second); now.Before(end); now = now.Add(gap + time.Duration(r.IntN(300))*time.Microsecond) {
-				a := d.sample(c.heard(now), now, 48000)
-				if now.Sub(c.start) < from {
-					continue
+			for off := range 12 {
+				var d dll
+				r := rand.New(rand.NewPCG(11, uint64(step)))
+				now := c.start.Add(time.Duration(off) * 9 * time.Millisecond)
+				for end := c.start.Add(16 * time.Second); now.Before(end); now = now.Add(gap + time.Duration(r.IntN(300))*time.Microsecond) {
+					a := d.sample(c.heard(now), now, 48000)
+					if now.Sub(c.start) < from {
+						continue
+					}
+					if e := placed(c, a, now).Abs(); e > want {
+						t.Fatalf("%d-frame steps, asked each %v from %v: a frame 200 ms ahead placed %v off at %v, want within %v",
+							step, gap, time.Duration(off)*9*time.Millisecond, e, now.Sub(c.start), want)
+					}
 				}
-				if off := placed(c, a, now).Abs(); off > want {
-					t.Fatalf("%d-frame steps, asked each %v: a frame 200 ms ahead placed %v off at %v, want within %v",
-						step, gap, off, now.Sub(c.start), want)
-				}
+			}
+		}
+	}
+}
+
+// TestAShortStepLeavesTheAnchor: as the sound runs dry a moment, Heard
+// moves 300 frames once among steps of 512, and the frames after are
+// heard 212 frames later. A move that size would have the loop take
+// Heard to move 4 frames at a time; the steps a host calling once a
+// block sees Heard stand still for keep it to the steps' own size, so
+// it does as well as it did before it learned how far Heard moves. A
+// host calling rarely keeps within a few milliseconds.
+func TestAShortStepLeavesTheAnchor(t *testing.T) {
+	const step, short = 512, 300
+	start := time.Unix(1000, 0)
+	period := float64(step) / 48000 * 1e9
+	cut := start.Add(5 * time.Second)
+	kc := int64(float64(cut.Sub(start)) / period)
+	heard := func(at time.Time) int64 {
+		k := int64(float64(at.Sub(start)) / period)
+		if k > kc {
+			return step*k - (step - short)
+		}
+		return step * k
+	}
+	when := func(f int64) time.Time {
+		if f > step*kc {
+			f += step - short
+		}
+		return start.Add(time.Duration(float64(f) / 48000 * 1e9))
+	}
+	for _, c := range []struct {
+		name     string
+		gap, jit time.Duration
+		want     time.Duration
+	}{
+		{"once a block", 2 * time.Millisecond, 2 * time.Millisecond, 1500 * time.Microsecond},
+		{"four times a second", 250 * time.Millisecond, 300 * time.Microsecond, 10 * time.Millisecond},
+	} {
+		var d dll
+		r := rand.New(rand.NewPCG(5, 5))
+		for now := start; now.Before(start.Add(16 * time.Second)); now = now.Add(c.gap + time.Duration(r.Int64N(int64(c.jit)))) {
+			a := d.sample(heard(now), now, 48000)
+			if now.Before(cut.Add(3 * time.Second)) {
+				continue
+			}
+			f := heard(now) + 9600
+			if e := a.TimeOf(f).Sub(when(f)).Abs(); e > c.want {
+				t.Fatalf("asked %s: a frame 200 ms ahead placed %v off at %v, want within %v", c.name, e, now.Sub(start), c.want)
 			}
 		}
 	}
