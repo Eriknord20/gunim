@@ -291,6 +291,8 @@ type Slider struct {
 	// colour temperature runs from blue to amber; it takes the fill's
 	// place. Two colours or more.
 	Gradient []color.NRGBA
+	// Fill, where set, colours the fill in place of [Accent].
+	Fill color.NRGBA
 
 	value float32
 	// drag is the value a drag has carried the knob to, unclamped, and
@@ -577,6 +579,10 @@ func (s *Slider) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 	k := KnobSize.Get(th)
 	track := SliderTrack.Get(th)
 	at := s.at.Value()
+	accent := Accent.Get(th)
+	if s.Fill != (color.NRGBA{}) {
+		accent = s.Fill
+	}
 
 	var whole, filled geom.Rect
 	var centre geom.Point
@@ -614,20 +620,20 @@ func (s *Slider) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		r := s.fracOf(s.Rest)
 		if s.Axis == Vertical {
 			y := whole.Max.Y + (whole.Min.Y-whole.Max.Y)*r
-			p.RRect(geom.Rect{Min: geom.Pt(whole.Min.X, min(y, centre.Y)), Max: geom.Pt(whole.Max.X, max(y, centre.Y))}, track/2, paint.Solid(Accent.Get(th)))
+			p.RRect(geom.Rect{Min: geom.Pt(whole.Min.X, min(y, centre.Y)), Max: geom.Pt(whole.Max.X, max(y, centre.Y))}, track/2, paint.Solid(accent))
 			if r > 0 && r < 1 {
 				p.RRect(geom.Rc(whole.Min.X-2, y-0.75, track+4, 1.5), 0.75, paint.Solid(SliderRestMark.Get(th)))
 			}
 		} else {
 			x := whole.Min.X + (whole.Max.X-whole.Min.X)*r
-			p.RRect(geom.Rect{Min: geom.Pt(min(x, centre.X), whole.Min.Y), Max: geom.Pt(max(x, centre.X), whole.Max.Y)}, track/2, paint.Solid(Accent.Get(th)))
+			p.RRect(geom.Rect{Min: geom.Pt(min(x, centre.X), whole.Min.Y), Max: geom.Pt(max(x, centre.X), whole.Max.Y)}, track/2, paint.Solid(accent))
 			if r > 0 && r < 1 {
 				p.RRect(geom.Rc(x-0.75, whole.Min.Y-2, 1.5, track+4), 0.75, paint.Solid(SliderRestMark.Get(th)))
 			}
 		}
 	default:
 		p.RRect(whole, track/2, paint.Solid(SwitchOff.Get(th)))
-		p.RRect(filled, track/2, paint.Solid(Accent.Get(th)))
+		p.RRect(filled, track/2, paint.Solid(accent))
 	}
 
 	grow := 1 + 0.2*max(s.hover.Value(), 0)
