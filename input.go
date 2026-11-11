@@ -847,9 +847,9 @@ func (u *UI) revealDrawn() {
 				u.revealing = append(u.revealing, s)
 			}
 		default:
+			// A scroll it starts is stepped later in the same frame,
+			// which keeps the window drawing.
 			u.revealState(s)
-			// The scroll it started runs from the next frame.
-			u.animating = true
 		}
 	}
 }

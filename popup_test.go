@@ -656,3 +656,40 @@ func TestAccessGivesAPopupInTheWindowsSpace(t *testing.T) {
 		t.Fatalf("the popup's tree starts at %v, want %v", pop.Bounds.Min, want)
 	}
 }
+
+// fitMenu is a menu that keeps the room it is told.
+type fitMenu struct {
+	*menu
+	room driver.Room
+}
+
+func (m *fitMenu) FitPopup(r driver.Room) { m.room = r }
+
+// roomy is a parent window that tells the room to the edges of a screen
+// at the window's corner, 1600 by 900.
+type roomy struct{ driver.Window }
+
+func (roomy) PopupRoom(a geom.Rect) driver.Room {
+	return driver.Room{Below: 900 - a.Max.Y, Above: a.Min.Y, Left: a.Min.X, Right: 1600 - a.Min.X}
+}
+
+// A popup slid inside its window is told the room from where it asked
+// to go, the place it measures itself from, as a palette keeps centred
+// on the screen.
+func TestAPopupSlidInsideItsWindowIsToldTheRoomFromWhereItAsked(t *testing.T) {
+	w, _, opener := newStage(t, paint.Identity)
+	m := &fitMenu{menu: newMenu()}
+	// The recorder is at (10, 10) and the window 800 wide, so the 120
+	// wide menu slides 30 left, to 680.
+	w.ui.OpenPopup(opener, m, PopupOptions{Anchor: geom.Rc(700, 0, 100, 50)})
+	run(w, 1)
+	if got := popupWindow(t, w).Anchor().Min.X; got != 680 {
+		t.Fatalf("setup: the popup is put at %v, want 680", got)
+	}
+	s := w.ui.popups[0]
+	s.roomKnown = false
+	w.ui.fitPopup(s, roomy{})
+	if m.room.Left != 710 || m.room.Right != 890 {
+		t.Fatalf("the room is %v left and %v right, want 710 and 890, from x 710", m.room.Left, m.room.Right)
+	}
+}

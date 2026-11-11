@@ -144,7 +144,9 @@ func (d *Descriptor) Instrument() bool {
 // Generator category, as "Generator|LFO", one plug adds beside VST3's.
 // A generator makes control alone, on its [Descriptor.ControlOut]
 // ports: the host gives it blocks whose In and Out are nil, and places
-// it in no chain of sound.
+// it in no chain of sound. It may declare aux and control ports of
+// every kind beside, as an envelope follower reads the sound at an aux
+// input.
 func (d *Descriptor) Generator() bool {
 	category, _, _ := strings.Cut(d.Kind, "|")
 	return category == "Generator"
@@ -169,7 +171,9 @@ type Ports struct {
 
 // PortsIn returns the ports a plugin of d has in state: what d.Ports
 // says, within the ports d declares, or every port d declares where
-// d.Ports is nil.
+// d.Ports is nil. Each call makes four new slices, and may decode
+// state, so a host that asks often, as once a frame, keeps the answer
+// until the state changes.
 func (d *Descriptor) PortsIn(state []byte) Ports {
 	all := func(n int) []bool {
 		out := make([]bool, n)

@@ -1044,7 +1044,7 @@ func TestWASAPILogsItsStamps(t *testing.T) {
 		// tells a frame heard, read at the next period's end.
 		// Then it had taken a period, the fake's latency, past what it
 		// tells, and holds its buffer full.
-		"the device's clock first moved 70ms after it started, to frame 480; by then 1920 frames were written, " +
+		"the device's clock was seen to move first 70ms after it started (to within a period), to frame 480; by then 1920 frames were written, " +
 			"0 of them silence, and its buffer held 960, so the engine had taken 960, 480 past the frame the clock told",
 		"WASAPI input: a packet of 480 frames at device position ",
 		// A packet read a period after its stamp is stamped as its first
