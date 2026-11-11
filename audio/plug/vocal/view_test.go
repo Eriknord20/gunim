@@ -68,8 +68,9 @@ func boundsIn(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) geom.R
 func TestLearnSetsTheChainAsOneGestureOverTheLoop(t *testing.T) {
 	p := Descriptor.New(nil).(*plugin)
 	h := &host{values: map[uint32]float64{}}
-	src := &memSource{frames: makeVoice(6, voiceOpts{level: 0.1, hiss: 0.1})}
-	p.SetDocument(memDoc{src: src, loop: plug.Loop{From: rate, To: 5 * rate}, on: true})
+	length := secs(6, 3)
+	src := &memSource{frames: makeVoice(length, voiceOpts{level: 0.1, hiss: 0.1})}
+	p.SetDocument(memDoc{src: src, loop: plug.Loop{From: rate, To: int64(length-1) * rate}, on: true})
 	pn := p.View(plug.Panel, h).(*panel)
 	w, run := stage(t, geom.Sz(760, 360), pn)
 	if pn.learn.Value != "Loop" || pn.learn.Disabled {
