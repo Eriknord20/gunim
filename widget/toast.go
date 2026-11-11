@@ -726,9 +726,21 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	fill := anim.Mix(anim.ColorCodec, DialogFill.Get(th), MenuFill.Get(th), min(max(c.hover.Value(), 0), 1))
 	p.ShadowRRect(r, CardRadius.Get(th), paint.Solid(fill), paint.Shadow{Offset: geom.Pt(0, 4), Blur: 16, Color: shadow})
 	p.RRectStroke(r, CardRadius.Get(th), paint.Fill{}, paint.Stroke{Width: 1, Color: DialogBorder.Get(th)})
+	// The words and icon come in behind the card, never ahead of it: a dark card on a dark window shows less at
+	// a low opacity than light words on it do, so they wait till it stands.
+	if a := toastContent(t); a < 0.999 {
+		defer p.Layer(paint.LayerOpts{Bounds: r, Opacity: a})()
+	}
 	for k := range kids.All {
 		k.Paint(p)
 	}
+}
+
+// toastContent is how far a toast's words and icon have come in, as the card has come t of the way: from nothing
+// till it is two fifths in, then easing to all of it with the card.
+func toastContent(t float32) float32 {
+	x := min(max((t-0.4)/0.6, 0), 1)
+	return x * x * (3 - 2*x)
 }
 
 // Handle implements [gunim.Handler]: the pointer resting keeps the

@@ -88,6 +88,10 @@ type Dialog struct {
 	// [DialogWidth], for a body that needs the room: a table, or a bank
 	// of faders. It is still capped at the window's width.
 	Width float32
+	// GrowDown keeps the panel's top where it first stood as the body grows or shrinks, as a part of it folds open,
+	// so what stands above the change stays still and the panel grows down. It moves up only as far as keeps it in
+	// the window, and stands anew, centred, where the window changes size.
+	GrowDown bool
 
 	// in runs from 0 (gone) to 1 (fully present) and drives every visual
 	// property. One value for the whole transition keeps the fade, the
@@ -105,6 +109,9 @@ type Dialog struct {
 	// is set once the keyboard has gone to the body's first field.
 	height  float32
 	focused bool
+	// top is where the panel's top stands in a window of size topIn, with GrowDown, once it has been laid out.
+	top   float32
+	topIn geom.Size
 	// problem shows what Check said, and shake is the shake it set off.
 	// saying is what the problem should say: it differs from problem's text
 	// while the last words fade out. problemIn fades the words, and
@@ -502,6 +509,9 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 		}
 	}
 	d.height = around + bs.H
+	if d.GrowDown && d.topIn != size {
+		d.top, d.topIn = (size.H-d.height)/2, size
+	}
 	panel := d.panel(size, f)
 	if hasBody {
 		at := panel.Min.Add(geom.Pt(pad, bar+pad))
@@ -523,7 +533,7 @@ func (d *Dialog) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	return size
 }
 
-// panel returns the dialog's own rectangle, centred in size.
+// panel returns the dialog's own rectangle, centred in size, or with GrowDown its top where it first stood.
 func (d *Dialog) panel(size geom.Size, f gunim.Frame) geom.Rect {
 	w, h := d.laidWidth, d.height
 	if w <= 0 {
@@ -532,7 +542,12 @@ func (d *Dialog) panel(size geom.Size, f gunim.Frame) geom.Rect {
 	if h <= 0 {
 		h = DialogHeight.Get(f.Theme)
 	}
-	return geom.Rc((size.W-w)/2, (size.H-h)/2, w, h)
+	y := (size.H - h) / 2
+	if d.GrowDown && d.topIn == size {
+		// Down from where it stood, up only as far as keeps its bottom the margin's half from the window's.
+		y = max(min(d.top, size.H-h-DialogMargin.Get(f.Theme)/2), min(y, 0))
+	}
+	return geom.Rc((size.W-w)/2, y, w, h)
 }
 
 // Transition implements [gunim.Transitioner]. The dialog springs in
