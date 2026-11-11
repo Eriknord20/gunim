@@ -548,3 +548,23 @@ func (a *clickArea) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	return false
 }
+
+// A submenu with ticks sets its text as far after its ticks as its parent does, icons and all.
+func TestASubmenusTicksKeepItsParentsRoomBeforeTheText(t *testing.T) {
+	c := NewContextMenu(&block{h: 300}, []MenuItem{
+		{Label: "Copy", Icon: icon.Copy, Checked: true},
+		{Label: "Volume", Sub: &Submenu{Items: []MenuItem{{Label: "0 dB"}, {Label: "+6 dB", Checked: true}}}},
+	})
+	w, run := stage(t, &frame{child: c, size: geom.Sz(400, 300)})
+	rightClick(w, 50, 50)
+	run(10)
+	typeKeys(w, run, 0, input.KeyDown, input.KeyDown, input.KeyRight)
+	sub := c.menu.sub
+	if sub == nil {
+		t.Fatal("Right did not open the submenu")
+	}
+	run(30)
+	if got, want := sub.menu.gut+sub.menu.iconSpace, c.menu.gut+c.menu.iconSpace; got != want {
+		t.Fatalf("the submenu's text starts %v after its edge, its parent's %v", got, want)
+	}
+}
