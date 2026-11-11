@@ -729,7 +729,12 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	}
 	r := geom.Rect{Max: box.Point()}
 	shown := min(max(c.shown.Value(), 0), 1)
-	defer p.Layer(paint.LayerOpts{Bounds: r.Inset(geom.Uniform(-24)), Opacity: t * shown})()
+	layer := paint.LayerOpts{Bounds: r.Inset(geom.Uniform(-24)), Opacity: t * shown}
+	if t < 0.999 {
+		// Keep the sliding card inside its stack's right edge
+		layer.Bounds.Max.X, layer.Clip = box.W, true
+	}
+	defer p.Layer(layer)()
 	defer p.Push(paint.Translate(geom.Pt(48*(1-t), 0)))()
 	shadow := DialogShadow.Get(th)
 	fill := anim.Mix(anim.ColorCodec, DialogFill.Get(th), MenuFill.Get(th), min(max(c.hover.Value(), 0), 1))
