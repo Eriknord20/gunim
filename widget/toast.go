@@ -35,6 +35,9 @@ const toastLife = 5 * time.Second
 // toastDrawOn is how long a toast's icon takes to draw itself on.
 const toastDrawOn = 600 * time.Millisecond
 
+// toastEdge is how wide the amber edge of a warning toast is.
+const toastEdge = 3
+
 // toastBodyLines is how many lines of its body a toast shows. The pointer resting on it shows the whole body.
 const toastBodyLines = 3
 
@@ -94,7 +97,7 @@ const (
 	ToastInfo
 	// ToastSuccess shows icon.CircleCheck in [ToastSuccessInk].
 	ToastSuccess
-	// ToastWarning shows icon.TriangleAlert in [ToastWarningInk].
+	// ToastWarning shows icon.TriangleAlert in [ToastWarningInk], with an edge and border in it.
 	ToastWarning
 	// ToastError shows icon.CircleAlert in [ToastErrorInk]. It stays
 	// until its close button is clicked.
@@ -132,6 +135,9 @@ func (k ToastKind) name() string {
 	}
 	return ""
 }
+
+// drawsOn reports whether the kind's icon draws its strokes on; an alert sign fades in whole instead.
+func (k ToastKind) drawsOn() bool { return k != ToastWarning && k != ToastError }
 
 // Toasts shows short notices in a stack, the newest nearest the corner
 // it sits in. Each slides in from the side and fades up, stays a few
@@ -456,6 +462,7 @@ type toastCard struct {
 	action *Link
 	// mark is the kind's icon before the title, or nil.
 	mark *Icon
+	kind ToastKind
 	// key is the toast's key. A toast that asks has buttons, a close
 	// button, and check, its tick box, or nil. An error has a close button.
 	key     string
@@ -476,7 +483,7 @@ type toastCard struct {
 }
 
 func newToastCard(t *Toasts, to Toast) *toastCard {
-	c := &toastCard{owner: t, title: NewLabel(to.Title), body: NewLabel(to.Body),
+	c := &toastCard{owner: t, title: NewLabel(to.Title), body: NewLabel(to.Body), kind: to.Kind,
 		in: anim.NewFloat(0), y: anim.NewFloat(0), hover: anim.NewFloat(0), shown: anim.NewFloat(1)}
 	c.body.Color = PaletteHint
 	c.body.MaxLines = toastBodyLines
@@ -510,7 +517,9 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 	if ic != nil {
 		c.mark = NewIcon(ic, to.Kind.name())
 		c.mark.Color = ink
-		c.mark.DrawOn(toastDrawOn)
+		if to.Kind.drawsOn() {
+			c.mark.DrawOn(toastDrawOn)
+		}
 	}
 	return c
 }
@@ -724,8 +733,18 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	defer p.Push(paint.Translate(geom.Pt(48*(1-t), 0)))()
 	shadow := DialogShadow.Get(th)
 	fill := anim.Mix(anim.ColorCodec, DialogFill.Get(th), MenuFill.Get(th), min(max(c.hover.Value(), 0), 1))
-	p.ShadowRRect(r, CardRadius.Get(th), paint.Solid(fill), paint.Shadow{Offset: geom.Pt(0, 4), Blur: 16, Color: shadow})
-	p.RRectStroke(r, CardRadius.Get(th), paint.Fill{}, paint.Stroke{Width: 1, Color: DialogBorder.Get(th)})
+	radius := CardRadius.Get(th)
+	p.ShadowRRect(r, radius, paint.Solid(fill), paint.Shadow{Offset: geom.Pt(0, 4), Blur: 16, Color: shadow})
+	border := DialogBorder.Get(th)
+	if c.kind == ToastWarning {
+		// An amber edge down the left and a faint amber border
+		amber := ToastWarningInk.Get(th)
+		border = anim.Mix(anim.ColorCodec, border, amber, 0.45)
+		edge := p.Layer(paint.LayerOpts{Bounds: r, Clip: true, Radius: radius, Opacity: 1})
+		p.RRect(geom.Rect{Max: geom.Pt(toastEdge, r.Max.Y)}, 0, paint.Solid(amber))
+		edge()
+	}
+	p.RRectStroke(r, radius, paint.Fill{}, paint.Stroke{Width: 1, Color: border})
 	// The words and icon come in behind the card, never ahead of it: a dark card on a dark window shows less at
 	// a low opacity than light words on it do, so they wait till it stands.
 	if a := toastContent(t); a < 0.999 {
@@ -736,10 +755,10 @@ func (c *toastCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	}
 }
 
-// toastContent is how far a toast's words and icon have come in, as the card has come t of the way: from nothing
-// till it is two fifths in, then easing to all of it with the card.
+// toastContent is how far a toast's words and icon have come in, as the card has come t of the way: nothing till the
+// card is four fifths in, then easing to all of it with the card.
 func toastContent(t float32) float32 {
-	x := min(max((t-0.4)/0.6, 0), 1)
+	x := min(max((t-0.8)/0.2, 0), 1)
 	return x * x * (3 - 2*x)
 }
 

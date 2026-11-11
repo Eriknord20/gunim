@@ -63,20 +63,20 @@ func TestADialogThatGrowsDownKeepsItsTop(t *testing.T) {
 	}
 }
 
-// A toast's words come in behind its card: none till it is two fifths in, then less of the way than it till near the
-// end, and all of it as it stands. They are drawn inside the card's own fade, so they never show more than it.
+// A toast's words come in behind its card: none till it is four fifths in, then less of the way than it till near
+// the end, and all of it as it stands. They are drawn inside the card's own fade, so they never show more than it.
 func TestAToastsWordsNeverComeAheadOfItsCard(t *testing.T) {
 	t.Parallel()
 	last := float32(0)
 	for i := range 101 {
 		card := float32(i) / 100
 		c := toastContent(card)
-		if c < last || (card < 0.8 && c > card) {
+		if c < last || (card < 0.95 && c > card) {
 			t.Fatalf("with the card %v in, the words are %v in", card, c)
 		}
 		last = c
 	}
-	if toastContent(0.4) != 0 || toastContent(1) != 1 {
-		t.Fatalf("the words are %v in at two fifths and %v at the end", toastContent(0.4), toastContent(1))
+	if toastContent(0.8) != 0 || toastContent(1) != 1 {
+		t.Fatalf("the words are %v in at four fifths and %v at the end", toastContent(0.8), toastContent(1))
 	}
 }
