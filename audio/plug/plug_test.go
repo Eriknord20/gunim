@@ -315,6 +315,18 @@ func TestAControlSignalDrivesAParameterByChanges(t *testing.T) {
 // finds nothing of stays unknown.
 func TestAFinderMakesAPluginKnownAsItIsAskedFor(t *testing.T) {
 	asked := map[string]int{}
+	// Take the finder and its plugin away after, for a run again.
+	findersMu.Lock()
+	before := len(finders)
+	findersMu.Unlock()
+	t.Cleanup(func() {
+		findersMu.Lock()
+		finders = finders[:before]
+		findersMu.Unlock()
+		registryMu.Lock()
+		delete(registry, "test.found")
+		registryMu.Unlock()
+	})
 	AddFinder(func(id string) bool {
 		asked[id]++
 		if id != "test.found" {
