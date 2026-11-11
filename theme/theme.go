@@ -174,7 +174,9 @@ func (t Token[T]) Get(l *Live) T {
 		if l.parent != nil && !l.active.hasKey(t.key) {
 			// Remember the token, so a later switch to a theme that sets
 			// it starts from the value it shows now.
-			l.reads[t.key] = func() stepper { return t.slotAt(t.Get(l.parent)) }
+			if _, seen := l.reads[t.key]; !seen {
+				l.reads[t.key] = func() stepper { return t.slotAt(t.Get(l.parent)) }
+			}
 			return t.Get(l.parent)
 		}
 		s = t.slotAt(t.In(l.active))
