@@ -50,7 +50,7 @@ func makeVoice(seconds float64, o voiceOpts) [2][]float32 {
 				if float64(k)*f0 > 0.45*rate {
 					break
 				}
-				x += env * math.Sin(float64(k)*phase) / math.Pow(float64(k), 1.1)
+				x += env * math.Sin(float64(k)*phase) / falloff[k]
 			}
 			x *= 0.25
 		}
@@ -66,6 +66,15 @@ func makeVoice(seconds float64, o voiceOpts) [2][]float32 {
 	return [2][]float32{out, append([]float32(nil), out...)}
 }
 
+// falloff is how far each harmonic of the voice lies under its first: the
+// kth by k to the power of 1.1.
+var falloff = func() (f [31]float64) {
+	for k := range f {
+		f[k] = math.Pow(float64(k), 1.1)
+	}
+	return f
+}()
+
 // melody is the notes the voice sings, a quarter of a second each: a
 // semitone apart from 140 to 260 Hz, in an order that leaps about, so
 // each note is sung as long as any other.
@@ -76,6 +85,15 @@ var melody = func() []float64 {
 	}
 	return notes
 }()
+
+// secs returns how long a voice a test learns from: full, or brief
+// under the race detector, which runs the chain some eight times slower.
+func secs(full, brief float64) float64 {
+	if raceOn {
+		return brief
+	}
+	return full
+}
 
 // run runs frames through a chain set as values, in blocks of 512, and
 // returns what came out.
@@ -357,7 +375,7 @@ func learn(t *testing.T, d plug.Document, values map[uint32]float64) learned {
 }
 
 func TestLearnBringsTheVoiceToTheTargetAndEachCompressorToItsCoupleOfDecibels(t *testing.T) {
-	src := &memSource{frames: makeVoice(8, voiceOpts{level: 0.08, hiss: 0.15})}
+	src := &memSource{frames: makeVoice(secs(8, 2), voiceOpts{level: 0.08, hiss: 0.15})}
 	values := defaults(nil)
 	got := learn(t, memDoc{src: src}, values)
 	set := defaults(nil)
@@ -403,12 +421,14 @@ func TestLearnBringsTheVoiceToTheTargetAndEachCompressorToItsCoupleOfDecibels(t 
 
 func TestLearnReadsTheLoopAloneWhereTheHostLoops(t *testing.T) {
 	// A quiet verse, then a chorus 12 dB louder.
-	verse := makeVoice(4, voiceOpts{level: 0.05, hiss: 0.1})
-	chorus := makeVoice(4, voiceOpts{level: 0.2, hiss: 0.1})
+	part := secs(4, 1)
+	verse := makeVoice(part, voiceOpts{level: 0.05, hiss: 0.1})
+	chorus := makeVoice(part, voiceOpts{level: 0.2, hiss: 0.1})
+	from, to := int64(part*rate), int64(2*part*rate)
 	src := &memSource{frames: [2][]float32{append(verse[0], chorus[0]...), append(verse[1], chorus[1]...)}}
 	values := defaults(nil)
 	whole := learn(t, memDoc{src: src}, values)
-	looped := learn(t, memDoc{src: src, loop: plug.Loop{From: 4 * rate, To: 8 * rate}, on: true}, values)
+	looped := learn(t, memDoc{src: src, loop: plug.Loop{From: from, To: to}, on: true}, values)
 	if !looped.loop {
 		t.Error("Learn does not say it read the loop alone")
 	}
@@ -421,7 +441,7 @@ func TestLearnReadsTheLoopAloneWhereTheHostLoops(t *testing.T) {
 			whole.values[InputID])
 	}
 	// A loop the host turned off reads the track.
-	off := learn(t, memDoc{src: src, loop: plug.Loop{From: 4 * rate, To: 8 * rate}}, values)
+	off := learn(t, memDoc{src: src, loop: plug.Loop{From: from, To: to}}, values)
 	if off.values[InputID] != whole.values[InputID] {
 		t.Errorf("with the loop off, Input = %+.1f dB, want the whole track's %+.1f", off.values[InputID], whole.values[InputID])
 	}
@@ -434,7 +454,7 @@ func TestLearnReadsTheLoopAloneWhereTheHostLoops(t *testing.T) {
 
 func TestLearnFindsTheBoxyRingAndCutsIt(t *testing.T) {
 	for _, hz := range []float64{320, 500} {
-		src := &memSource{frames: makeVoice(6, voiceOpts{level: 0.1, hiss: 0.1, ring: 9, ringHz: hz})}
+		src := &memSource{frames: makeVoice(secs(6, 2), voiceOpts{level: 0.1, hiss: 0.1, ring: 9, ringHz: hz})}
 		got := learn(t, memDoc{src: src}, defaults(nil))
 		if f := got.values[MudFreqID]; math.Abs(math.Log2(f/hz)) > 1.0/6+0.01 {
 			t.Errorf("a ring at %.0f Hz: the cut is at %.0f Hz", hz, f)
@@ -447,7 +467,7 @@ func TestLearnFindsTheBoxyRingAndCutsIt(t *testing.T) {
 
 func TestLearnStopsWhenTheVoiceChanges(t *testing.T) {
 	p := Descriptor.New(nil).(*plugin)
-	src := &memSource{frames: makeVoice(20, voiceOpts{level: 0.1, hiss: 0.1})}
+	src := &memSource{frames: makeVoice(secs(20, 5), voiceOpts{level: 0.1, hiss: 0.1})}
 	p.SetDocument(memDoc{src: src})
 	if ok, loop := p.canLearn(); !ok || loop {
 		t.Fatalf("canLearn = %v, %v, want a track and no loop", ok, loop)

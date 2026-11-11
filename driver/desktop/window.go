@@ -63,6 +63,12 @@ type Window struct {
 	in        *inbox.Inbox
 	presented chan driver.Frame
 	frames    chan frame
+	// heldAt is the held clock's time the engine stamps the frames it presents with, or zero; see HoldClock. The
+	// engine's goroutine alone touches it.
+	heldAt time.Time
+	// holding says the engine holds the window's clock, so the render thread draws no frame of its own to sharpen
+	// what a frame drew stretched: the next held frame does.
+	holding atomic.Bool
 	// released carries a token for each frame whose ops the render
 	// thread is done with ([driver.Releaser]).
 	released chan struct{}
@@ -281,11 +287,17 @@ func (w *Window) Present(ops []paint.Op, damage []geom.Rect) error {
 	select {
 	case <-w.quit:
 		return errClosed
-	case w.frames <- frame{ops, damage}:
+	case w.frames <- frame{ops, damage, w.heldAt}:
 		return nil
 	default:
 		return errors.New("desktop: Present called with a frame already in flight")
 	}
+}
+
+// HoldClock implements [driver.ClockHolder].
+func (w *Window) HoldClock(now time.Time) {
+	w.heldAt = now
+	w.holding.Store(!now.IsZero())
 }
 
 // Size implements [driver.Window].
@@ -1153,6 +1165,8 @@ func shotBack(was func([]byte, int, int), shot func(*image.RGBA)) func([]byte, i
 type frame struct {
 	ops    []paint.Op
 	damage []geom.Rect
+	// held is the held clock's time the engine stamped the frame with, or zero on the wall clock; see HoldClock.
+	held time.Time
 }
 
 // render is the window's render thread. It owns the GL context: it
@@ -1224,6 +1238,15 @@ func (w *Window) render() {
 			return
 		case f = <-w.frames:
 		case <-sharpen:
+			if w.holding.Load() {
+				// Armed by a frame drawn before the clock was held: the held frames draw it sharp.
+				sharpen = nil
+				if held {
+					held, again = false, frame{}
+					release()
+				}
+				continue
+			}
 			f, redraw = again, true
 			// A frame come meanwhile is drawn instead: the engine may
 			// already be recording into the ops of the one held.
@@ -1299,9 +1322,11 @@ func (w *Window) render() {
 			// See ContextCreation: a frame's buffers go while no window's
 			// context is being made.
 			glfw.ContextCreation.RLock()
+			r.Held = f.held
 			r.DrawRects(f.ops, f.damage, fbW, fbH, scale)
 			buffersDone(r.GL)
-			if !r.Stretched.Empty() {
+			// Held, the next frame draws what this one stretched sharp, at its time.
+			if !r.Stretched.Empty() && f.held.IsZero() {
 				again = frame{ops: f.ops}
 				sharpen = time.After(time.Until(r.SharpAt))
 			}

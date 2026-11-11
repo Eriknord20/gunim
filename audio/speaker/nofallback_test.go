@@ -235,20 +235,37 @@ func TestOpeningAgainWhereTheBackendFailsSaysWhy(t *testing.T) {
 				}
 				// Failed again, Reopen plays once the backend is back.
 				b.fail(t)
-				s.Reopen()
-				synctest.Wait()
+				reopen(s)
 				if s.out.Load() != nil {
 					t.Fatal("Reopen opened the output, though the backend failed")
 				}
+				if n := failedOpens(s); n != 1 {
+					t.Fatalf("after Reopen, %d opens failed, want 1", n)
+				}
 				b.heal(t)
-				s.Reopen()
-				synctest.Wait()
+				reopen(s)
 				if out := s.out.Load(); out == nil || !b.plays(out.output) {
 					t.Fatalf("after Reopen with the backend back, it plays through %v", out)
 				}
 			})
 		})
 	}
+}
+
+// reopen asks s to open its output again and waits until it has tried: an
+// output closing waits on its device, wasWait at most, which
+// synctest.Wait alone takes for done.
+func reopen(s *Speaker) {
+	s.Reopen()
+	time.Sleep(2 * wasWait)
+	synctest.Wait()
+}
+
+// failedOpens returns how many opens of s failed in a row.
+func failedOpens(s *Speaker) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fails
 }
 
 // An output that fails to open again, as a device goes or changes its

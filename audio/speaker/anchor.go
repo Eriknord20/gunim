@@ -35,14 +35,21 @@ func (a Anchor) FrameAt(t time.Time) int64 {
 // Anchor returns where the mixer's frames are heard on the clock
 // [time.Now] reads, and the zero Anchor while the speakers are closed.
 //
-// [Speaker.Heard] steps a buffer at a time, as the system takes the
-// sound. Anchor learns where each step lands, and runs a delay-locked
-// loop through the steps, which follows the sound card's clock as it
-// drifts from the computer's. It places a frame 200 ms ahead to within
-// a millisecond, once it has run a second, through steps of 256 frames
-// to 4096. Each call teaches it, and the speaker calls it four times a
-// second itself. A host calls it once a block, from the goroutine that
-// renders its sound: it allocates nothing.
+// [Speaker.Heard] moves frame by frame where the device tells when its
+// frames play, and a buffer at a time where it tells only what it
+// took. Anchor learns where each move lands, and runs a delay-locked
+// loop through them, which follows the sound card's clock as it drifts
+// from the computer's. It learns how far Heard moves at a time, and so
+// how long ago the move it sees can have come. Where Heard moves frame
+// by frame, it places a frame 200 ms ahead to within a millisecond once
+// it has run a second, however rarely it is called. Through steps of
+// 256 frames to 4096, it places one to within 2 ms, once it has run
+// a few seconds, where it is called every few milliseconds;
+// called more rarely, as four times a second, to within 3 ms, or 40%
+// of a step for steps longer than 7.5 ms, once it has run 8 s. Each call teaches it,
+// and the speaker calls it four times a second itself. A host calls it
+// once a block, from the goroutine that renders its sound: it
+// allocates nothing.
 //
 // The time of a frame heard within a second moves earlier by 5% of
 // the time passed at most, so notes a host sent for later frames leave
@@ -76,6 +83,12 @@ const (
 	// drift is how far the sound card's clock may run from the
 	// computer's.
 	drift = 0.01
+	// sharp is the span a step's time is known to within past which a
+	// step teaches the loop less, as that span is wider.
+	sharp = 20 * time.Millisecond
+	// longest is the longest a step of Heard lasts: a device's buffer
+	// of 4096 frames at 44100 Hz, and more.
+	longest = 100 * time.Millisecond
 	// slew is the most a frame's time moves earlier, as a part of the
 	// time passed.
 	slew = 0.05
@@ -92,9 +105,21 @@ type dll struct {
 	frame  int64
 	at     float64 // ns from base
 	period float64 // ns a frame
-	// heard is the frame Heard said last, at sampled.
+	// heard is the frame Heard said last, at sampled, and seen when
+	// a sample first saw it.
 	heard   int64
 	sampled float64
+	seen    float64
+	// grain is how many frames Heard moves by at a time, as far as the
+	// moves seen since the loop started tell: the greatest common
+	// divisor of them, 1 where Heard counts each frame, a buffer where
+	// it steps a buffer at a time, and 0 before it moved.
+	grain int64
+	// still is the longest Heard was seen standing still since the
+	// loop started, up to the longest a step lasts: a step can't have
+	// come sooner than that before the sample that saw it, whatever
+	// grain says.
+	still   float64
 	edge    float64 // when the loop last learned from a step
 	started float64 // when it started
 	spread  float64 // the mean distance of a step from the line, ns
@@ -119,24 +144,56 @@ func (d *dll) sample(h int64, t time.Time, rate int) Anchor {
 	}
 	now := float64(t.Sub(d.base))
 	gap := now - d.sampled
-	moved := h != d.heard
+	was := d.heard
+	moved := h != was
 	d.heard, d.sampled = h, now
 	switch {
 	case d.n == 0 || rate != d.rate:
 		d.restart(h, now, rate)
+		d.seen = now
 	case moved:
-		// The step came between the last sample and this one.
-		d.learn(h, now-gap/2, gap)
+		if h > was {
+			d.grain = gcd(d.grain, h-was)
+		}
+		// The step came between the last sample and this one, and no
+		// longer ago than a step of grain frames takes, or than Heard
+		// was seen to stand still: the step after it has yet to come.
+		// Over a gap far longer than a step, the step came just now.
+		within := gap
+		if d.grain > 0 {
+			within = min(gap, max(float64(d.grain)*d.period, d.still))
+		}
+		d.seen = now
+		if within > float64(longest) {
+			// Heard moved further at once than a step can last: the
+			// move tells only that it came since the last sample.
+			break
+		}
+		d.learn(h, now-within/2, within, gap)
+	default:
+		// Heard standing still longer than a step lasts is the sound
+		// stalled, as while suspended, not a step.
+		if still := now - d.seen; still <= float64(longest) {
+			d.still = max(d.still, still)
+		}
 	}
 	return d.hand(now)
 }
 
+// gcd returns the greatest common divisor of a and b, b where a is 0.
+func gcd(a, b int64) int64 {
+	for a != 0 {
+		a, b = b%a, a
+	}
+	return b
+}
+
 // learn moves the loop towards frame h being heard at edge, a step's
-// time, known to within gap.
-func (d *dll) learn(h int64, edge, gap float64) {
+// time, known to within within, from a sample gap after the last.
+func (d *dll) learn(h int64, edge, within, gap float64) {
 	predicted := d.at + float64(h-d.frame)*d.period
 	e := edge - predicted
-	far := max(float64(jump), gap, 4*d.spread)
+	far := max(float64(jump), within, 4*d.spread)
 	if e < -far {
 		d.restart(h, edge, d.rate)
 		return
@@ -150,7 +207,7 @@ func (d *dll) learn(h int64, edge, gap float64) {
 	// be either, or the sound stalled: the loop moves to it once the
 	// next keeps to its pace. A step the loop doesn't learn from is
 	// taken to have come when it was seen, the latest it can have.
-	from, seen := edge-gap/2, edge+gap/2
+	from, seen := edge-within/2, edge+within/2
 	took := float64(h-d.step) * d.period
 	held := gap > 4*took || from-d.stepSeen > 2*took
 	soon := seen-d.stepFrom < took/2
@@ -175,6 +232,10 @@ func (d *dll) learn(h int64, edge, gap float64) {
 	}
 	dt := max(edge-d.edge, float64(time.Millisecond))
 	b := min(2*math.Pi*bw*dt/1e9, 0.5)
+	if within > float64(sharp) {
+		// A step known only to within a wide span moves the loop less.
+		b *= float64(sharp) / within
+	}
 	nominal := 1e9 / float64(d.rate)
 	d.frame, d.at = h, predicted+math.Sqrt2*b*e
 	d.period += b * b * e / (dt / d.period)
@@ -187,6 +248,7 @@ func (d *dll) restart(h int64, at float64, rate int) {
 	d.rate, d.frame, d.at, d.edge, d.started, d.n = rate, h, at, at, at, 1
 	d.step, d.stepFrom, d.stepSeen, d.late = h, at, at, false
 	d.period = 1e9 / float64(rate)
+	d.grain, d.still = 0, 0
 }
 
 // hand returns the loop's anchor, held where it would move a frame

@@ -177,8 +177,11 @@ type surface struct {
 	// opened is when the popup was opened, window how it got its window and in how long, and shown whether its first
 	// frame has been shown, for GUNIM_DEBUG_POPUP.
 	opened time.Time
-	window string
-	shown  bool
+	// unshown says a held frame gave up waiting for the popup's window to show its frame, and waits no more until
+	// it does; see waitsForPopups.
+	unshown bool
+	window  string
+	shown   bool
 	// region is where the window was last told it takes the pointer, and regionSet says it was told at all; see
 	// pointerRegion.
 	region    []geom.Rect
@@ -319,12 +322,7 @@ func (u *UI) framePopups(f Frame) {
 
 func (u *UI) framePopup(s *surface, f Frame) {
 	opener := s.root.opener
-	f.Theme = u.themeOf(opener)
-	// A popup's window keeps clear of the system's bars itself.
-	f.Safe = geom.Insets{}
-	f.Keyboard = 0
-	// Until the window opens, guess it blends as the last one did.
-	f.Transparent = u.w.blends
+	f = u.popupFrame(s, f)
 	if s.dw != nil && s.zoom != u.zoom {
 		setZoom(s.dw, u.zoom)
 		// Place the window again at the new zoom
@@ -395,12 +393,38 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		s.stale = true
 		return
 	}
+	u.stampClock(s.dw)
 	if err := s.dw.Present(pp.Ops(), everything); err != nil {
 		u.w.err = fmt.Errorf("gunim: present popup: %w", err)
 		u.closePopup(s)
 		return
 	}
 	s.inFlight, s.stale = true, false
+}
+
+// popupFrame is f as popup s's content sees it.
+func (u *UI) popupFrame(s *surface, f Frame) Frame {
+	f.Theme = u.themeOf(s.root.opener)
+	// A popup's window keeps clear of the system's bars itself.
+	f.Safe = geom.Insets{}
+	f.Keyboard = 0
+	// Until the window opens, guess it blends as the last one did.
+	f.Transparent = u.w.blends
+	return f
+}
+
+// layoutPopups lays out the popups open, for a frame left unpainted, which has them neither painted nor
+// presented: what a popup's layout starts moving moves from the frame it would have, as in a frame painted.
+func (u *UI) layoutPopups(f Frame) {
+	for _, s := range u.popups {
+		if s.dw == nil || s.closing && len(s.root.kids) == 0 {
+			continue
+		}
+		pf := u.popupFrame(s, f)
+		pf.Scale, pf.Transparent = s.dw.Scale(), transparent(s.dw)
+		u.fitPopup(s, u.windowOf(s.root.opener))
+		u.layoutPopup(s, pf)
+	}
 }
 
 // fitPopup tells content that fits itself to the screen how much room there is round its anchor, asking the parent
@@ -821,7 +845,7 @@ func (u *UI) popupEvent(e popupEvent) {
 				float64(time.Since(e.s.opened).Microseconds())/1000, e.s.window)
 		}
 		e.s.shown = true
-		e.s.inFlight = false
+		e.s.inFlight, e.s.unshown = false, false
 		if e.s.stale {
 			u.invalid = true
 		}
@@ -831,7 +855,7 @@ func (u *UI) popupEvent(e popupEvent) {
 		u.popupCovered(e.s, c.Covered)
 		return
 	}
-	u.handleOn(e.s.root, e.ev)
+	u.handleOn(e.s.root, u.heldTime(e.ev))
 }
 
 // popupCovered notes whether s's window is out of sight. A popup is on top of other windows, so one can still be
