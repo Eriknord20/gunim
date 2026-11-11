@@ -166,10 +166,15 @@ func describe(c Class, open func(cfg Config) (*Plugin, error)) (plug.Descriptor,
 	d := plug.Descriptor{ID: PlugID(c), Name: c.Name, Vendor: c.Vendor, Version: c.Version, Kind: kind,
 		Notes: p.Notes() || c.Instrument()}
 	ins, outs := p.Buses()
-	first := 0
+	first, mainIn := 0, 0
 	if len(ins) > 0 && ins[0].Main {
+		mainIn = ins[0].Channels
 		ins, first = ins[1:], 1
 	}
+	// A plugin whose main buses are one channel each, or whose main
+	// output is one channel and which has no main input, as a mono
+	// instrument, keeps mono: it has but one channel to put out.
+	d.KeepsMono = len(outs) > 0 && outs[0].Channels == 1 && (first == 0 || mainIn == 1)
 	d.AuxIn = ports(ins, "Sidechain", first)
 	d.AuxOut = ports(outs[1:], "Output", 1)
 	seen := map[uint32]bool{}
