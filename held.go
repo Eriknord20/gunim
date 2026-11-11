@@ -120,7 +120,7 @@ func (c *HeldClock) Step(ctx context.Context, d time.Duration) error {
 			return err
 		}
 	}
-	_, err := c.step(ctx, c.Now().Add(d), d)
+	_, err := c.stepAll(ctx, c.Now().Add(d), d)
 	return err
 }
 
@@ -144,7 +144,7 @@ func (c *HeldClock) Advance(ctx context.Context, d time.Duration) error {
 	defer c.advancing.Unlock()
 	start := c.Now()
 	end := start.Add(d)
-	timer, err := c.step(ctx, time.Time{}, -1)
+	timer, err := c.stepAll(ctx, time.Time{}, -1)
 	if err != nil {
 		return err
 	}
@@ -165,7 +165,7 @@ func (c *HeldClock) Advance(ctx context.Context, d time.Duration) error {
 				return err
 			}
 		}
-		if timer, err = c.step(ctx, at, at.Sub(now)); err != nil {
+		if timer, err = c.stepAll(ctx, at, at.Sub(now)); err != nil {
 			return err
 		}
 		now = at
@@ -195,9 +195,9 @@ type heldStep struct {
 	done  chan time.Time
 }
 
-// step has every window of the clock draw the frame at now, and returns when the earliest of their timers is
+// stepAll has every window of the clock draw the frame at now, and returns when the earliest of their timers is
 // due, zero for none. A negative delta draws nothing and only asks.
-func (c *HeldClock) step(ctx context.Context, now time.Time, delta time.Duration) (time.Time, error) {
+func (c *HeldClock) stepAll(ctx context.Context, now time.Time, delta time.Duration) (time.Time, error) {
 	if delta >= 0 {
 		c.mu.Lock()
 		c.now, c.moved = now, true
