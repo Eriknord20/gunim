@@ -324,10 +324,11 @@ func trashWhat(items []TrashItem) string {
 }
 
 // trashRun does do to each of items in the background, one at a time,
-// and says on the page what came of it, in the words of doing and done.
-// The first item that fails stops it, as the window closing does at the
-// next item, as closing waits for it. One thing at a time: a second asked
-// for while the first runs is refused.
+// and says what came of it, in the words of doing and done: on the page,
+// or as a notice where the page that asked has closed. The first item
+// that fails stops it, as the window closing does at the next item, as
+// closing waits for it. One thing at a time: a second asked for while the
+// first runs is refused.
 func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx context.Context, it TrashItem) error) {
 	s := &a.bin
 	if s.busy {
@@ -356,34 +357,56 @@ func (a *app) trashRun(items []TrashItem, doing, done string, do func(ctx contex
 			}
 			worked++
 		}
+		// Stopped, which only the window closing does: an item it cut
+		// short failed for no reason of its own.
+		closing := ctx.Err() != nil
 		a.post(func() {
+			s.busy, s.acting = false, nil
+			if closing {
+				// The window is going, with no one left to tell.
+				return
+			}
+			// The folder showing may have an item back.
+			a.poll()
+			note, bad := trashNote(items, worked, done, failed)
+			if !s.open || seq != s.seq {
+				// The page that asked is gone: a notice says how it went,
+				// which the log keeps, and a page open since reads the
+				// trash again.
+				if bad {
+					a.fail(note)
+				} else {
+					a.patch(Notice{Title: note, Kind: "success"})
+				}
+				if s.open {
+					a.readTrashCan()
+					a.publishTrashCan()
+				}
+				return
+			}
 			if failed != nil {
 				a.logLine(doing+" "+items[worked].Name+" from the trash", failed.Error())
 			}
-			s.busy, s.acting = false, nil
-			if !s.open {
-				return
-			}
-			switch {
-			case seq != s.seq:
-				// The page closed and opened again since: it says only
-				// what the trash holds now.
-			case failed == nil:
-				s.note, s.noteErr = upperFirst(trashWhat(items))+" "+done+".", false
-				if len(items) == 1 {
-					s.note = "“" + items[0].Name + "” " + done + "."
-				}
-			case worked == 0:
-				s.note, s.noteErr = "“"+items[0].Name+"” could not be "+done+": "+failed.Error(), true
-			default:
-				s.note, s.noteErr = plural(worked, "item")+" "+done+"; stopped at “"+items[worked].Name+"”: "+failed.Error(), true
-			}
+			s.note, s.noteErr = note, bad
 			a.readTrashCan()
-			// The folder showing may have an item back.
-			a.poll()
 			a.publishTrashCan()
 		})
 	})
+}
+
+// trashNote says what came of an act on items, done in the word done: all
+// of them, or the worked of them before failed stopped it, which is then
+// a failure.
+func trashNote(items []TrashItem, worked int, done string, failed error) (note string, bad bool) {
+	switch {
+	case failed == nil && len(items) == 1:
+		return "“" + items[0].Name + "” " + done + ".", false
+	case failed == nil:
+		return upperFirst(trashWhat(items)) + " " + done + ".", false
+	case worked == 0:
+		return "“" + items[0].Name + "” could not be " + done + ": " + failed.Error(), true
+	}
+	return plural(worked, "item") + " " + done + "; stopped at “" + items[worked].Name + "”: " + failed.Error(), true
 }
 
 // upperFirst is s with its first letter in upper case.
@@ -432,12 +455,10 @@ func (a *app) emptyTrash() {
 			err := can.EmptyTrash(ctx)
 			a.post(func() {
 				s.busy, s.acting = false, nil
-				if err != nil {
-					a.logLine("Emptying the trash", err.Error())
-				}
 				if !s.open || seq != s.seq {
 					// The page that asked is gone: a notice says how it went,
-					// and a page open since reads the trash again.
+					// which the log keeps, and a page open since reads the
+					// trash again.
 					if err != nil {
 						a.fail("Couldn't empty the " + trashNoun(title) + ": " + err.Error())
 					} else {
@@ -451,6 +472,7 @@ func (a *app) emptyTrash() {
 				}
 				s.note, s.noteErr = "Emptied the "+trashNoun(title)+".", false
 				if err != nil {
+					a.logLine("Emptying the trash", err.Error())
 					s.note, s.noteErr = "Couldn't empty all of the "+trashNoun(title)+": "+err.Error(), true
 				}
 				a.readTrashCan()

@@ -675,3 +675,35 @@ func TestAFadesLayerHoldsAllTheLinesOfAMessageTooTallForItsBox(t *testing.T) {
 		t.Errorf("the message's layer is %v wide, its box %v", at.Max.X-at.Min.X, box.Max.X-box.Min.X)
 	}
 }
+
+// heldFails is a trash whose restore waits for gate, and then fails.
+type heldFails struct {
+	xdgTrash
+	gate chan struct{}
+}
+
+func (f heldFails) RestoreItem(TrashItem) error {
+	<-f.gate
+	return errors.New("the disk said no")
+}
+
+func TestARestoreThatFailsAfterThePageClosedSaysSoInTheWindow(t *testing.T) {
+	h := newTrashHarness(t, []string{"a.txt"}, "a.txt")
+	gate := make(chan struct{})
+	// The window waits for the restore as it closes, whatever failed.
+	open := sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(open)
+	h.a.trash = heldFails{xdgTrash: h.a.trash.(xdgTrash), gate: gate}
+	pg := h.openTrashPage(Command{Name: CmdTrashCan})
+	h.pickTrash(pg, "a.txt")
+	h.clickButton(pg, pg.restore.OnClick)
+	h.until("the restore runs", func() bool { return pg.state.Busy })
+	// The first Escape lets go of the row selected, the second closes.
+	h.press(input.KeyEscape, 0)
+	h.press(input.KeyEscape, 0)
+	h.until("the page closes", func() bool { return !h.a.bin.open })
+	open()
+	h.until("the window says the restore failed", func() bool {
+		return strings.Contains(h.b.banner.label.Text, "a.txt") && strings.Contains(h.b.banner.label.Text, "the disk said no")
+	})
+}

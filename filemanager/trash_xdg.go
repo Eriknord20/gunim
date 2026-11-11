@@ -362,23 +362,76 @@ func (t xdgTrash) PurgeItem(ctx context.Context, it TrashItem) error {
 	return nil
 }
 
-// EmptyTrash implements [TrashCan]: every item goes, then the records,
-// and the sizes the trash noted of its folders.
+// EmptyTrash implements [TrashCan]: every item the trash holds as it
+// starts goes, each with its record, and the sizes the trash noted of its
+// folders. An item that comes to the trash meanwhile, under a name the
+// trash did not hold, stays with its record. A record with no item stays
+// too: it may be of an item on its way in, whose record is made first,
+// and one left over costs only its name.
 func (t xdgTrash) EmptyTrash(ctx context.Context) error {
 	fsys, ps := t.on()
-	for _, sub := range []string{"files", "info"} {
-		dir := ps.Join(t.dir, sub)
-		kids, err := fsys.ReadDir(ctx, dir)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
+	list := func(sub string) ([]fs.DirEntry, error) {
+		kids, err := fsys.ReadDir(ctx, ps.Join(t.dir, sub))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("emptying the trash: %w", err)
 		}
-		if err != nil {
-			return fmt.Errorf("emptying the trash: %w", err)
-		}
-		for _, k := range kids {
-			if err := removeAll(ctx, fsys, ps.Join(dir, k.Name())); err != nil {
+		return kids, nil
+	}
+	// The records are listed before the items, as an item on its way in
+	// has its record first: an item listed here with no record listed may
+	// be one that came between the two.
+	records, err := list("info")
+	if err != nil {
+		return err
+	}
+	kept, err := list("files")
+	if err != nil {
+		return err
+	}
+	// folded tells a record listed under other letters' case, as a file
+	// system that ignores case keeps one another program wrote, from a
+	// record made since.
+	recorded, folded := make(map[string]bool, len(records)), make(map[string]bool, len(records))
+	for _, r := range records {
+		recorded[r.Name()], folded[strings.ToLower(r.Name())] = true, true
+	}
+	for _, k := range kept {
+		name := k.Name()
+		record := ps.Join(t.dir, "info", name+infoExt)
+		has := recorded[name+infoExt]
+		if !has {
+			switch _, err := fsys.Lstat(record); {
+			case err == nil && folded[strings.ToLower(name+infoExt)]:
+				has = true
+			case err == nil:
+				// A record made since the listing: the item came with it,
+				// and both stay.
+				continue
+			case !errors.Is(err, fs.ErrNotExist):
 				return fmt.Errorf("emptying the trash: %w", err)
 			}
+		}
+		if err := removeAll(ctx, fsys, ps.Join(t.dir, "files", name)); err != nil {
+			return fmt.Errorf("emptying the trash: %w", err)
+		}
+		// An item with no record has none to remove: one there now is of
+		// an item that took the name since.
+		if !has {
+			continue
+		}
+		if err := removeAll(ctx, fsys, record); err != nil {
+			return fmt.Errorf("emptying the trash: %w", err)
+		}
+	}
+	for _, r := range records {
+		// What is in info and is no record goes, as nothing claims a name
+		// with it. A name of dots is no item's.
+		name, isRecord := strings.CutSuffix(r.Name(), infoExt)
+		if isRecord && name != "" && name != "." && name != ".." {
+			continue
+		}
+		if err := removeAll(ctx, fsys, ps.Join(t.dir, "info", r.Name())); err != nil {
+			return fmt.Errorf("emptying the trash: %w", err)
 		}
 	}
 	if err := fsys.Remove(ps.Join(t.dir, "directorysizes")); err != nil && !errors.Is(err, fs.ErrNotExist) {

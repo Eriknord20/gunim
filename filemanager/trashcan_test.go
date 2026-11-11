@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -452,5 +453,108 @@ func TestARestoreGoesOnWhereTheFileSystemCannotRefuseANameTaken(t *testing.T) {
 				t.Fatalf("restoring over a new b.txt made %v", err)
 			}
 		}
+	}
+}
+
+// meanwhileFS is a file system on which do happens once, as the first
+// name is removed: what another window does while this one works.
+type meanwhileFS struct {
+	FS
+	once *sync.Once
+	do   func()
+}
+
+func (m meanwhileFS) Remove(p string) error {
+	m.once.Do(m.do)
+	return m.FS.Remove(p)
+}
+
+func TestEmptyingLeavesAnItemThatComesToTheTrashMeanwhile(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt", "b.txt", "new.txt")
+	tr := xdgTrash{dir: filepath.Join(root, "Trash")}
+	for _, p := range []string{"a.txt", "b.txt"} {
+		if _, err := tr.Trash(at(root, p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An item with no record, as a trash another program left may hold.
+	tree(t, filepath.Join(root, "Trash", "files"), "stray.txt")
+	emptying := xdgTrash{dir: tr.dir, fs: meanwhileFS{FS: LocalFS(), once: new(sync.Once), do: func() {
+		if _, err := tr.Trash(at(root, "new.txt")); err != nil {
+			t.Error(err)
+		}
+	}}}
+	if err := emptying.EmptyTrash(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	its := trashItems(t, tr)
+	if len(its) != 1 || its[0].Name != "new.txt" {
+		t.Fatalf("after an empty that new.txt came to the trash during, the trash lists %+v", its)
+	}
+	if got := names(t, filepath.Join(root, "Trash", "files")); len(got) != 1 {
+		t.Fatalf("the trash's files keep %v, want new.txt alone", got)
+	}
+	if got := names(t, filepath.Join(root, "Trash", "info")); len(got) != 1 {
+		t.Fatalf("the trash's info keeps %v, want new.txt's record alone", got)
+	}
+}
+
+// betweenFS is a file system on which do happens once, as the folder
+// named at is listed and before the listing is read.
+type betweenFS struct {
+	FS
+	at   string
+	once *sync.Once
+	do   func()
+}
+
+func (b betweenFS) ReadDir(ctx context.Context, p string) ([]fs.DirEntry, error) {
+	if filepath.Base(p) == b.at {
+		b.once.Do(b.do)
+	}
+	return b.FS.ReadDir(ctx, p)
+}
+
+func TestEmptyingLeavesAnItemThatComesBetweenItsTwoListings(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt", "new.txt")
+	tr := xdgTrash{dir: filepath.Join(root, "Trash")}
+	if _, err := tr.Trash(at(root, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	emptying := xdgTrash{dir: tr.dir, fs: betweenFS{FS: LocalFS(), at: "files", once: new(sync.Once), do: func() {
+		if _, err := tr.Trash(at(root, "new.txt")); err != nil {
+			t.Error(err)
+		}
+	}}}
+	if err := emptying.EmptyTrash(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if its := trashItems(t, tr); len(its) != 1 || its[0].Name != "new.txt" {
+		t.Fatalf("after an empty that new.txt came between the listings of, the trash lists %+v", its)
+	}
+}
+
+func TestEmptyingKeepsARecordWithNoItemAndTakesWhatIsNoRecord(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "a.txt")
+	tr := xdgTrash{dir: filepath.Join(root, "Trash")}
+	if _, err := tr.Trash(at(root, "a.txt")); err != nil {
+		t.Fatal(err)
+	}
+	info := filepath.Join(root, "Trash", "info")
+	// A record of an item on its way in, a folder named as a.txt's record
+	// would be beside b.txt, and two things that are no records.
+	tree(t, info, "coming.txt.trashinfo", "b.txt.trashinfo/x", "notes", ".trashinfo")
+	tree(t, filepath.Join(root, "Trash", "files"), "b.txt")
+	if err := tr.EmptyTrash(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, info); len(got) != 1 || got[0] != "coming.txt.trashinfo" {
+		t.Fatalf("the trash's info keeps %v, want the record with no item alone", got)
+	}
+	if got := names(t, filepath.Join(root, "Trash", "files")); len(got) != 0 {
+		t.Fatalf("the trash's files keep %v", got)
 	}
 }
