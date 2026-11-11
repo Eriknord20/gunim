@@ -133,14 +133,15 @@ func onOff(v float64) string {
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:       "marrasen.dynamics",
-	Name:     "Dynamics",
-	Vendor:   "Marras",
-	Version:  "0.1.0",
-	Kind:     "Fx|Dynamics",
-	Tagline:  "Gate, compressor & limiter",
-	Keywords: []string{"compressor", "compression", "limiter", "gate", "noise gate", "sidechain", "ducking", "threshold", "ratio", "loudness"},
-	AuxIn:    []plug.AudioPort{{Name: "Sidechain"}},
+	ID:        "marrasen.dynamics",
+	Name:      "Dynamics",
+	Vendor:    "Marras",
+	Version:   "0.1.0",
+	Kind:      "Fx|Dynamics",
+	Tagline:   "Gate, compressor & limiter",
+	KeepsMono: true,
+	Keywords:  []string{"compressor", "compression", "limiter", "gate", "noise gate", "sidechain", "ducking", "threshold", "ratio", "loudness"},
+	AuxIn:     []plug.AudioPort{{Name: "Sidechain"}},
 	ControlOut: []plug.ControlPort{
 		GateOut:  {Name: "Gate reduction", Key: "gate", Unit: "dB", Min: -90, Measures: plug.MeasureGate},
 		CompOut:  {Name: "Compression", Key: "compression", Unit: "dB", Min: -60, Measures: plug.MeasureCompression},

@@ -53,13 +53,14 @@ const (
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:       "marrasen.eq",
-	Name:     "EQ",
-	Vendor:   "Marras",
-	Version:  "0.1.0",
-	Kind:     "Fx|EQ",
-	Tagline:  "Parametric EQ",
-	Keywords: []string{"equalizer", "equaliser", "filter", "bell", "shelf", "cut", "notch", "high-pass", "low-pass", "tone", "dynamic eq"},
+	ID:        "marrasen.eq",
+	Name:      "EQ",
+	Vendor:    "Marras",
+	Version:   "0.1.0",
+	Kind:      "Fx|EQ",
+	Tagline:   "Parametric EQ",
+	KeepsMono: true,
+	Keywords:  []string{"equalizer", "equaliser", "filter", "bell", "shelf", "cut", "notch", "high-pass", "low-pass", "tone", "dynamic eq"},
 	Params: []plug.Param{{
 		ID: BypassID, Name: "Bypass",
 		Min: 0, Max: 1, Default: 0, Steps: 1,

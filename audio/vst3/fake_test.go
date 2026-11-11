@@ -19,6 +19,8 @@ type fakeBus struct {
 	name     string
 	channels int
 	aux      bool
+	// fixed keeps the bus at its channels, whatever the host asks.
+	fixed bool
 }
 
 type fakePlugin struct {
@@ -215,7 +217,7 @@ var fakeProcKind = &kind{iids: []uid{iidAudioProcessor}, other: fakeOther, make:
 			take := func(arr uintptr, n int, buses []fakeBus) {
 				for i := range n {
 					a := *ptr[uint64](arr + uintptr(i)*8)
-					if !buses[i].aux && (a == mono || a == stereo) {
+					if !buses[i].aux && !buses[i].fixed && (a == mono || a == stereo) {
 						buses[i].channels = map[uint64]int{mono: 1, stereo: 2}[a]
 					}
 				}

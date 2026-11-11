@@ -56,6 +56,15 @@ type Descriptor struct {
 	// past its name and kind: "mono" and "phase" find a gain and stereo
 	// tool. A browser searches them, and shows none.
 	Keywords []string
+	// KeepsMono says a mono sound in comes out mono, at every setting:
+	// the same sound on both sides in gives the same sound on both
+	// out, as an EQ, a compressor or a gate with its sides linked
+	// gives. A reverb, a stereo delay, a chorus, a pan or a widener
+	// spreads the sound, and leaves it false. For an instrument, it
+	// says the instrument's sound is mono. A host may write a chain of
+	// such plugins to one channel, as a stem of a mono track. False is
+	// the safe guess, and the zero value.
+	KeepsMono bool
 	// Notes says the plugin takes notes, in [Block.Events]. An
 	// instrument does.
 	Notes bool
