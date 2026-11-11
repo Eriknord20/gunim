@@ -148,6 +148,9 @@ type Renderer struct {
 	// one again.
 	Stretched geom.Rect
 	SharpAt   time.Time
+	// Held is the held clock's time of the frame drawn next, which the renderer goes by in place of the wall
+	// clock's, or zero; see driver.ClockHolder.
+	Held time.Time
 	// Under is the window's background, where a frame's first op leaves
 	// it uncovered; see driver.Backgrounder.
 	Under color.NRGBA
@@ -816,6 +819,9 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	r.now = time.Now()
 	if r.clock != nil {
 		r.now = r.clock()
+	}
+	if !r.Held.IsZero() {
+		r.now = r.Held
 	}
 	// What the last frame drew stretched is drawn again, to be sharp.
 	r.damage = append(r.damage[:0], damage...)

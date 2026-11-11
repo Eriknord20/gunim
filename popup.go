@@ -177,8 +177,11 @@ type surface struct {
 	// opened is when the popup was opened, window how it got its window and in how long, and shown whether its first
 	// frame has been shown, for GUNIM_DEBUG_POPUP.
 	opened time.Time
-	window string
-	shown  bool
+	// unshown says a held frame gave up waiting for the popup's window to show its frame, and waits no more until
+	// it does; see waitsForPopups.
+	unshown bool
+	window  string
+	shown   bool
 	// region is where the window was last told it takes the pointer, and regionSet says it was told at all; see
 	// pointerRegion.
 	region    []geom.Rect
@@ -395,6 +398,7 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		s.stale = true
 		return
 	}
+	u.stampClock(s.dw)
 	if err := s.dw.Present(pp.Ops(), everything); err != nil {
 		u.w.err = fmt.Errorf("gunim: present popup: %w", err)
 		u.closePopup(s)
@@ -821,7 +825,7 @@ func (u *UI) popupEvent(e popupEvent) {
 				float64(time.Since(e.s.opened).Microseconds())/1000, e.s.window)
 		}
 		e.s.shown = true
-		e.s.inFlight = false
+		e.s.inFlight, e.s.unshown = false, false
 		if e.s.stale {
 			u.invalid = true
 		}
@@ -831,7 +835,7 @@ func (u *UI) popupEvent(e popupEvent) {
 		u.popupCovered(e.s, c.Covered)
 		return
 	}
-	u.handleOn(e.s.root, e.ev)
+	u.handleOn(e.s.root, u.heldTime(e.ev))
 }
 
 // popupCovered notes whether s's window is out of sight. A popup is on top of other windows, so one can still be

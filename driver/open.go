@@ -215,6 +215,16 @@ type Releaser interface {
 	Released() <-chan struct{}
 }
 
+// A ClockHolder is a [Window] that draws by the engine's held clock where told to (gunim's HeldClock). What the
+// window draws differently as time passes, as a mask drawn stretched while its size changes and sharp once it
+// settles, then goes by the frames' held time, and the window draws no frame of its own on the wall clock, so the
+// frames drawn are the same however long they took.
+type ClockHolder interface {
+	// HoldClock stamps the frames presented from now on with the held time now. A zero now gives the window back
+	// to the wall clock. It is called on the goroutine that calls Present.
+	HoldClock(now time.Time)
+}
+
 // WindowFocus is sent on [Window.Input] when the window gains or loses
 // the keyboard.
 type WindowFocus struct{ Focused bool }
