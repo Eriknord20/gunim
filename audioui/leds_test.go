@@ -121,3 +121,22 @@ func BenchmarkAMeterOfLights(b *testing.B) {
 		s.Paint(&p, th, geom.Rc(0, 0, 46, 124), lv)
 	}
 }
+
+func TestAReadoutNearZeroHasNoSign(t *testing.T) {
+	for _, c := range []struct {
+		format string
+		v      float64
+		want   string
+	}{
+		{"%.0f", -0.1, "0"},
+		{"%.0f", -0.6, "-1"},
+		{"%.1f", -0.04, "0.0"},
+		{"%.1f", -0.06, "-0.1"},
+		{"%.1f", 0.04, "0.0"},
+		{"%.1f", -10.0, "-10.0"},
+	} {
+		if got := Readout(c.format, c.v); got != c.want {
+			t.Errorf("Readout(%q, %v) = %q, want %q", c.format, c.v, got, c.want)
+		}
+	}
+}
