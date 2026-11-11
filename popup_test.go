@@ -680,7 +680,7 @@ func TestAPopupSlidInsideItsWindowIsToldTheRoomFromWhereItAsked(t *testing.T) {
 	w, _, opener := newStage(t, paint.Identity)
 	m := &fitMenu{menu: newMenu()}
 	// The recorder is at (10, 10) and the window 800 wide, so the 120
-	// wide menu slides 20 left, to 680.
+	// wide menu slides 30 left, to 680.
 	w.ui.OpenPopup(opener, m, PopupOptions{Anchor: geom.Rc(700, 0, 100, 50)})
 	run(w, 1)
 	if got := popupWindow(t, w).Anchor().Min.X; got != 680 {
