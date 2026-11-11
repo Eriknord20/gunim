@@ -174,6 +174,14 @@ func through(st speaker.State) string {
 	return st.Driver
 }
 
+// onOff names a switch's state.
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
 func newView(mix *audio.Mixer, spk *speaker.Speaker, n *notes) *view {
 	v := &view{mix: mix, spk: spk, notes: n, driver: native, digit: widget.NewLabel(""),
 		info: widget.NewLabel("")}
@@ -213,7 +221,7 @@ func newView(mix *audio.Mixer, spk *speaker.Speaker, n *notes) *view {
 		}
 		log.Printf("SYNCCHECK driver=%q quick=%v route=%v shift=%v latency=%v device=%v", st.Driver, v.quick,
 			st.Route, v.shift, st.Latency.Round(100*time.Microsecond), device.Round(100*time.Microsecond))
-		v.saved, v.savedAt = fmt.Sprintf("Saved: %s, quick %v, picture %+v.", through(st), v.quick, v.shift), time.Now()
+		v.saved, v.savedAt = fmt.Sprintf("Saved: %s, Quick %s, picture %+v.", through(st), onOff(v.quick), v.shift), time.Now()
 		return nil
 	}
 	v.button = append(v.button, sw, quick, done)
@@ -263,9 +271,9 @@ func (v *view) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) g
 	if v.shift < 0 {
 		later = "earlier"
 	}
-	v.info.Text = fmt.Sprintf("Playing through %s, route %v, quick %v.\nReported latency %v.\n\nPicture shifted %v %s.\n\n"+
+	v.info.Text = fmt.Sprintf("Playing through %s, route %v, Quick %s.\nReported latency %v.\n\nPicture shifted %v %s.\n\n"+
 		"Shift the picture until each number shows exactly as its note sounds. Then press Done.",
-		through(st), st.Route, v.quick, st.Latency.Round(100*time.Microsecond), v.shift.Abs(), later)
+		through(st), st.Route, onOff(v.quick), st.Latency.Round(100*time.Microsecond), v.shift.Abs(), later)
 	if time.Since(v.savedAt) < 4*time.Second {
 		v.info.Text += "\n\n" + v.saved
 	}
