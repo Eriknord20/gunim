@@ -420,7 +420,9 @@ func (u *UI) fitPopup(s *surface, parent driver.Window) {
 	if len(fits) == 0 && !s.opts.Beside {
 		return
 	}
-	a := u.popupAnchor(s)
+	// The room round the anchor the content asked for: the slide inside the window is the engine's, and content that
+	// places itself goes by where it asked to go.
+	a := u.askedAnchor(s)
 	if s.opts.Beside {
 		// The room round the anchor itself, which the popup is put beside
 		a = u.openerRect(s)
@@ -462,46 +464,47 @@ func (u *UI) layoutPopup(s *surface, f Frame) geom.Size {
 // bottom, even where the padding turns it inside out: the popup lines
 // its top up with the bottom and its bottom with the top.
 //
-// A popup opened beside its anchor gets an anchor of no size, at where its window's top-left corner goes.
+// A popup opened beside its anchor gets an anchor of no size, at where its window's top-left corner goes. One of the
+// main window that opens below or above slides sideways to keep inside the window, as [UI.insideWindow] says.
 func (u *UI) popupAnchor(s *surface) geom.Rect {
+	anchor := u.askedAnchor(s)
+	if s.opts.Beside || s.opts.Over {
+		return anchor
+	}
+	return u.insideWindow(s, anchor, u.popupPadding(s))
+}
+
+// popupPadding returns the padding of s's content, where it has one.
+func (u *UI) popupPadding(s *surface) geom.Insets {
+	for _, k := range s.root.kids {
+		if pp, ok := k.node.(PopupPadder); ok {
+			return pp.PopupPadding()
+		}
+	}
+	return geom.Insets{}
+}
+
+// askedAnchor returns s's anchor as [UI.popupAnchor] does, before the slide that keeps a popup inside its window: where
+// the content asked to go.
+func (u *UI) askedAnchor(s *surface) geom.Rect {
 	anchor := u.openerRect(s)
-	if s.opts.Beside {
+	in := u.popupPadding(s)
+	switch {
+	case s.opts.Beside:
 		room := driver.NoRoomLimit
 		if s.roomKnown {
 			room = s.room
 		}
-		var in geom.Insets
-		for _, k := range s.root.kids {
-			if pp, ok := k.node.(PopupPadder); ok {
-				in = pp.PopupPadding()
-				break
-			}
-		}
 		at := besideAt(anchor, s.root.size, in, room)
 		return geom.Rect{Min: at, Max: at}
+	case s.opts.Over:
+		// The content, inside its padding, sits on the anchor's corner
+		return anchor.Add(geom.Pt(-in.Left, -in.Top))
 	}
-	var in geom.Insets
-	for _, k := range s.root.kids {
-		pp, ok := k.node.(PopupPadder)
-		if !ok {
-			continue
-		}
-		in = pp.PopupPadding()
-		if s.opts.Over {
-			// The content, inside its padding, sits on the anchor's corner
-			anchor.Min = anchor.Min.Sub(geom.Pt(in.Left, in.Top))
-			anchor.Max = anchor.Max.Sub(geom.Pt(in.Left, in.Top))
-			return anchor
-		}
-		anchor.Min.X -= in.Left
-		anchor.Min.Y += in.Bottom
-		anchor.Max.Y -= in.Top
-		break
-	}
-	if s.opts.Over {
-		return anchor
-	}
-	return u.insideWindow(s, anchor, in)
+	anchor.Min.X -= in.Left
+	anchor.Min.Y += in.Bottom
+	anchor.Max.Y -= in.Top
+	return anchor
 }
 
 // insideWindow slides anchor, where a popup of the main window opens
