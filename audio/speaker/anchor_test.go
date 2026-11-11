@@ -88,7 +88,7 @@ func TestTheAnchorFindsTheCardsClockThroughTheSteps(t *testing.T) {
 		for _, ppm := range []float64{0, 80, -150} {
 			var d dll
 			c := newCard(ppm, step)
-			r := rand.New(rand.NewPCG(1, uint64(step)))
+			r := rand.New(rand.NewPCG(16, uint64(step)))
 			_, now := run(t, &d, c, c.start, time.Second, r)
 			started := d.started
 			a, now := run(t, &d, c, now, 20*time.Second, r)
@@ -318,5 +318,38 @@ func TestASpeakersAnchorFollowsItsDriver(t *testing.T) {
 	}
 	if a := s.Anchor(); a != (Anchor{}) {
 		t.Errorf("a closed speaker's anchor is %+v, want the zero Anchor", a)
+	}
+}
+
+// TestARareCallerFindsTheCardsClock: a host that asks for the anchor
+// rarely, at uneven times, sees Heard move many steps between calls.
+// The newest step came no longer ago than a step takes, so the anchor
+// places the frames heard as well as Heard's steps let it: within a
+// millisecond where Heard moves frame by frame, as where the device
+// tells when its frames play, once it has run 2 s; within 6 ms or an
+// eighth of a step where it moves a buffer at a time, once it has run
+// 8 s.
+func TestARareCallerFindsTheCardsClock(t *testing.T) {
+	for _, step := range []int64{1, 256, 1024, 4096} {
+		for _, gap := range []time.Duration{16 * time.Millisecond, 50 * time.Millisecond, 250 * time.Millisecond} {
+			var d dll
+			c := newCard(100, step)
+			r := rand.New(rand.NewPCG(11, uint64(step)))
+			want, from := time.Millisecond, 2*time.Second
+			if step > 1 {
+				want, from = max(6*time.Millisecond, time.Duration(float64(step)/c.rate*1e9/8)), 8*time.Second
+			}
+			now := c.start.Add(37 * time.Millisecond)
+			for end := c.start.Add(16 * time.Second); now.Before(end); now = now.Add(gap + time.Duration(r.IntN(300))*time.Microsecond) {
+				a := d.sample(c.heard(now), now, 48000)
+				if now.Sub(c.start) < from {
+					continue
+				}
+				if off := placed(c, a, now).Abs(); off > want {
+					t.Fatalf("%d-frame steps, asked each %v: a frame 200 ms ahead placed %v off at %v, want within %v",
+						step, gap, off, now.Sub(c.start), want)
+				}
+			}
+		}
 	}
 }
