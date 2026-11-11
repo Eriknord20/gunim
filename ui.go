@@ -120,6 +120,8 @@ type App struct {
 	windows windows
 	// loops counts the windows' goroutines still running.
 	loops sync.WaitGroup
+	// held is the clock the windows keep time by, or nil for the wall clock; see [App.Hold].
+	held atomic.Pointer[HeldClock]
 }
 
 // NowPlaying is what a media application plays; see [App.SetNowPlaying].
@@ -444,7 +446,9 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.ui.arriving, w.ui.animated = animated, animated
 	w.open = a.drv.NewWindow
 	w.app = a
-	a.windows.add(w)
+	// Opened while the clock is held, the window keeps its time from its first frame. Hold and Release change
+	// the clock under the same lock.
+	a.windows.addHeld(w, &a.held)
 	a.loops.Add(1)
 	go w.loop()
 	return w, nil
@@ -543,6 +547,17 @@ type Window struct {
 	// clock is the synthetic frame time used by [Window.Frame], so an
 	// offscreen window steps at whatever rate the caller chooses.
 	clock time.Time
+	// held is the clock the window keeps time by, or nil for the wall
+	// clock; see [HeldClock]. steps carries Advance's frames to the loop,
+	// and step is the one waiting for the loop to be free to draw it.
+	held  atomic.Pointer[HeldClock]
+	steps chan heldStep
+	step  *heldStep
+	// heldBy is the clock the loop keeps time by, as it last took it up from held; see followClock.
+	heldBy *HeldClock
+	// popupWait is when a held frame began to wait for a popup to show
+	// the frame before, or zero; see heldFrame.
+	popupWait time.Time
 
 	// inMu guards the inbound queue, which application goroutines fill
 	// and the UI goroutine drains once a frame.
@@ -595,6 +610,7 @@ func newWindow(dw driver.Window, root Node) *Window {
 		injected: make(chan input.Event),
 		accesses: make(chan chan *access.Tree),
 		dragIn:   make(chan dragMsg, 64),
+		steps:    make(chan heldStep),
 		blends:   true,
 	}
 	rootState := &state{node: root, presence: Present, id: Root}
@@ -1072,6 +1088,11 @@ func (w *Window) Offscreen() *driver.OffscreenWindow {
 // holding an offscreen window can step time. Commands queued through
 // [Client] are applied first, the same way the loop applies them.
 func (w *Window) Frame(delta time.Duration) {
+	w.frameAt(w.clock.Add(delta), delta)
+}
+
+// frameAt is [Window.Frame] at the time now, delta after the frame before.
+func (w *Window) frameAt(now time.Time, delta time.Duration) {
 	defer w.drive()()
 	// What comes before the frame lays out may go by where the last
 	// frame drew things, as a timer asking where a node is: each kind of
@@ -1095,9 +1116,9 @@ func (w *Window) Frame(delta time.Duration) {
 		}
 	}
 	w.applyPending()
-	w.clock = w.clock.Add(delta)
+	w.clock = now
 	w.ui.stepped = true
-	w.ui.frame(w.clock, w.clock, delta)
+	w.ui.frame(now, now, delta)
 }
 
 // PaintWhenLooked has a window from [NewOffscreen] paint a frame only
@@ -1212,7 +1233,7 @@ func (w *Window) platform(ev any) {
 	if !w.draws() {
 		w.applyPending()
 	}
-	w.ui.handlePlatform(ev)
+	w.ui.handlePlatform(w.ui.heldTime(ev))
 }
 
 // Err returns the error that ended the window. Read it once
@@ -1306,6 +1327,9 @@ func (w *Window) loop() {
 	if w.app != nil {
 		defer w.app.loops.Done()
 	}
+	// However the loop ends, done says so: as the user closed the window, or its driver window went. A held
+	// clock's Advance waits on it.
+	defer w.Close()
 	defer close(w.out)
 	defer w.ui.closeAllPopups()
 	defer func() {
@@ -1326,7 +1350,12 @@ func (w *Window) loop() {
 	defer w.ui.closeNatives()
 
 	for {
-		if w.free() && w.wants() && w.draws() {
+		w.followClock()
+		if w.ui.onHeld {
+			if w.heldFrame() {
+				continue
+			}
+		} else if w.free() && w.wants() && w.draws() {
 			w.draw()
 			continue
 		}
@@ -1434,6 +1463,12 @@ func (w *Window) wait() bool {
 	var alarm <-chan time.Time
 	var at time.Time
 	switch timer, ok := w.ui.nextTimer(); {
+	case w.ui.onHeld:
+		// Held, a timer runs in the frame Advance draws at its time. A
+		// frame waiting on a popup's waits so long at most.
+		if !w.popupWait.IsZero() {
+			at = w.popupWait.Add(popupWaitMost)
+		}
 	case w.draws():
 		if ok && w.free() {
 			at = wakeFor(timer, w.shown, refreshInterval(w.dw.RefreshRate()))
@@ -1457,6 +1492,8 @@ func (w *Window) wait() bool {
 	case <-w.done:
 		return false
 	case <-w.wake:
+	case st := <-w.steps:
+		w.heldAsked(st)
 	case ev, ok := <-w.dw.Input():
 		if !ok {
 			return false
@@ -1493,7 +1530,8 @@ func (w *Window) wait() bool {
 		}
 		w.shown = f.Shown
 		w.learnLate(f)
-		if w.ui.arriving && w.ui.arrivedAt.IsZero() {
+		if w.ui.arriving && w.ui.arrivedAt.IsZero() && !w.ui.onHeld {
+			// Held, the next frame takes its arrival from the held clock.
 			w.ui.arrivedAt = w.shown
 			if w.shown.IsZero() {
 				w.ui.arrivedAt = time.Now()
@@ -1916,6 +1954,13 @@ type UI struct {
 	// byFrames says everything the window times goes by the time its
 	// frames have stepped; see [Window.TimeByFrames].
 	byFrames bool
+	// onHeld says the window keeps a held clock's time ([HeldClock]), and
+	// wasStepped and wasByFrames are how it kept time before.
+	onHeld, wasStepped, wasByFrames bool
+	// heldSkip says the frame being built under a held clock is laid out and left unpainted; see HoldOptions.PaintEvery.
+	heldSkip bool
+	// everHeld says the window has kept a held clock's time, so its drivers' windows are told when it no longer does.
+	everHeld bool
 	// lazy says the window paints a frame only when something looks at
 	// it; see [Window.PaintWhenLooked]. owed says the last frame was laid
 	// out and left unpainted, and owedFrame is what painting it takes.
@@ -2009,6 +2054,8 @@ type timer struct {
 	redraw bool
 	// wake marks only a Waker deadline; ordinary After timers still invalidate.
 	wake bool
+	// held marks a timer set while the window kept a held clock's time, which Advance cuts a frame at.
+	held bool
 }
 
 // redrawAt sets a timer that draws a frame at t, unless one due by then is already set.
@@ -2018,14 +2065,14 @@ func (u *UI) redrawAt(t time.Time) {
 			return
 		}
 	}
-	u.timers = append(u.timers, &timer{at: t, redraw: true, fn: func(u *UI) { u.Invalidate() }})
+	u.timers = append(u.timers, &timer{at: t, redraw: true, held: u.onHeld, fn: func(u *UI) { u.Invalidate() }})
 }
 
 // After runs fn on the UI goroutine at the first frame d or more after
 // this one, and returns a function that cancels it. The window sleeps
 // while it waits, so a tooltip's delay costs no frames.
 func (u *UI) After(d time.Duration, fn func(u *UI)) (stop func()) {
-	t := &timer{at: u.timerClock().Add(d), fn: fn}
+	t := &timer{at: u.timerClock().Add(d), fn: fn, held: u.onHeld}
 	u.timers = append(u.timers, t)
 	return func() {
 		u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t })
@@ -2045,7 +2092,7 @@ func (u *UI) wakeAfter(d time.Duration) {
 	u.wakeAt = at
 	// The timer's own frame is the one the node asked for, and the node
 	// draws anew in it as it moves; the rest may stay carried.
-	t := &timer{at: at, wake: true, fn: func(u *UI) { u.wakeStop = nil }}
+	t := &timer{at: at, wake: true, held: u.onHeld, fn: func(u *UI) { u.wakeStop = nil }}
 	u.timers = append(u.timers, t)
 	u.wakeStop = func() { u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t }) }
 }
@@ -2866,6 +2913,9 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	} else {
 		u.owed, u.owedFrame = true, fp
 		u.fadedAway()
+		if u.heldSkip {
+			u.layoutPopups(f)
+		}
 	}
 
 	// 5. Layout and paint may have started animations: a caret aimed at
@@ -2975,6 +3025,9 @@ func (u *UI) fading(now time.Time, f Frame, size geom.Size) (fp framePaint, left
 // where it drew things: a node to bring into view, a popup or a native
 // child to place, and the pointer held, carrying a drag, or flinging.
 func (u *UI) mustPaint() bool {
+	if u.heldSkip {
+		return false
+	}
 	return !u.lazy || u.shotsOwed.Load() > 0 || len(u.revealing) > 0 || len(u.popups) > 0 || len(u.nativeNodes) > 0 ||
 		u.capture != nil || u.drag != nil || u.dragOver || u.fling != nil
 }
@@ -3006,6 +3059,7 @@ func (u *UI) paintFrame(fp framePaint) {
 		u.root.node.Paint(&u.painter, f, u.root.size, Children{ns: u.root.kids, f: f, s: u.root})
 		u.painter.PaintFloats()
 	}()
+	u.stampClock(u.w.dw)
 	if err := u.w.dw.Present(u.painter.Ops(), u.painter.DamageRects()); err != nil {
 		u.w.err = fmt.Errorf("gunim: present frame: %w", err)
 		u.w.Close()
@@ -3034,6 +3088,17 @@ func (u *UI) paintFrame(fp framePaint) {
 // the frame as the frame itself would have: nothing has changed since.
 func (u *UI) paintOwed() {
 	if !u.owed || u.painting {
+		return
+	}
+	if u.onHeld && u.w.app != nil {
+		// Held, a frame owed paints only into buffers the driver is done with, else the next painted frame shows
+		// it, and one painted is in flight as a frame drawn is.
+		if !u.w.free() {
+			return
+		}
+		u.paintFrame(u.owedFrame)
+		u.w.unshown++
+		u.w.unreleased++
 		return
 	}
 	u.paintFrame(u.owedFrame)
