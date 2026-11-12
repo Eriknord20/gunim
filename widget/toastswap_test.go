@@ -421,3 +421,174 @@ func TestToastsThatChangeFastNeverShowABareCard(t *testing.T) {
 		t.Fatalf("at rest the card holds %d faces, the last %v solid, reading %q", card.faces, card.face.alpha(), card.face.title.Text)
 	}
 }
+
+// A tall toast replaced by a short one keeps the short one's button under the pointer as the card glides
+// shorter: the button stays at the card's foot on every frame, and a click two frames in lands.
+func TestAToastsButtonKeepsToTheCardsFootAsItShrinks(t *testing.T) {
+	ts := &Toasts{}
+	w, on, frames := toastFrame(t, ts)
+	clicked := 0
+	body := strings.Repeat("A sentence of the long body. ", 6)
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Open the song it came with?", Body: body, Check: "Don't ask again", Key: "k",
+			Buttons: []ToastButton{{Label: "Open"}}}, u)
+	})
+	frames(60, func() {})
+	card := ts.cards[0]
+	tall := card.size.H
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Open it?", Check: "Don't ask again", Key: "k",
+			Buttons: []ToastButton{{Label: "Open now", OnClick: func(bool, *gunim.UI) gunim.Intent { clicked++; return nil }}}}, u)
+	})
+	button := card.face.buttons.Children()[0]
+	gap := func() float32 {
+		r := boundsOf(on, card, button)
+		return r[0].Max.Y - r[1].Max.Y
+	}
+	// It stands at the card's foot, less what is left of its roll in from below.
+	rest := CardPadding.Default().Bottom
+	for range 2 {
+		if g := gap(); g < rest-toastRise-0.5 || g > rest+0.5 {
+			t.Fatalf("as the card shrinks its button is %v from the foot, want %v, or up to %v less as it rolls in", g, rest, toastRise)
+		}
+	}
+	if card.size.H >= tall-1 || card.size.H <= card.face.size.H+10 || !card.h.Active() {
+		t.Fatalf("the card is %v tall, was %v, its face %v, gliding %v: want it part way down", card.size.H, tall, card.face.size.H, card.h.Active())
+	}
+	at := boundsOf(on, button)[0].Center()
+	click(w, at.X, at.Y)
+	frames(2, func() {})
+	if clicked != 1 {
+		t.Fatalf("the click on the button of a toast shrinking was heard %d times", clicked)
+	}
+}
+
+// A button beside the words follows the card's middle as the card shrinks, and takes a click there too.
+func TestAToastsButtonBesideItsWordsAnswersAsTheCardShrinks(t *testing.T) {
+	ts := &Toasts{}
+	w, on, frames := toastFrame(t, ts)
+	clicked := 0
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Could not make the folder", Body: strings.Repeat("A sentence of the long body. ", 6), Key: "k"}, u)
+	})
+	frames(60, func() {})
+	card := ts.cards[0]
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Saved", Key: "k",
+			Buttons: []ToastButton{{Label: "Show", OnClick: func(bool, *gunim.UI) gunim.Intent { clicked++; return nil }}}}, u)
+	})
+	frames(1, func() {})
+	if card.face.where != toastLeft || card.size.H <= card.face.size.H+10 {
+		t.Fatalf("the button is placed %d on a card %v tall with a face %v tall", card.face.where, card.size.H, card.face.size.H)
+	}
+	// The lower edge of the button, which is past the face's own height.
+	r := boundsOf(on, card.face.buttons.Children()[0])[0]
+	click(w, r.Center().X, r.Max.Y-3)
+	frames(2, func() {})
+	if clicked != 1 {
+		t.Fatalf("a click low on the button beside the words of a shrinking toast was heard %d times", clicked)
+	}
+}
+
+// The same toast shown again while it is still rolling in rolls on: no third face, and no jump in how solid the
+// old words and the new are.
+func TestTheSameToastShownAgainMidHandoverRollsOn(t *testing.T) {
+	ts := &Toasts{Life: time.Minute}
+	w, on, frames := toastFrame(t, ts)
+	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Saved the song", Key: "k"}, u) })
+	frames(60, func() {})
+	card := ts.cards[0]
+	old := card.face
+	exporting := Toast{Title: "Exporting the song", Key: "k"}
+	on(func(u *gunim.UI) { ts.Show(exporting, u) })
+	face := card.face
+	frames(3, func() {})
+	wasOld, wasNew, wasFade := old.alpha(), face.alpha(), face.fade.Value()
+	on(func(u *gunim.UI) { ts.Show(exporting, u) })
+	if card.face != face || card.faces != 2 {
+		t.Fatalf("the same toast again made a new face %v, on a card of %d faces", card.face != face, card.faces)
+	}
+	if old.alpha() < 0.5 || old.alpha() > wasOld+0.01 || old.alpha() < wasOld-0.3 || face.alpha() < wasNew-0.01 || face.fade.Value() > wasFade+0.3 {
+		t.Fatalf("the old words went from %v to %v and the new from %v to %v in a frame", wasOld, old.alpha(), wasNew, face.alpha())
+	}
+	rolled := false
+	frames(60, func() {
+		solid, words := drawnAlpha(w.Offscreen().Ops())
+		if solid < 0.99 || words < 0.45 {
+			t.Fatalf("the card is %v solid and its words %v", solid, words)
+		}
+		if o := old.alpha(); o > 0.2 && o < 0.8 {
+			rolled = true
+		}
+	})
+	if !rolled || card.faces != 1 || card.face.alpha() < 0.999 {
+		t.Fatalf("the old words rolled out %v, leaving %d faces, the new %v solid", rolled, card.faces, card.face.alpha())
+	}
+}
+
+// The same toast shown again keeps what the user did on it: the tick stays, the pointer's light stays, and a
+// press held on its button still clicks. Only what the buttons do is the new toast's.
+func TestTheSameToastShownAgainKeepsItsControls(t *testing.T) {
+	ts := &Toasts{Life: time.Minute}
+	w, on, frames := toastFrame(t, ts)
+	heard := ""
+	asks := func(name string) Toast {
+		return Toast{Title: "Open the song it came with?", Check: "Don't ask again", Key: "k",
+			Buttons: []ToastButton{{Label: "Open", OnClick: func(ticked bool, _ *gunim.UI) gunim.Intent {
+				heard = name + " " + strconv.FormatBool(ticked)
+				return nil
+			}}},
+			OnDismiss: func(bool, *gunim.UI) gunim.Intent { heard = name + " closed"; return nil }}
+	}
+	on(func(u *gunim.UI) { ts.Show(asks("first"), u) })
+	frames(60, func() {})
+	card := ts.cards[0]
+	face, box, button := card.face, card.face.check, card.face.buttons.Children()[0]
+	tick := boundsOf(on, box)[0].Center()
+	click(w, tick.X, tick.Y)
+	frames(30, func() {})
+	if !box.Checked() {
+		t.Fatal("the click did not tick the box")
+	}
+	// The pointer rests on the button, pressed, as the same toast is shown again.
+	at := boundsOf(on, button)[0].Center()
+	w.Input(input.PointerMove{Pos: at, Time: time.Now()})
+	frames(30, func() {})
+	lit := card.hover.Value()
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	on(func(u *gunim.UI) { ts.Show(asks("second"), u) })
+	frames(2, func() {
+		if card.face != face || card.faces != 1 || card.face.check != box || !box.Checked() {
+			t.Fatalf("shown again, the toast has a new face %v, %d faces, its box ticked %v", card.face != face, card.faces, box.Checked())
+		}
+		if card.hover.Value() < lit-0.01 || !card.hovered {
+			t.Fatalf("shown again, the pointer's light went from %v to %v", lit, card.hover.Value())
+		}
+	})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	frames(2, func() {})
+	if heard != "second true" || ts.Len() != 0 {
+		t.Fatalf("the press held through the second showing was heard as %q, leaving %d toasts", heard, ts.Len())
+	}
+}
+
+// A toast that asks for more width gets it, as far as the stack has room, and the others keep to the stack's
+// right edge.
+func TestAToastCanBeWiderThanTheStack(t *testing.T) {
+	ts := &Toasts{}
+	_, on, frames := toastFrame(t, ts)
+	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Saved"}, u) })
+	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Exported", Width: 280}, u) })
+	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Far too wide", Width: 900}, u) })
+	frames(60, func() {})
+	base := min(ToastWidth.Default(), 300)
+	r := boundsOf(on, ts, ts.cards[0], ts.cards[1], ts.cards[2])
+	for i, want := range []float32{base, max(base, 280), 300} {
+		if got := r[i+1].Size().W; got != want || r[i+1].Max.X != r[0].Max.X {
+			t.Errorf("toast %d is %v wide, ending at %v; want %v wide, ending at the stack's %v", i, got, r[i+1].Max.X, want, r[0].Max.X)
+		}
+	}
+	if r[0].Size().W != 300 {
+		t.Errorf("the stack is %v wide, want its widest toast's 300", r[0].Size().W)
+	}
+}

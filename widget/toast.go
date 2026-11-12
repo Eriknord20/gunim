@@ -13,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
 )
 
@@ -59,6 +60,9 @@ type Toast struct {
 	Kind ToastKind
 	// Icon, when set, replaces the kind's icon. A plain toast shows it in the ink.
 	Icon *icon.Icon
+	// Width, above the stack's [ToastWidth], makes the toast that wide, as far as the stack's room goes: for one
+	// whose line should not wrap. The narrower toasts keep to the stack's right edge.
+	Width float32
 	// Key names the toast, so [Toasts.Close] can take it away. A toast
 	// shown with the key of one showing takes its place. Where that one is
 	// the newest, its card stays: the old words fade out as the new fade
@@ -178,11 +182,11 @@ func NewToasts() *Toasts { return &Toasts{} }
 func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	if to.Key != "" {
 		// The new toast takes the old one's place, and sounds once, as it arrives.
-		for i, c := range slices.Clone(t.cards) {
+		for _, c := range slices.Clone(t.cards) {
 			if c.key != to.Key {
 				continue
 			}
-			if i == len(t.cards)-1 {
+			if c == t.cards[len(t.cards)-1] {
 				// The newest keeps its card and its place, and shows the new toast on it.
 				c.swap(to, u)
 				t.skip = 0
@@ -227,16 +231,17 @@ func (t *Toasts) Close(key string, u *gunim.UI) {
 func (t *Toasts) Len() int { return len(t.cards) }
 
 // expire takes c away once the time of the toast it shows is up, or later,
-// while the pointer rests on it. A toast shown in its place since has a
-// time of its own.
+// while the pointer rests on it. A toast shown on the card since, the same
+// one again too, has a time of its own.
 func (t *Toasts) expire(c *toastCard, u *gunim.UI) {
 	life := t.Life
 	if life <= 0 {
 		life = toastLife
 	}
-	face := c.face
+	c.lives++
+	lives := c.lives
 	u.After(life, func(u *gunim.UI) {
-		if c.face != face {
+		if c.lives != lives {
 			return
 		}
 		if c.hovered {
@@ -271,18 +276,28 @@ func (t *Toasts) take(c *toastCard, u *gunim.UI) bool {
 // the height given fade out under the card that counts them.
 func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	th := f.Theme
-	w := min(ToastWidth.Get(th), max(c.Max.W, 1))
+	most := max(c.Max.W, 1)
+	base := min(ToastWidth.Get(th), most)
+	// w is the stack's width: its widest toast's.
+	w := base
 	gap := ToastGap.Get(th)
 	sizes := map[gunim.Node]geom.Size{}
 	for k := range kids.All {
-		cs := gunim.Constraints{Min: geom.Sz(w, 0), Max: geom.Sz(w, c.Max.H)}
+		cs := gunim.Constraints{Min: geom.Sz(base, 0), Max: geom.Sz(base, c.Max.H)}
 		if k.Node() == gunim.Node(t.more) {
-			cs = gunim.Tight(geom.Sz(w, ToastMoreHeight.Get(th)))
+			cs = gunim.Tight(geom.Sz(base, ToastMoreHeight.Get(th)))
+		}
+		card, ok := k.Node().(*toastCard)
+		if ok {
+			// A toast may ask for more width than the stack's.
+			wide := min(max(base, card.width), most)
+			cs.Min.W, cs.Max.W = wide, wide
+			w = max(w, wide)
 		}
 		sizes[k.Node()] = k.Layout(cs)
-		if card, ok := k.Node().(*toastCard); ok {
+		if ok {
 			// A card gliding to a new height is placed by that height, so it and its place move as one.
-			sizes[k.Node()] = geom.Sz(w, card.want)
+			sizes[k.Node()] = geom.Sz(cs.Max.W, card.want)
 		}
 	}
 	from, to := t.fit(sizes, c.Max.H, gap, ToastMoreHeight.Get(th))
@@ -325,12 +340,13 @@ func (t *Toasts) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children)
 	for k := range kids.All {
 		switch n := k.Node().(type) {
 		case *toastCard:
-			k.Place(geom.Pt(0, n.y.Value()))
+			// At the stack's right edge, where a toast slides in from.
+			k.Place(geom.Pt(w-k.Size().W, n.y.Value()))
 			if n.shown.Target() == 1 {
 				height, some = max(height, n.y.Value()+k.Size().H), true
 			}
 		case *toastMore:
-			k.Place(geom.Point{})
+			k.Place(geom.Pt(w-base, 0))
 		}
 	}
 	if !some {
@@ -509,6 +525,10 @@ type toastCard struct {
 	placed  bool
 	// sized says the card has been laid out, so its height glides from here on.
 	sized bool
+	// lives counts the times a toast's time on the card began, so that only the last of them takes it away.
+	lives int
+	// width is the width the toast asked for, or zero for the stack's.
+	width float32
 	// size is the card's size at its last layout, for telling a release
 	// on it from one off it.
 	size  geom.Size
@@ -516,7 +536,7 @@ type toastCard struct {
 }
 
 func newToastCard(t *Toasts, to Toast) *toastCard {
-	c := &toastCard{owner: t, key: to.Key, in: anim.NewFloat(0), y: anim.NewFloat(0), hover: anim.NewFloat(0),
+	c := &toastCard{owner: t, key: to.Key, width: to.Width, in: anim.NewFloat(0), y: anim.NewFloat(0), hover: anim.NewFloat(0),
 		shown: anim.NewFloat(1), h: anim.NewFloat(0), warn: anim.NewFloat(anim.OnOff(to.Kind == ToastWarning))}
 	c.Add(c.in, c.y, c.hover, c.shown, c.h, c.warn)
 	c.face = newToastFace(c, to, true)
@@ -524,16 +544,20 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 }
 
 // swap shows to on the card in place of what it shows. The card stays as it is: the old face fades out as the new
-// one fades in, and the card's height glides to the new one's.
+// one fades in, and the card's height glides to the new one's. The same toast again keeps its face.
 func (c *toastCard) swap(to Toast, u *gunim.UI) {
 	old := c.face
+	c.key, c.width = to.Key, to.Width
+	if old.says(to) {
+		// The same toast shown again stands as it stood, with what was ticked, pressed or lit on it: only what
+		// its buttons do is the new toast's. One still rolling in rolls on.
+		old.said = to
+		u.Invalidate()
+		return
+	}
 	c.face = newToastFace(c, to, false)
 	old.next = c.face
-	if !old.says(to) {
-		// The same toast shown again stands as it stood. Another one rolls in.
-		c.face.fade.Jump(0)
-	}
-	c.key = to.Key
+	c.face.fade.Jump(0)
 	// A press held on the old toast is not a click on the new one.
 	c.click = Clicker{}
 	c.warn.Animate(anim.OnOff(to.Kind == ToastWarning), Settle.Get(u.Theme()))
@@ -579,10 +603,11 @@ func (c *toastCard) Transition(p gunim.Presence, f gunim.Frame) bool {
 func (c *toastCard) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	c.faces = kids.Len()
 	for k := range kids.All {
-		s := k.Layout(cs)
+		k.Layout(cs)
 		k.Place(geom.Point{})
 		if k.Node() == gunim.Node(c.face) {
-			c.want = s.H
+			// The face's own height: its box is as tall as the card while the card is the taller.
+			c.want = c.face.size.H
 		}
 	}
 	if !c.sized {
@@ -728,8 +753,14 @@ const toastColumnGap = 2
 // of it, and still put them there, for the room that gives the words.
 const toastColumnOver = 8
 
-// toastFit is what the place of a toast's buttons was worked out for.
-type toastFit struct{ width, text float32 }
+// toastFit is what the place of a toast's buttons was worked out for: the width given, and what of the theme the
+// layout measures with.
+type toastFit struct {
+	width, text float32
+	face        *text.Face
+	pad         geom.Insets
+	gap, icon   float32
+}
 
 // newToastFace returns the face of to on c. arrives says it comes with its card, so its icon draws on as the card
 // stands; one that takes another's place shows its icon whole, and fades in with its words.
@@ -741,8 +772,9 @@ func newToastFace(c *toastCard, to Toast, arrives bool) *toastFace {
 	t := c.owner
 	if to.Action != "" {
 		fc.action = NewLink(to.Action)
-		on := to.OnClick
+		// What it does is read as it is clicked: the same toast shown again brings its own.
 		fc.action.OnClick = func(u *gunim.UI) gunim.Intent {
+			on := fc.said.OnClick
 			t.dismiss(c, u)
 			if on == nil {
 				return nil
@@ -800,9 +832,8 @@ func (fc *toastFace) ask(to Toast) {
 		if i == 0 {
 			b.Kind = ButtonPrimary
 		}
-		on := tb.OnClick
 		b.OnClick = func(u *gunim.UI) gunim.Intent {
-			if on != nil {
+			if on := fc.said.Buttons[i].OnClick; on != nil {
 				send(u, c, on(checked(), u))
 			}
 			c.owner.dismiss(c, u)
@@ -813,8 +844,8 @@ func (fc *toastFace) ask(to Toast) {
 	// They wrap: squeezed into a row, their words would clip.
 	fc.buttons = NewWrap(kids...)
 	fc.buttons.Justify = JustifyEnd
-	dismiss := to.OnDismiss
 	fc.closer(func(u *gunim.UI) gunim.Intent {
+		dismiss := fc.said.OnDismiss
 		if dismiss == nil {
 			return nil
 		}
@@ -848,6 +879,11 @@ func (fc *toastFace) corner() []gunim.Node {
 		out = append(out, fc.action)
 	}
 	return out
+}
+
+// inCorner reports whether n is the close button or the action.
+func (fc *toastFace) inCorner(n gunim.Node) bool {
+	return fc.close != nil && n == gunim.Node(fc.close) || fc.action != nil && n == gunim.Node(fc.action)
 }
 
 // Children implements [gunim.Composite].
@@ -912,6 +948,17 @@ func (fc *toastFace) alpha() float32 {
 // and all of them while the pointer rests on the card, as many as fit in the height given. Buttons sit beside the
 // words where that leaves the words room, and under them where it doesn't.
 func (fc *toastFace) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
+	// The face's box is as tall as its card while the card is the taller, as it is gliding down to a shorter
+	// face: what keeps to the card's foot meanwhile is then inside the box, and takes the pointer.
+	size := fc.natural(cs, f, kids)
+	if fc.card.sized {
+		size.H = max(size.H, fc.card.h.Value())
+	}
+	return size
+}
+
+// natural lays the face out and returns its own size, which fc.size keeps.
+func (fc *toastFace) natural(cs gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	fc.body.MaxLines = toastBodyLines
 	size := fc.place(cs, f, kids)
 	if !fc.card.hovered {
@@ -934,10 +981,12 @@ func (fc *toastFace) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Chil
 // place lays the face out with its body at three lines, the buttons beside the words where they fit: in one row
 // that takes no more than [toastSide] of the width, with every word of the body still showing.
 func (fc *toastFace) place(cs gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
-	fit := toastFit{cs.Max.W, TextSize.Get(f.Theme)}
+	th := f.Theme
+	fit := toastFit{cs.Max.W, TextSize.Get(th), faceIn(Font, th), CardPadding.Get(th), Gap.Get(th), IconSize.Get(th) + IconGap.Get(th)}
 	if fc.laid && fc.decided == fit {
-		// Buttons that no longer fit beside the words, as after a theme's padding changed, are placed anew.
-		if size := fc.lay(cs, f, kids, fc.where); size.W > 0 || fc.where == toastUnder {
+		// Buttons that no longer fit beside the words, or cut the body there, are placed anew.
+		size := fc.lay(cs, f, kids, fc.where)
+		if fc.where == toastUnder || size.W > 0 && !fc.body.laid.p.Truncated {
 			return size
 		}
 	}
@@ -981,10 +1030,9 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	var act float32
 	// foot is how far down the face the close button ends, or zero with none.
 	var foot float32
-	corner := fc.corner()
 	// Children lists the corner in its order, from the right.
 	for k := range kids.All {
-		if !slices.Contains(corner, k.Node()) {
+		if !fc.inCorner(k.Node()) {
 			continue
 		}
 		if act > 0 {
@@ -1060,7 +1108,9 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 		// foot says it stands at the foot of the face: the tick box and the buttons under the words.
 		foot bool
 	}
-	var puts []put
+	// At the most the title, the body, the tick box and the buttons.
+	var puts [4]put
+	placed := 0
 	var title, body geom.Size
 	var bodyAt float32
 	// line is the height of the title's first line, which the icon sits beside.
@@ -1068,7 +1118,7 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 	var y float32
 	for k := range kids.All {
 		n := k.Node()
-		if slices.Contains(fc.corner(), n) || n == gunim.Node(fc.mark) || beside && n == gunim.Node(fc.buttons) {
+		if fc.inCorner(n) || n == gunim.Node(fc.mark) || beside && n == gunim.Node(fc.buttons) {
 			continue
 		}
 		r := bodyRoom
@@ -1083,7 +1133,8 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 			y += 4
 		}
 		s := k.Layout(kc)
-		puts = append(puts, put{k, y, n == gunim.Node(fc.buttons) || n == gunim.Node(fc.check)})
+		puts[placed] = put{k, y, n == gunim.Node(fc.buttons) || n == gunim.Node(fc.check)}
+		placed++
 		switch n {
 		case gunim.Node(fc.title):
 			title = s
@@ -1109,7 +1160,7 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 	top := pad.Top + (block-words)/2
 	lift := max(spare, -body.H)
 	fc.cut = geom.Rect{}
-	for _, p := range puts {
+	for _, p := range puts[:placed] {
 		y := top + p.y
 		if p.foot {
 			y += lift
