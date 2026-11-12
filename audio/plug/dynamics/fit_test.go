@@ -66,9 +66,10 @@ func TestSheet(t *testing.T) {
 	if dir == "" {
 		t.Skip("GUNIM_SHEETS names no folder")
 	}
-	var sizes []geom.Size
-	for _, s := range [][2]float32{{560, 380}, {640, 420}, {720, 460}, {720, 480}, {760, 500}, {800, 550},
-		{880, 560}, {960, 600}, {1040, 640}, {1280, 720}, {1100, 440}, {760, 640}} {
+	dims := [][2]float32{{560, 380}, {640, 420}, {720, 460}, {720, 480}, {760, 500}, {800, 550},
+		{880, 560}, {960, 600}, {1040, 640}, {1280, 720}, {1100, 440}, {760, 640}}
+	sizes := make([]geom.Size, 0, len(dims))
+	for _, s := range dims {
 		sizes = append(sizes, geom.Sz(s[0], s[1]))
 	}
 	plugtest.Shots(t, func() gunim.Node { return showing(t) }, Descriptor, sizes, dir)
