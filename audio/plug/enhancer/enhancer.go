@@ -83,7 +83,7 @@ var Descriptor = func() plug.Descriptor {
 		Tagline:     "Harmonics, band by band",
 		KeepsMono:   true,
 		Keywords:    []string{"exciter", "saturation", "harmonics", "drive", "warmth", "presence", "air", "distortion", "multiband"},
-		ViewSize:    geom.Sz(960, 560),
+		ViewSize:    geom.Sz(1000, 580),
 		ViewMinSize: geom.Sz(800, 480),
 		New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 	}
