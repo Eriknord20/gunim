@@ -71,9 +71,10 @@ func TestKeysAndDoubleClickStepTheKnob(t *testing.T) {
 	if h.values[3] != 1000 {
 		t.Errorf("End took the knob to %v, want 1000", h.values[3])
 	}
-	// The wheel passes the knob by, to scroll the pane it is in.
-	if k.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || h.values[3] != 1000 {
-		t.Errorf("the wheel turned the knob to %v, want it left at 1000", h.values[3])
+	// At its top, the wheel turned up leaves it there.
+	k.Handle(input.Scroll{Delta: geom.Pt(0, 40), Notches: geom.Pt(0, 1)}, nil)
+	if h.values[3] != 1000 {
+		t.Errorf("the wheel turned the knob at its top to %v, want it left at 1000", h.values[3])
 	}
 	k.Handle(input.KeyPress{Key: input.KeyDown}, nil)
 	if v := h.values[3]; v >= 1000 || v < 900 {

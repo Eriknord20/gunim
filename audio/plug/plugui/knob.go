@@ -34,6 +34,13 @@ var (
 	KnobGlide = theme.Spring("plug.knob.glide", anim.Spring{Response: 0.09, Damping: 1})
 )
 
+// The wheel: how far round a notch turns a knob, and how long after its last notch a turn by it ends, as one step
+// to undo.
+const (
+	wheelNotch = 0.025
+	wheelRun   = 500 * time.Millisecond
+)
+
 // knobFollows is how soon a value set after the last one makes the needle follow at once rather than glide, as an
 // automation ramp moving it on every frame.
 const knobFollows = 60 * time.Millisecond
@@ -49,10 +56,11 @@ const (
 
 // Knob turns a value, as a synth's knob does: a drag up turns it up,
 // ten times finer with Shift; the arrow keys step it; a double click
-// sets it back to its default. While it has the keyboard, the wheel
-// steps it as an arrow key does, as a number field takes the wheel.
-// Without the keyboard the wheel passes it by, so a pane of knobs
-// scrolls under the pointer without turning one. Each turn is one gesture,
+// sets it back to its default. The wheel turns the knob under the
+// pointer, 2.5% of the way round a notch, a quarter of that with Shift.
+// Inside a view that the wheel would scroll, the knob takes the wheel
+// only while it has the keyboard, and leaves it to the view otherwise.
+// Each turn is one gesture, wheel notches in a run included,
 // one step to undo: of a parameter of the host's, or of whatever the
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
@@ -94,6 +102,11 @@ type Knob struct {
 	// glide is the needle's motion, from the theme, and aimed how long ago the needle took its last new aim.
 	glide anim.Spring
 	aimed time.Duration
+	// wheeling says a turn by the wheel is under way, until wheelStop's timer ends it; wheelRest is the part of a
+	// step the wheel has turned a stepped knob so far.
+	wheeling  bool
+	wheelStop func()
+	wheelRest float64
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -438,6 +451,7 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 
 // stepTo sets the knob to v as a gesture of its own.
 func (k *Knob) stepTo(v float64, u *gunim.UI) {
+	k.endWheel(u)
 	if v = k.p.Clamp(v); v == k.v {
 		return
 	}
@@ -448,7 +462,7 @@ func (k *Knob) stepTo(v float64, u *gunim.UI) {
 
 // tooltip is what the knob's tooltip says.
 func (k *Knob) tooltip() string {
-	how := "Drag up or down to turn, with Shift for fine steps; double-click to reset"
+	how := "Drag up or down, or turn the wheel, with Shift for fine steps; double-click to reset"
 	if k.Tooltip != "" {
 		return k.Tooltip + ". " + how
 	}
@@ -509,6 +523,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 			k.stepTo(k.p.Default, u)
 			return true
 		}
+		k.endWheel(u)
 		k.held, k.from, k.start = true, e.Pos, k.turnOf(k.v)
 		k.begin(u)
 		u.Invalidate()
@@ -530,12 +545,11 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
 	case input.Scroll:
-		// Only while the knob has the keyboard, as a number field takes it, so scrolling a pane turns no knob it
-		// passes. The wheel turned up gives a positive Delta.Y, and turns the knob up.
-		if !k.focused || e.Touch || e.Delta.Y == 0 {
+		n := wheelNotches(e)
+		if e.Touch || n == 0 || k.held || !k.focused && u.ScrollsAround(k, e.Delta) {
 			return false
 		}
-		k.stepTo(k.valueAt(k.turnOf(k.v)+math.Copysign(k.stepSize(), float64(e.Delta.Y))), u)
+		k.wheel(n, u)
 	case input.KeyPress:
 		// Ctrl, Alt or Super with a key is the window's shortcut, such as
 		// Alt+Left to the loop's start: the knob leaves it be.
@@ -562,6 +576,68 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		return false
 	}
 	return true
+}
+
+// wheelNotches returns how many notches e turned the wheel up, a fraction from a touchpad, and a quarter as many with
+// Shift.
+func wheelNotches(e input.Scroll) float64 {
+	n := float64(e.Notches.Y)
+	if n == 0 && e.Mods.Has(input.ModShift) {
+		// Some systems turn the wheel with Shift held into a sideways one
+		n = float64(e.Notches.X)
+	}
+	if n == 0 {
+		n = float64(e.Delta.Y) / 40
+	}
+	if e.Mods.Has(input.ModShift) {
+		n /= 4
+	}
+	return n
+}
+
+// wheel turns the knob by n notches of the wheel, in the gesture of the wheel's run, which ends wheelRun after the
+// last notch.
+func (k *Knob) wheel(n float64, u *gunim.UI) {
+	to := k.turnOf(k.v) + n*wheelNotch
+	if k.p.Steps > 0 {
+		k.wheelRest += n
+		whole := math.Trunc(k.wheelRest)
+		k.wheelRest -= whole
+		to = k.turnOf(k.v) + whole*k.stepSize()
+	}
+	v := k.p.Clamp(k.valueAt(to))
+	if !k.wheeling && v != k.v {
+		k.wheeling = true
+		k.begin(u)
+	}
+	if k.wheeling {
+		k.turn(v, u)
+	}
+	if k.wheelStop != nil {
+		k.wheelStop()
+		k.wheelStop = nil
+	}
+	if u == nil {
+		k.endWheel(u)
+		return
+	}
+	k.wheelStop = u.After(wheelRun, func(u *gunim.UI) {
+		k.wheelStop = nil
+		k.endWheel(u)
+	})
+}
+
+// endWheel ends a turn by the wheel under way.
+func (k *Knob) endWheel(u *gunim.UI) {
+	if k.wheelStop != nil {
+		k.wheelStop()
+		k.wheelStop = nil
+	}
+	k.wheelRest = 0
+	if k.wheeling {
+		k.wheeling = false
+		k.end(u)
+	}
 }
 
 // openMenu opens the host's menu for the knob's parameter, at pos in
