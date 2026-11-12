@@ -82,7 +82,12 @@ type scrolling struct {
 	over, onBar, gripped bool
 	// wide grows the bar from 0 to 1 while the pointer is on it.
 	wide *anim.Float
+	// wheeled is when the wheel last scrolled the content, or turned on at an end within wheelHold of that.
+	wheeled time.Time
 }
+
+// wheelHold is how long after the wheel last scrolled the content the view keeps a run of the wheel for itself.
+const wheelHold = 500 * time.Millisecond
 
 type sample struct {
 	y float32
@@ -368,9 +373,16 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 	default:
 		return false
 	}
+	_, wheel := e.(input.Scroll)
 	// At an end, the event is for whatever scrolls outside.
 	if s.clamp(to) == s.base() {
+		if wheel && s.wheeledLately(u) {
+			s.wheeled = u.Clock()
+		}
 		return false
+	}
+	if wheel {
+		s.wheeled = u.Clock()
 	}
 	s.ScrollTo(to, Quick.Get(th))
 	u.Invalidate()
@@ -378,9 +390,17 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 }
 
 // WouldScroll implements [gunim.WheelScroller]: true while the content can move the way a wheel turned by delta
-// moves it.
+// moves it, and while a run of the wheel that scrolled it goes on.
 func (s *scrolling) WouldScroll(delta geom.Point) bool {
-	return delta.Y != 0 && s.scrollable() && s.clamp(s.base()-delta.Y) != s.base()
+	if delta.Y == 0 || !s.scrollable() {
+		return false
+	}
+	return s.clamp(s.base()-delta.Y) != s.base() || s.wheeledLately(s.u)
+}
+
+// wheeledLately reports whether the wheel scrolled the content within wheelHold, by u's clock.
+func (s *scrolling) wheeledLately(u *gunim.UI) bool {
+	return !s.wheeled.IsZero() && u.Clock().Sub(s.wheeled) < wheelHold
 }
 
 // edgeScroll scrolls for a drag held at p, in the widget's space, over
