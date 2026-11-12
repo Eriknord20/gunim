@@ -6,10 +6,12 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/theme"
 )
 
 // A value set from outside, as a patch picked or an undo, glides the knob's needle there; at rest it asks for no
@@ -137,6 +139,8 @@ func TestKeysAndADoubleClickGlideTheNeedle(t *testing.T) {
 	h := &host{values: map[uint32]float64{3: 10}}
 	k := NewKnob(h, release)
 	w := stageNode(t, k)
+	// The rest between the key and the click counts by the frames
+	w.TimeByFrames(true)
 	w.Input(input.KeyPress{Key: input.KeyTab})
 	frames(w, 30)
 	w.Input(input.KeyPress{Key: input.KeyUp, Mods: input.ModShift})
@@ -235,5 +239,41 @@ func TestAWrappedKnobsNeedleFollows(t *testing.T) {
 	}
 	if got := wk.turned.Value(); got != 0.5 {
 		t.Errorf("dragged to 0.5, the wrapped knob's needle stands %v round", got)
+	}
+}
+
+// Two values set close together and then a long rest, the window asleep meanwhile, leave the next value set to glide:
+// the needle counts the rest by the clock, not by the frames drawn.
+func TestTheNeedleGlidesAfterARestTheWindowSleptThrough(t *testing.T) {
+	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
+	h := &host{values: map[uint32]float64{1: 0}}
+	k := NewKnob(h, mix)
+	w := stageNode(t, k)
+	gunim.RegisterPatch(w, "n", func(k *Knob, v float64, u *gunim.UI) { k.Follow(v, u) })
+	for _, v := range []float64{0.5, 0.55} {
+		if err := w.Client().Patch("n", v); err != nil {
+			t.Fatal(err)
+		}
+		w.Frame(time.Second / 60)
+	}
+	// The window sleeps: the clock moves on, and no frame is drawn
+	time.Sleep(2 * knobFollows)
+	if err := w.Client().Patch("n", 0.0); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	if got := k.turned.Value(); got <= 0.01 || got >= 0.54 {
+		t.Errorf("a frame after a value set past a rest, the needle stands %v round, want part way from 0.55 to 0", got)
+	}
+}
+
+// A trim pot's needle glides with the theme's spring, as a knob's does.
+func TestATrimPotGlidesWithTheThemesSpring(t *testing.T) {
+	sp := anim.Spring{Response: 0.4, Damping: 1}
+	th := theme.NewLive(theme.Make("slow", theme.Set(KnobGlide, sp)))
+	tp := NewTrimPot(&host{values: map[uint32]float64{3: 10}}, release)
+	tp.Layout(gunim.Tight(geom.Sz(TrimPotSize, TrimPotSize)), gunim.Frame{Theme: th}, gunim.Children{})
+	if tp.glide != sp {
+		t.Errorf("laid out in a theme that sets the knob's glide, the trim pot glides with %v, want %v", tp.glide, sp)
 	}
 }

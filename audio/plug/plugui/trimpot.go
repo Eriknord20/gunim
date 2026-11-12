@@ -41,8 +41,8 @@ type TrimPot struct {
 func NewTrimPot(h plug.Host, p plug.Param) *TrimPot { return &TrimPot{Knob: NewKnob(h, p)} }
 
 // Layout implements [gunim.Node].
-func (t *TrimPot) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	t.firstLayout()
+func (t *TrimPot) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
+	t.lay(f)
 	return c.Constrain(geom.Sz(TrimPotSize, TrimPotSize))
 }
 

@@ -112,9 +112,11 @@ type Knob struct {
 	// it has been laid out, before which they jump to where they are set.
 	grey, faint, turned *anim.Float
 	laid                bool
-	// glide is the needle's motion, from the theme, and aimed how long ago the needle took its last new aim.
+	// glide is the needle's motion, from the theme; setAt is when the value was last set, by the UI's clock, and
+	// quick says it came within knobFollows of the set before.
 	glide anim.Spring
-	aimed time.Duration
+	setAt time.Time
+	quick bool
 	// wheeling says a turn by the wheel is under way, until wheelStop's timer or wheelClose, as the window closes,
 	// ends it; wheelRest is the part of a step the wheel has turned a stepped knob so far, and wheelFrom how far round
 	// the knob was as the run began.
@@ -190,7 +192,6 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 // or the depth changes, to show it move, and rests while they stand
 // still, as with the song stopped.
 func (k *Knob) Step(dt time.Duration) bool {
-	k.aimed += dt
 	if !k.laid {
 		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
 	} else {
@@ -201,12 +202,11 @@ func (k *Knob) Step(dt time.Duration) bool {
 			case a != k.turned:
 				a.Animate(v, anim.Snappy)
 				return
-			case k.held || k.aimed < knobFollows:
+			case k.held || k.quick:
 				a.Jump(v)
 			default:
 				a.Animate(v, k.glide)
 			}
-			k.aimed = 0
 		})
 	}
 	moving := k.Group.Step(dt)
@@ -246,8 +246,9 @@ func (k *Knob) normalAt(t float64) float64 {
 	return t
 }
 
-// firstLayout puts every spring where it is set on the first layout.
-func (k *Knob) firstLayout() {
+// lay reads the needle's glide from f's theme, and on the first layout puts every spring where it is set.
+func (k *Knob) lay(f gunim.Frame) {
+	k.glide = KnobGlide.Get(f.Theme)
 	if !k.laid {
 		k.laid = true
 		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
@@ -266,8 +267,7 @@ func (k *Knob) jumpUnlaid(u *gunim.UI) {
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
 	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), ring: anim.NewFloat(0),
-		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0), glide: KnobGlide.Default(),
-		aimed: knobFollows}
+		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0), glide: KnobGlide.Default()}
 	k.turned.Jump(float32(k.turnOf(v)))
 	k.Add(k.hover, k.ring, k.grey, k.faint, k.turned)
 	return k
@@ -282,8 +282,16 @@ func (k *Knob) SetParam(p plug.Param, v float64, u *gunim.UI) {
 		k.end(u)
 	}
 	k.p, k.v = p, v
+	k.noteSet(u)
 	k.jumpUnlaid(u)
 	u.Invalidate()
+}
+
+// noteSet notes that the value was set now, by u's clock, and whether that came within knobFollows of the set before.
+func (k *Knob) noteSet(u *gunim.UI) {
+	now := u.Clock()
+	k.quick = !k.setAt.IsZero() && now.Sub(k.setAt) < knobFollows
+	k.setAt = now
 }
 
 // EndDrag ends a turn under way where it got to, as letting go does,
@@ -326,14 +334,15 @@ func (k *Knob) Param() plug.Param { return k.p }
 func (k *Knob) Follow(v float64, u *gunim.UI) {
 	if !k.held && v != k.v {
 		k.v = v
+		k.noteSet(u)
 		k.jumpUnlaid(u)
 		u.Invalidate()
 	}
 }
 
 // Layout implements [gunim.Node].
-func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	k.firstLayout()
+func (k *Knob) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
+	k.lay(f)
 	if k.Compact {
 		return c.Constrain(geom.Sz(CompactW, CompactH))
 	}
@@ -343,7 +352,6 @@ func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 // Paint implements [gunim.Node].
 func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
-	k.glide = KnobGlide.Get(th)
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	accent = anim.MixColor(accent, paint.Faded(ink, 0.35), k.grey.Value())
 	hover := k.hover.Value()
@@ -467,6 +475,7 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 		return
 	}
 	k.v = v
+	k.noteSet(u)
 	k.set(v, u)
 	if k.OnTurn != nil {
 		k.OnTurn(v, u)
