@@ -59,14 +59,16 @@ func TestAHitHoldsTheKeyFor20Milliseconds(t *testing.T) {
 	}
 }
 
-func TestTheLouderOfTwoHitsWinsWhileTheirHoldsOverlap(t *testing.T) {
+func TestALaterHitTakesTheKeyOverAtItsOwnVelocity(t *testing.T) {
 	// Each case is hits by frame and velocity, and the level heard from each frame on, to the next.
 	for name, c := range map[string]struct{ hits, want []float64 }{
-		"a quieter hit after a louder":  {[]float64{0, 1, 480, 0.5}, []float64{0, 1, 960, 0.5, 1440, 0}},
+		"a quieter hit after a louder":  {[]float64{0, 1, 480, 0.5}, []float64{0, 1, 480, 0.5, 1440, 0}},
 		"a louder hit after a quieter":  {[]float64{0, 0.5, 480, 1}, []float64{0, 0.5, 480, 1, 1440, 0}},
-		"three hits, each quieter":      {[]float64{0, 1, 240, 0.7, 480, 0.3}, []float64{0, 1, 960, 0.7, 1200, 0.3, 1440, 0}},
-		"a hit between two louder ones": {[]float64{0, 1, 240, 0.3, 480, 0.7}, []float64{0, 1, 960, 0.7, 1440, 0}},
-		"two hits as loud":              {[]float64{0, 0.5, 959, 0.5}, []float64{0, 0.5, 1919, 0}},
+		"three hits, each quieter":      {[]float64{0, 1, 240, 0.7, 480, 0.3}, []float64{0, 1, 240, 0.7, 480, 0.3, 1440, 0}},
+		"a hit between two louder ones": {[]float64{0, 1, 240, 0.3, 480, 0.7}, []float64{0, 1, 240, 0.3, 480, 0.7, 1440, 0}},
+		"a hit on a hold's last frame":  {[]float64{0, 0.5, 959, 0.25}, []float64{0, 0.5, 959, 0.25, 1919, 0}},
+		"a hit on the frame after one":  {[]float64{0, 1, 1, 0.25}, []float64{0, 1, 1, 0.25, 961, 0}},
+		"a hit after the hold is done":  {[]float64{0, 1, 960, 0.25}, []float64{0, 1, 960, 0.25, 1920, 0}},
 	} {
 		var k hitKey
 		k.prepare(48000)
@@ -81,6 +83,52 @@ func TestTheLouderOfTwoHitsWinsWhileTheirHoldsOverlap(t *testing.T) {
 				t.Fatalf("%s: on frame %d the detector hears %v, want %v", name, f, got, want)
 			}
 		}
+		if k.count != len(c.hits)/2 {
+			t.Errorf("%s: %d hits counted, not %d", name, k.count, len(c.hits)/2)
+		}
+	}
+}
+
+func TestAHitOfNoVelocityIsNoHit(t *testing.T) {
+	var k hitKey
+	k.prepare(48000)
+	// Before a hit, and in the middle of a hold, which runs on at its level to its own end.
+	for _, v := range []float32{0, -0.5, float32(math.NaN())} {
+		if got := k.step(v); got != 0 || k.running() || k.count != 0 {
+			t.Fatalf("a pulse of %v is heard as %v, with %d hits counted", v, got, k.count)
+		}
+	}
+	k.step(0.5)
+	for f := 1; f < 960; f++ {
+		if got := k.step([]float32{0, -0.5, float32(math.NaN())}[f%3]); got != 0.5 {
+			t.Fatalf("on frame %d of a hold a pulse of no velocity leaves the detector hearing %v, not 0.5", f, got)
+		}
+	}
+	if got := k.step(0); got != 0 || k.running() || k.count != 1 {
+		t.Errorf("after the hold the detector hears %v, with %d hits counted", got, k.count)
+	}
+	k.step(1)
+	k.clear()
+	if k.running() || k.step(0) != 0 {
+		t.Error("cleared, the key still holds its hit")
+	}
+}
+
+func TestTheKeysReportsAreHiddenAndNeverSet(t *testing.T) {
+	for _, id := range []uint32{KeyWiredID, KeyHitsID} {
+		prm := param(id)
+		if prm.Flags != plug.ReadOnly|plug.Hidden {
+			t.Errorf("%q has flags %b, not read-only and hidden alone", prm.Name, prm.Flags)
+		}
+		for _, patch := range Descriptor.Patches {
+			if _, ok := patch.Params[id]; ok {
+				t.Errorf("the patch %q sets %q", patch.Name, prm.Name)
+			}
+		}
+	}
+	p, _ := newDynamics(t)
+	if p.State() != nil {
+		t.Error("the plugin keeps a state, which could hold Key's reports")
 	}
 }
 
@@ -271,7 +319,7 @@ func TestProcessAllocatesNothingWithHitsArriving(t *testing.T) {
 	p, _ := newDynamics(t)
 	pr := p.Processor()
 	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
-	// Hits a few frames apart, each quieter, so the holds stack up, and louder ones that take over.
+	// Hits a few frames apart, each taking the key over from the one before.
 	hits := make([]float32, 512)
 	for f := 0; f < 512; f += 3 {
 		hits[f] = 1 - float32(f%96)/100

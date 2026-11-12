@@ -13,6 +13,7 @@
 // Its control input Key takes hits: while the host wires it, the gate
 // and the compressor listen to the hits alone, each held at its velocity
 // for KeyHoldMS, in place of the sidechain and of the sound they shape.
+// A later hit takes over at its own velocity.
 //
 // Its panel draws the sound in and out as it plays, with how far each
 // part turns it down, over knobs for every control, beside two classic
@@ -205,8 +206,8 @@ var Descriptor = plug.Descriptor{
 		{ID: CompGRID, Name: "Compression", Unit: "dB", Min: -60, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: LimitGRID, Name: "Limiting", Unit: "dB", Min: -24, Max: 0, Flags: plug.ReadOnly, Format: db},
 
-		{ID: KeyWiredID, Name: "Key wired", Max: 1, Steps: 1, Flags: plug.ReadOnly, Format: onOff},
-		{ID: KeyHitsID, Name: "Key hits", Max: keyHitsWrap - 1, Flags: plug.ReadOnly,
+		{ID: KeyWiredID, Name: "Key wired", Max: 1, Steps: 1, Flags: plug.ReadOnly | plug.Hidden, Format: onOff},
+		{ID: KeyHitsID, Name: "Key hits", Max: keyHitsWrap - 1, Flags: plug.ReadOnly | plug.Hidden,
 			Format: func(v float64) string { return fmt.Sprintf("%.0f", v) }},
 	},
 	Patches: []plug.Patch{
@@ -329,56 +330,37 @@ type processor struct {
 }
 
 // hitKey turns Key's hits into the level the detector hears: each hit's velocity for KeyHoldMS from the hit's frame,
-// the louder of two whose holds overlap, then silence.
+// then silence. A later hit takes over.
 type hitKey struct {
-	hold int
-	// at counts the frames stepped, and count the hits taken.
-	at    int64
+	hold, left int
+	level      float32
+	// count is the hits taken.
 	count int
-	// held are the hits whose holds run, each quieter and ending later than the one before, in a ring: from is the
-	// first's place and n how many there are.
-	held    []heldHit
-	from, n int
 }
 
-// heldHit is a hit's velocity and the frame its hold ends before.
-type heldHit struct {
-	level float32
-	end   int64
-}
-
-// prepare readies k for hits at rate, and lets go of any held.
+// prepare readies k for hits at rate, and lets go of any hit held.
 func (k *hitKey) prepare(rate float64) {
-	hold := max(1, int(math.Round(KeyHoldMS*rate/1000)))
-	*k = hitKey{hold: hold, held: make([]heldHit, hold)}
+	*k = hitKey{hold: int(math.Round(KeyHoldMS * rate / 1000))}
 }
 
 // step takes a frame of the trigger, hit, and returns the level the detector hears on it.
 func (k *hitKey) step(hit float32) float32 {
-	if k.n > 0 && k.held[k.from].end <= k.at {
-		k.from, k.n = (k.from+1)%len(k.held), k.n-1
-	}
 	if hit > 0 {
+		k.level, k.left = hit, k.hold
 		k.count++
-		// A hit outlasts every hit before it that is no louder
-		for k.n > 0 && k.held[(k.from+k.n-1)%len(k.held)].level <= hit {
-			k.n--
-		}
-		k.held[(k.from+k.n)%len(k.held)] = heldHit{level: hit, end: k.at + int64(k.hold)}
-		k.n++
 	}
-	k.at++
-	if k.n == 0 {
+	if k.left == 0 {
 		return 0
 	}
-	return k.held[k.from].level
+	k.left--
+	return k.level
 }
 
 // running reports whether a hit's hold still runs.
-func (k *hitKey) running() bool { return k.n > 0 && k.held[k.from].end > k.at }
+func (k *hitKey) running() bool { return k.left > 0 }
 
-// clear lets go of the hits held.
-func (k *hitKey) clear() { k.n = 0 }
+// clear lets go of the hit held.
+func (k *hitKey) clear() { k.left = 0 }
 
 // gate turns the sound down by Range where it falls under Threshold,
 // opening over Attack and closing over Release.
