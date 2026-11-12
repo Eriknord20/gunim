@@ -115,7 +115,6 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	hover, glow := d.hover.Value(), d.glow.Value()
 	end := widget.Faint(p, box, anim.OnOff(d.Disabled)*0.6)
 	defer end()
-	tileRing(p, box, d.ring.Value(), th)
 	const r, text = float32(17), float32(10.5)
 	c := geom.Pt(box.W/2, 4+r)
 	if lit := max(hover, glow); lit > 0.01 {
@@ -152,6 +151,7 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		widget.PaintIcon(p, th, d.Icon, geom.Rc(c.X-7, c.Y-7, 14, 14), mark)
 	}
 	popCap()
+	capRing(p, c, r, d.ring.Value(), th)
 	name := audioui.Shaped(d.Title, text, false, false)
 	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), paint.Faded(ink, 0.6+0.3*hover))
 	val := audioui.Shaped(d.Value, text, false, true)

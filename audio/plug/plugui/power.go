@@ -94,7 +94,8 @@ func (p *Power) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geo
 func (p *Power) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	mid := geom.Pt(box.W/2, box.H/2)
-	widget.FocusRing(pt, geom.Rc(mid.X-7, mid.Y-7, 14, 14), 7, p.ring.Value(), th)
+	// The ring hugs the lamp, so it stays clear of a section's title beside it.
+	widget.FocusRing(pt, geom.Rc(mid.X-6, mid.Y-6, 12, 12), 6, p.ring.Value(), th)
 	defer pt.Push(paint.Scale(1-0.12*p.squash.Value(), mid))()
 	PaintPower(pt, mid, p.on.Value(), p.hover.Value(), widget.Accent.Get(th), widget.Ink.Get(th))
 }

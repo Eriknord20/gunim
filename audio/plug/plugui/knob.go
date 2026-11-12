@@ -287,7 +287,6 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	}
 	end := widget.Faint(p, box, k.faint.Value()*0.6)
 	defer end()
-	tileRing(p, box, k.ring.Value(), th)
 	c := geom.Pt(box.W/2, 4+r)
 	if hover > 0.01 {
 		// Under the pointer, a glow about the knob.
@@ -324,6 +323,7 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
 		paint.Shadow{Offset: geom.Pt(0, 2), Blur: 4, Color: color.NRGBA{A: 0x90}})
+	capRing(p, c, r, k.ring.Value(), th)
 	a := from + sweep*t
 	audioui.Segment(p, geom.Pt(c.X+(r-13)*float32(math.Cos(a)), c.Y+(r-13)*float32(math.Sin(a))),
 		geom.Pt(c.X+(r-7)*float32(math.Cos(a)), c.Y+(r-7)*float32(math.Sin(a))), 2, ink)
@@ -337,10 +337,11 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	val.Paint(p, geom.Pt((box.W-val.Advance)/2, c.Y+r+4+name.Height()), col)
 }
 
-// tileRing draws the focus ring of a control shaped as a knob, at strength t, just inside its box so it never reaches
-// a neighbour's words.
-func tileRing(p *paint.Painter, box geom.Size, t float32, th *theme.Live) {
-	widget.FocusRing(p, geom.Rect{Max: box.Point()}.Inset(geom.Uniform(4)), 6, t, th)
+// capRing draws the focus ring of a knob of radius r about c, at strength t, between its cap and its arc.
+func capRing(p *paint.Painter, c geom.Point, r, t float32, th *theme.Live) {
+	// Halfway between the cap (r-6) and the arc (r-1.75), less the 3 px FocusRing adds
+	h := r - 6.875
+	widget.FocusRing(p, geom.Rc(c.X-h, c.Y-h, 2*h, 2*h), h, t, th)
 }
 
 // paintModulation draws how control moves the knob's value: a ring

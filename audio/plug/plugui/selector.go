@@ -152,7 +152,14 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	end := widget.Faint(p, box, anim.OnOff(s.Locked)*0.6)
 	defer end()
-	tileRing(p, box, s.ring.Value(), th)
+	if len(s.cells) > 0 {
+		// The ring runs round the lamps' grid, 6 out from the middle of the lamps at its corners.
+		g := geom.Rect{Min: s.cells[0].Min, Max: s.cells[len(s.cells)-1].Max}
+		for _, r := range s.cells {
+			g = g.Union(r)
+		}
+		widget.FocusRing(p, g.Inset(geom.Uniform(lampCol/2-6)), 6, s.ring.Value(), th)
+	}
 	for i, r := range s.cells {
 		lit := s.lit[i].Value()
 		cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
