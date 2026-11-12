@@ -18,6 +18,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs.
@@ -62,7 +63,9 @@ var Descriptor = plug.Descriptor{
 		{ID: PanLID, Name: "Pan L", Min: -100, Max: 100, Default: -100, Flags: plug.Automatable, Format: panText},
 		{ID: PanRID, Name: "Pan R", Min: -100, Max: 100, Default: 100, Flags: plug.Automatable, Format: panText},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{host: h} },
+	ViewSize:    geom.Sz(640, 300),
+	ViewMinSize: geom.Sz(480, 280),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{host: h} },
 }
 
 func init() { plug.Register(Descriptor) }

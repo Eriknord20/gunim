@@ -347,18 +347,24 @@ const (
 	ribbonW  = 16
 	laneMin  = 64
 	laneMost = 120
+	// braidH is how tall the braid stands with its lanes as far apart as they go.
+	braidH = rowTop + plugui.KnobH + 24 + laneMost + foot
 )
 
 // Layout implements [gunim.Node]: the meters at either end, the stages
-// spread between them, the lanes under the row of controls.
+// spread between them, the lanes under the row of controls, in the
+// middle of a taller panel. Under its least size the panel lays out at
+// that size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	p.size = c.Max
+	p.size = plug.AtLeast(c.Max, Descriptor.ViewMinSize)
 	l := &p.lay
+	// The braid stands in the middle of a panel taller than it needs.
+	top := max((p.size.H-braidH)/2, 0) + rowTop
 	l.inX, l.outX = edge, p.size.W-edge-audioui.MeterW
 	l.x0, l.x1 = l.inX+audioui.MeterW+8, l.outX-8
 	along := func(t float32) float32 { return l.x0 + (l.x1-l.x0)*t }
 	l.invert, l.pan, l.mono, l.gain = along(0.12), along(0.32), along(0.6), along(0.85)
-	l.lane[0] = rowTop + plugui.KnobH + 24
+	l.lane[0] = top + plugui.KnobH + 24
 	gap := min(max(p.size.H-l.lane[0]-foot, laneMin), laneMost)
 	l.lane[1] = l.lane[0] + gap
 	l.mid = (l.lane[0] + l.lane[1]) / 2
@@ -375,14 +381,16 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 		place(2+ch, geom.Sz(plugui.CompactW, plugui.CompactH), geom.Pt(l.pan-plugui.CompactW/2, l.lane[ch]-18))
 	}
 	ms := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(80, plugui.SelectorH)})
-	kids.At(4).Place(geom.Pt(l.mono-ms.W/2, rowTop))
-	place(5, geom.Sz(plugui.KnobW, plugui.KnobH), geom.Pt(l.gain-plugui.KnobW/2, rowTop))
-	return p.size
+	kids.At(4).Place(geom.Pt(l.mono-ms.W/2, top))
+	place(5, geom.Sz(plugui.KnobW, plugui.KnobH), geom.Pt(l.gain-plugui.KnobW/2, top))
+	return c.Max
 }
 
 // Paint implements [gunim.Node]: the meters, In and Out, under their
-// names; the ribbons; the controls over them.
+// names; the ribbons; the controls over them; clipped to the box where
+// the panel was laid out larger.
 func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	defer plug.ClipTo(pt, box, p.size)()
 	th := f.Theme
 	ink := widget.Ink.Get(th)
 	l := p.lay
