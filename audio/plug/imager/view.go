@@ -549,6 +549,8 @@ type panel struct {
 	scope    *scope
 	sections []*plugui.Section
 	tuner    *plugui.Tuner
+	// laid is the size the panel was laid out at: its room, or its least size where the room is smaller.
+	laid geom.Size
 }
 
 func newPanel(h plug.Host) *panel {
@@ -587,8 +589,10 @@ const (
 // Layout implements [gunim.Node]: the display fills the panel, its
 // middle line halfway down the room over the sections; the sections
 // along the foot; the scope at the right, over them.
+// Under its least size the panel lays out at that size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := plug.AtLeast(c.Max, Descriptor.ViewMinSize)
+	p.laid = size
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	top := plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
@@ -605,11 +609,13 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
 	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
 	kids.At(n + 1).Place(geom.Pt(size.W-panelInset/2-max(cs.W, plugui.TunerW), panelInset/2+36))
-	return size
+	return c.Max
 }
 
 // Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// It clips to its box where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
+	defer plug.ClipTo(pt, box, p.laid)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}
