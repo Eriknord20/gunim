@@ -188,8 +188,9 @@ func newPanel(pl *plugin, h plug.Host) *panel {
 	modeSection := &plugui.Section{Name: "MODE"}
 	modeSection.Add(p.mode, 96)
 	p.target = plugui.NewKnob(h, param(TargetID))
+	// The empty part at the end leaves as much room after Learn as a section of no knobs leaves before the target.
 	learn := &plugui.Section{Name: "LOUDNESS"}
-	learn.Add(p.target, targetW).Add(p.learn, plugui.KnobW)
+	learn.Add(p.target, targetW).Add(p.learn, plugui.KnobW).Add(&gap{}, 0)
 	p.sections = []*plugui.Section{
 		modeSection,
 		plugui.NewSection(h, &Descriptor, "LIMITER", 0, GainID, CeilingID, CharacterID, LinkID),
@@ -200,6 +201,15 @@ func newPanel(pl *plugin, h plug.Host) *panel {
 
 // targetW is how wide the target's knob stands, for its value in LUFS.
 const targetW = 66
+
+// gap is an empty part of no size. Its field gives each gap an address of its own, for the engine to tell them apart.
+type gap struct{ _ byte }
+
+// Layout implements [gunim.Node].
+func (*gap) Layout(gunim.Constraints, gunim.Frame, gunim.Children) geom.Size { return geom.Size{} }
+
+// Paint implements [gunim.Node].
+func (*gap) Paint(*paint.Painter, gunim.Frame, geom.Size, gunim.Children) {}
 
 // Learn's tooltip, and its word at rest before it has learned.
 const (
