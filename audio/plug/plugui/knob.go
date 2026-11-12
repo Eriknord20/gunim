@@ -78,10 +78,10 @@ type Knob struct {
 	// has none of. Each glides there.
 	Disabled, Locked bool
 	// grey is how far the knob's arc has gone grey, faint how far a lock
-	// has faded it, and laid says it has been laid out, before which they
-	// jump to where they are set.
-	grey, faint *anim.Float
-	laid        bool
+	// has faded it, turned how far round its needle shows, and laid says
+	// it has been laid out, before which they jump to where they are set.
+	grey, faint, turned *anim.Float
+	laid                bool
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -144,14 +144,19 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 	return mh.Modulation(k.p.ID)
 }
 
-// Step implements [anim.Animator]: a knob whose parameter control moves
-// asks for the next frame while the value heard or the depth changes,
-// to show it move, and rests while they stand still, as with the song
-// stopped.
+// Step implements [anim.Animator]: the needle glides to a value set
+// elsewhere and follows a drag at once. A knob whose parameter control
+// moves asks for the next frame while the value heard or the depth
+// changes, to show it move, and rests while they stand still, as with
+// the song stopped.
 func (k *Knob) Step(dt time.Duration) bool {
 	if k.laid {
 		k.aim(func(a *anim.Float, v float32) {
-			if a.Target() != v {
+			switch {
+			case a.Target() == v:
+			case a == k.turned && k.held:
+				a.Jump(v)
+			default:
 				a.Animate(v, anim.Snappy)
 			}
 		})
@@ -163,10 +168,37 @@ func (k *Knob) Step(dt time.Duration) bool {
 	return moving || changed
 }
 
-// aim moves its greys by to where Disabled and Locked have them.
+// aim moves its greys by to where Disabled and Locked have them, and its needle to its value.
 func (k *Knob) aim(to func(a *anim.Float, v float32)) {
 	to(k.grey, anim.OnOff(k.Disabled || k.Locked))
 	to(k.faint, anim.OnOff(k.Locked))
+	to(k.turned, float32(k.turnOf(k.v)))
+}
+
+// needle returns how far round the needle shows, from 0 to 1.
+func (k *Knob) needle() float64 { return min(max(float64(k.turned.Value()), 0), 1) }
+
+// normalAt returns the Normal of the knob turned t of the way round.
+func (k *Knob) normalAt(t float64) float64 {
+	if k.Taper != nil {
+		return k.Taper.From(t)
+	}
+	return t
+}
+
+// firstLayout puts every spring where it is set on the first layout.
+func (k *Knob) firstLayout() {
+	if !k.laid {
+		k.laid = true
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	}
+}
+
+// jumpUnlaid puts the needle at the value at once while there is no UI or no layout yet to glide in.
+func (k *Knob) jumpUnlaid(u *gunim.UI) {
+	if u == nil || !k.laid {
+		k.turned.Jump(float32(k.turnOf(k.v)))
+	}
 }
 
 // NewKnobFunc returns a knob of what p describes, at v, turning it by
@@ -174,8 +206,9 @@ func (k *Knob) aim(to func(a *anim.Float, v float32)) {
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
 	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), ring: anim.NewFloat(0),
-		grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
-	k.Add(k.hover, k.ring, k.grey, k.faint)
+		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0)}
+	k.turned.Jump(float32(k.turnOf(v)))
+	k.Add(k.hover, k.ring, k.grey, k.faint, k.turned)
 	return k
 }
 
@@ -187,6 +220,7 @@ func (k *Knob) SetParam(p plug.Param, v float64, u *gunim.UI) {
 		k.end(u)
 	}
 	k.p, k.v = p, v
+	k.jumpUnlaid(u)
 	u.Invalidate()
 }
 
@@ -219,20 +253,19 @@ func (k *Knob) Value() float64 { return k.v }
 // Param returns the knob's parameter.
 func (k *Knob) Param() plug.Param { return k.p }
 
-// Follow shows v, set elsewhere, unless the knob is held.
+// Follow shows v, set elsewhere, unless the knob is held: the needle
+// glides there once the knob is laid out, and jumps with a nil UI.
 func (k *Knob) Follow(v float64, u *gunim.UI) {
 	if !k.held && v != k.v {
 		k.v = v
+		k.jumpUnlaid(u)
 		u.Invalidate()
 	}
 }
 
 // Layout implements [gunim.Node].
 func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	if !k.laid {
-		k.laid = true
-		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
-	}
+	k.firstLayout()
 	if k.Compact {
 		return c.Constrain(geom.Sz(CompactW, CompactH))
 	}
@@ -273,7 +306,7 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		}
 	}
 	arc(0, 1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
-	t := k.turnOf(k.v)
+	t := k.needle()
 	zero := 0.0
 	if k.p.Min < 0 && k.p.Max > 0 {
 		zero = k.turnOf(0)
@@ -318,7 +351,7 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 		a := from + sweep*t
 		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
 	}
-	n := k.p.Normal(k.v)
+	n := k.normalAt(k.needle())
 	t0, t1, a := k.round(n+m.Low), k.round(n+m.High), float32(0.85)
 	if m.Sets {
 		t0, t1, a = 0, 1, 0.35
