@@ -23,6 +23,15 @@ type Tray struct {
 	// and are to hand the work on rather than do it there.
 	OnPick  func(id int)
 	OnClick func()
+	// OnNotifyClick runs with a click on a message [TrayNotifier.TrayNotify] showed, as for a message that opens the
+	// page it is about. Windows does not say which message, and may say so for a click in the notification centre
+	// too, after a newer message: open a page that fits any message shown, or keep only one kind of message waiting.
+	// The program takes the foreground as the click comes, so a window raised from here comes to the front.
+	//
+	// OnNotifyGone runs when the message shown last leaves the screen, closed or timed out, as it may then wait in
+	// the notification centre. Both run on a goroutine of the driver's. Only Windows says so.
+	OnNotifyClick func()
+	OnNotifyGone  func()
 }
 
 // TrayItem is a line of a tray icon's menu: a command, a submenu, or a

@@ -48,9 +48,14 @@ const (
 	niifUser      = 0x4
 	ninSelect     = 0x400
 	ninKeySelect  = 0x401
-	wmContextMenu = 0x007b
-	wsPopup       = 0x80000000
-	wsExTool      = 0x00000080
+	// ninBalloonUserClick is NIN_BALLOONUSERCLICK: a click on the message TrayNotify showed.
+	ninBalloonUserClick = 0x405
+	// ninBalloonHide and ninBalloonTimeout are NIN_BALLOONHIDE and NIN_BALLOONTIMEOUT: the message left the screen.
+	ninBalloonHide    = 0x403
+	ninBalloonTimeout = 0x404
+	wmContextMenu     = 0x007b
+	wsPopup           = 0x80000000
+	wsExTool          = 0x00000080
 
 	mfString    = 0x0
 	mfGrayed    = 0x1
@@ -91,14 +96,17 @@ type TrayMenuItem struct {
 }
 
 // TrayIcon is what the tray shows: the icon at several sizes, its
-// tooltip and menu, and what a pick from the menu and a click on the
-// icon call. They are called on the main thread.
+// tooltip and menu, and what a pick from the menu, a click on the
+// icon and a click on its message call. They are called on the main
+// thread.
 type TrayIcon struct {
-	Images  []image.Image
-	Tooltip string
-	Items   []TrayMenuItem
-	OnPick  func(id int)
-	OnClick func()
+	Images        []image.Image
+	Tooltip       string
+	Items         []TrayMenuItem
+	OnPick        func(id int)
+	OnClick       func()
+	OnNotifyClick func()
+	OnNotifyGone  func()
 }
 
 // trayState is the icon shown.
@@ -299,6 +307,9 @@ func trayImage(images []image.Image) *Image {
 	return &Image{Width: b.Dx(), Height: b.Dy(), Pixels: m.Pix}
 }
 
+// takeForeground brings the program to the foreground through window h; a test puts its own in its place.
+var takeForeground = func(h windows.HWND) { _ = _SetForegroundWindow(h) }
+
 // trayProc hears the tray icon's messages.
 func trayProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) uintptr {
 	s := trayNow
@@ -317,6 +328,17 @@ func trayProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) ui
 			s.showMenu(int32(int16(wParam&0xffff)), int32(int16(wParam>>16&0xffff)))
 		case wmContextMenu:
 			s.showMenu(int32(int16(wParam&0xffff)), int32(int16(wParam>>16&0xffff)))
+		case ninBalloonUserClick:
+			if s.t.OnNotifyClick != nil {
+				// The click lets this program take the foreground for a moment; taking it now, on the main
+				// thread, lets the window the application raises after it come to the front.
+				takeForeground(s.hwnd)
+				s.t.OnNotifyClick()
+			}
+		case ninBalloonHide, ninBalloonTimeout:
+			if s.t.OnNotifyGone != nil {
+				s.t.OnNotifyGone()
+			}
 		}
 		return 0
 	case uMsg == trayTaskbarCreated && trayTaskbarCreated != 0:

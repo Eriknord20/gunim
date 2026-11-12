@@ -21,6 +21,14 @@ func (d *Driver) SetTray(t driver.Tray) error {
 			click := t.OnClick
 			icon.OnClick = func() { go click() }
 		}
+		if t.OnNotifyGone != nil {
+			gone := t.OnNotifyGone
+			icon.OnNotifyGone = func() { go gone() }
+		}
+		if t.OnNotifyClick != nil {
+			click := t.OnNotifyClick
+			icon.OnNotifyClick = func() { go click() }
+		}
 	}
 	done := make(chan error, 1)
 	if !d.post(func() { done <- glfw.SetTrayIcon(icon) }) {
