@@ -80,11 +80,17 @@ type Menubar struct {
 	// OnPick runs on the UI goroutine with the menu and the item picked,
 	// once the menu has closed. It may act in the window through u; a
 	// non-nil result is sent to the application as the bar's intent.
+	//
+	// The menu and the item are indexes into Menus as it was when the
+	// menu opened. The bar makes a menu from Menus as it opens, and keeps
+	// it while it is open. Leave Menus alone while IsOpen is true, or the
+	// indexes point into the new menus, not the ones shown.
 	OnPick func(menu, item int, u *gunim.UI) gunim.Intent
 	// OnPickSub runs in the same way when an item of a submenu is picked,
 	// with the menu and the item's path: the item of the menu whose
 	// submenu holds it, then the item in that submenu, and on down for a
-	// submenu in a submenu; see [Menu.OnPickSub].
+	// submenu in a submenu; see [Menu.OnPickSub]. As for OnPick, the menu
+	// and the path index Menus as it was when the menu opened.
 	OnPickSub func(menu int, path []int, u *gunim.UI) gunim.Intent
 	// OnHighlight runs on the UI goroutine when the highlight moves,
 	// with the open menu and the item highlighted on it, -1 for none.
@@ -365,17 +371,8 @@ func (b *Menubar) subKey(k input.KeyPress, u *gunim.UI) bool {
 			return true
 		}
 		return m.sub != nil
-	case input.KeyLeft:
-		switch {
-		case km != m:
-			m.Key(k, u)
-		case m.sub != nil:
-			m.closeSub()
-		default:
-			return false
-		}
-		return true
-	case input.KeyEscape:
+	case input.KeyLeft, input.KeyEscape:
+		// A submenu is open while m.sub is set, whether the keys are in it or not. Menu.Key closes one of them.
 		return m.sub != nil && m.Key(k, u)
 	}
 	return false
@@ -406,8 +403,25 @@ func (b *Menubar) Close(u *gunim.UI) {
 	u.Invalidate()
 }
 
+// Transition implements [gunim.Transitioner]. A bar taken out of the tree while open has its menus closed with it, by
+// the engine, and forgets them: it reports itself closed, and holds nothing of them.
+func (b *Menubar) Transition(p gunim.Presence, _ gunim.Frame) bool {
+	if p == gunim.Exiting && (b.IsOpen() || b.armed) {
+		if b.menu != nil {
+			b.menu.leave()
+		}
+		b.stopWaiting()
+		b.popup, b.menu, b.listPopup, b.list, b.panel, b.back = nil, nil, nil, nil, nil, nil
+		b.open, b.inMenu, b.armed, b.byKeys = -1, false, false, false
+	}
+	return true
+}
+
 // shut closes the open menu: its popup, or on a compact bar, the menu beside the list, which fades from the card.
 func (b *Menubar) shut(u *gunim.UI) {
+	if b.menu != nil {
+		b.menu.leave()
+	}
 	if b.popup != nil {
 		b.popup.Close()
 		b.popup = nil

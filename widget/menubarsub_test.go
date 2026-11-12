@@ -227,10 +227,10 @@ func TestTheKeysOpenABarMenusSubmenuAndPickInIt(t *testing.T) {
 			s.keys(input.KeyDown, input.KeyDown, open)
 			sm := s.b.menu.sub
 			if sm == nil || sm.item != 1 || !sm.keys || sm.menu.Highlighted() != 0 {
-				t.Fatalf("%v on Open recent did not open its submenu with the keys on a.txt", open)
+				t.Fatalf("%s on Open recent did not open its submenu with the keys on a.txt", keyName[open])
 			}
 			if s.b.open != 0 {
-				t.Fatalf("%v on Open recent opened menu %d", open, s.b.open)
+				t.Fatalf("%s on Open recent opened menu %d", keyName[open], s.b.open)
 			}
 			s.keys(input.KeyDown, input.KeyEnter)
 			if want := []barSubPick{{0, "[1 1]"}}; !slices.Equal(s.subs, want) || len(s.picks) != 0 {
@@ -258,17 +258,17 @@ func TestLeftAndEscapeComeOutOfABarMenusSubmenusOneAtATime(t *testing.T) {
 			more := sm.menu.sub
 			s.keys(out)
 			if sm.menu.sub != nil || more.popup.Open() || !sm.keys || s.b.menu.sub != sm {
-				t.Fatalf("%v in More did not close it alone, back to Open recent", out)
+				t.Fatalf("%s in More did not close it alone, back to Open recent", keyName[out])
 			}
 			if sm.menu.Highlighted() != 2 {
-				t.Fatalf("%v in More left Open recent's highlight on %d, want More", out, sm.menu.Highlighted())
+				t.Fatalf("%s in More left Open recent's highlight on %d, want More", keyName[out], sm.menu.Highlighted())
 			}
 			s.keys(out)
 			if s.b.menu.sub != nil || sm.popup.Open() || s.b.open != 0 || s.b.menu.Highlighted() != 1 {
-				t.Fatalf("%v in Open recent did not close it alone, back to File: menu %d open", out, s.b.open)
+				t.Fatalf("%s in Open recent did not close it alone, back to File: menu %d open", keyName[out], s.b.open)
 			}
 			if compact && !s.b.inMenu {
-				t.Fatalf("%v in Open recent took the keys back to the list", out)
+				t.Fatalf("%s in Open recent took the keys back to the list", keyName[out])
 			}
 			s.keys(out)
 			switch {
@@ -507,3 +507,339 @@ func (s *subBar) at1() geom.Point {
 
 // menuShown is how far menu m has faded in, as it is drawn.
 func menuShown(m *Menu) float32 { return min(1, max(0, m.in.Value())) }
+
+// inPopup returns the popup a bar's menu is in, and where p, in the menu's space, is in that popup's window.
+func (s *subBar) inPopup(p geom.Point) (*gunim.Popup, geom.Point) {
+	if s.b.Compact {
+		return s.b.listPopup, p.Add(s.b.panel.sideCard().Min)
+	}
+	return s.b.popup, p
+}
+
+// move moves the pointer to p, in the bar menu's space.
+func (s *subBar) move(p geom.Point) {
+	pp, at := s.inPopup(p)
+	pp.Input(input.PointerMove{Pos: at, Time: time.Now()})
+	s.run(1)
+}
+
+// barClosers are the ways the bar's menus close while a submenu waits for the pointer to rest.
+var barClosers = []struct {
+	name string
+	do   func(s *subBar)
+}{
+	{"Escape", func(s *subBar) { s.w.Input(input.KeyPress{Key: input.KeyEscape, Time: time.Now()}) }},
+	{"F10", func(s *subBar) { s.w.Input(input.KeyPress{Key: input.KeyF10, Time: time.Now()}) }},
+	{"Tab", func(s *subBar) { s.w.Input(input.KeyPress{Key: input.KeyTab, Time: time.Now()}) }},
+	{"Alt", func(s *subBar) { s.w.Input(input.AltTapped{}) }},
+	{"Alt+E", func(s *subBar) {
+		s.w.Input(input.KeyPress{Key: input.KeyE, Mods: input.ModAlt, Char: 'e', Time: time.Now()})
+	}},
+	{"press outside", func(s *subBar) {
+		s.w.Input(input.PointerMove{Pos: geom.Pt(300, 300), Time: time.Now()})
+		s.w.Input(input.PointerDown{Pos: geom.Pt(300, 300), Clicks: 1, Time: time.Now()})
+		s.w.Input(input.PointerUp{Pos: geom.Pt(300, 300), Time: time.Now()})
+	}},
+	{"another menu", func(s *subBar) {
+		if s.b.Compact {
+			s.b.listPopup.Input(input.PointerMove{Pos: s.b.list.RowRect(1).Center().Add(s.b.panel.off), Time: time.Now()})
+			return
+		}
+		edit := s.b.span(1)
+		s.w.Input(input.PointerMove{Pos: geom.Pt((edit[0]+edit[1])/2, 15), Time: time.Now()})
+	}},
+}
+
+// restOff checks that menu, closed, waits on no rest and has no submenu, now and on each of the frames after.
+func restOff(t *testing.T, menu *Menu, run func(int), how string, k int) {
+	t.Helper()
+	for f := range 41 {
+		if menu.wait != nil || menu.sub != nil {
+			t.Fatalf("closed by %s %d frames into the rest, %d frames on the menu still waits %v, with a submenu open %v",
+				how, k, f, menu.wait != nil, menu.sub != nil)
+		}
+		run(1)
+	}
+}
+
+// A menu that closes as the pointer rests on an item with a submenu opens no submenu, whichever frame of the rest it
+// closes in.
+func TestABarMenuClosedAsThePointerRestsOpensNoSubmenu(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		for k := range int(subDelay*60/time.Second) + 3 {
+			c := barClosers[k%len(barClosers)]
+			s := newSubBar(t, compact)
+			s.openFile()
+			if compact {
+				// Back onto File's line, so moving to Edit's is a move straight down
+				s.b.listPopup.Input(input.PointerMove{Pos: s.b.list.RowRect(0).Center().Add(s.b.panel.off), Time: time.Now()})
+				s.run(1)
+			}
+			s.point(1)
+			menu := s.b.menu
+			s.run(k)
+			if menu.sub != nil {
+				// The rest ran out before the menu closed: the submenu opened beside a menu still open.
+				continue
+			}
+			c.do(s)
+			if c.name == "another menu" && compact {
+				// The list's line moves in the frame
+				s.run(1)
+			}
+			restOff(t, menu, s.run, c.name, k)
+			if s.b.menu == menu {
+				t.Fatalf("%s did not close File", c.name)
+			}
+		}
+	})
+}
+
+func TestAContextMenuClosedAsThePointerRestsOpensNoSubmenu(t *testing.T) {
+	for k := range int(subDelay*60/time.Second) + 3 {
+		w, c, run := subStage(t)
+		pointAt(c, 1, run)
+		menu := c.menu
+		run(k)
+		if menu.sub != nil {
+			continue
+		}
+		how := "Escape"
+		if k%2 == 0 {
+			w.Input(input.KeyPress{Key: input.KeyEscape, Time: time.Now()})
+		} else {
+			how = "a press outside"
+			click(w, 300, 250)
+		}
+		restOff(t, menu, run, how, k)
+		if c.Focusable() {
+			t.Fatal("the context menu did not close")
+		}
+	}
+}
+
+func TestADropdownClosedAsThePointerRestsOpensNoSubmenu(t *testing.T) {
+	for k := range int(subDelay*60/time.Second) + 3 {
+		w, d, run := songStage(t)
+		clickOpen(w, run)
+		run(20)
+		r := d.menu.RowRect(1)
+		d.popup.Input(input.PointerMove{Pos: geom.Pt(r.Min.X+20, r.Center().Y), Time: time.Now()})
+		run(1)
+		menu := d.menu
+		run(k)
+		if menu.sub != nil {
+			continue
+		}
+		w.Input(input.KeyPress{Key: input.KeyEscape, Time: time.Now()})
+		restOff(t, menu, run, "Escape", k)
+		if d.IsOpen() {
+			t.Fatal("Escape did not close the list")
+		}
+	}
+}
+
+// Left comes out of one submenu, the one the pointer opened last, as Escape does.
+func TestLeftClosesOneSubmenuThePointerOpenedInABar(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		for _, out := range []input.Key{input.KeyLeft, input.KeyEscape} {
+			s := newSubBar(t, compact)
+			s.openFile()
+			s.clickRow(1)
+			s.run(20)
+			sm := s.b.menu.sub
+			r := sm.menu.RowRect(2)
+			sm.popup.Input(input.PointerMove{Pos: geom.Pt(r.Min.X+20, r.Center().Y), Time: time.Now()})
+			s.run(30)
+			more := sm.menu.sub
+			if more == nil || more.keys {
+				t.Fatal("resting on More did not open its submenu, with the keys left on Open recent")
+			}
+			s.keys(out)
+			if sm.menu.sub != nil || more.popup.Open() || s.b.menu.sub != sm || !sm.popup.Open() {
+				t.Fatalf("%s closed More's submenu %v, and Open recent's %v; want More's alone", keyName[out], !more.popup.Open(), !sm.popup.Open())
+			}
+			s.keys(out)
+			if s.b.menu.sub != nil || sm.popup.Open() || s.b.open != 0 {
+				t.Fatalf("%s again left Open recent's submenu open %v, menu %d open", keyName[out], s.b.menu.sub != nil, s.b.open)
+			}
+		}
+	})
+}
+
+func TestLeftClosesASubmenuThePointerOpenedInAContextMenu(t *testing.T) {
+	w, c, run := subStage(t)
+	pointAt(c, 1, run)
+	run(30)
+	s := c.menu.sub
+	if s == nil || s.keys {
+		t.Fatal("the submenu did not open by the pointer, the keys left on the menu")
+	}
+	typeKeys(w, run, 0, input.KeyLeft)
+	if c.menu.sub != nil || s.popup.Open() || !c.Focusable() {
+		t.Fatalf("Left left the submenu open %v, the menu open %v", c.menu.sub != nil, c.Focusable())
+	}
+}
+
+func TestABarMenusSubmenuStaysOpenAsThePointerHeadsForIt(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		for _, aim := range []bool{true, false} {
+			s := newSubBar(t, compact)
+			s.openFile()
+			s.point(1)
+			s.run(30)
+			sm := s.b.menu.sub
+			if sm == nil {
+				t.Fatal("the submenu did not open")
+			}
+			// Down and right across Quit toward the submenu, or straight down onto Quit.
+			from, to := s.b.menu.RowRect(1), s.b.menu.RowRect(2)
+			x := from.Max.X - 40
+			s.move(geom.Pt(x, from.Center().Y))
+			if aim {
+				s.move(geom.Pt(x+20, to.Min.Y+2))
+			} else {
+				s.move(geom.Pt(x, to.Center().Y))
+			}
+			s.run(20)
+			if open := s.b.menu.sub == sm; open != aim {
+				t.Fatalf("heading for the submenu %v, it is open %v after %v", aim, open, subDelay)
+			}
+			if !aim {
+				continue
+			}
+			r := sm.menu.RowRect(0)
+			sm.popup.Input(input.PointerMove{Pos: geom.Pt(r.Min.X+20, r.Center().Y), Time: time.Now()})
+			s.run(60)
+			if s.b.menu.sub != sm || s.b.menu.Highlighted() != 1 || s.b.open != 0 {
+				t.Fatalf("on the submenu, it is open %v, File's highlight on %d", s.b.menu.sub == sm, s.b.menu.Highlighted())
+			}
+		}
+	})
+}
+
+func TestABarWithoutOnPickSubStillClosesOnASubmenuPick(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		s := newSubBar(t, compact)
+		s.b.OnPickSub = nil
+		s.openFile()
+		s.clickRow(1)
+		s.run(20)
+		sm := s.b.menu.sub
+		s.clickSub(sm, 0)
+		if len(s.picks) != 0 {
+			t.Fatalf("a pick in the submenu ran OnPick with %v", s.picks)
+		}
+		s.closed(sm)
+	})
+}
+
+func TestEscapeInABarOpenedByTheKeysComesOutOneLevelAtATime(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		s := newSubBar(t, compact)
+		s.letter('f', input.ModAlt)
+		s.run(20)
+		s.letter('r', 0)
+		sm := s.b.menu.sub
+		if sm == nil {
+			t.Fatal("R did not open Open recent's submenu")
+		}
+		s.keys(input.KeyEscape)
+		if s.b.menu == nil || s.b.menu.sub != nil || sm.popup.Open() || s.b.open != 0 {
+			t.Fatal("Escape did not close the submenu alone")
+		}
+		s.keys(input.KeyEscape)
+		if compact {
+			s.closed()
+			return
+		}
+		// The keys opened the bar: Escape goes back to it, File lit.
+		if s.b.open != -1 || !s.b.armed || s.b.lit != 0 {
+			t.Fatalf("Escape in File left menu %d open, the bar armed %v at %d", s.b.open, s.b.armed, s.b.lit)
+		}
+		s.keys(input.KeyEscape)
+		s.closed()
+	})
+}
+
+func TestTheBarsOwnKeysCloseItsMenusWithASubmenuOpen(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		for _, c := range barClosers {
+			if c.name == "another menu" || c.name == "Escape" {
+				// Escape closes the submenu alone; see TestLeftAndEscapeComeOutOfABarMenusSubmenusOneAtATime.
+				continue
+			}
+			s := newSubBar(t, compact)
+			s.openFile()
+			s.clickRow(1)
+			s.run(20)
+			menu, sm := s.b.menu, s.b.menu.sub
+			c.do(s)
+			s.run(1)
+			if sm.popup.Open() || menu.sub != nil {
+				t.Fatalf("%s left the submenu open", c.name)
+			}
+			if c.name == "Alt+E" {
+				if s.b.open != 1 {
+					t.Fatalf("Alt+E opened menu %d, want Edit", s.b.open)
+				}
+				continue
+			}
+			if s.b.IsOpen() {
+				t.Fatalf("%s left the bar open", c.name)
+			}
+		}
+	})
+}
+
+func TestAPressOnTheOpenTitleClosesTheMenusWithASubmenuOpen(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		s := newSubBar(t, compact)
+		s.openFile()
+		s.clickRow(1)
+		s.run(20)
+		sm := s.b.menu.sub
+		sp := s.b.span(0)
+		clickAt(s.w, s.run, geom.Pt((sp[0]+sp[1])/2, 15))
+		s.closed(sm)
+	})
+}
+
+func TestAWideBarMenusSubmenuOpensLeftWhereTheScreenEnds(t *testing.T) {
+	s := newSubBar(t, false)
+	s.openFile()
+	card := s.b.menu.card
+	s.b.popup.Offscreen().SetWorkArea(geom.Rect{Min: geom.Pt(-600, -400), Max: geom.Pt(card.Max.X+30, 1000)})
+	s.keys(input.KeyDown, input.KeyDown, input.KeyRight)
+	s.run(20)
+	sm := s.b.menu.sub
+	if sm == nil {
+		t.Fatal("Right on Open recent opened no submenu")
+	}
+	c := sm.menu.card.Add(sm.popup.Offscreen().Anchor().Min)
+	if c.Max.X < card.Min.X-1 || c.Max.X > card.Min.X+1 {
+		t.Fatalf("near the screen's right edge, the submenu's card is at %v, want against the menu's left edge, %v", c, card.Min.X)
+	}
+}
+
+func TestAMenubarTakenOutWhileOpenSaysItIsClosed(t *testing.T) {
+	forms(t, func(t *testing.T, compact bool) {
+		s := newSubBar(t, compact)
+		s.openFile()
+		s.clickRow(1)
+		s.run(20)
+		sm := s.b.menu.sub
+		do(t, s.w, func(u *gunim.UI) { u.Remove(s.b) })
+		s.run(2)
+		if s.b.IsOpen() || s.b.menu != nil || s.b.list != nil {
+			t.Fatal("a bar taken out of the tree while open still says it is open")
+		}
+		s.run(30)
+		if sm.popup.Open() {
+			t.Fatal("the submenu of a bar taken out stayed open")
+		}
+	})
+}
+
+// keyName names the keys the tests work submenus with.
+var keyName = map[input.Key]string{input.KeyLeft: "Left", input.KeyEscape: "Escape", input.KeyEnter: "Enter", input.KeyRight: "Right"}
