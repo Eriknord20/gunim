@@ -61,7 +61,9 @@ const (
 // Inside a view that the wheel would scroll, the knob takes the wheel
 // only while it has the keyboard, and leaves it to the view otherwise.
 // Each turn is one gesture, wheel notches in a run included,
-// one step to undo: of a parameter of the host's, or of whatever the
+// one step to undo. A run ends half a second after its last notch, or
+// as the pointer leaves, a key or a press comes, or the knob goes.
+// Each step to undo is of a parameter of the host's, or of whatever the
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
 // it is a [plug.ModulationHost], a ring outside the knob spans the
@@ -102,11 +104,11 @@ type Knob struct {
 	// glide is the needle's motion, from the theme, and aimed how long ago the needle took its last new aim.
 	glide anim.Spring
 	aimed time.Duration
-	// wheeling says a turn by the wheel is under way, until wheelStop's timer ends it; wheelRest is the part of a
-	// step the wheel has turned a stepped knob so far.
-	wheeling  bool
-	wheelStop func()
-	wheelRest float64
+	// wheeling says a turn by the wheel is under way, until wheelStop's timer or wheelClose, as the window closes,
+	// ends it; wheelRest is the part of a step the wheel has turned a stepped knob so far.
+	wheeling              bool
+	wheelStop, wheelClose func()
+	wheelRest             float64
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -202,10 +204,14 @@ func (k *Knob) Step(dt time.Duration) bool {
 	return moving || changed
 }
 
-// Transition implements [gunim.Transitioner]: a knob coming into the tree shows where it is set at once.
-func (k *Knob) Transition(p gunim.Presence, _ gunim.Frame) bool {
-	if p == gunim.Entering {
+// Transition implements [gunim.Transitioner]: a knob coming into the tree shows where it is set at once, and one
+// leaving it ends a turn by the wheel.
+func (k *Knob) Transition(p gunim.Presence, f gunim.Frame) bool {
+	switch p {
+	case gunim.Entering:
 		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	case gunim.Exiting:
+		k.endWheel(f.UI())
 	}
 	return true
 }
@@ -258,6 +264,7 @@ func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float6
 // SetParam makes the knob turn what p describes, at v, as a band's Q
 // becoming its slope as it turns into a cut.
 func (k *Knob) SetParam(p plug.Param, v float64, u *gunim.UI) {
+	k.endWheel(u)
 	if k.held {
 		k.held = false
 		k.end(u)
@@ -282,11 +289,17 @@ func (k *Knob) EndDrag(u *gunim.UI) {
 // Dragging reports whether a turn by the pointer is under way.
 func (k *Knob) Dragging() bool { return k.held }
 
-// Overhear implements [gunim.Overhearer]: a second button pressed
-// while a turn runs ends it, as the press goes elsewhere.
+// Overhear implements [gunim.Overhearer]: a second button pressed while a drag runs ends it, as the press goes
+// elsewhere, and a key or a press anywhere ends a turn by the wheel before the window hears it.
 func (k *Knob) Overhear(e input.Event, u *gunim.UI) {
-	if _, ok := e.(input.PointerDown); ok && k.held {
-		k.EndDrag(u)
+	switch e.(type) {
+	case input.PointerDown:
+		k.endWheel(u)
+		if k.held {
+			k.EndDrag(u)
+		}
+	case input.KeyPress:
+		k.endWheel(u)
 	}
 }
 
@@ -502,6 +515,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.hover.Animate(1, widget.Quick.Get(u.Theme()))
 		return false
 	case input.PointerLeave:
+		k.endWheel(u)
 		if !k.held {
 			k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		}
@@ -609,6 +623,7 @@ func (k *Knob) wheel(n float64, u *gunim.UI) {
 	if !k.wheeling && v != k.v {
 		k.wheeling = true
 		k.begin(u)
+		k.wheelClose = u.BeforeClose(k.endWheel)
 	}
 	if k.wheeling {
 		k.turn(v, u)
@@ -632,6 +647,10 @@ func (k *Knob) endWheel(u *gunim.UI) {
 	if k.wheelStop != nil {
 		k.wheelStop()
 		k.wheelStop = nil
+	}
+	if k.wheelClose != nil {
+		k.wheelClose()
+		k.wheelClose = nil
 	}
 	k.wheelRest = 0
 	if k.wheeling {
