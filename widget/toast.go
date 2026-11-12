@@ -64,9 +64,11 @@ type Toast struct {
 	// whose line should not wrap. The narrower toasts keep to the stack's right edge.
 	Width float32
 	// Key names the toast, so [Toasts.Close] can take it away. A toast
-	// shown with the key of one showing takes its place. Where that one is
-	// the newest, its card stays: the old words fade out as the new fade
-	// in, and the card glides to their size.
+	// shown with the key of one showing takes its place, on its card and
+	// where it stands in the stack: the old words fade out as the new fade
+	// in, the card glides to their size, and the toasts round it make
+	// room. The keyboard on one of its buttons goes to the button of the
+	// same name on the new toast, or to its close button.
 	Key string
 	// Buttons are the toast's buttons, the first the one the toast
 	// expects. They sit beside the text, at its right, where one row of
@@ -151,8 +153,9 @@ func (k ToastKind) drawsOn() bool { return k != ToastWarning && k != ToastError 
 // it sits in. Each slides in from the side and fades up, stays a few
 // seconds, and slides away; the pointer resting on one keeps it, and a
 // click dismisses it. As one leaves, the rest glide together. A toast
-// shown with the key of the newest takes its card: the card stays, its
-// words roll over to the new ones, and it glides to their height.
+// shown with the key of one showing takes its card, wherever in the
+// stack it stands: the card stays, its words roll over to the new ones,
+// it glides to their height, and the toasts over it glide to make room.
 //
 // It takes the size of its stack, so the window behind it keeps its
 // clicks: place it in a corner, as the last child of a window's root.
@@ -176,9 +179,11 @@ type Toasts struct {
 func NewToasts() *Toasts { return &Toasts{} }
 
 // Show adds a toast to the stack. One with the key of a toast showing
-// takes its place: on the same card where that toast is the newest, its
-// words handing over to the new ones, and as a new card otherwise. A toast
-// that asks stays until it is answered, and an error until it is closed.
+// takes its place on the same card, its words handing over to the new
+// ones. Where the stack has no room for that card, and it is not the
+// newest, the toast comes as a new card, the newest, so that it is seen.
+// A toast that asks stays until it is answered, and an error until it is
+// closed.
 func (t *Toasts) Show(to Toast, u *gunim.UI) {
 	if to.Key != "" {
 		// The new toast takes the old one's place, and sounds once, as it arrives.
@@ -186,10 +191,14 @@ func (t *Toasts) Show(to Toast, u *gunim.UI) {
 			if c.key != to.Key {
 				continue
 			}
-			if c == t.cards[len(t.cards)-1] {
-				// The newest keeps its card and its place, and shows the new toast on it.
+			newest := c == t.cards[len(t.cards)-1]
+			if newest || c.shown.Target() == 1 {
+				// The card keeps its place in the stack, and shows the new toast on it. The newest comes back
+				// into view. An older one is in view, and the stack stays on the toasts it shows.
 				c.swap(to, u)
-				t.skip = 0
+				if newest {
+					t.skip = 0
+				}
 				if !c.stays() {
 					t.expire(c, u)
 				}
@@ -556,6 +565,8 @@ func (c *toastCard) swap(to Toast, u *gunim.UI) {
 		return
 	}
 	c.face = newToastFace(c, to, false)
+	// The keyboard on the old toast goes to the new one. The old face is leaving, and takes no keys.
+	heir := c.face.heir(old, u)
 	old.next = c.face
 	c.face.fade.Jump(0)
 	// A press held on the old toast is not a click on the new one.
@@ -563,6 +574,9 @@ func (c *toastCard) swap(to Toast, u *gunim.UI) {
 	c.warn.Animate(anim.OnOff(to.Kind == ToastWarning), Settle.Get(u.Theme()))
 	u.Insert(c, c.face)
 	u.Remove(old)
+	if heir != nil {
+		u.Focus(heir)
+	}
 	u.Invalidate()
 }
 
@@ -812,6 +826,36 @@ func (fc *toastFace) says(to Toast) bool {
 	return was.Title == to.Title && was.Body == to.Body && was.Action == to.Action && was.Kind == to.Kind &&
 		was.Icon == to.Icon && was.Check == to.Check &&
 		slices.EqualFunc(was.Buttons, to.Buttons, func(a, b ToastButton) bool { return a.Label == b.Label })
+}
+
+// heir returns the control of the face that takes the keyboard from old, the face it takes the place of, or nil
+// where the keyboard is not on old. A button hands it to the button of the same name, the action, the tick box and
+// the close button each to their like. Where the face has no such control its close button takes it, so Tab goes on
+// from the toast. A face with none leaves the keyboard on nothing.
+func (fc *toastFace) heir(old *toastFace, u *gunim.UI) gunim.Node {
+	if !u.HasFocus(old) {
+		return nil
+	}
+	switch {
+	case old.action != nil && fc.action != nil && u.HasFocus(old.action) && old.said.Action == fc.said.Action:
+		return fc.action
+	case old.check != nil && fc.check != nil && u.HasFocus(old.check) && old.said.Check == fc.said.Check:
+		return fc.check
+	case old.buttons != nil && fc.buttons != nil && u.HasFocus(old.buttons):
+		for i, b := range old.buttons.Children() {
+			if !u.HasFocus(b) {
+				continue
+			}
+			same := slices.IndexFunc(fc.said.Buttons, func(tb ToastButton) bool { return tb.Label == old.said.Buttons[i].Label })
+			if same >= 0 {
+				return fc.buttons.Children()[same]
+			}
+		}
+	}
+	if fc.close != nil {
+		return fc.close
+	}
+	return nil
 }
 
 // ask gives the face the buttons, the close button and the tick box of
