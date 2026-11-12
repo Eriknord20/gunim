@@ -140,7 +140,8 @@ func TestALeastSizeIsCappedAtTheWorkArea(t *testing.T) {
 			t.Errorf("%s, sized to 100×100 the window is %v, larger than the work area %v", what, r.Size(), area)
 		}
 	}
-	w := leastWindow(t, driver.Options{Title: "gunim least huge", Size: geom.Sz(300, 200), MinSize: geom.Sz(6000, 4000)})
+	w := leastWindow(t, driver.Options{Title: "gunim least huge", Size: geom.Sz(300, 200),
+		MinSize: geom.Sz(6000, 4000)})
 	fits("opened with a least size of 6000×4000", w)
 
 	w = leastWindow(t, driver.Options{Title: "gunim least huge", Size: geom.Sz(300, 200)})

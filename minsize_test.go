@@ -89,8 +89,8 @@ func TestANegativeSideOfALeastSizeIsZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.got.MinSize != geom.Sz(0, 250) || size != geom.Sz(0, 250) {
-		t.Errorf("given -50×250, the driver was asked for a least size of %v, and the window reports %v", d.got.MinSize,
-			size)
+		t.Errorf("given -50×250, the driver was asked for a least size of %v, and the window reports %v",
+			d.got.MinSize, size)
 	}
 	w := NewOffscreen(geom.Sz(400, 300), nil)
 	if err := w.ui.SetMinSize(geom.Sz(320, -1)); err != nil || w.ui.MinSize() != geom.Sz(320, 0) {
