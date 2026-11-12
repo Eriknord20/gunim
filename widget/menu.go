@@ -721,8 +721,10 @@ func (m *Menu) content() float32 {
 // menuBreak is the room a line between groups takes.
 const menuBreak = 9
 
-// menuTick is the room a tick takes before the items, when any has one.
-const menuTick = 18
+// menuTick is the room a tick takes before the items, when any has one. The tick stands in the middle of it, so
+// with an icon 16 px across it has 4 px each side: 4 px more than the row's padding from the menu's edge, and 4 px
+// before the item's icon or text.
+const menuTick = 24
 
 // menuHintGap is the room between an item's text and its hint.
 const menuHintGap = 32
@@ -992,7 +994,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		it := &m.list.items[i]
 		if it.Checked {
 			s := IconSize.Get(th)
-			drawIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+m.gut/2-1-s/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
+			drawIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+(m.gut-s)/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
 		}
 		x := card.Min.X + pad + m.gut
 		if it.Icon != nil {
