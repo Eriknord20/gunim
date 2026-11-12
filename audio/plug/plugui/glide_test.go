@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -87,5 +89,151 @@ func TestLampsSetElsewhereGlide(t *testing.T) {
 	w.Frame(time.Second / 60)
 	if got := p.on.Value(); got <= 0 || got >= 1 {
 		t.Errorf("a frame after it is set on, the power lamp is %v lit, want part way", got)
+	}
+}
+
+// glides runs frames at 120 Hz until the knob's needle rests at want, and fails where it overshoots, stands still before it
+// arrives, or takes longer than within to rest. It returns how long it took.
+func glides(t *testing.T, w *gunim.Window, k *Knob, want float32, within time.Duration) time.Duration {
+	t.Helper()
+	const frame = time.Second / 120
+	from := k.turned.Value()
+	last := from
+	for took := frame; took <= within; took += frame {
+		w.Frame(frame)
+		v := k.turned.Value()
+		if (want-from)*(v-last) < 0 || (want-from)*(v-want) > 1e-6 {
+			t.Fatalf("at %v the needle went from %v to %v, heading for %v from %v: it overshot or turned back",
+				took, last, v, want, from)
+		}
+		if took == frame && (v == from || v == want) {
+			t.Fatalf("a frame in, the needle stands at %v, from %v to %v: want it part way", v, from, want)
+		}
+		if v == want && !k.turned.Active() {
+			return took
+		}
+		last = v
+	}
+	t.Fatalf("after %v the needle stands at %v, want it at rest at %v", within, k.turned.Value(), want)
+	return 0
+}
+
+// A new parameter for the knob, set from outside, glides the needle there and rests within about 150 ms.
+func TestSetParamGlidesTheNeedle(t *testing.T) {
+	h := &host{values: map[uint32]float64{3: 10}}
+	k := NewKnob(h, release)
+	w := stageNode(t, k)
+	gunim.RegisterPatch(w, "n", func(k *Knob, v float64, u *gunim.UI) {
+		k.SetParam(plug.Param{ID: 3, Name: "Slope", Min: 0, Max: 1}, v, u)
+	})
+	if err := w.Client().Patch("n", 0.8); err != nil {
+		t.Fatal(err)
+	}
+	glides(t, w, k, 0.8, 160*time.Millisecond)
+}
+
+// An arrow key and a double click glide the needle to where they set the knob.
+func TestKeysAndADoubleClickGlideTheNeedle(t *testing.T) {
+	h := &host{values: map[uint32]float64{3: 10}}
+	k := NewKnob(h, release)
+	w := stageNode(t, k)
+	w.Input(input.KeyPress{Key: input.KeyTab})
+	frames(w, 30)
+	w.Input(input.KeyPress{Key: input.KeyUp, Mods: input.ModShift})
+	glides(t, w, k, float32(k.turnOf(k.Value())), 160*time.Millisecond)
+	frames(w, 30)
+	at := geom.Pt(KnobW/2, 20)
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 2, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	if k.Value() != release.Default {
+		t.Fatalf("a double click set the knob to %v, want its default %v", k.Value(), release.Default)
+	}
+	glides(t, w, k, float32(k.turnOf(k.Value())), 160*time.Millisecond)
+}
+
+// A value that moves on every frame, as an automation ramp, has the needle follow it closely, and rest as it stops.
+func TestTheNeedleFollowsARampClosely(t *testing.T) {
+	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
+	h := &host{values: map[uint32]float64{1: 0}}
+	k := NewKnob(h, mix)
+	w := stageNode(t, k)
+	gunim.RegisterPatch(w, "n", func(k *Knob, v float64, u *gunim.UI) { k.Follow(v, u) })
+	const frame = time.Second / 120
+	for i := 1; i <= 120; i++ {
+		v := float64(i) / 120
+		if err := w.Client().Patch("n", v); err != nil {
+			t.Fatal(err)
+		}
+		w.Frame(frame)
+		// The first frame of the ramp may glide; after it, the needle stands with the value.
+		if lag := v - float64(k.turned.Value()); i > 1 && math.Abs(lag) > 1e-6 {
+			t.Fatalf("on frame %d of the ramp the needle trails the value %v by %v", i, v, lag)
+		}
+	}
+	w.Frame(frame)
+	if k.turned.Value() != 1 || k.Step(frame) {
+		t.Errorf("a frame after the ramp, the needle stands at %v, moving %v", k.turned.Value(), k.turned.Active())
+	}
+}
+
+// A knob taken out of the tree, set elsewhere while out, and put back shows its value on the first frame back.
+func TestAKnobBackInTheTreeShowsItsValueAtOnce(t *testing.T) {
+	h := &host{values: map[uint32]float64{3: 10}}
+	k := NewKnob(h, release)
+	r := &row{kids: []gunim.Node{k}}
+	w := gunimtest.New(t, geom.Sz(400, 120), nil)
+	gunim.RegisterView(w, "row", func(struct{}) gunim.Node { return r }, nil)
+	if err := w.Client().Mount(gunim.Root, "row", "row", nil); err != nil {
+		t.Fatal(err)
+	}
+	frames(w, 2)
+	gunim.RegisterPatch(w, "row", func(r *row, step string, u *gunim.UI) {
+		switch step {
+		case "out":
+			u.Remove(k)
+		case "follow":
+			k.Follow(1000, u)
+		case "in":
+			u.Insert(r, k)
+		}
+	})
+	for _, step := range []string{"out", "follow", "in"} {
+		if err := w.Client().Patch("row", step); err != nil {
+			t.Fatal(err)
+		}
+		frames(w, 1)
+	}
+	if got := k.turned.Value(); got != 1 {
+		t.Errorf("on the first frame back the needle stands %v round, want 1", got)
+	}
+}
+
+// wrapped is a control that embeds a knob and lays itself out its own way.
+type wrapped struct{ *Knob }
+
+func (w *wrapped) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	return c.Constrain(geom.Sz(KnobW, KnobH))
+}
+
+// A control that embeds a knob and has a Layout of its own still shows the needle where the knob is turned.
+func TestAWrappedKnobsNeedleFollows(t *testing.T) {
+	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
+	h := &host{values: map[uint32]float64{1: 0}}
+	wk := &wrapped{NewKnob(h, mix)}
+	w := stageNode(t, wk)
+	at := geom.Pt(KnobW/2, 60)
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerMove{Pos: geom.Pt(at.X, at.Y-90)})
+	w.Input(input.PointerUp{Pos: geom.Pt(at.X, at.Y-90), Button: input.ButtonPrimary, Time: time.Now()})
+	frames(w, 2)
+	if wk.Value() != 0.5 {
+		t.Fatalf("dragged half its throw, the knob stands at %v", wk.Value())
+	}
+	if got := wk.turned.Value(); got != 0.5 {
+		t.Errorf("dragged to 0.5, the wrapped knob's needle stands %v round", got)
 	}
 }

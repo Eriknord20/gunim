@@ -30,7 +30,13 @@ var (
 	KnobGroove    = theme.Color("plug.knob.groove", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x16})
 	// KnobRing is the ring of the control moving a knob's value.
 	KnobRing = theme.Color("plug.knob.ring", color.NRGBA{R: 0xff, G: 0xb3, B: 0x47, A: 0xff})
+	// KnobGlide is the motion of a knob's needle to a value set elsewhere: at rest in about 150 ms, with no overshoot.
+	KnobGlide = theme.Spring("plug.knob.glide", anim.Spring{Response: 0.09, Damping: 1})
 )
+
+// knobFollows is how soon a value set after the last one makes the needle follow at once rather than glide, as an
+// automation ramp moving it on every frame.
+const knobFollows = 60 * time.Millisecond
 
 // KnobW and KnobH are how big a knob is: its cap, its name and its
 // value under it; CompactW and CompactH how big a compact one is.
@@ -85,6 +91,9 @@ type Knob struct {
 	// it has been laid out, before which they jump to where they are set.
 	grey, faint, turned *anim.Float
 	laid                bool
+	// glide is the needle's motion, from the theme, and aimed how long ago the needle took its last new aim.
+	glide anim.Spring
+	aimed time.Duration
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -148,20 +157,29 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 }
 
 // Step implements [anim.Animator]: the needle glides to a value set
-// elsewhere and follows a drag at once. A knob whose parameter control
-// moves asks for the next frame while the value heard or the depth
-// changes, to show it move, and rests while they stand still, as with
-// the song stopped.
+// elsewhere, and follows a drag or a value that moves on every frame at
+// once. Before the knob is laid out, everything jumps. A knob whose
+// parameter control moves asks for the next frame while the value heard
+// or the depth changes, to show it move, and rests while they stand
+// still, as with the song stopped.
 func (k *Knob) Step(dt time.Duration) bool {
-	if k.laid {
+	k.aimed += dt
+	if !k.laid {
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	} else {
 		k.aim(func(a *anim.Float, v float32) {
 			switch {
 			case a.Target() == v:
-			case a == k.turned && k.held:
+				return
+			case a != k.turned:
+				a.Animate(v, anim.Snappy)
+				return
+			case k.held || k.aimed < knobFollows:
 				a.Jump(v)
 			default:
-				a.Animate(v, anim.Snappy)
+				a.Animate(v, k.glide)
 			}
+			k.aimed = 0
 		})
 	}
 	moving := k.Group.Step(dt)
@@ -169,6 +187,14 @@ func (k *Knob) Step(dt time.Duration) bool {
 	changed := modded != k.modded || modded && m != k.shown
 	k.shown, k.modded = m, modded
 	return moving || changed
+}
+
+// Transition implements [gunim.Transitioner]: a knob coming into the tree shows where it is set at once.
+func (k *Knob) Transition(p gunim.Presence, _ gunim.Frame) bool {
+	if p == gunim.Entering {
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	}
+	return true
 }
 
 // aim moves its greys by to where Disabled and Locked have them, and its needle to its value.
@@ -209,7 +235,8 @@ func (k *Knob) jumpUnlaid(u *gunim.UI) {
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
 	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), ring: anim.NewFloat(0),
-		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0)}
+		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0), glide: KnobGlide.Default(),
+		aimed: knobFollows}
 	k.turned.Jump(float32(k.turnOf(v)))
 	k.Add(k.hover, k.ring, k.grey, k.faint, k.turned)
 	return k
@@ -278,6 +305,7 @@ func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 // Paint implements [gunim.Node].
 func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
+	k.glide = KnobGlide.Get(th)
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	accent = anim.MixColor(accent, paint.Faded(ink, 0.35), k.grey.Value())
 	hover := k.hover.Value()
