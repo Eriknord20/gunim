@@ -41,6 +41,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs: the macros first, then each part of the chain.
@@ -218,7 +219,9 @@ var Descriptor = plug.Descriptor{
 		{Name: "Dark and warm", Category: "Vocal", Params: map[uint32]float64{
 			AirGainID: 0, PresenceGainID: 0.5, LowShelfID: -3, TapeID: 35}},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{} },
+	ViewSize:    geom.Sz(960, 600),
+	ViewMinSize: geom.Sz(880, 520),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 }
 
 func init() { plug.Register(Descriptor) }

@@ -127,6 +127,10 @@ type panel struct {
 	// how far.
 	learning bool
 	stopPoll func()
+	// laid is the size the panel was laid out at: its room, or its least size where the room is smaller.
+	laid geom.Size
+	// least is the size the panel lays out at least at: the window's least size in full, and none otherwise.
+	least geom.Size
 }
 
 // The macros, in their row.
@@ -158,6 +162,7 @@ func newPanel(pl *plugin, h plug.Host, full bool) *panel {
 	learn.Add(p.learn, plugui.KnobW)
 	p.sections = []*plugui.Section{plugui.NewSection(h, &Descriptor, "MACROS", 0, macroIDs...), learn}
 	if full {
+		p.least = Descriptor.ViewMinSize
 		p.sections = append(p.sections,
 			plugui.NewSection(h, &Descriptor, "DE-ESSER", DeEssOnID, DeEssFreqID, DeEssThresholdID, DeEssRangeID),
 			plugui.NewSection(h, &Descriptor, "LEVELS", 0, InputID, OutputID, WidthFreqID),
@@ -296,19 +301,23 @@ const panelInset = 16
 
 // Layout implements [gunim.Node]: the history fills the panel, and over
 // it, on glass, the sections along the foot.
+// Under its least size the panel lays out at that size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := plug.AtLeast(c.Max, p.least)
+	p.laid = size
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
 		kids.At(1 + i).Layout(gunim.Tight(r.Size()))
 		kids.At(1 + i).Place(r.Min)
 	})
-	return size
+	return c.Max
 }
 
 // Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// It clips to its box where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
+	defer plug.ClipTo(pt, box, p.laid)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}
