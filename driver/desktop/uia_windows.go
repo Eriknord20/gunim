@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -44,6 +45,7 @@ var (
 	procUiaRaiseAutomationPropertyChangedEvent = uiaCore.NewProc("UiaRaiseAutomationPropertyChangedEvent")
 	procUiaRaiseStructureChangedEvent          = uiaCore.NewProc("UiaRaiseStructureChangedEvent")
 	procUiaClientsAreListening                 = uiaCore.NewProc("UiaClientsAreListening")
+	procUiaRaiseNotificationEvent              = uiaCore.NewProc("UiaRaiseNotificationEvent")
 	procSafeArrayCreateVector                  = oleaut32.NewProc("SafeArrayCreateVector")
 	procSafeArrayPutElement                    = oleaut32.NewProc("SafeArrayPutElement")
 	procSysAllocString                         = oleaut32.NewProc("SysAllocString")
@@ -107,18 +109,27 @@ const (
 	hrNotAvailable     = 0x80040201 // UIA_E_ELEMENTNOTAVAILABLE
 	hrInvalidOperation = 0x80131509 // UIA_E_INVALIDOPERATION
 
-	uiaRootObjectID      = -25
-	uiaAppendRuntimeID   = 3
-	providerServerSide   = 1
-	vtEmpty              = 0
-	vtI4                 = 3
-	vtR8                 = 5
-	vtBSTR               = 8
-	vtBool               = 11
-	variantTrue          = 0xffff
-	childrenInvalidated  = 2
-	eventFocusChanged    = 20005
-	eventElementSelected = 20012
+	uiaRootObjectID        = -25
+	uiaAppendRuntimeID     = 3
+	providerServerSide     = 1
+	vtEmpty                = 0
+	vtI4                   = 3
+	vtR8                   = 5
+	vtBSTR                 = 8
+	vtBool                 = 11
+	variantTrue            = 0xffff
+	childrenInvalidated    = 2
+	eventFocusChanged      = 20005
+	eventElementSelected   = 20012
+	eventLiveRegionChanged = 20024
+	propLiveSetting        = 30135
+	propPositionInSet      = 30152
+	propSizeOfSet          = 30153
+	livePolite             = 1
+	liveAssertive          = 2
+	notificationOther      = 4
+	notificationMostRecent = 3
+	notificationAnnounceID = "gunim.announce"
 
 	propControlType         = 30003
 	propName                = 30005
@@ -153,6 +164,7 @@ const (
 	ctMenuBar     = 50010
 	ctMenuItem    = 50011
 	ctProgressBar = 50012
+	ctRadioButton = 50013
 	ctScrollBar   = 50014
 	ctSlider      = 50015
 	ctTab         = 50018
@@ -186,10 +198,22 @@ type uiaWindow struct {
 	events chan func()
 	stop   chan struct{}
 	closed atomic.Bool
+	// spoken is the announcement still to make, which speak wakes the goroutine for. A slot of its own keeps it
+	// from being dropped with a full queue, and only the latest counts.
+	spoken atomic.Pointer[string]
+	speak  chan struct{}
+	// liveAt is when each live node was last read out, and livePending the nodes waiting their turn; see liveChanged.
+	liveMu      sync.Mutex
+	liveAt      map[uint64]time.Time
+	livePending map[uint64]bool
 }
 
+// liveEvery is how often a live node is read out at most, however often its words change.
+var liveEvery = time.Second
+
 func newUIAWindow(w *Window, hwnd uintptr) *uiaWindow {
-	uw := &uiaWindow{win: w, hwnd: hwnd, events: make(chan func(), 64), stop: make(chan struct{})}
+	uw := &uiaWindow{win: w, hwnd: hwnd, events: make(chan func(), 64), stop: make(chan struct{}),
+		speak: make(chan struct{}, 1), liveAt: map[uint64]time.Time{}, livePending: map[uint64]bool{}}
 	go func() {
 		// UI Automation's functions, raising events among them, need COM
 		// on the thread that calls them.
@@ -205,6 +229,10 @@ func newUIAWindow(w *Window, hwnd uintptr) *uiaWindow {
 			select {
 			case ev := <-uw.events:
 				ev()
+			case <-uw.speak:
+				if s := uw.spoken.Swap(nil); s != nil {
+					uw.notify(*s)
+				}
 			case <-uw.stop:
 				return
 			}
@@ -250,7 +278,32 @@ func (uw *uiaWindow) raise(ev func()) {
 	case <-uw.stop:
 	case uw.events <- ev:
 	default:
+		uiaLog("dropped an event: the queue is full")
 	}
+}
+
+// liveChanged has a screen reader read live node id again: at once where it was last read a second or more ago, and
+// else once that second is up, with its words as they are then.
+func (uw *uiaWindow) liveChanged(id uint64) {
+	uw.liveMu.Lock()
+	defer uw.liveMu.Unlock()
+	if uw.livePending[id] {
+		return
+	}
+	wait := liveEvery - time.Since(uw.liveAt[id])
+	if wait <= 0 {
+		uw.liveAt[id] = time.Now()
+		uw.raise(func() { uw.event(id, eventLiveRegionChanged) })
+		return
+	}
+	uw.livePending[id] = true
+	time.AfterFunc(wait, func() {
+		uw.liveMu.Lock()
+		delete(uw.livePending, id)
+		uw.liveAt[id] = time.Now()
+		uw.liveMu.Unlock()
+		uw.raise(func() { uw.event(id, eventLiveRegionChanged) })
+	})
 }
 
 // focusChanged tells UI Automation where the window's focus is, when
@@ -288,7 +341,7 @@ func (uw *uiaWindow) publish(t *access.Tree) {
 		return
 	}
 	if old == nil {
-		uw.raise(func() { uw.structure(0) })
+		uw.first(t)
 		if t.Focus != nil && uw.keyboard() {
 			uw.focusChanged()
 		}
@@ -298,6 +351,9 @@ func (uw *uiaWindow) publish(t *access.Tree) {
 	diff = func(n *access.Node) {
 		if o := old.Find(n.ID); o != nil {
 			uw.diff(o, n, n == t.Root)
+		} else if n.Role == access.RoleAlert {
+			// An alert is read as it appears.
+			uw.liveChanged(n.ID)
 		}
 		for _, k := range n.Children {
 			diff(k)
@@ -323,9 +379,19 @@ func (uw *uiaWindow) diff(o, n *access.Node, root bool) {
 	if !slices.EqualFunc(o.Children, n.Children, func(a, b *access.Node) bool { return a.ID == b.ID }) {
 		uw.raise(func() { uw.structure(id) })
 	}
-	if o.State.Has(access.StateChecked) != n.State.Has(access.StateChecked) {
+	switch {
+	case n.Role == access.RoleRadioButton && isSelected(o) != isSelected(n):
+		was, is := isSelected(o), isSelected(n)
+		uw.raise(func() { uw.changed(id, propIsSelected, boolVariant(was), boolVariant(is)) })
+		if is {
+			uw.raise(func() { uw.event(id, eventElementSelected) })
+		}
+	case o.State.Has(access.StateChecked) != n.State.Has(access.StateChecked):
 		was, is := toggleState(o), toggleState(n)
 		uw.raise(func() { uw.changed(id, propToggleState, intVariant(was), intVariant(is)) })
+	}
+	if live(n) && (o.Name != n.Name || o.Value != n.Value || !live(o)) {
+		uw.liveChanged(id)
 	}
 	if o.State.Has(access.StateExpanded) != n.State.Has(access.StateExpanded) {
 		was, is := expandState(o), expandState(n)
@@ -358,6 +424,62 @@ func (uw *uiaWindow) event(id uint64, event int32) {
 	defer e.release()
 	hr, _, _ := procUiaRaiseAutomationEvent.Call(e.iface(ifSimple), uintptr(event))
 	uiaLog("event %d from node %d: HRESULT %#x", event, id, uint32(hr))
+}
+
+// first tells UI Automation of the window's first tree: its children, and any alert in it, which is read too.
+func (uw *uiaWindow) first(t *access.Tree) {
+	uw.raise(func() { uw.structure(0) })
+	for _, id := range alerts(t.Root) {
+		uw.liveChanged(id)
+	}
+}
+
+// alerts returns the IDs of the alerts under n.
+func alerts(n *access.Node) []uint64 {
+	var out []uint64
+	if n.Role == access.RoleAlert {
+		out = append(out, n.ID)
+	}
+	for _, k := range n.Children {
+		out = append(out, alerts(k)...)
+	}
+	return out
+}
+
+// announce has a screen reader say text, from the window, through UiaRaiseNotificationEvent, and reports whether it
+// passed the words on: false where nothing listens, or on Windows before 10 version 1709, which has no such call.
+func (uw *uiaWindow) announce(text string) bool {
+	if uw.closed.Load() || procUiaRaiseNotificationEvent.Find() != nil {
+		return false
+	}
+	if r, _, _ := procUiaClientsAreListening.Call(); r == 0 {
+		return false
+	}
+	uw.say(text)
+	return true
+}
+
+// say puts text in the announcement's slot, in place of one not made yet, and wakes the COM goroutine for it.
+func (uw *uiaWindow) say(text string) {
+	uw.spoken.Store(&text)
+	select {
+	case uw.speak <- struct{}{}:
+	default:
+	}
+}
+
+// notify raises the notification event that says text. It runs on the window's COM goroutine.
+func (uw *uiaWindow) notify(text string) {
+	e := uw.element(0)
+	defer e.release()
+	words, activity := bstr(text), bstr(notificationAnnounceID)
+	defer func() {
+		_, _, _ = procSysFreeString.Call(words)
+		_, _, _ = procSysFreeString.Call(activity)
+	}()
+	hr, _, _ := procUiaRaiseNotificationEvent.Call(e.iface(ifSimple), notificationOther, notificationMostRecent,
+		words, activity)
+	uiaLog("announced %q: HRESULT %#x", text, uint32(hr))
 }
 
 // changed raises a property's change on node id, and frees the two
@@ -479,19 +601,19 @@ func (e *element) supports(k int) bool {
 		return e.id == 0
 	case ifInvoke:
 		switch n.Role {
-		case access.RoleCheckbox, access.RoleSwitch, access.RoleTab, access.RoleComboBox:
+		case access.RoleCheckbox, access.RoleSwitch, access.RoleTab, access.RoleComboBox, access.RoleRadioButton:
 			return false
 		default:
 			return slices.Contains(n.Actions, access.ActionPress)
 		}
 	case ifToggle:
-		return n.State.Has(access.StateCheckable)
+		return n.State.Has(access.StateCheckable) && n.Role != access.RoleRadioButton
 	case ifValue:
 		return hasValue(n)
 	case ifRange:
 		return n.Range != nil
 	case ifSelectionItem:
-		return n.Role == access.RoleTab || n.Role == access.RoleRow
+		return n.Role == access.RoleTab || n.Role == access.RoleRow || n.Role == access.RoleRadioButton
 	case ifExpandCollapse:
 		return n.State.Has(access.StateExpandable)
 	}
@@ -568,6 +690,11 @@ func controlType(n *access.Node) int32 {
 		return ctProgressBar
 	case access.RoleScrollBar:
 		return ctScrollBar
+	case access.RoleStatus, access.RoleAlert:
+		// Text whose live setting says how soon a screen reader reads its changes.
+		return ctText
+	case access.RoleRadioButton:
+		return ctRadioButton
 	case access.RoleGroup:
 		return ctGroup
 	}
@@ -658,9 +785,66 @@ func (e *element) property(id int32) variant {
 		if n.Role == access.RoleDialog {
 			return boolVariant(true)
 		}
+	case propLiveSetting:
+		if n.Role == access.RoleStatus {
+			return intVariant(livePolite)
+		}
+		if n.Role == access.RoleAlert {
+			return intVariant(liveAssertive)
+		}
+	case propIsSelected:
+		if n.Role == access.RoleRadioButton {
+			return boolVariant(isSelected(n))
+		}
+	case propPositionInSet, propSizeOfSet:
+		if n.Role != access.RoleRadioButton {
+			break
+		}
+		t, _ := e.node()
+		parents := e.w.parents.Load()
+		if t == nil || parents == nil {
+			break
+		}
+		pos, size := radioPlace(t.Find((*parents)[n.ID]), n.ID)
+		if pos == 0 {
+			break
+		}
+		if id == propPositionInSet {
+			return intVariant(int32(pos))
+		}
+		return intVariant(int32(size))
 	}
 	return variant{}
 }
+
+// radioPlace returns where radio button id is among the radio buttons under parent, from 1, and how many there are,
+// as "2 of 3": 0, 0 where parent holds no such button.
+func radioPlace(parent *access.Node, id uint64) (pos, size int) {
+	if parent == nil {
+		return 0, 0
+	}
+	for _, k := range parent.Children {
+		if k.Role != access.RoleRadioButton {
+			continue
+		}
+		size++
+		if k.ID == id {
+			pos = size
+		}
+	}
+	if pos == 0 {
+		return 0, 0
+	}
+	return pos, size
+}
+
+// isSelected reports whether n is selected, as a tab or a row is, or, for a radio button, chosen.
+func isSelected(n *access.Node) bool {
+	return n.State.Has(access.StateSelected) || n.Role == access.RoleRadioButton && n.State.Has(access.StateChecked)
+}
+
+// live reports whether a screen reader follows n's changes as they come.
+func live(n *access.Node) bool { return n.Role == access.RoleStatus || n.Role == access.RoleAlert }
 
 // screenRect returns r, in the window's space, in screen pixels.
 func (e *element) screenRect(r geom.Rect) [4]float64 {
@@ -994,7 +1178,7 @@ func tables() {
 			func(this uintptr) uintptr { return hrInvalidOperation },
 			func(this, p uintptr) uintptr {
 				return withNode(this, ifSelectionItem, func(_ *element, n *access.Node) uintptr {
-					boolOut(p, n.State.Has(access.StateSelected))
+					boolOut(p, isSelected(n))
 					return hrOK
 				})
 			},

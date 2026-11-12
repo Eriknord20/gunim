@@ -57,6 +57,15 @@ const (
 	RoleProgressBar
 	// RoleScrollBar scrolls something else, its place in its Range.
 	RoleScrollBar
+	// RoleStatus says how something stands, such as "Syncing 3 files". A screen reader reads its new Name or Value
+	// when the user is free to hear it, at most once a second. Change its words at the steps that matter, and keep a
+	// number that changes fast, such as a speed, in a node that is not live.
+	RoleStatus
+	// RoleAlert says something the user must hear at once, such as an error. A screen reader reads it as it
+	// appears, and its new Name or Value as it changes.
+	RoleAlert
+	// RoleRadioButton is one choice of several in a RoleGroup, with StateChecked on the chosen one.
+	RoleRadioButton
 )
 
 var roleNames = [...]string{
@@ -64,6 +73,7 @@ var roleNames = [...]string{
 	"label", "heading", "image", "list", "list item", "tab list", "tab",
 	"menu", "menu item", "combo box", "dialog", "tooltip", "scroll area", "link",
 	"table", "row", "cell", "column header", "menu bar", "progress bar", "scroll bar",
+	"status", "alert", "radio button",
 }
 
 func (r Role) String() string {
