@@ -281,10 +281,10 @@ func TestALockedSelectorUnderThePointerPicksNothing(t *testing.T) {
 	}
 }
 
-// Name, where set, names the selector for a screen reader, its title still written under the lamps.
-func TestASelectorsNameReplacesItsTitleForAccess(t *testing.T) {
+// Label, where set, names the selector for a screen reader, its title still written under the lamps.
+func TestASelectorsLabelReplacesItsTitleForAccess(t *testing.T) {
 	s := NewSelector("Style", []string{"A", "B"}, nil)
-	s.Name = "Low style"
+	s.Label = "Low style"
 	if got := s.Access().Name; got != "Low style" {
 		t.Errorf("the selector reads as %q, want %q", got, "Low style")
 	}

@@ -45,8 +45,8 @@ type Selector struct {
 	Columns int
 	// Title is what it picks, written under its lamps as a knob's name.
 	Title string
-	// Name, where set, names the selector for a screen reader in place of Title.
-	Name  string
+	// Label, where set, names the selector for a screen reader in place of Title.
+	Label string
 	tip   widget.PartTip
 	cells []geom.Rect
 	size  geom.Size
@@ -347,11 +347,11 @@ func isLeave(e input.Event) bool {
 }
 
 // Access implements [gunim.Accessible]: a list of tabs named by its
-// Name or its title, one an option, as a segmented control reads.
+// Label or its title, one an option, as a segmented control reads.
 func (s *Selector) Access() access.Info {
 	info := access.Info{Role: access.RoleTabList, Name: s.Title, Value: s.names[s.sel]}
-	if s.Name != "" {
-		info.Name = s.Name
+	if s.Label != "" {
+		info.Name = s.Label
 	}
 	if s.Locked {
 		info.State = access.StateDisabled
