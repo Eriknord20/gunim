@@ -61,8 +61,8 @@ type Power struct {
 
 // NewPower returns a power lamp, off, switching name.
 func NewPower(name string) *Power {
-	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), ring: anim.NewFloat(0), squash: anim.NewFloat(0),
-		click: widget.Clicker{Repeats: true}}
+	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), ring: anim.NewFloat(0),
+		squash: anim.NewFloat(0), click: widget.Clicker{Repeats: true}}
 	p.Add(p.on, p.hover, p.ring, p.squash)
 	return p
 }
@@ -100,7 +100,7 @@ func (p *Power) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 	PaintPower(pt, mid, p.on.Value(), p.hover.Value(), widget.Accent.Get(th), widget.Ink.Get(th))
 }
 
-// tooltip says whether it is on and what a click does, as "Follow song is on. Click to turn it off.".
+// tooltip says whether it is on and what a click does, as "Follow song: on. Click to turn off.".
 func (p *Power) tooltip() string {
 	if p.Tooltip != "" {
 		return p.Tooltip
@@ -109,12 +109,12 @@ func (p *Power) tooltip() string {
 	if p.checked {
 		now, to = "on", "off"
 	}
-	click := "Click to turn it " + to + "."
 	if p.Name == "" {
-		return click
+		r, n := utf8.DecodeRuneInString(now)
+		return string(unicode.ToUpper(r)) + now[n:] + ". Click to turn " + to + "."
 	}
 	r, n := utf8.DecodeRuneInString(p.Name)
-	return string(unicode.ToUpper(r)) + p.Name[n:] + " is " + now + ". " + click
+	return string(unicode.ToUpper(r)) + p.Name[n:] + ": " + now + ". Click to turn " + to + "."
 }
 
 // Focusable implements [gunim.Focusable].

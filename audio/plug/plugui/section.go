@@ -1,8 +1,6 @@
 package plugui
 
 import (
-	"strings"
-
 	"math"
 
 	"github.com/marrasen/gunim"
@@ -53,7 +51,7 @@ func NewSection(h plug.Host, d *plug.Descriptor, name string, on uint32, ids ...
 		s.Knobs = append(s.Knobs, NewKnob(h, p))
 	}
 	if on != 0 {
-		s.Switch = NewPower(strings.ToLower(name))
+		s.Switch = NewPower(name)
 		s.Switch.SetChecked(h.Param(on) > 0.5, nil)
 		s.Switch.OnChange = func(v bool, u *gunim.UI) gunim.Intent {
 			h.Begin(on, u)

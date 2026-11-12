@@ -7,9 +7,9 @@ import (
 	"github.com/marrasen/gunim/access"
 )
 
-// Every control reads aloud with a name and a value: a screen reader says them, and a script finds the control by
-// its name.
-func TestEachControlReadsWithANameAndAValue(t *testing.T) {
+// Every control reads aloud with its name, its value where it has one, and its state: a screen reader says them,
+// and a script finds the control by its name.
+func TestEachControlReadsItsNameValueAndState(t *testing.T) {
 	h := &host{values: map[uint32]float64{3: 100}}
 	sel := NewSelector("Stereo", []string{"Left", "Both", "Right"}, nil)
 	sel.SetSelected(1, nil)
