@@ -858,12 +858,16 @@ func TestOnlyTheBandInFocusWritesItsThreshold(t *testing.T) {
 }
 
 func TestTheMatchButtonSaysLessWhereTheBarIsNarrow(t *testing.T) {
+	// Under its least size the view lays out at that size, so the bar is never narrower than there.
 	for _, c := range []struct {
 		w      float32
+		target float64
 		words  string
 		hidden bool
-	}{{1200, matchWords(tonal.Pink), false}, {560, matchShort(tonal.Pink), false}, {380, matchShort(tonal.Pink), true}} {
+	}{{1200, 0, matchWords(tonal.Pink), false}, {640, 1, matchShort(tonal.Music), false},
+		{380, 1, matchShort(tonal.Music), false}} {
 		p, h := newEQ(t)
+		h.values[TargetID] = c.target
 		v, ok := p.View(plug.Full, h).(*full)
 		if !ok {
 			t.Fatal("the full view is of another type")
