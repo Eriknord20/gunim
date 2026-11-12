@@ -41,8 +41,8 @@ type OffscreenWindow struct {
 	zoom float32
 	rate float64
 	// ops are the last frame's commands, and raw says they are still the engine's own; see keptOps.
-	ops  []paint.Op
-	raw  bool
+	ops []paint.Op
+	raw bool
 	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
 	drawnSize             geom.Size
 	drawnScale, drawnZoom float32

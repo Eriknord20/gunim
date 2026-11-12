@@ -14,7 +14,9 @@ import (
 // paintCount is a node that counts its paints.
 type paintCount struct{ paints int }
 
-func (c *paintCount) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size { return cs.Max }
+func (c *paintCount) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	return cs.Max
+}
 
 func (c *paintCount) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, _ gunim.Children) {
 	c.paints++
