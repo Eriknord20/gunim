@@ -947,7 +947,6 @@ func (fc *toastFace) place(cs gunim.Constraints, f gunim.Frame, kids gunim.Child
 			fc.where = toastColumn
 		case left > 0:
 			fc.where = toastLeft
-		case column > 0, left > 0:
 		}
 		fc.beside = fc.where != toastUnder
 	}
@@ -1036,9 +1035,10 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 }
 
 // words places the title in titleRoom and the rest in bodyRoom, from left, and the icon before the title. With
-// buttons beside the words, of the size given, it places them at the right, at the words' middle. With a clear
-// above zero they stand in the corner's column, no higher than clear, and the face is tall enough to hold them.
-func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, titleRoom, bodyRoom float32, buttons geom.Size, clear float32) geom.Size {
+// buttons beside the words, of the size given, it places them at the right, at the words' middle. With from
+// above zero they stand in the corner's column, from that far down the face, and the face is tall enough to hold
+// them.
+func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, titleRoom, bodyRoom float32, buttons geom.Size, from float32) geom.Size {
 	th := f.Theme
 	pad := CardPadding.Get(th)
 	beside := buttons.W > 0
@@ -1080,12 +1080,12 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 	// Words shorter than the buttons beside them sit at the buttons' middle, and the buttons at the words'.
 	block := max(words, buttons.H)
 	x := w - pad.Right - buttons.W
-	if clear > 0 {
-		block = max(block, clear+buttons.H-pad.Top)
+	if from > 0 {
+		block = max(block, from+buttons.H-pad.Top)
 	} else if beside {
 		x = left + bodyRoom + Gap.Get(th)
 	}
-	at := max(pad.Top+(block-buttons.H)/2, clear)
+	at := max(pad.Top+(block-buttons.H)/2, from)
 	top := pad.Top + (block-words)/2
 	for _, p := range puts {
 		p.k.Place(geom.Pt(left, top+p.y))
