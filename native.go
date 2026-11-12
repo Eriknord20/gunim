@@ -56,24 +56,26 @@ func (u *UI) Reshape(by geom.Insets) error {
 
 // SetMinSize sets the window's least size, in logical pixels, as [WindowOptions.MinSize] does: the user cannot size
 // the window smaller, and a window that is smaller grows to it, keeping its top left corner where it can. The limit
-// follows the monitor's scale and the window's zoom. Zero sets none. Windows, macOS and X11 keep it; on a driver that
-// cannot, as the web's and Android's, it only notes the size for [UI.MinSize], and returns nil.
+// follows the monitor's scale and the window's zoom, and is capped at the monitor's work area. Zero sets none, and a
+// negative side counts as zero. Windows, macOS and X11 keep it; on a driver that cannot, as the web's and Android's,
+// it only notes the size for [UI.MinSize], and returns nil. On an error the least size stays as it was.
 func (u *UI) SetMinSize(s geom.Size) error {
-	s = geom.Sz(max(s.W, 0), max(s.H, 0))
+	s = noNegative(s)
 	if s == u.minSize {
 		return nil
 	}
+	if m, ok := u.w.dw.(driver.MinSizer); ok {
+		if err := m.SetMinSize(s); err != nil {
+			return fmt.Errorf("gunim: least window size: %w", err)
+		}
+		u.invalid = true
+	}
 	u.minSize = s
-	m, ok := u.w.dw.(driver.MinSizer)
-	if !ok {
-		return nil
-	}
-	if err := m.SetMinSize(s); err != nil {
-		return fmt.Errorf("gunim: least window size: %w", err)
-	}
-	u.invalid = true
 	return nil
 }
+
+// noNegative returns s with each negative side made zero.
+func noNegative(s geom.Size) geom.Size { return geom.Sz(max(s.W, 0), max(s.H, 0)) }
 
 // MinSize returns the window's least size, as last set, or zero for none.
 func (u *UI) MinSize() geom.Size { return u.minSize }

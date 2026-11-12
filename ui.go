@@ -431,8 +431,9 @@ type WindowOptions struct {
 	// window manager tiles every window, it may still size the window as it will.
 	Fixed bool
 	// MinSize is the least size of an ordinary or a tool window, in logical pixels, as Size is: the user cannot size
-	// it smaller, and a window that would open smaller, at Size or at a saved place, opens at MinSize. Zero sets none.
-	// [UI.SetMinSize] changes it while the window is open, where it says which platforms keep it.
+	// it smaller, and a window that would open smaller, at Size or at a saved place, opens at MinSize. Zero sets none,
+	// and a negative side counts as zero. [UI.SetMinSize] changes it while the window is open, where it says which
+	// platforms keep it.
 	MinSize geom.Size
 	// Hidden opens the window without showing it, as for an application
 	// that starts in the tray and may close it unseen.
@@ -472,7 +473,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Class: o.Class, Owned: o.Owned && o.Parent != nil,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Corner: o.Corner, Text: o.Text, Place: o.Place,
 		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
-		MinSize: o.MinSize,
+		MinSize: noNegative(o.MinSize),
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw
@@ -490,7 +491,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.placeFile = o.PlaceFile
 	w.ui.underBar = o.UnderTitleBar
 	w.ui.fixed = o.Fixed
-	w.ui.minSize = o.MinSize
+	w.ui.minSize = noNegative(o.MinSize)
 	w.ui.startChrome(o.TitleBar)
 	if o.Pinned {
 		if err := w.ui.SetPinned(true); err != nil {

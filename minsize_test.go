@@ -2,8 +2,10 @@ package gunim
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 )
 
@@ -67,5 +69,63 @@ func TestALeastSizeHoldsTheWindowWhileOpen(t *testing.T) {
 	if got := w.dw.Size(); got != geom.Sz(200, 200) || w.ui.MinSize() != (geom.Size{}) {
 		t.Errorf("with no least size, the window sized to 200×200 is %v, and reports a least size of %v", got,
 			w.ui.MinSize())
+	}
+}
+
+// A negative side of a least size counts as zero, as the window opens and while it is open.
+func TestANegativeSideOfALeastSizeIsZero(t *testing.T) {
+	d := &optionsDriver{}
+	var size geom.Size
+	err := runApp(context.Background(), d, func(a *App) error {
+		w, err := a.NewWindow(WindowOptions{Title: "least", Size: geom.Sz(400, 300), MinSize: geom.Sz(-50, 250)})
+		if err != nil {
+			return err
+		}
+		size = w.ui.MinSize()
+		w.Close()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.got.MinSize != geom.Sz(0, 250) || size != geom.Sz(0, 250) {
+		t.Errorf("given -50×250, the driver was asked for a least size of %v, and the window reports %v", d.got.MinSize,
+			size)
+	}
+	w := NewOffscreen(geom.Sz(400, 300), nil)
+	if err := w.ui.SetMinSize(geom.Sz(320, -1)); err != nil || w.ui.MinSize() != geom.Sz(320, 0) {
+		t.Errorf("given 320×-1, the window reports a least size of %v, and %v", w.ui.MinSize(), err)
+	}
+}
+
+// failingMinSizer is an offscreen window that fails to take a least size while fail is set.
+type failingMinSizer struct {
+	*driver.OffscreenWindow
+	fail bool
+}
+
+func (f *failingMinSizer) SetMinSize(s geom.Size) error {
+	if f.fail {
+		return errors.New("no least size today")
+	}
+	return f.OffscreenWindow.SetMinSize(s)
+}
+
+// A least size the driver fails to take is not noted, so the same size set again is tried again.
+func TestALeastSizeTheDriverRefusesIsNotKept(t *testing.T) {
+	dw := &failingMinSizer{OffscreenWindow: driver.Offscreen(geom.Sz(400, 300)), fail: true}
+	w := newWindow(dw, nil)
+	if err := w.ui.SetMinSize(geom.Sz(500, 400)); err == nil {
+		t.Fatal("a least size the driver refused gave no error")
+	}
+	if got := w.ui.MinSize(); got != (geom.Size{}) {
+		t.Errorf("after the driver refused 500×400 the window reports a least size of %v", got)
+	}
+	dw.fail = false
+	if err := w.ui.SetMinSize(geom.Sz(500, 400)); err != nil {
+		t.Fatal(err)
+	}
+	if got := dw.MinSize(); got != geom.Sz(500, 400) {
+		t.Errorf("set again once the driver takes it, the driver holds a least size of %v", got)
 	}
 }
