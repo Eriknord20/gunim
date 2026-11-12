@@ -192,7 +192,9 @@ func TestTheKeyboardFollowsAToastsButtonThroughASwap(t *testing.T) {
 	ts := &Toasts{Life: time.Minute}
 	w, on, frames, focused := focusStage(t, ts)
 	var heard []string
-	on(func(u *gunim.UI) { ts.Show(heardToast("first", "Open the song it came with?", &heard, "Open", "Later"), u) })
+	on(func(u *gunim.UI) {
+		ts.Show(heardToast("first", "Open the song it came with?", &heard, "Open", "Later"), u)
+	})
 	frames(60)
 	card := ts.cards[0]
 	old := card.face
