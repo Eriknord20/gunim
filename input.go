@@ -863,14 +863,37 @@ func (u *UI) revealState(s *state) {
 	}
 }
 
+// RevealRect scrolls r, a part of n in n's own space such as one of its rows, into view through every [Revealer]
+// around n, as the last frame drew n. It does nothing for a node not drawn yet.
+func (u *UI) RevealRect(n Node, r geom.Rect) {
+	if u == nil {
+		return
+	}
+	s, ok := u.index[n]
+	if !ok || s.drawn == 0 || s.leaving() {
+		return
+	}
+	for a := s.parent; a != nil; a = a.parent {
+		if rv, ok := a.node.(Revealer); ok {
+			rv.Reveal(u.partIn(s, a, r), u)
+		}
+	}
+	u.invalid = true
+}
+
 // rectIn returns s's box, as the last frame drew it, in a's space.
 func (u *UI) rectIn(s, a *state) geom.Rect {
+	return u.partIn(s, a, geom.Rect{Max: s.size.Point()})
+}
+
+// partIn returns r, in s's space, as the last frame drew s, in a's space.
+func (u *UI) partIn(s, a *state, r geom.Rect) geom.Rect {
 	inv, ok := a.toWindow.Invert()
 	if !ok {
 		return geom.Rect{}
 	}
 	out := geom.Rect{Min: geom.Pt(float32(math.Inf(1)), float32(math.Inf(1))), Max: geom.Pt(float32(math.Inf(-1)), float32(math.Inf(-1)))}
-	for _, c := range []geom.Point{{}, {X: s.size.W}, {Y: s.size.H}, s.size.Point()} {
+	for _, c := range []geom.Point{r.Min, {X: r.Max.X, Y: r.Min.Y}, {X: r.Min.X, Y: r.Max.Y}, r.Max} {
 		flat, ok := a.proj.Unapply(s.screenAt(c))
 		if !ok {
 			continue

@@ -46,6 +46,7 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"Segmented.SetSelected":   func() { NewSegmented("a", "b").SetSelected(1, u) },
 		"NavList.SetSelected":     func() { NewNavList(NavItem{Label: "a"}, NavItem{Label: "b"}).SetSelected(1, u) },
 		"NavList.SetItems":        func() { NewNavList().SetItems([]NavItem{{Label: "a", Count: 2}}, u) },
+		"NavList.SetCursor":       func() { NewNavList(NavItem{Label: "a"}, NavItem{Label: "b"}).SetCursor(1, u) },
 		"Tree.SetKeys":            func() { NewTree().SetKeys([]Key{"a"}, u) },
 		"Tree.SetCursor":          func() { tr := NewTree(); tr.SetKeys([]Key{"a"}, u); tr.SetCursor("a", u) },
 		"Split.SetPane":           func() { NewSplit(newSpot(1, 1), newSpot(1, 1)).SetPane(0, newSpot(2, 2), u) },
