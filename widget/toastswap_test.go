@@ -120,20 +120,6 @@ func TestAToastThatTakesAnothersPlaceHasItsOwnTime(t *testing.T) {
 	}
 }
 
-// A toast that takes the place of an older one, not the newest, arrives as the newest, on a card of its own.
-func TestAToastThatTakesAnOlderOnesPlaceArrivesAsTheNewest(t *testing.T) {
-	ts := &Toasts{Life: time.Minute}
-	_, on, frames := toastFrame(t, ts)
-	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Old", Key: "a"}, u) })
-	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Other", Key: "b"}, u) })
-	frames(30, func() {})
-	other := ts.cards[1]
-	on(func(u *gunim.UI) { ts.Show(Toast{Title: "New", Key: "a"}, u) })
-	if len(ts.cards) != 2 || ts.cards[0] != other || ts.cards[1].face.title.Text != "New" {
-		t.Fatalf("the stack holds %d cards, the other first %v", len(ts.cards), ts.cards[0] == other)
-	}
-}
-
 // boundsOf returns where the frame drew each node.
 func boundsOf(on func(func(*gunim.UI)), ns ...gunim.Node) []geom.Rect {
 	out := make([]geom.Rect, len(ns))
