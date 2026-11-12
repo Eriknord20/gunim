@@ -357,9 +357,9 @@ const (
 	rowFoot = 30
 )
 
-// Layout implements [gunim.Node].
+// Layout implements [gunim.Node]. Under its least size the view lays out at that size.
 func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
-	v.size = c.Max
+	v.size = plug.AtLeast(c.Max, Descriptor.ViewMinSize)
 	size := v.size
 	// The bar along the top, a pane of glass over the graph, in from its
 	// edges: on it the switch at the left, the knobs at the right, and
@@ -457,13 +457,16 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	kids.At(tc).Place(geom.Pt(o.X+sw.W+gap, v.barAt.Max.Y+4))
 	kids.At(3).Layout(gunim.Tight(v.barAt.Size()))
 	kids.At(3).Place(v.barAt.Min)
-	return size
+	return c.Max
 }
 
 // Paint implements [gunim.Node]: the bar along the top, the graph and
 // its row faded out as the list fades in, and the bar of how far the
-// track is read under the match button.
+// track is read under the match button; clipped to the box where the
+// view was laid out larger.
 func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	defer plug.ClipTo(p, box, v.size)()
+	box = v.size
 	th := f.Theme
 	listed := min(max(v.listed.Value(), 0), 1)
 	fade := func(i int, alpha float32, dy float32) {
