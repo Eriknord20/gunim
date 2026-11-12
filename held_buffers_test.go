@@ -2,6 +2,7 @@ package gunim
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -66,7 +67,7 @@ func (w *readingWindow) Released() <-chan struct{} { return w.released }
 
 func (w *readingWindow) Present(ops []paint.Op, damage []geom.Rect) error {
 	if len(ops) == 0 {
-		return fmt.Errorf("a frame of no ops")
+		return errors.New("a frame of no ops")
 	}
 	at := &ops[0]
 	w.mu.Lock()
@@ -212,13 +213,14 @@ func TestAClockLetGoOwesNoFrame(t *testing.T) {
 		frames := 0
 		c := a.Hold(HoldOptions{Rate: 100, PaintEvery: 2, Start: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC),
 			Sync: func(ctx context.Context, _ time.Duration) error {
-				if frames++; frames == 4 {
+				frames++
+				if frames == 4 {
 					stop()
 				}
 				return ctx.Err()
 			}})
 		if err := c.Advance(short, 200*time.Millisecond); err == nil {
-			return fmt.Errorf("the Advance ran to its end")
+			return errors.New("the Advance ran to its end")
 		}
 		a.Release()
 		// The wall clock's frames, each with the timer due.
