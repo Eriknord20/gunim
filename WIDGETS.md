@@ -142,7 +142,8 @@ ChipHeight = theme.TextRow("chip.height", 24)                  // room for a lin
   `widget.Light().With(calendar.Light...)`. `calendar` and `audioui` do this.
 
 **States look alike.** Hover lightens the fill through the hover spring. Press squashes through its spring. Disabled
-fades the whole control through `Faint`. Focus draws `FocusRing`. Selection uses `Accent`.
+fades the whole control through `Faint`. Focus draws `FocusRing`. Selection uses `Accent`. In a column of rows, the
+chosen row sits on a pill that glides to it, with an accent mark at its left, as in `Tree` and `NavList`.
 
 ## Motion
 

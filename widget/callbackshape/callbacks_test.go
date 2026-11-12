@@ -128,6 +128,8 @@ var structs = []any{
 	(*widget.RichSpan)(nil),
 	(*widget.RichText)(nil),
 	(*widget.Scroll)(nil),
+	(*widget.NavItem)(nil),
+	(*widget.NavList)(nil),
 	(*widget.Segmented)(nil),
 	(*widget.Sized)(nil),
 	(*widget.Slider)(nil),

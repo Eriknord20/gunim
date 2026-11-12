@@ -242,7 +242,7 @@ func buildGallery(Gallery) *gallery {
 	notes.Placeholder = "Notes: several lines, wrapped to the width"
 
 	list := widget.NewList()
-	body := &galleryPage{parts: []gunim.Node{header, icons(), moreIcons(), callout, notes}, list: widget.NewScroll(list)}
+	body := &galleryPage{parts: []gunim.Node{header, icons(), moreIcons(), places(), callout, notes}, list: widget.NewScroll(list)}
 	return &gallery{page: widget.NewScroll(widget.NewPad(body)), body: body, list: list, toasts: widget.NewToasts()}
 }
 
@@ -329,6 +329,18 @@ func moreIcons() *widget.Card {
 	col := widget.Column(tabs, controls, rich, doc)
 	col.Cross = widget.CrossStretch
 	return widget.NewCard(col)
+}
+
+// places lays out a card with a navigation list: a row with a count, and one that opens a window of its own.
+func places() *widget.Card {
+	nav := widget.NewNavList(
+		widget.NavItem{Label: "Overview", Icon: icon.Home},
+		widget.NavItem{Label: "Storage", Icon: icon.HardDrive},
+		widget.NavItem{Label: "Can't sync", Icon: icon.CircleAlert, Count: 4, CountLabel: "4 files", CountInk: widget.ToastWarningInk},
+		widget.NavItem{Label: "Time travel", Icon: icon.History, Trail: icon.ExternalLink, Acts: true},
+	)
+	nav.Tooltip = "Pages"
+	return widget.NewCard(widget.Row(widget.NewSized(nav, 220, 0)))
 }
 
 // bigIcon is the size of the large icons in the gallery.

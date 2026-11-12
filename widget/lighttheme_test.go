@@ -25,6 +25,8 @@ var bothThemes = map[string]bool{
 	"livegraph.head": true,
 	// Rings drawn on the desktop around the window, not on the window's background.
 	"echo.problem": true, "echo.done": true, "echo.call": true, "echo.wait": true,
+	// The chosen row's ink of a navigation list, which follows Ink unless a theme sets it.
+	"nav.selected.ink": true,
 }
 
 func TestTheLightThemeGivesEveryColourALightValue(t *testing.T) {
