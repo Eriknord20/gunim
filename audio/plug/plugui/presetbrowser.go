@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -66,14 +67,23 @@ type PresetBrowser struct {
 	// revealing is a reveal asked for and not yet laid out, revealJump says it puts new content in place at once,
 	// and laid that the columns have had room before.
 	revealing, revealJump, laid bool
-	// played is the preset the browser last played, and asked what the source's Current gave as it did. While
-	// pending, played stands for the preset playing, until the source's Current moves on from asked.
+	// played is the preset the browser last played, at pickedAt, and asked what the source's Current gave as it did.
+	// While pending, a skip steps from played, for pickHold or until the source's Current moves on from asked.
 	played    placed
 	hasPlayed bool
 	pending   bool
 	asked     plug.Preset
 	askedOK   bool
+	pickedAt  time.Time
+	// at caches playing: where the preset playing stands in the list, for the source's Current of atCur and atOK,
+	// while atSet.
+	at          int
+	atCur       plug.Preset
+	atOK, atSet bool
 }
+
+// pickHold is how long after a pick a skip steps from the preset picked, while the source has yet to play it.
+const pickHold = time.Second
 
 // placed names a preset by its place in the list: the preset, and how many of the same name come before it.
 type placed struct {
@@ -108,7 +118,7 @@ func NewPresetBrowser(src PresetSource) *PresetBrowser {
 // Refresh reads the source's presets afresh, as after one is kept or
 // let go, and shows the one playing.
 func (b *PresetBrowser) Refresh(u *gunim.UI) {
-	b.list = b.src.Presets()
+	b.list, b.atSet = b.src.Presets(), false
 	b.field.Placeholder = fmt.Sprintf("Search %d presets", len(b.list))
 	if cur, ok := b.current(); ok {
 		b.bank, b.group = cur.Bank, cur.Group
@@ -140,28 +150,39 @@ func (b *PresetBrowser) current() (plug.Preset, bool) {
 	return plug.Preset{}, false
 }
 
-// playing returns the place in the list of the preset playing, or -1. That is the one the browser last played, until
-// the source's Current moves on from what it gave then; after, the source's Current, the one the browser played where
-// two share its name.
+// playing returns the place in the list of the source's Current, or -1: the one the browser played where two share
+// its name.
 func (b *PresetBrowser) playing() int {
 	cur, ok := b.src.Current()
-	if b.pending {
-		if ok == b.askedOK && (!ok || cur.Same(b.asked)) {
-			if i := b.indexOf(b.played); i >= 0 {
-				return i
-			}
-		}
+	if b.pending && (ok != b.askedOK || ok && !cur.Same(b.asked)) {
 		b.pending = false
 	}
-	if !ok {
-		return -1
+	if b.atSet && ok == b.atOK && (!ok || cur.Same(b.atCur)) {
+		return b.at
 	}
-	if b.hasPlayed && b.played.p.Same(cur) {
+	at := -1
+	switch {
+	case !ok:
+	case b.hasPlayed && b.played.p.Same(cur) && b.indexOf(b.played) >= 0:
+		at = b.indexOf(b.played)
+	default:
+		at = slices.IndexFunc(b.list, cur.Same)
+	}
+	b.at, b.atCur, b.atOK, b.atSet = at, cur, ok, true
+	return at
+}
+
+// stepFrom returns the place in the list a skip steps from: the preset the browser picked last, within pickHold of
+// the pick by u's clock while the source's Current gives what it gave then; else the preset playing.
+func (b *PresetBrowser) stepFrom(u *gunim.UI) int {
+	at := b.playing()
+	if b.pending && u.Clock().Sub(b.pickedAt) < pickHold {
 		if i := b.indexOf(b.played); i >= 0 {
 			return i
 		}
 	}
-	return slices.IndexFunc(b.list, cur.Same)
+	b.pending = false
+	return at
 }
 
 // placeOf returns the place of the preset at i in the list.
@@ -246,21 +267,23 @@ func (b *PresetBrowser) glide(u *gunim.UI) {
 
 // Follow shows the preset playing, as set elsewhere: its group, while
 // no search runs, scrolled to.
-func (b *PresetBrowser) Follow(u *gunim.UI) {
-	cur, ok := b.current()
-	if b.query == "" && ok && (cur.Bank != b.bank || cur.Group != b.group) && b.hasGroup(cur.Bank, cur.Group) {
-		b.bank, b.group = cur.Bank, cur.Group
+func (b *PresetBrowser) Follow(u *gunim.UI) { b.showAt(b.playing(), u) }
+
+// showAt shows the preset at i in the list, or none for a negative i: its group, while no search runs, scrolled to.
+func (b *PresetBrowser) showAt(i int, u *gunim.UI) {
+	if i >= 0 && b.query == "" && (b.list[i].Bank != b.bank || b.list[i].Group != b.group) {
+		b.bank, b.group = b.list[i].Bank, b.list[i].Group
 		b.fill(u)
-		b.jumpToCurrent()
+		b.jumpTo(i)
 	} else {
 		b.glide(u)
 	}
-	b.inView(u)
+	b.inView(i, u)
 }
 
 // Reveal implements [gunim.Revealer]: as Tab brings the keyboard to a column, the columns show the group shown and
 // the preset playing, in place of the column's top.
-func (b *PresetBrowser) Reveal(_ geom.Rect, u *gunim.UI) { b.inView(u) }
+func (b *PresetBrowser) Reveal(_ geom.Rect, u *gunim.UI) { b.inView(b.playing(), u) }
 
 // ShowPlaying centres the preset playing and its group at the next layout with room for them: at once on the
 // browser's first such layout, and gliding after.
@@ -290,33 +313,33 @@ func (b *PresetBrowser) centre(jump bool, th *theme.Live) {
 	}
 }
 
-// inView scrolls the columns to the group shown and the preset playing.
-func (b *PresetBrowser) inView(u *gunim.UI) {
+// inView scrolls the columns to the group shown and the preset at i in the list.
+func (b *PresetBrowser) inView(i int, u *gunim.UI) {
 	if u == nil {
 		return
 	}
-	if i := b.groups.index(b.bank, b.group); i >= 0 {
-		b.gs.RevealContent(b.groups.rowRect(i), u)
+	if g := b.groups.index(b.bank, b.group); g >= 0 {
+		b.gs.RevealContent(b.groups.rowRect(g), u)
 	}
-	if i := b.presets.current(); i >= 0 {
-		b.ps.RevealContent(b.presets.rowRect(i), u)
+	if r := b.presets.rowOf(i); r >= 0 {
+		b.ps.RevealContent(b.presets.rowRect(r), u)
 	}
 }
 
-// jumpToCurrent puts the presets column, new content, where the preset
-// playing shows, at once, as a group picked opens at its top. The
+// jumpTo puts the presets column, new content, where the preset at i
+// in the list shows, at once, as a group picked opens at its top. The
 // column's scroll still holds the old group's height, so a scroll
 // there would stop short of a row past it.
-func (b *PresetBrowser) jumpToCurrent() {
+func (b *PresetBrowser) jumpTo(i int) {
 	if b.revealing {
 		b.revealJump = true
 		return
 	}
 	y := float32(0)
-	if i := b.presets.current(); i >= 0 {
+	if r := b.presets.rowOf(i); r >= 0 {
 		const room = 8
-		r := b.presets.rows[i]
-		y = max(0, r.y+r.h+room-b.colH)
+		row := b.presets.rows[r]
+		y = max(0, row.y+row.h+room-b.colH)
 	}
 	b.ps.JumpTo(y)
 }
@@ -343,7 +366,8 @@ func (b *PresetBrowser) showGroup(bank, group string, u *gunim.UI) {
 // pick plays the preset at i in the list.
 func (b *PresetBrowser) pick(i int, u *gunim.UI) {
 	b.asked, b.askedOK = b.src.Current()
-	b.played, b.hasPlayed, b.pending = b.placeOf(i), true, true
+	b.played, b.hasPlayed, b.pending, b.pickedAt = b.placeOf(i), true, true, u.Clock()
+	b.atSet = false
 	b.src.Pick(b.list[i], u)
 	b.glide(u)
 	if b.Picked != nil {
@@ -353,13 +377,15 @@ func (b *PresetBrowser) pick(i int, u *gunim.UI) {
 
 // Skip plays the preset by from the one playing, in the order the browser lists them, on into the group after or
 // before and round from the last to the first; during a search, through what it finds, from its first or its last
-// where the preset playing is not among them. With the browser drawn and another group shown than the playing
-// preset's, it plays the first preset of that group, or its last going back; closed, it steps from the preset
-// playing. The browser shows the group of the preset it plays.
+// where the preset playing is not among them. Within a moment of a pick the source has yet to play, it steps from
+// the preset picked. With the browser drawn and another group shown than the playing preset's, it plays the first
+// preset of that group, or its last going back; closed, it steps from the preset playing. The browser shows the group
+// of the preset it plays.
 func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
-	list, i := b.listed()
+	cur := b.stepFrom(u)
+	list, i := b.listed(cur)
 	if b.query == "" {
-		list, i = b.all()
+		list, i = b.all(cur)
 	}
 	n := len(list)
 	if n == 0 {
@@ -386,13 +412,14 @@ func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 			}
 		}
 	}
-	b.pick(list[((from+by)%n+n)%n], u)
-	b.Follow(u)
+	to := list[((from+by)%n+n)%n]
+	b.pick(to, u)
+	b.showAt(to, u)
 }
 
 // all returns where every preset stands in the list, group by group in the order the groups column lists them, and
-// the index among them of the one playing, or -1.
-func (b *PresetBrowser) all() (list []int, at int) {
+// the index among them of the preset at cur in the list, or -1.
+func (b *PresetBrowser) all(cur int) (list []int, at int) {
 	type key struct{ bank, group string }
 	of := map[key][]int{}
 	for i, p := range b.list {
@@ -400,7 +427,6 @@ func (b *PresetBrowser) all() (list []int, at int) {
 		of[k] = append(of[k], i)
 	}
 	at = -1
-	cur := b.playing()
 	list = make([]int, 0, len(b.list))
 	for _, r := range b.groups.rows {
 		if r.header {
@@ -416,11 +442,10 @@ func (b *PresetBrowser) all() (list []int, at int) {
 	return list, at
 }
 
-// listed returns where the presets the column lists stand in the list, and the index among them of the one playing,
-// or -1.
-func (b *PresetBrowser) listed() (list []int, at int) {
+// listed returns where the presets the column lists stand in the list, and the index among them of the preset at cur
+// in the list, or -1.
+func (b *PresetBrowser) listed(cur int) (list []int, at int) {
 	at = -1
-	cur := b.playing()
 	for _, r := range b.presets.rows {
 		if !r.header {
 			if r.at == cur {
@@ -891,13 +916,15 @@ func (l *presetList) fill() {
 }
 
 // current returns the row of the preset playing, or -1.
-func (l *presetList) current() int {
-	cur := l.b.playing()
-	if cur < 0 {
+func (l *presetList) current() int { return l.rowOf(l.b.playing()) }
+
+// rowOf returns the row of the preset at i in the list, or -1.
+func (l *presetList) rowOf(at int) int {
+	if at < 0 {
 		return -1
 	}
 	for i, r := range l.rows {
-		if !r.header && r.at == cur {
+		if !r.header && r.at == at {
 			return i
 		}
 	}
@@ -936,7 +963,7 @@ func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Mods != 0 || e.Key == input.KeyUp || e.Key == input.KeyDown {
 			return false
 		}
-		list, at := l.b.listed()
+		list, at := l.b.listed(l.b.stepFrom(u))
 		if len(list) == 0 {
 			return false
 		}
@@ -945,7 +972,7 @@ func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		l.b.pick(list[to], u)
-		l.b.inView(u)
+		l.b.inView(list[to], u)
 		return true
 	case input.PointerMove:
 		l.setHover(l.at(e.Pos.Y), u)

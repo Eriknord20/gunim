@@ -32,7 +32,7 @@ func (s *lateHost) land() {
 }
 
 // Where the source's Current follows a pick late, a skip shows the group of the preset it picked, and a second skip
-// before the pick lands steps on from it.
+// before the pick lands steps on from it. The column marks what plays all the while.
 func TestASkipShowsTheGroupItPickedBeforeThePickLands(t *testing.T) {
 	src := &lateHost{presetHost: *kits(4)}
 	src.cur = src.list[5]
@@ -49,10 +49,13 @@ func TestASkipShowsTheGroupItPickedBeforeThePickLands(t *testing.T) {
 	if want := []string{"Bass 0", "Bass 1"}; !slices.Equal(src.picked, want) || b.group != "Bass" {
 		t.Fatalf("two skips before the first landed picked %v and show %s, want %v in Bass", src.picked, b.group, want)
 	}
-	if i := b.presets.current(); i < 0 || b.presets.rows[i].p.Name != "Bass 1" {
-		t.Errorf("the presets' pill marks row %d, want the row of Bass 1", i)
+	if got := playingRow(b); got != "" {
+		t.Errorf("before the pick lands, with Kit 2 playing, the presets column marks %q as playing, want none", got)
 	}
 	src.land()
+	if got := playingRow(b); got != "Bass 1" {
+		t.Errorf("once the pick landed, the presets column marks %q as playing, want Bass 1", got)
+	}
 	patch(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Skip(1, u) })
 	if got := src.picked[len(src.picked)-1]; got != "Bass 2" {
 		t.Errorf("once the pick landed, a skip picked %s, want Bass 2", got)
@@ -218,5 +221,122 @@ func TestAPressShowsOnTheRowPressedAlone(t *testing.T) {
 	frames(w, 2)
 	if want := []string{"Sub", "Growl"}; !slices.Equal(src.picked, want) {
 		t.Errorf("the clicks picked %v, want %v", src.picked, want)
+	}
+}
+
+// deafHost is a source whose Pick fails: the preset playing stays as it was.
+type deafHost struct{ presetHost }
+
+func (s *deafHost) Pick(p plug.Preset, _ *gunim.UI) { s.picked = append(s.picked, p.Name) }
+
+// briefly runs fn in the browser's window and two frames after it, on the window's frame clock.
+func briefly(t *testing.T, w *gunim.Window, fn func(b *PresetBrowser, u *gunim.UI)) {
+	t.Helper()
+	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, _ struct{}, u *gunim.UI) { fn(b, u) })
+	if err := w.Client().Patch("browser", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	frames(w, 2)
+}
+
+// playingRow is the name of the preset the presets column marks as playing, or "".
+func playingRow(b *PresetBrowser) string {
+	if i := b.presets.current(); i >= 0 {
+		return b.presets.rows[i].p.Name
+	}
+	return ""
+}
+
+// A pick that fails leaves the browser showing the preset that plays, and once a moment has passed, a skip steps from
+// that preset, not from the one the browser asked for.
+func TestAPickThatFailsShowsWhatPlays(t *testing.T) {
+	src := &deafHost{presetHost: *kits(4)}
+	src.cur = src.list[5]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	w.TimeByFrames(true)
+	briefly(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Skip(1, u) })
+	if got := playingRow(b); got != "Kit 2" {
+		t.Fatalf("with the pick of Kit 3 failed, the column marks %q as playing, want Kit 2", got)
+	}
+	frames(w, 90)
+	if got := playingRow(b); got != "Kit 2" {
+		t.Errorf("a while after the pick failed, the column marks %q as playing, want Kit 2", got)
+	}
+	briefly(t, w, func(b *PresetBrowser, u *gunim.UI) { b.Skip(-1, u) })
+	if want := []string{"Kit 3", "Kit 1"}; !slices.Equal(src.picked, want) {
+		t.Errorf("next, a failed pick, and previous a while later picked %v, want %v", src.picked, want)
+	}
+}
+
+// With the browser shut and the source late, a pick that landed and was undone no longer steers the next skip, once
+// the host has the browser follow, or once a moment has passed.
+func TestAPickLandedAndUndoneNoLongerSteersASkip(t *testing.T) {
+	for _, follows := range []bool{true, false} {
+		src := &lateHost{presetHost: *kits(4)}
+		src.cur = src.list[5]
+		b := NewPresetBrowser(src)
+		sh := &shutter{child: b, shut: true}
+		w := gunimtest.New(t, geom.Sz(360, 480), nil)
+		w.TimeByFrames(true)
+		gunim.RegisterView(w, "browser", func(struct{}) gunim.Node { return sh }, nil)
+		if err := w.Client().Mount(gunim.Root, "browser", "browser", nil); err != nil {
+			t.Fatal(err)
+		}
+		frames(w, 30)
+		gunim.RegisterPatch(w, "browser", func(_ *shutter, step string, u *gunim.UI) {
+			switch step {
+			case "next":
+				b.Skip(1, u)
+			case "land":
+				src.land()
+			case "undo":
+				src.cur = src.list[5]
+			case "follow":
+				if follows {
+					b.Follow(u)
+				}
+			}
+		})
+		for _, step := range []string{"next", "land", "follow", "undo", "follow"} {
+			if err := w.Client().Patch("browser", step); err != nil {
+				t.Fatal(err)
+			}
+			frames(w, 2)
+		}
+		if !follows {
+			frames(w, 90)
+		}
+		if err := w.Client().Patch("browser", "next"); err != nil {
+			t.Fatal(err)
+		}
+		frames(w, 2)
+		if want := []string{"Kit 3", "Kit 3"}; !slices.Equal(src.picked, want) {
+			t.Errorf("with the browser following %v, next, undone, and next again picked %v, want %v", follows,
+				src.picked, want)
+		}
+	}
+}
+
+// The browser works out where the preset playing stands once, and again only as the source's Current, the list or a
+// pick changes, not on every painted frame.
+func TestTheBrowserFindsThePresetPlayingOnce(t *testing.T) {
+	src := kits(4)
+	src.cur = src.list[5]
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	if b.playing() != 5 {
+		t.Fatalf("Kit 2 playing, the browser finds it at %d, want 5", b.playing())
+	}
+	// Renamed behind the browser's back, the list would be scanned afresh only by a browser that scans every frame
+	b.list[5].Name = "Renamed"
+	frames(w, 2)
+	if got := b.playing(); got != 5 {
+		t.Errorf("with the source's Current and the list as they were, the browser scanned the list again, to %d", got)
+	}
+	b.list[5].Name = "Kit 2"
+	src.cur = src.list[6]
+	if got := b.playing(); got != 6 {
+		t.Errorf("with Kit 3 playing, the browser finds it at %d, want 6", got)
 	}
 }
