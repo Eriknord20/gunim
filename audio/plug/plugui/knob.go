@@ -52,7 +52,8 @@ const (
 // reach of the control moving the parameter, either side of its value,
 // and a dot on the arc shows its value as heard. A value that runs
 // either side of zero fills its arc from zero. It lights as the pointer comes over it, and its tooltip
-// says how to turn it. A second button pressed mid-turn ends the turn
+// says how to turn it. Tab brings the keyboard to it, and a focus ring
+// fades in round it. A second button pressed mid-turn ends the turn
 // where it got to.
 type Knob struct {
 	anim.Group
@@ -69,7 +70,9 @@ type Knob struct {
 	from  geom.Point
 	start float64
 	hover *anim.Float
-	tip   widget.PartTip
+	// ring is how far the focus ring shows.
+	ring *anim.Float
+	tip  widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
 	// has none of. Each glides there.
@@ -170,8 +173,9 @@ func (k *Knob) aim(to func(a *anim.Float, v float32)) {
 // a gesture of begin, a set for each move, and end: a value of a
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
-	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
-	k.Add(k.hover, k.grey, k.faint)
+	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), ring: anim.NewFloat(0),
+		grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
+	k.Add(k.hover, k.ring, k.grey, k.faint)
 	return k
 }
 
@@ -247,6 +251,7 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	}
 	end := widget.Faint(p, box, k.faint.Value()*0.6)
 	defer end()
+	tileRing(p, box, k.ring.Value(), th)
 	c := geom.Pt(box.W/2, 4+r)
 	if hover > 0.01 {
 		// Under the pointer, a glow about the knob.
@@ -294,6 +299,12 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		col = accent
 	}
 	val.Paint(p, geom.Pt((box.W-val.Advance)/2, c.Y+r+4+name.Height()), col)
+}
+
+// tileRing draws the focus ring of a control shaped as a knob, at strength t, just inside its box so it never reaches
+// a neighbour's words.
+func tileRing(p *paint.Painter, box geom.Size, t float32, th *theme.Live) {
+	widget.FocusRing(p, geom.Rect{Max: box.Point()}.Inset(geom.Uniform(4)), 6, t, th)
 }
 
 // paintModulation draws how control moves the knob's value: a ring
@@ -375,6 +386,9 @@ func (k *Knob) DragsTouch() bool { return true }
 func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	if !k.held {
 		k.tip.Handle(e, u, k, k.tooltip())
+	}
+	if followRing(k.ring, e, u) {
+		return true
 	}
 	switch e.(type) {
 	case input.PointerEnter:

@@ -30,7 +30,8 @@ const TrimPotSize = 17
 // as far as the value. It turns as a [Knob] does: a drag up turns it
 // up, the wheel and the arrow keys step it, a double click sets it back.
 // While the pointer is on it, or it is held, its value shows beside it,
-// to its left, fading in.
+// to its left, fading in. Tab brings the keyboard to it, and a focus
+// ring fades in round it.
 type TrimPot struct {
 	*Knob
 }
@@ -58,6 +59,7 @@ func (t *TrimPot) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		p.ShadowRRect(geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, paint.Solid(paint.Faded(accent, 0)),
 			paint.Shadow{Blur: 10 * hover, Color: paint.Faded(accent, 0.5*hover)})
 	}
+	widget.FocusRing(p, geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, t.ring.Value(), th)
 	// The hole it sits in, then the head, lit from above.
 	p.RRect(geom.Rc(c.X-r-1.5, c.Y-r-1.5, 2*r+3, 2*r+3), r+1.5, paint.Solid(color.NRGBA{A: 0x70}))
 	p.ShadowRRect(geom.Rc(c.X-r, c.Y-r, 2*r, 2*r), r, paint.Fill{Gradient: &paint.Gradient{

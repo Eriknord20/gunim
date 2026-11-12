@@ -18,7 +18,8 @@ import (
 // picks its option, and the arrow keys step through them. The wheel
 // passes it by, to scroll the pane it is in.
 // Lamps light and dim gliding, the name turns over as it changes, and
-// each lamp's tooltip says what its option does.
+// each lamp's tooltip says what its option does. Tab brings the keyboard
+// to it, and a focus ring fades in round it.
 type Selector struct {
 	anim.Group
 	names, tips []string
@@ -27,6 +28,8 @@ type Selector struct {
 	// gliding as it changes.
 	lit   []*anim.Float
 	shown *anim.Float
+	// ring is how far the focus ring shows.
+	ring *anim.Float
 	// OnPick picks option i, as the user chose it.
 	OnPick func(i int, u *gunim.UI)
 	// Locked greys the selector, and it picks nothing.
@@ -47,12 +50,12 @@ const SelectorH = KnobH
 // NewSelector returns a selector titled title of the options names, each
 // with its tooltip of tips, the first chosen.
 func NewSelector(title string, names, tips []string) *Selector {
-	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0)}
+	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0), ring: anim.NewFloat(0)}
 	for i := range names {
 		s.lit = append(s.lit, anim.NewFloat(float32(anim.OnOff(i == 0))))
 		s.Add(s.lit[i])
 	}
-	s.Add(s.shown)
+	s.Add(s.shown, s.ring)
 	return s
 }
 
@@ -143,6 +146,7 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	end := widget.Faint(p, box, anim.OnOff(s.Locked)*0.6)
 	defer end()
+	tileRing(p, box, s.ring.Value(), th)
 	for i, r := range s.cells {
 		lit := s.lit[i].Value()
 		cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
@@ -226,6 +230,9 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	if _, ok := e.(input.PointerMove); ok || isLeave(e) {
 		s.tip.Handle(e, u, s, tip)
+	}
+	if followRing(s.ring, e, u) {
+		return true
 	}
 	switch e := e.(type) {
 	case input.PointerMove:

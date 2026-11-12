@@ -21,7 +21,8 @@ import (
 // its title and a word on how it stands. While the task runs, the
 // knob's arc fills as far as it has got, and the icon is a square, to
 // stop it; as it ends, the arc glows a moment. Stale greys its word, as
-// what it last did no longer holds.
+// what it last did no longer holds. Tab brings the keyboard to it, a
+// focus ring fades in round it, and Space or Enter clicks it.
 type ActionDial struct {
 	anim.Group
 	// Title is written under the cap, and Value under it, as a knob's
@@ -40,7 +41,9 @@ type ActionDial struct {
 	// progress is how far the task has got, gliding; hover how far the
 	// pointer is on it, and glow how far it glows, as the task ends.
 	progress, hover, glow *anim.Float
-	tip                   widget.PartTip
+	// ring is how far the focus ring shows.
+	ring *anim.Float
+	tip  widget.PartTip
 	// squash is how far it is pressed in; held says a press is on it, and size is how big it was laid out.
 	squash  *anim.Float
 	held    bool
@@ -51,8 +54,8 @@ type ActionDial struct {
 // NewActionDial returns a dial titled title, with ic on its cap.
 func NewActionDial(title string, ic *icon.Icon) *ActionDial {
 	d := &ActionDial{Title: title, Icon: ic, progress: anim.NewFloat(0), hover: anim.NewFloat(0), glow: anim.NewFloat(0),
-		squash: anim.NewFloat(0), clicker: widget.Clicker{Repeats: true}}
-	d.Add(d.progress, d.hover, d.glow, d.squash)
+		ring: anim.NewFloat(0), squash: anim.NewFloat(0), clicker: widget.Clicker{Repeats: true}}
+	d.Add(d.progress, d.hover, d.glow, d.ring, d.squash)
 	return d
 }
 
@@ -112,6 +115,7 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	hover, glow := d.hover.Value(), d.glow.Value()
 	end := widget.Faint(p, box, anim.OnOff(d.Disabled)*0.6)
 	defer end()
+	tileRing(p, box, d.ring.Value(), th)
 	const r, text = float32(17), float32(10.5)
 	c := geom.Pt(box.W/2, 4+r)
 	if lit := max(hover, glow); lit > 0.01 {
@@ -172,6 +176,9 @@ func (d *ActionDial) Focusable() bool { return !d.Disabled }
 // it.
 func (d *ActionDial) Handle(e input.Event, u *gunim.UI) bool {
 	d.tip.Handle(e, u, d, d.Tooltip)
+	if followRing(d.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
 	case input.PointerEnter:
 		d.hover.Animate(1, widget.Quick.Get(u.Theme()))

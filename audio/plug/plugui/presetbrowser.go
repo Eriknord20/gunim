@@ -335,8 +335,8 @@ func moveTo(key input.Key, at, n, page int) (int, bool) {
 	return min(max(at, 0), n-1), true
 }
 
-// ringFollows springs ring to show the focus ring as e says, and reports whether e was a focus event.
-func (b *PresetBrowser) ringFollows(ring *anim.Float, e input.Event, u *gunim.UI) bool {
+// followRing springs ring to show the focus ring as e says, and reports whether e was a focus event.
+func followRing(ring *anim.Float, e input.Event, u *gunim.UI) bool {
 	on := float32(0)
 	switch e := e.(type) {
 	case input.FocusRing:
@@ -517,7 +517,7 @@ func (g *groupList) at(y float32) int { return rowAt(g.rows, y) }
 // click shows its presets. Up, Down, Home, End, Page Up and Page Down
 // show the group they move to.
 func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
-	if g.b.ringFollows(g.ring, e, u) {
+	if followRing(g.ring, e, u) {
 		return true
 	}
 	switch e := e.(type) {
@@ -739,7 +739,7 @@ func (l *presetList) at(y float32) int { return rowAt(l.rows, y) }
 // click picks it. Home, End, Page Up and Page Down play the preset they
 // move to; Up and Down go on to the browser.
 func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
-	if l.b.ringFollows(l.ring, e, u) {
+	if followRing(l.ring, e, u) {
 		return true
 	}
 	switch e := e.(type) {

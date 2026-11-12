@@ -34,12 +34,15 @@ func PaintPower(p *paint.Painter, c geom.Point, on, hover float32, accent, ink c
 
 // Power switches something on and off, as a power lamp: lit while on,
 // gliding as it changes, lighting a little under the pointer, its
-// tooltip saying what a click does.
+// tooltip saying what a click does. Tab brings the keyboard to it, a
+// focus ring fades in round it, and Space or Enter switches it.
 type Power struct {
 	anim.Group
 	checked bool
 	on      *anim.Float
 	hover   *anim.Float
+	// ring is how far the focus ring shows.
+	ring *anim.Float
 	// squash is how far it is pressed in; held says a press is on it, and size is how big it was laid out.
 	squash *anim.Float
 	held   bool
@@ -54,9 +57,9 @@ type Power struct {
 
 // NewPower returns a power lamp, off, switching name.
 func NewPower(name string) *Power {
-	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), squash: anim.NewFloat(0),
+	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), ring: anim.NewFloat(0), squash: anim.NewFloat(0),
 		click: widget.Clicker{Repeats: true}}
-	p.Add(p.on, p.hover, p.squash)
+	p.Add(p.on, p.hover, p.ring, p.squash)
 	return p
 }
 
@@ -87,6 +90,7 @@ func (p *Power) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geo
 func (p *Power) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	mid := geom.Pt(box.W/2, box.H/2)
+	widget.FocusRing(pt, geom.Rc(mid.X-7, mid.Y-7, 14, 14), 7, p.ring.Value(), th)
 	defer pt.Push(paint.Scale(1-0.12*p.squash.Value(), mid))()
 	PaintPower(pt, mid, p.on.Value(), p.hover.Value(), widget.Accent.Get(th), widget.Ink.Get(th))
 }
@@ -106,6 +110,9 @@ func (p *Power) Focusable() bool { return true }
 // switches it.
 func (p *Power) Handle(e input.Event, u *gunim.UI) bool {
 	p.tip.Handle(e, u, p, p.tooltip())
+	if followRing(p.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
 	case input.PointerEnter:
 		p.hover.Animate(1, widget.Quick.Get(u.Theme()))
