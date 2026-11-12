@@ -43,8 +43,10 @@ const (
 
 // Knob turns a value, as a synth's knob does: a drag up turns it up,
 // ten times finer with Shift; the arrow keys step it; a double click
-// sets it back to its default. The wheel passes it by, so a pane of
-// knobs scrolls under the pointer without turning one. Each turn is one gesture,
+// sets it back to its default. While it has the keyboard, the wheel
+// steps it as an arrow key does, as a number field takes the wheel.
+// Without the keyboard the wheel passes it by, so a pane of knobs
+// scrolls under the pointer without turning one. Each turn is one gesture,
 // one step to undo: of a parameter of the host's, or of whatever the
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
@@ -70,9 +72,10 @@ type Knob struct {
 	from  geom.Point
 	start float64
 	hover *anim.Float
-	// ring is how far the focus ring shows.
-	ring *anim.Float
-	tip  widget.PartTip
+	// ring is how far the focus ring shows, and focused says the knob has the keyboard.
+	ring    *anim.Float
+	focused bool
+	tip     widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
 	// has none of. Each glides there.
@@ -420,6 +423,12 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	if !k.held {
 		k.tip.Handle(e, u, k, k.tooltip())
 	}
+	switch e.(type) {
+	case input.FocusGained:
+		k.focused = true
+	case input.FocusLost:
+		k.focused = false
+	}
 	if followRing(k.ring, e, u) {
 		return true
 	}
@@ -469,6 +478,13 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.end(u)
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
+	case input.Scroll:
+		// Only while the knob has the keyboard, as a number field takes it, so scrolling a pane turns no knob it
+		// passes. The wheel turned up gives a positive Delta.Y, and turns the knob up.
+		if !k.focused || e.Touch || e.Delta.Y == 0 {
+			return false
+		}
+		k.stepTo(k.valueAt(k.turnOf(k.v)+math.Copysign(k.stepSize(), float64(e.Delta.Y))), u)
 	case input.KeyPress:
 		// Ctrl, Alt or Super with a key is the window's shortcut, such as
 		// Alt+Left to the loop's start: the knob leaves it be.

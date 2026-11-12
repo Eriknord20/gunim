@@ -28,7 +28,8 @@ const TrimPotSize = 17
 // TrimPot is a small setting turned now and then, as a meter's
 // calibration is set with a screwdriver: a screw head, its slot turned
 // as far as the value. It turns as a [Knob] does: a drag up turns it
-// up, the wheel and the arrow keys step it, a double click sets it back.
+// up, the arrow keys step it, and so does the wheel while it has the
+// keyboard; a double click sets it back.
 // While the pointer is on it, or it is held, its value shows beside it,
 // to its left, fading in. Tab brings the keyboard to it, and a focus
 // ring fades in round it.
