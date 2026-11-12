@@ -75,20 +75,61 @@ func TestTheBrowserShowsTheGroupOfThePresetPlaying(t *testing.T) {
 	}
 }
 
-func TestSkipsGoRoundTheGroup(t *testing.T) {
+// Next and previous run on into the group after or before, in the order the browser lists them, and round from the
+// last to the first; the browser shows the group of each preset they play.
+func TestSkipsRunOnAcrossGroups(t *testing.T) {
 	src := newPresetHost()
 	b := NewPresetBrowser(src)
 	w := mountBrowser(t, b)
 	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, by int, u *gunim.UI) { b.Skip(by, u) })
-	for _, by := range []int{1, 1, -1} {
+	groups := make([]string, 0, 5)
+	for _, by := range []int{1, 1, 1, -1, -1} {
 		if err := w.Client().Patch("browser", by); err != nil {
 			t.Fatal(err)
 		}
 		w.Frame(time.Second / 60)
+		groups = append(groups, b.group)
 	}
-	want := []string{"Sub", "Growl", "Sub"}
-	if len(src.picked) != 3 || src.picked[0] != want[0] || src.picked[1] != want[1] || src.picked[2] != want[2] {
+	// Listed: User's Mine (Warm), then Factory's Bass (Sub, Growl) and Pads (Glass). From Growl.
+	if want := []string{"Glass", "Warm", "Sub", "Warm", "Glass"}; !slices.Equal(src.picked, want) {
 		t.Fatalf("the skips picked %v, want %v", src.picked, want)
+	}
+	if want := []string{"Pads", "Mine", "Bass", "Mine", "Pads"}; !slices.Equal(groups, want) {
+		t.Fatalf("the skips showed %v, want %v", groups, want)
+	}
+}
+
+// With one preset in each group, next and previous still step from group to group.
+func TestSkipsStepThroughGroupsOfOne(t *testing.T) {
+	src := &presetHost{}
+	for _, g := range []string{"Bass", "Keys", "Pads"} {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: g, Name: g + " 1"})
+	}
+	src.cur = src.list[0]
+	b := NewPresetBrowser(src)
+	mountBrowser(t, b)
+	for range 3 {
+		b.Skip(1, nil)
+	}
+	b.Skip(-1, nil)
+	if want := []string{"Keys 1", "Pads 1", "Bass 1", "Pads 1"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("the skips picked %v, want %v", src.picked, want)
+	}
+}
+
+// During a search, next and previous step through what it finds, across its groups.
+func TestSkipsStepThroughASearch(t *testing.T) {
+	src := newPresetHost()
+	src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Pads", Name: "Warm pad"})
+	b := NewPresetBrowser(src)
+	mountBrowser(t, b)
+	b.query = "warm"
+	b.fill(nil)
+	src.cur = src.list[0]
+	b.Skip(1, nil)
+	b.Skip(1, nil)
+	if want := []string{"Warm pad", "Warm"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("the skips through a search picked %v, want %v", src.picked, want)
 	}
 }
 

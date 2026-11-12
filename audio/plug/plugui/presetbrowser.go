@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -280,19 +281,53 @@ func (b *PresetBrowser) pick(p plug.Preset, u *gunim.UI) {
 	}
 }
 
-// Skip plays the preset by from the one playing, in the group listed,
-// or in what the search finds, round from the last to the first.
+// Skip plays the preset by from the one playing, in the order the browser lists them, on into the group after or
+// before and round from the last to the first; during a search, through what it finds. The browser shows the group
+// of the preset it plays.
 func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 	list, i := b.listed()
+	if b.query == "" {
+		list, i = b.all()
+	}
 	if len(list) == 0 {
 		return
 	}
-	if i < 0 && by < 0 {
-		i = 0
+	if i < 0 {
+		// Nothing listed plays: step from just before the group shown, or from its first preset going back.
+		i = max(slices.IndexFunc(list, func(p plug.Preset) bool { return p.Bank == b.bank && p.Group == b.group }), 0)
+		if by > 0 {
+			i--
+		}
 	}
 	i = ((i+by)%len(list) + len(list)) % len(list)
 	b.pick(list[i], u)
-	b.inView(u)
+	b.Follow(u)
+}
+
+// all returns every preset, group by group in the order the groups column lists them, and the index of the one
+// playing among them, or -1.
+func (b *PresetBrowser) all() (list []plug.Preset, at int) {
+	type key struct{ bank, group string }
+	of := map[key][]plug.Preset{}
+	for _, p := range b.list {
+		k := key{p.Bank, p.Group}
+		of[k] = append(of[k], p)
+	}
+	at = -1
+	cur, ok := b.current()
+	list = make([]plug.Preset, 0, len(b.list))
+	for _, r := range b.groups.rows {
+		if r.header {
+			continue
+		}
+		for _, p := range of[key{r.bank, r.group}] {
+			if ok && at < 0 && p.Same(cur) {
+				at = len(list)
+			}
+			list = append(list, p)
+		}
+	}
+	return list, at
 }
 
 // listed returns the presets the column lists, and the index of the one playing among them, or -1.
