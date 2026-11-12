@@ -19,9 +19,8 @@ const MaxChordAhead = 16 * time.Second
 //
 // For an instrument, the host follows each lane that plays it, and the
 // chords the lane reads, voiced as the lane's own notes are voiced from
-// them. For an effect, it follows the lanes it picks, as for a lane the
-// effect sits on. It
-// tells of each chord once, with Coming, as the chord comes within
+// them. For an effect, the host picks the chords it follows. It tells
+// of each chord once, with Coming, as the chord comes within
 // ChordAhead, and with Moved or Removed as an edit changes it. A chord
 // has no event of its own as it starts: it starts at its Coming's
 // Frame, or its last Moved's, and sounds for Length frames, or until
