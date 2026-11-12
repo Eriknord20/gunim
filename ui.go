@@ -2622,6 +2622,15 @@ func (u *UI) Bounds(n Node) (geom.Rect, bool) {
 	return u.rectIn(s, u.root), true
 }
 
+// Drawn reports whether the last frame drew n, in the window or in a popup's; false on a nil UI.
+func (u *UI) Drawn(n Node) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	return ok && s.drawn == u.seq
+}
+
 // Presence reports where n is in its lifecycle.
 func (u *UI) Presence(n Node) Presence {
 	if s, ok := u.index[n]; ok {
