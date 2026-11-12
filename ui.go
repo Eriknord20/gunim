@@ -1353,8 +1353,8 @@ func (w *Window) drive() (end func()) {
 	}
 }
 
-// closeOwedPopups runs the closers and closes the popups a Close left, unless a call that drives the window is in flight, which closes them
-// as it ends.
+// closeOwedPopups runs the closers and closes the popups a Close left, unless a call that drives the window is in
+// flight, which does both as it ends.
 func (w *Window) closeOwedPopups() {
 	for w.popupsOwed.Load() && w.framing.TryLock() {
 		if w.popupsOwed.Swap(false) {
