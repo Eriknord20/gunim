@@ -308,10 +308,13 @@ func isLeave(e input.Event) bool {
 	return ok
 }
 
-// Access implements [gunim.Accessible]: a list of tabs, one an
-// option, as a segmented control reads.
+// Access implements [gunim.Accessible]: a list of tabs named by its
+// title, one an option, as a segmented control reads.
 func (s *Selector) Access() access.Info {
-	info := access.Info{Role: access.RoleTabList, Value: s.names[s.sel]}
+	info := access.Info{Role: access.RoleTabList, Name: s.Title, Value: s.names[s.sel]}
+	if s.Locked {
+		info.State = access.StateDisabled
+	}
 	for i, n := range s.names {
 		part := access.Info{Role: access.RoleTab, Name: n, Actions: []string{access.ActionPress}}
 		if i < len(s.tips) {
