@@ -519,7 +519,7 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 	c := &toastCard{owner: t, key: to.Key, in: anim.NewFloat(0), y: anim.NewFloat(0), hover: anim.NewFloat(0),
 		shown: anim.NewFloat(1), h: anim.NewFloat(0), warn: anim.NewFloat(anim.OnOff(to.Kind == ToastWarning))}
 	c.Add(c.in, c.y, c.hover, c.shown, c.h, c.warn)
-	c.face = newToastFace(c, to)
+	c.face = newToastFace(c, to, true)
 	return c
 }
 
@@ -527,10 +527,15 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 // one fades in, and the card's height glides to the new one's.
 func (c *toastCard) swap(to Toast, u *gunim.UI) {
 	old := c.face
-	old.gone = true
-	c.face = newToastFace(c, to)
-	c.face.fade.Jump(0)
+	c.face = newToastFace(c, to, false)
+	if !old.says(to) {
+		// The same toast shown again stands as it stood. Another one rolls in.
+		old.gone = true
+		c.face.fade.Jump(0)
+	}
 	c.key = to.Key
+	// A press held on the old toast is not a click on the new one.
+	c.click = Clicker{}
 	c.warn.Animate(anim.OnOff(to.Kind == ToastWarning), Settle.Get(u.Theme()))
 	u.Insert(c, c.face)
 	u.Remove(old)
@@ -667,7 +672,9 @@ const toastRise = 14
 // fades out.
 type toastFace struct {
 	anim.Group
-	card   *toastCard
+	card *toastCard
+	// said is the toast the face shows.
+	said   Toast
 	title  *Label
 	body   *Label
 	action *Link
@@ -681,19 +688,41 @@ type toastFace struct {
 	// fade runs to 1 as the face shows, and back to 0 once another takes its place, which gone says.
 	fade *anim.Float
 	gone bool
-	// beside says the buttons sit beside the words, not under them. It is worked out once for a width and text
-	// size, which decided holds.
+	// where is where the buttons sit, and beside says that is beside the words, not under them. It is worked out
+	// once for a width and text size, which decided holds.
+	where   toastButtons
 	beside  bool
 	decided toastFit
 	laid    bool
 	size    geom.Size
 }
 
+// toastButtons is where a toast's buttons sit.
+type toastButtons uint8
+
+const (
+	// toastUnder puts the buttons under the words, at the right.
+	toastUnder toastButtons = iota
+	// toastLeft puts them beside the words, left of the close button, at the words' middle.
+	toastLeft
+	// toastColumn puts them beside the words, under the close button, in its column.
+	toastColumn
+)
+
+// toastColumnGap is the room between the close button and buttons under it.
+const toastColumnGap = 2
+
+// toastColumnOver is how much taller a toast may be with its buttons under the close button than with them left
+// of it, and still put them there, for the room that gives the words.
+const toastColumnOver = 8
+
 // toastFit is what the place of a toast's buttons was worked out for.
 type toastFit struct{ width, text float32 }
 
-func newToastFace(c *toastCard, to Toast) *toastFace {
-	fc := &toastFace{card: c, title: NewLabel(to.Title), body: NewLabel(to.Body), kind: to.Kind, fade: anim.NewFloat(1)}
+// newToastFace returns the face of to on c. arrives says it comes with its card, so its icon draws on as the card
+// stands; one that takes another's place shows its icon whole, and fades in with its words.
+func newToastFace(c *toastCard, to Toast, arrives bool) *toastFace {
+	fc := &toastFace{card: c, said: to, title: NewLabel(to.Title), body: NewLabel(to.Body), kind: to.Kind, fade: anim.NewFloat(1)}
 	fc.body.Color = PaletteHint
 	fc.body.MaxLines = toastBodyLines
 	fc.Add(fc.fade)
@@ -726,11 +755,19 @@ func newToastFace(c *toastCard, to Toast) *toastFace {
 	if ic != nil {
 		fc.mark = NewIcon(ic, to.Kind.name())
 		fc.mark.Color = ink
-		if to.Kind.drawsOn() {
+		if arrives && to.Kind.drawsOn() {
 			fc.mark.DrawOn(toastDrawOn)
 		}
 	}
 	return fc
+}
+
+// says reports whether the face shows what to would: the same words, icon and buttons.
+func (fc *toastFace) says(to Toast) bool {
+	was := fc.said
+	return was.Title == to.Title && was.Body == to.Body && was.Action == to.Action && was.Kind == to.Kind &&
+		was.Icon == to.Icon && was.Check == to.Check &&
+		slices.EqualFunc(was.Buttons, to.Buttons, func(a, b ToastButton) bool { return a.Label == b.Label })
 }
 
 // ask gives the face the buttons, the close button and the tick box of
@@ -846,7 +883,7 @@ func (fc *toastFace) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Chil
 		return size
 	}
 	fc.body.MaxLines = 0
-	size = fc.lay(cs, f, kids, fc.beside)
+	size = fc.lay(cs, f, kids, fc.where)
 	if cs.Max.H <= 0 || size.H <= cs.Max.H {
 		return size
 	}
@@ -856,7 +893,7 @@ func (fc *toastFace) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Chil
 	}
 	over := int((size.H - cs.Max.H + para.LineHeight - 1) / para.LineHeight)
 	fc.body.MaxLines = max(toastBodyLines, len(para.Lines)-over)
-	return fc.lay(cs, f, kids, fc.beside)
+	return fc.lay(cs, f, kids, fc.where)
 }
 
 // place lays the face out with its body at three lines, the buttons beside the words where they fit: in one row
@@ -864,21 +901,38 @@ func (fc *toastFace) Layout(cs gunim.Constraints, f gunim.Frame, kids gunim.Chil
 func (fc *toastFace) place(cs gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	fit := toastFit{cs.Max.W, TextSize.Get(f.Theme)}
 	if fc.laid && fc.decided == fit {
-		return fc.lay(cs, f, kids, fc.beside)
-	}
-	fc.laid, fc.decided, fc.beside = true, fit, false
-	if fc.buttons != nil && fc.check == nil {
-		size := fc.lay(cs, f, kids, true)
-		if fc.beside = size.W > 0 && !fc.body.laid.p.Truncated; fc.beside {
+		// Buttons that no longer fit beside the words, as after a theme's padding changed, are placed anew.
+		if size := fc.lay(cs, f, kids, fc.where); size.W > 0 || fc.where == toastUnder {
 			return size
 		}
 	}
-	return fc.lay(cs, f, kids, false)
+	fc.laid, fc.decided, fc.where, fc.beside = true, fit, toastUnder, false
+	if fc.buttons != nil && fc.check == nil {
+		// try lays the buttons out at where, and returns the face's height, or zero where that cuts the body or
+		// doesn't fit.
+		try := func(where toastButtons) float32 {
+			if size := fc.lay(cs, f, kids, where); size.W > 0 && !fc.body.laid.p.Truncated {
+				return size.H
+			}
+			return 0
+		}
+		column, left := try(toastColumn), try(toastLeft)
+		switch {
+		case column > 0 && (left == 0 || column <= left+toastColumnOver):
+			// The corner's column leaves the words the most room, so it wins unless it makes a taller toast.
+			fc.where = toastColumn
+		case left > 0:
+			fc.where = toastLeft
+		case column > 0, left > 0:
+		}
+		fc.beside = fc.where != toastUnder
+	}
+	return fc.lay(cs, f, kids, fc.where)
 }
 
-// lay lays the face out with the body as it stands, the buttons beside the words or under them. Asked for buttons
-// beside words they don't fit beside, it returns no size.
-func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Children, beside bool) geom.Size {
+// lay lays the face out with the body as it stands, the buttons where it is told. Asked for buttons beside words
+// they don't fit beside, it returns no size.
+func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Children, where toastButtons) geom.Size {
 	th := f.Theme
 	pad := CardPadding.Get(th)
 	gap := Gap.Get(th)
@@ -891,6 +945,8 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	// The close button, and the action before it, sit at the right of
 	// the title; act is the width they take.
 	var act float32
+	// foot is how far down the face the close button ends, or zero with none.
+	var foot float32
 	corner := fc.corner()
 	// Children lists the corner in its order, from the right.
 	for k := range kids.All {
@@ -907,33 +963,61 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 			// The close button's box is larger than its cross; it
 			// keeps to the corner rather than push the title down.
 			top = pad.Top / 2
+			foot = top + s.H
 		}
 		k.Place(geom.Pt(w-pad.Right-act, top))
 	}
-	// taken is what the corner takes of the title's line, and side what the buttons beside the words take of every
-	// line, each with the gap before it.
-	var taken, side float32
+	// taken is what the corner takes of the title's line, with the gap before it.
+	var taken float32
 	if act > 0 {
 		taken = act + gap
 	}
+	if where == toastUnder {
+		return fc.words(f, kids, w, left, room, room-taken, room, geom.Size{}, 0)
+	}
 	var buttons geom.Size
-	if beside {
-		for k := range kids.All {
-			if k.Node() != gunim.Node(fc.buttons) {
-				continue
-			}
-			// Given the whole width, the buttons are as wide as their words want.
-			k.Layout(gunim.Constraints{Max: geom.Sz(max(0, room-taken), 0)})
-			if fc.buttons.lines != 1 || fc.buttons.wide > (room-taken)*toastSide {
-				return geom.Size{}
-			}
-			buttons = k.Layout(gunim.Tight(geom.Sz(fc.buttons.wide, fc.buttons.tall)))
+	for k := range kids.All {
+		if k.Node() != gunim.Node(fc.buttons) {
+			continue
 		}
-		side = taken + buttons.W + gap
-		if room-side < toastSideText {
+		// Given the whole width, the buttons are as wide as their words want. Left of the corner, the corner's
+		// width is not theirs to share.
+		most := room
+		if where == toastLeft {
+			most = max(0, room-taken)
+		}
+		k.Layout(gunim.Constraints{Max: geom.Sz(most, 0)})
+		if fc.buttons.lines != 1 || fc.buttons.wide > most*toastSide {
 			return geom.Size{}
 		}
+		buttons = k.Layout(gunim.Tight(geom.Sz(fc.buttons.wide, fc.buttons.tall)))
 	}
+	if where == toastColumn {
+		// In the corner's column, under the close button.
+		if foot == 0 {
+			return geom.Size{}
+		}
+		r := room - max(buttons.W, act) - gap
+		if r < toastSideText {
+			return geom.Size{}
+		}
+		return fc.words(f, kids, w, left, room, r, r, buttons, foot+toastColumnGap)
+	}
+	// Left of the corner, at the words' middle.
+	r := room - taken - buttons.W - gap
+	if r < toastSideText {
+		return geom.Size{}
+	}
+	return fc.words(f, kids, w, left, room, r, r, buttons, 0)
+}
+
+// words places the title in titleRoom and the rest in bodyRoom, from left, and the icon before the title. With
+// buttons beside the words, of the size given, it places them at the right, at the words' middle. With a clear
+// above zero they stand in the corner's column, no higher than clear, and the face is tall enough to hold them.
+func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, titleRoom, bodyRoom float32, buttons geom.Size, clear float32) geom.Size {
+	th := f.Theme
+	pad := CardPadding.Get(th)
+	beside := buttons.W > 0
 	// The words go down from the top, each at its y from the first.
 	type put struct {
 		k gunim.Child
@@ -946,13 +1030,14 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	var y float32
 	for k := range kids.All {
 		n := k.Node()
-		if slices.Contains(corner, n) || n == gunim.Node(fc.mark) || beside && n == gunim.Node(fc.buttons) {
+		if slices.Contains(fc.corner(), n) || n == gunim.Node(fc.mark) || beside && n == gunim.Node(fc.buttons) {
 			continue
 		}
-		r := room - side
-		if !beside && n == gunim.Node(fc.title) {
-			r = max(0, room-taken)
+		r := bodyRoom
+		if n == gunim.Node(fc.title) {
+			r = titleRoom
 		}
+		r = max(0, r)
 		kc := gunim.Constraints{Max: geom.Sz(r, 0)}
 		if n == gunim.Node(fc.buttons) {
 			// The buttons sit at the right, under a little room.
@@ -970,6 +1055,13 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 	words := y - 4
 	// Words shorter than the buttons beside them sit at the buttons' middle, and the buttons at the words'.
 	block := max(words, buttons.H)
+	x := w - pad.Right - buttons.W
+	if clear > 0 {
+		block = max(block, clear+buttons.H-pad.Top)
+	} else if beside {
+		x = left + bodyRoom + Gap.Get(th)
+	}
+	at := max(pad.Top+(block-buttons.H)/2, clear)
 	top := pad.Top + (block-words)/2
 	for _, p := range puts {
 		p.k.Place(geom.Pt(left, top+p.y))
@@ -984,7 +1076,7 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 			k.Place(geom.Pt(pad.Left, top+(min(line, title.H)-s.H)/2))
 		case gunim.Node(fc.buttons):
 			if beside {
-				k.Place(geom.Pt(w-pad.Right-taken-buttons.W, pad.Top+(block-buttons.H)/2))
+				k.Place(geom.Pt(x, at))
 			}
 		}
 	}
@@ -994,12 +1086,16 @@ func (fc *toastFace) lay(cs gunim.Constraints, f gunim.Frame, kids gunim.Childre
 
 // Paint implements [gunim.Node]. A face handing over is drawn part clear, a little above or below its place.
 func (fc *toastFace) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	a := min(max(fc.fade.Value(), 0), 1)
+	x := min(max(fc.fade.Value(), 0), 1)
+	// The words change over in the middle of the roll, so the old and the new are both half clear for a moment
+	// only, and one of them is always more than half there.
+	a := min(max((x-0.25)/0.5, 0), 1)
+	a = a * a * (3 - 2*a)
 	if a <= 0.001 {
 		return
 	}
-	if a < 0.999 {
-		rise := toastRise * (1 - a)
+	if x < 0.999 {
+		rise := toastRise * (1 - x)
 		if fc.gone {
 			rise = -rise
 		}

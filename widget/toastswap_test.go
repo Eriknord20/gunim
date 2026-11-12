@@ -87,7 +87,7 @@ func TestAToastThatTakesAnothersPlaceNeverShowsABareCard(t *testing.T) {
 		})
 	}
 	if !mid {
-		t.Fatal("the old words and the new never showed together")
+		t.Fatal("the old words and the new never rolled past each other")
 	}
 	if card.faces != 1 || card.face.fade.Value() < 0.999 || card.warn.Value() < 0.99 {
 		t.Fatalf("at rest the card holds %d faces, the new one %v in, its warning edge %v", card.faces, card.face.fade.Value(), card.warn.Value())
@@ -143,7 +143,8 @@ func boundsOf(on func(func(*gunim.UI)), ns ...gunim.Node) []geom.Rect {
 	return out
 }
 
-// A toast's button sits beside its words, at their right and their middle, and left of the close button.
+// A toast's button sits beside its words: at their right, in the close button's column and under it, where that
+// leaves the words the most room. The words sit at the card's middle.
 func TestAToastsButtonSitsBesideItsWords(t *testing.T) {
 	ts := &Toasts{}
 	_, on, frames := toastFrame(t, ts)
@@ -154,35 +155,37 @@ func TestAToastsButtonSitsBesideItsWords(t *testing.T) {
 	frames(60, func() {})
 	card := ts.cards[0]
 	fc := card.face
-	if !fc.beside {
-		t.Fatal("the button is under the words")
+	if !fc.beside || fc.where != toastColumn {
+		t.Fatalf("the button is placed %d, beside the words %v; want in the close button's column", fc.where, fc.beside)
 	}
 	r := boundsOf(on, card, fc.title, fc.body, fc.buttons, fc.close)
 	box, title, body, button, closeAt := r[0], r[1], r[2], r[3], r[4]
 	if button.Min.X < title.Max.X || button.Min.X < body.Max.X {
 		t.Errorf("the button at %v overlaps the words at %v and %v", button, title, body)
 	}
-	if button.Max.X > closeAt.Min.X || button.Max.X < box.Max.X-80 {
-		t.Errorf("the button at %v is not just left of the close button at %v", button, closeAt)
+	if d := button.Max.X - closeAt.Max.X; d < -1 || d > 1 || button.Min.Y < closeAt.Max.Y {
+		t.Errorf("the button at %v is not under the close button at %v, in its column", button, closeAt)
 	}
-	if mid, want := button.Center().Y, (title.Min.Y+body.Max.Y)/2; mid < want-1 || mid > want+1 {
-		t.Errorf("the button's middle is at %v, the words' at %v", mid, want)
+	pad := CardPadding.Default()
+	if button.Max.Y > box.Max.Y-pad.Bottom+1 {
+		t.Errorf("the button at %v is not inside the padding of the card at %v", button, box)
 	}
-	if button.Min.Y < box.Min.Y+4 || button.Max.Y > box.Max.Y-4 {
-		t.Errorf("the button at %v is not well inside the card at %v", button, box)
+	if over, under := title.Min.Y-box.Min.Y-pad.Top, box.Max.Y-body.Max.Y-pad.Bottom; over < under-1 || over > under+1 {
+		t.Errorf("the words have %v over them and %v under: not at the card's middle", over, under)
 	}
 	// The button is as wide as its word wants, as it is under the words.
 	on(func(u *gunim.UI) {
-		ts.Show(Toast{Title: "Exported", Check: "Always", Buttons: []ToastButton{{Label: "Show"}}}, u)
+		ts.Show(Toast{Title: "Exported song.wav", Body: "Loudness −19.3 LUFS · range 0.5 LU · true peak −5.7 dBTP",
+			Buttons: []ToastButton{{Label: "Show"}, {Label: "Use MOTU M Series Number One"}}}, u)
 	})
 	frames(60, func() {})
 	under := boundsOf(on, ts.cards[1].face.buttons.Children()[0])[0]
 	if w, want := boundsOf(on, fc.buttons.Children()[0])[0].Size().W, under.Size().W; w < want-0.5 || w > want+0.5 {
 		t.Errorf("beside the words the button is %v wide, under them %v", w, want)
 	}
-	// Nothing is left under the words but the card's padding.
-	if under := box.Max.Y - body.Max.Y; under > CardPadding.Default().Bottom+1 {
-		t.Errorf("%v px of card lie under the words", under)
+	// The card is shorter than with the button under the words.
+	if stacked := boundsOf(on, ts.cards[1])[0].Size().H; box.Size().H >= stacked {
+		t.Errorf("the card is %v tall with its button beside the words, %v with a button under them", box.Size().H, stacked)
 	}
 	if len(fc.body.laid.p.Lines) > toastBodyLines || fc.body.laid.p.Truncated {
 		t.Errorf("beside the button the body is cut")
@@ -198,8 +201,11 @@ func TestAToastsButtonBesideATitleAloneSharesItsMiddle(t *testing.T) {
 	})
 	frames(60, func() {})
 	fc := ts.cards[0].face
-	r := boundsOf(on, ts.cards[0], fc.title, fc.buttons, fc.mark)
+	r := boundsOf(on, ts.cards[0], fc.title, fc.buttons, fc.mark, fc.close)
 	box, title, button, mark := r[0], r[1], r[2], r[3]
+	if fc.where != toastLeft || button.Max.X > r[4].Min.X {
+		t.Errorf("the button at %v is placed %d, not left of the close button at %v", button, fc.where, r[4])
+	}
 	if !fc.beside || title.Center().Y < button.Center().Y-1 || title.Center().Y > button.Center().Y+1 {
 		t.Errorf("beside %v: the title's middle is at %v, the button's at %v", fc.beside, title.Center().Y, button.Center().Y)
 	}
@@ -273,4 +279,62 @@ func TestAToastGrowsUnderThePointerWithItsButtonStillBeside(t *testing.T) {
 			t.Fatalf("under the pointer a body that already showed whole changed the card from %v to %v", was, h)
 		}
 	})
+}
+
+// The same toast shown again stands as it stood: its words don't roll, and its time starts again.
+func TestTheSameToastShownAgainStandsStill(t *testing.T) {
+	ts := &Toasts{Life: time.Second}
+	w, on, frames := toastFrame(t, ts)
+	same := Toast{Title: "Importing kick.wav", Key: "k", Kind: ToastInfo}
+	on(func(u *gunim.UI) { ts.Show(same, u) })
+	frames(40, func() {})
+	card := ts.cards[0]
+	on(func(u *gunim.UI) { ts.Show(same, u) })
+	frames(40, func() {
+		if _, words := drawnAlpha(w.Offscreen().Ops()); words < 0.999 || card.faces > 1 {
+			t.Fatalf("the same toast shown again drew its words %v solid, on %d faces", words, card.faces)
+		}
+		if ts.Len() != 1 || ts.cards[0] != card {
+			t.Fatal("the first showing's time took the toast away")
+		}
+	})
+	frames(60, func() {})
+	if ts.Len() != 0 {
+		t.Fatal("the toast outstayed the time of its second showing")
+	}
+}
+
+// As one toast hands over to another, a click lands on the new one only: the old toast's action is out of reach,
+// and a press begun on the old toast is no click on the new.
+func TestAClickDuringTheHandoverReachesOnlyTheNewToast(t *testing.T) {
+	ts := &Toasts{Life: time.Minute}
+	w, on, frames := toastFrame(t, ts)
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Removed Bass", Key: "k", Action: "Undo", OnClick: Sends(undone{1})}, u)
+	})
+	frames(40, func() {})
+	card := ts.cards[0]
+	link := boundsOf(on, card.face.action)[0].Center()
+	// A press on the old toast, held as the new one takes its place.
+	w.Input(input.PointerMove{Pos: geom.Pt(40, 20), Time: time.Now()})
+	w.Input(input.PointerDown{Pos: geom.Pt(40, 20), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Exported song.wav", Key: "k", Buttons: []ToastButton{{Label: "Show", OnClick: func(bool, *gunim.UI) gunim.Intent { return undone{2} }}}}, u)
+	})
+	w.Input(input.PointerUp{Pos: geom.Pt(40, 20), Button: input.ButtonPrimary, Time: time.Now()})
+	frames(2, func() {})
+	// Where the old toast's Undo still fades.
+	click(w, link.X, link.Y)
+	frames(2, func() {})
+	if got := sent(w); len(got) != 0 || ts.Len() != 1 {
+		t.Fatalf("mid handover the clicks sent %v and left %d toasts", got, ts.Len())
+	}
+	// The new toast's button answers once the card has grown to hold it.
+	frames(40, func() {})
+	show := boundsOf(on, card.face.buttons.Children()[0])[0].Center()
+	click(w, show.X, show.Y)
+	frames(2, func() {})
+	if got := sent(w); len(got) != 1 || got[0] != (undone{2}) || ts.Len() != 0 {
+		t.Fatalf("a click on the new toast's button sent %v and left %d toasts", got, ts.Len())
+	}
 }
