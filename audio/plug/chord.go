@@ -56,7 +56,9 @@ type ChordNews struct {
 	// Frame is where the chord starts, counted from the block's start:
 	// in this block, as a note's news never is, or a later one. A Now's
 	// is where in this block the chord it tells of holds from, and a
-	// Removed's is 0.
+	// Removed's is 0. A host may skip blocks while a plugin sleeps, so a
+	// plugin that waits for a later block adds [Position.Frame] as the
+	// news comes, and compares with it from then on.
 	Frame int
 	// ID is the chord's, from its Coming on: a Moved or a Removed names
 	// the chord by it. The same chord, played again, as a loop repeats,
