@@ -197,6 +197,13 @@ type Window struct {
 	// transparent is whether the window blends with what is behind it,
 	// read once as it opens.
 	transparent bool
+	// flyout says the window is a [driver.KindFlyout], and held that it has had the keyboard since it opened. flyAt and
+	// flyMargin are what it was placed beside, to place it again as its monitor's scale changes, and outside is the
+	// watch for a press outside it, or 0.
+	flyout, held bool
+	flyAt        geom.Rect
+	flyMargin    float32
+	outside      uintptr //nolint:unused // used on Windows
 	// noColor leaves the window's colours unconverted, set once as it
 	// opens; see [driver.Options.NoColorManagement].
 	noColor bool
@@ -309,6 +316,10 @@ func (w *Window) Size() geom.Size {
 
 // SetBackground implements [driver.Backgrounder].
 func (w *Window) SetBackground(c color.NRGBA) {
+	if w.flyout {
+		// A flyout is clear round the card the application draws.
+		c = color.NRGBA{}
+	}
 	w.mu.Lock()
 	w.under = c
 	w.mu.Unlock()
@@ -511,6 +522,7 @@ func (w *Window) shutdown() {
 	if w.closed {
 		return
 	}
+	stopFlyout(w)
 	// Where the window was as it closed, for Placement to say after.
 	p, ok := w.placementNow()
 	w.mu.Lock()
@@ -571,6 +583,10 @@ func (w *Window) stopRender() { w.quitOnce.Do(func() { close(w.quit) }) }
 // position moves the window where the options ask: attached to its
 // anchor, or centred on a chosen monitor. It runs on the main thread.
 func (w *Window) position(o driver.Options) error {
+	if o.Kind == driver.KindFlyout {
+		w.flyAt, w.flyMargin = o.Anchor, o.Margin
+		return w.placeFlyout(o.Anchor, o.Margin)
+	}
 	if p, ok := o.Parent.(*Window); ok {
 		if o.Kind == driver.KindPopup {
 			w.parent, w.popup, w.over, w.above = p, true, o.Over, o.Above
@@ -649,6 +665,79 @@ func (w *Window) position(o driver.Options) error {
 	x := int(b.Min.X) + max((int(b.Size().W)-ow)/2, 0) + l
 	y := int(b.Min.Y) + max((int(b.Size().H)-oh)/2, 0) + t
 	return w.gw.SetPos(x, y)
+}
+
+// flyoutFocus has a flyout ask to close once it loses the keyboard it had. It runs on the main thread.
+func (w *Window) flyoutFocus(focused bool) {
+	switch {
+	case !w.flyout:
+	case focused:
+		w.held = true
+	case w.held:
+		w.held = false
+		w.flyoutLeft()
+	}
+}
+
+// flyoutLeft has a flyout ask to close as the user turns to something else, and notes when, for the click on the
+// tray icon that may follow. It runs on the main thread.
+func (w *Window) flyoutLeft() {
+	w.d.flyoutGone.Store(time.Now().UnixNano())
+	w.in.Push(driver.CloseAsked{})
+}
+
+// flyoutRescaled puts a flyout back beside the tray icon once its monitor's scale changed: Windows has moved it to
+// the rectangle it suggests for the new scale by then. It runs on the main thread.
+func (w *Window) flyoutRescaled() {
+	if !w.flyout {
+		return
+	}
+	if err := w.placeFlyout(w.flyAt, w.flyMargin); err != nil {
+		w.debugf("flyout not placed again: %v", err)
+	}
+}
+
+// placeFlyout puts a flyout's card beside icon, the tray icon's rectangle in screen coordinates, on the monitor
+// holding it, with margin logical pixels of the window round the card. It runs on the main thread.
+func (w *Window) placeFlyout(icon geom.Rect, margin float32) error {
+	ms := monitors()
+	var m driver.Monitor
+	found := false
+	for _, mm := range ms {
+		if (!icon.Empty() && mm.Bounds.Contains(icon.Center())) || (!found && mm.Primary) {
+			m, found = mm, true
+		}
+	}
+	if !found {
+		if len(ms) == 0 {
+			return nil
+		}
+		m = ms[0]
+	}
+	work := m.WorkArea
+	if work.Empty() {
+		work = m.Bounds
+	}
+	ww, wh, err := w.gw.GetSize()
+	if err != nil {
+		return err
+	}
+	// A window that scales to its monitor grows by the ratio of the two monitors' scales once it arrives there.
+	if runtime.GOOS == "windows" && m.Scale > 0 {
+		if from, _, err := w.gw.GetContentScale(); err == nil && from > 0 {
+			ww = int(float32(ww) * m.Scale / from)
+			wh = int(float32(wh) * m.Scale / from)
+		}
+	}
+	per := m.CoordsPerLogical
+	if per <= 0 {
+		per = 1
+	}
+	pad := margin * per
+	card := geom.Sz(float32(ww)-2*pad, float32(wh)-2*pad)
+	at := driver.FlyoutPlace(icon, card, work, driver.FlyoutGap*per)
+	w.debugf("flyout beside %v in %v, card at %v", icon, work, at)
+	return w.gw.SetPos(roundInt(at.X-pad), roundInt(at.Y-pad))
 }
 
 // coordsPerLogical is GLFW screen coordinates per logical pixel.
@@ -963,6 +1052,7 @@ func (w *Window) install() {
 	})
 	_, _ = gw.SetContentScaleCallback(func(_ *glfw.Window, x, _ float32) {
 		w.debugf("content scale %v", x)
+		w.flyoutRescaled()
 		remeasure()
 		w.updateColor(false)
 	})
@@ -1017,6 +1107,7 @@ func (w *Window) install() {
 		w.accessFocus(focused)
 		w.pointerf("keyboard %v", focused)
 		w.in.Push(driver.WindowFocus{Focused: focused})
+		w.flyoutFocus(focused)
 	})
 	_, _ = gw.SetCloseCallback(func(gw *glfw.Window) {
 		// The engine decides: it closes the window, or asks the
@@ -1698,6 +1789,9 @@ func (w *Window) Show() error {
 			return err
 		}
 		w.measure()
+		if w.flyout {
+			startFlyout(w)
+		}
 		return nil
 	})
 }

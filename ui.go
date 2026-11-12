@@ -266,6 +266,16 @@ func (a *App) TrayNotify(title, body string) error {
 	return tn.TrayNotify(title, body)
 }
 
+// TrayRect returns the tray icon's rectangle in screen coordinates, for a [driver.KindFlyout] window to open beside
+// as [WindowOptions.Beside]. It fails where no icon is up, or the system does not say: only Windows does.
+func (a *App) TrayRect() (geom.Rect, error) {
+	tl, ok := a.drv.(driver.TrayLocator)
+	if !ok {
+		return geom.Rect{}, ErrNoTray
+	}
+	return tl.TrayRect()
+}
+
 // SystemLook is what the user chose in the system's settings for how applications look and move; see
 // [driver.SystemLook].
 type SystemLook = driver.SystemLook
@@ -344,6 +354,11 @@ type WindowOptions struct {
 	// existing one.
 	Parent *Window
 	Anchor geom.Point
+	// Beside, for a [driver.KindFlyout], is the rectangle in screen coordinates the flyout opens beside: the tray
+	// icon's, from [App.TrayRect]. Margin is the room round the card the application draws in it, left for the card's
+	// shadow. Empty, the flyout opens in the bottom right corner of the primary monitor's work area.
+	Beside geom.Rect
+	Margin float32
 	// Owned makes an ordinary window belong to Parent, as a palette or a plugin's window does: it stays in front of
 	// Parent, and Windows keeps it off the taskbar. It is an ordinary window in every other way: it moves to any
 	// monitor, has its title bar, and opens at Place where that is set, or else at Anchor in Parent's space. Windows
@@ -456,6 +471,9 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw
+	}
+	if o.Kind == driver.KindFlyout {
+		do.Anchor, do.Margin, do.Chromeless = o.Beside, o.Margin, false
 	}
 	dw, err := a.drv.NewWindow(do)
 	if err != nil {

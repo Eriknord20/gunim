@@ -24,7 +24,7 @@ import (
 func (w *Window) getWindowStyle() uint32 {
 	var style uint32 = _WS_CLIPSIBLINGS | _WS_CLIPCHILDREN
 
-	if w.platform.popup {
+	if w.platform.popup || w.platform.flyout {
 		return style | _WS_POPUP
 	}
 
@@ -58,6 +58,11 @@ func (w *Window) getWindowExStyle() uint32 {
 		if w.platform.owner == 0 {
 			style |= _WS_EX_TOPMOST
 		}
+	}
+
+	if w.platform.flyout {
+		// gunim change: a flyout keeps off the taskbar and above other windows, as a popup does, and activates.
+		style = _WS_EX_TOOLWINDOW | _WS_EX_TOPMOST
 	}
 
 	if w.floating {
@@ -1630,6 +1635,7 @@ func (w *Window) platformCreateWindow(wndconfig *wndconfig, ctxconfig *ctxconfig
 	}
 
 	w.platform.popup = wndconfig.popup
+	w.platform.flyout = wndconfig.flyout
 
 	if err := w.createNativeWindow(wndconfig, fbconfig); err != nil {
 		return err

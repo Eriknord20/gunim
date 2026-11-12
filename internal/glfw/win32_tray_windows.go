@@ -2,6 +2,7 @@ package glfw
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/draw"
 	"strings"
@@ -167,6 +168,35 @@ func TrayNotify(title, body string) error {
 	put(d.szInfo[:], body)
 	d.dwInfoFlags = niifUser
 	return shellNotify(nimModify, d)
+}
+
+// notifyIconIdentifier is NOTIFYICONIDENTIFIER.
+type notifyIconIdentifier struct {
+	cbSize   uint32
+	hWnd     windows.HWND
+	uID      uint32
+	guidItem windows.GUID
+}
+
+var procShellNotifyIconGetRect = shell32tray.NewProc("Shell_NotifyIconGetRect")
+
+// TrayIconRect returns the tray icon's rectangle on the screen, in device pixels. It fails where no icon is up, and
+// where Windows cannot say, as for an icon in the overflow while that is shut. It must be called on the main thread.
+func TrayIconRect() (left, top, right, bottom int32, err error) {
+	if !_glfw.initialized {
+		return 0, 0, 0, 0, NotInitialized
+	}
+	if trayNow == nil || !trayNow.added {
+		return 0, 0, 0, 0, errors.New("glfw: there is no tray icon to find")
+	}
+	id := notifyIconIdentifier{hWnd: trayNow.hwnd, uID: 1}
+	id.cbSize = uint32(unsafe.Sizeof(id))
+	var r _RECT
+	hr, _, _ := procShellNotifyIconGetRect.Call(uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(&r)))
+	if int32(hr) < 0 {
+		return 0, 0, 0, 0, fmt.Errorf("glfw: Shell_NotifyIconGetRect: HRESULT %#x", uint32(hr))
+	}
+	return r.left, r.top, r.right, r.bottom, nil
 }
 
 // CloseTrayIcon takes the icon away, as the application ends.

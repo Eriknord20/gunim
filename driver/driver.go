@@ -136,6 +136,9 @@ type Options struct {
 	// Passthrough lets the pointer through the window to whatever is
 	// under it, as for the picture carried under the pointer in a drag.
 	Passthrough bool
+	// Margin, for a [KindFlyout], is the room in logical pixels round the card the application draws, left for its
+	// shadow. Placement puts the card, not the window, beside the tray icon.
+	Margin float32
 	// Over puts a popup's top-left corner at Anchor.Min exactly, for a
 	// popup laid over its parent, such as a glow reaching past the
 	// parent's edges. It stays there even where the screen runs out.
@@ -217,6 +220,24 @@ const (
 	// focus. Its surface is transparent where the display server can
 	// blend windows, so a popup can have round corners and a shadow.
 	KindPopup
+	// KindFlyout is a window that opens from the tray icon, as a panel of the application's state. It is bare and
+	// transparent like a popup, so the application draws its rounded card and shadow, but it takes the keyboard. It
+	// opens beside Anchor, the tray icon's rectangle in screen coordinates: see [FlyoutPlace].
+	//
+	// On Windows it keeps off the taskbar, stays above other windows, and takes the foreground as it shows. It asks
+	// to close, with [CloseAsked], once it loses the keyboard it had, or at a press of a mouse button anywhere outside
+	// it, so it cannot stay on top for good. A click on the tray icon while it is open closes it and no more: the
+	// tray's OnClick does not run for that click, so it does not open again. It is placed again after its monitor's
+	// scale changes. A window it opens, such as a dialog, takes the keyboard from it, and so closes it.
+	//
+	// Escape is the application's to handle, as a key the flyout's content hears: close the window on it.
+	//
+	// Elsewhere it is a window with no frame that stays above the others, and closes as it loses the keyboard. On X11
+	// the window manager may show it in the taskbar, and the system says nothing of where the tray icon is, so it
+	// opens in the bottom right corner of the primary monitor's work area. Under Wayland, through XWayland, the
+	// compositor chooses where it opens. macOS does not say where its status item is either, and the flyout opens in
+	// the corner there too.
+	KindFlyout
 )
 
 // A Window is one on-screen surface with its own GL context.

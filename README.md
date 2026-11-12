@@ -148,18 +148,20 @@ Bonbon Sudoku, a sudoku of candies made for a phone, started here as
 `example/sudoku`, to see how far the animation goes. It is now an app of
 Skalarit AB's, on its way to Google Play.
 
-Three smaller examples show one thing each. `example/widgets` is a
+Four smaller examples show one thing each. `example/widgets` is a
 gallery of the widgets, with a dark and a light theme to switch
 between. `example/controls` has popups, pictures that fly to fill the
 window, a list of a hundred thousand items, rows to put in order by
 dragging, and a second window to drag pictures to. `example/paragraph`
 springs a column of English, Hebrew and Arabic between narrow and wide,
-wrapping it again every frame.
+wrapping it again every frame. `example/tray` puts an icon in the tray
+and opens a flyout beside it on a click.
 
 ```sh
 CGO_ENABLED=0 go run ./example/widgets
 CGO_ENABLED=0 go run ./example/controls
 CGO_ENABLED=0 go run ./example/paragraph
+CGO_ENABLED=0 go run ./example/tray
 ```
 
 ## Sound
@@ -349,7 +351,10 @@ and `UI`:
 - **The tray.** `App.SetTray` shows an icon with a menu, and
   `App.TrayNotify` a message from it. On Windows, `Tray.OnNotifyClick`
   hears a click on the message, to open the page it is about, and
-  `Tray.OnNotifyGone` hears it leave the screen. With `App.StayOpen` the
+  `Tray.OnNotifyGone` hears it leave the screen. A window of
+  `driver.KindFlyout` opens beside the icon, at `App.TrayRect` on
+  Windows, takes the keyboard, and closes once the user turns to
+  something else. With `App.StayOpen` the
   application runs on with no window open. Linux speaks
   StatusNotifierItem.
 - **The system's look.** `App.SystemLook` reads what the user chose

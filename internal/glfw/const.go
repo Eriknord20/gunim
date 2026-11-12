@@ -128,6 +128,10 @@ const (
 	// gunim change.
 	ContextOnly = Hint(0x00025002)
 
+	// Flyout makes a window that opens from the tray: on Windows it has no frame, stays above other windows and keeps
+	// off the taskbar, as a popup does, but takes the keyboard. A gunim change.
+	Flyout = Hint(0x00025003)
+
 	// Win32NoRedirectionBitmap specifies whether the window is created without a redirection surface
 	// (WS_EX_NOREDIRECTIONBITMAP). Only set this when the content is presented through
 	// DirectComposition, as such a window shows nothing otherwise.

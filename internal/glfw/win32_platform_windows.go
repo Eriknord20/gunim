@@ -36,6 +36,9 @@ type platformWindowState struct {
 	// popup is set for a window made with the Popup hint. A gunim change.
 	popup bool
 
+	// flyout is set for a window made with the Flyout hint. A gunim change.
+	flyout bool
+
 	// owner is the window a popup stays just above, set by SetOwner, or 0 for a popup above every window. A gunim
 	// change.
 	owner windows.HWND

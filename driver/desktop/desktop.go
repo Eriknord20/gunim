@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marrasen/gunim/driver"
@@ -44,6 +45,9 @@ type Driver struct {
 	// isES records whether the GL library loaded is OpenGL ES, which
 	// decides the context to ask GLFW for and the shader dialect.
 	isES bool
+
+	// flyoutGone is when a flyout last closed as the user turned away, in Unix nanoseconds; see flyoutJustLeft.
+	flyoutGone atomic.Int64
 
 	mu      sync.Mutex
 	tasks   []func()
@@ -492,6 +496,15 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			// framebuffer to.
 			hints = append(hints, [2]int{int(glfw.TransparentFramebuffer), glfw.True})
 		}
+	case driver.KindFlyout:
+		hints = append(hints,
+			[2]int{int(glfw.Flyout), glfw.True},
+			[2]int{int(glfw.Floating), glfw.True},
+			[2]int{int(glfw.Decorated), glfw.False},
+			[2]int{int(glfw.FocusOnShow), glfw.True})
+		if !d.dxgi {
+			hints = append(hints, [2]int{int(glfw.TransparentFramebuffer), glfw.True})
+		}
 	case driver.KindUtility:
 		hints = append(hints, [2]int{int(glfw.Floating), glfw.True})
 	case driver.KindNormal:
@@ -535,10 +548,11 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		}
 		w.ctx = ctx
 	}
-	if o.Kind == driver.KindPopup {
+	if o.Kind == driver.KindPopup || o.Kind == driver.KindFlyout {
 		t, err := gw.GetAttrib(glfw.TransparentFramebuffer)
 		w.transparent = d.dxgi || (err == nil && t == glfw.True)
 	}
+	w.flyout = o.Kind == driver.KindFlyout
 	if err := w.position(o); err != nil {
 		_ = gw.Destroy()
 		return nil, err
@@ -629,6 +643,9 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 			return nil, err
 		}
 		w.debugf("shown")
+		if w.flyout {
+			startFlyout(w)
+		}
 	}
 	if place && placeAgainShown && !o.Hidden {
 		// The bounds chosen, not the newest ones noted: a window sized
