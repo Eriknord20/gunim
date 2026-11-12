@@ -291,6 +291,9 @@ type Wrap struct {
 	Cross Cross
 
 	kids []gunim.Node
+	// lines is how many rows the last layout made, wide the width of its widest and tall their height together.
+	lines      int
+	wide, tall float32
 }
 
 // NewWrap returns a wrap of kids.
@@ -312,7 +315,11 @@ func (w *Wrap) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	start := 0
 	var at []geom.Point
 	var sizes []geom.Size
+	w.lines, w.wide = 0, 0
 	endLine := func() {
+		if start < len(at) {
+			w.lines, w.wide = w.lines+1, max(w.wide, x-gap)
+		}
 		var spare float32
 		if w.Justify == JustifyEnd && start < len(at) {
 			spare = max(0, width-(x-gap))
@@ -345,7 +352,8 @@ func (w *Wrap) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		kid.Place(at[i])
 		i++
 	}
-	return c.Constrain(geom.Sz(width, y+line))
+	w.tall = y + line
+	return c.Constrain(geom.Sz(width, w.tall))
 }
 
 // Paint implements [gunim.Node].
