@@ -6,6 +6,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/gunim/input"
@@ -178,4 +179,23 @@ func TestAKnobsRingRunsBetweenCapAndArc(t *testing.T) {
 // overlap reports whether a and b share any area.
 func overlap(a, b geom.Rect) bool {
 	return a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y
+}
+
+// Tab reaches a section's switch before its knobs, as the switch stands before them.
+func TestTabReachesASectionsSwitchFirst(t *testing.T) {
+	d := &plug.Descriptor{Params: []plug.Param{{ID: 1, Name: "On", Max: 1}, release}}
+	h := &host{values: map[uint32]float64{1: 1, 3: 100}}
+	s := NewSection(h, d, "GATE", 1, 3)
+	w := stageRow(t, s)
+	w.Input(input.KeyPress{Key: input.KeyTab})
+	w.Frame(time.Second / 60)
+	if s.Switch.ring.Target() != 1 || s.Knobs[0].ring.Target() != 0 {
+		t.Fatalf("the first Tab rings the switch %v and the knob %v, want the switch", s.Switch.ring.Target(),
+			s.Knobs[0].ring.Target())
+	}
+	w.Input(input.KeyPress{Key: input.KeyTab})
+	w.Frame(time.Second / 60)
+	if s.Knobs[0].ring.Target() != 1 {
+		t.Errorf("the second Tab leaves the knob's ring at %v, want it on", s.Knobs[0].ring.Target())
+	}
 }
