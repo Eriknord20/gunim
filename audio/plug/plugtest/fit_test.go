@@ -52,7 +52,7 @@ func TestFitsPassesAViewWithRoom(t *testing.T) {
 		at:    []geom.Rect{geom.Rc(10, 30, plugui.KnobW, plugui.KnobH), geom.Rc(80, 30, plugui.KnobW, plugui.KnobH)},
 		texts: []string{"INPUT"}, where: []geom.Point{geom.Pt(10, 6)}}
 	if got := Misfits(t, v, geom.Sz(200, 140), Fit{}); len(got) != 0 {
-		t.Errorf("a view with room for its parts misfits: %q", got)
+		t.Errorf("a view with room for its parts misfits: %v", got)
 	}
 }
 
@@ -80,8 +80,8 @@ func TestFitsNamesWhatIsWrong(t *testing.T) {
 		`text "EDGE" at`,
 		`cut short`,
 	} {
-		if !slices.ContainsFunc(got, func(m string) bool { return strings.Contains(m, want) }) {
-			t.Errorf("nothing says %q in %q", want, got)
+		if !slices.ContainsFunc(got, func(m Misfit) bool { return strings.Contains(m.Text, want) }) {
+			t.Errorf("nothing says %q in %v", want, got)
 		}
 	}
 }
@@ -92,7 +92,7 @@ func TestFitsLetsAPartLieOverOthers(t *testing.T) {
 	v := &spots{kids: []gunim.Node{knob("Gain"), card},
 		at: []geom.Rect{geom.Rc(10, 30, plugui.KnobW, plugui.KnobH), geom.Rc(30, 40, plugui.KnobW, plugui.KnobH)}}
 	if got := Misfits(t, v, geom.Sz(200, 140), Fit{Over: []gunim.Node{card}}); slices.ContainsFunc(got,
-		func(m string) bool { return strings.Contains(m, "overlap") }) {
-		t.Errorf("a card laid over a knob on purpose misfits: %q", got)
+		func(m Misfit) bool { return m.Kind == Overlaps }) {
+		t.Errorf("a card laid over a knob on purpose misfits: %v", got)
 	}
 }

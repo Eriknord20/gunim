@@ -50,8 +50,46 @@ func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 	}
 }
 
+// Inside lays view out and paints it at size, as Fits does, and fails t where it draws anything outside its box: for
+// a view under its least size, which lays itself out larger and clips.
+func Inside(t testing.TB, view gunim.Node, size geom.Size) {
+	t.Helper()
+	for _, m := range Misfits(t, view, size, Fit{}) {
+		if m.Kind == Spills {
+			t.Errorf("at %v×%v: %s", size.W, size.H, m)
+		}
+	}
+}
+
+// Misfit is one thing wrong with a view, as [Fits] finds it.
+type Misfit struct {
+	Kind Kind
+	// Text says what is wrong, naming the parts.
+	Text string
+}
+
+// String returns m's Text.
+func (m Misfit) String() string { return m.Text }
+
+// Kind is what sort of thing is wrong with a view.
+type Kind uint8
+
+// The kinds.
+const (
+	// Overlaps is two controls, two texts, or a text and a control over each other.
+	Overlaps Kind = iota
+	// Outside is a control lying partly outside the view.
+	Outside
+	// Spills is a text or a shape drawn outside the view.
+	Spills
+	// CutShort is a text clipped, faded where it is cut, or ended with an ellipsis.
+	CutShort
+	// Squeezed is a part under its least size.
+	Squeezed
+)
+
 // Misfits returns what [Fits] fails t for, without failing it.
-func Misfits(t testing.TB, view gunim.Node, size geom.Size, f Fit) []string {
+func Misfits(t testing.TB, view gunim.Node, size geom.Size, f Fit) []Misfit {
 	t.Helper()
 	pr := &probe{kid: view}
 	w := mount(t, size, pr)
@@ -63,7 +101,7 @@ func Misfits(t testing.TB, view gunim.Node, size geom.Size, f Fit) []string {
 		w.Frame(time.Second / 60)
 	}
 	if pr.u == nil {
-		return []string{"the view was never laid out"}
+		return []Misfit{{Kind: Outside, Text: "the view was never laid out"}}
 	}
 	c := checker{u: pr.u, frame: pr.f, fit: f, box: geom.Rect{Max: size.Point()}}
 	c.walk(view, nil, false)
@@ -123,11 +161,11 @@ type checker struct {
 	fit   Fit
 	box   geom.Rect
 	parts []part
-	out   []string
+	out   []Misfit
 }
 
-func (c *checker) fail(format string, args ...any) {
-	c.out = append(c.out, fmt.Sprintf(format, args...))
+func (c *checker) fail(k Kind, format string, args ...any) {
+	c.out = append(c.out, Misfit{Kind: k, Text: fmt.Sprintf(format, args...)})
 }
 
 // walk notes n and the nodes under it that were drawn, each with the nodes above it.
@@ -165,10 +203,10 @@ func (c *checker) checkParts() {
 	const slack = 0.5
 	for i, p := range c.parts {
 		if p.control && !within(p.at, c.box, slack) {
-			c.fail("%s at %v lies partly outside the view", p.name, p.at)
+			c.fail(Outside, "%s at %v lies partly outside the view", p.name, p.at)
 		}
 		if least, ok := c.leastOf(p.n); ok && (p.at.Size().W < least.W-slack || p.at.Size().H < least.H-slack) {
-			c.fail("%s is %v×%v, under its least size %v×%v", p.name, p.at.Size().W, p.at.Size().H, least.W, least.H)
+			c.fail(Squeezed, "%s is %v×%v, under its least size %v×%v", p.name, p.at.Size().W, p.at.Size().H, least.W, least.H)
 		}
 		if !p.control || p.over {
 			continue
@@ -178,7 +216,7 @@ func (c *checker) checkParts() {
 				continue
 			}
 			if o := intersect(p.at, q.at); o.Size().W > 1 && o.Size().H > 1 {
-				c.fail("%s at %v and %s at %v overlap", p.name, p.at, q.name, q.at)
+				c.fail(Overlaps, "%s at %v and %s at %v overlap", p.name, p.at, q.name, q.at)
 			}
 		}
 	}
@@ -268,7 +306,7 @@ func (c *checker) checkOps(ops []paint.Op) {
 		}
 	}
 	if spills > 0 {
-		c.fail("%d shapes are drawn outside the view, within %v", spills, spilt)
+		c.fail(Spills, "%d shapes are drawn outside the view, within %v", spills, spilt)
 	}
 	for i, a := range runs {
 		if c.underOver(a.at) {
@@ -279,7 +317,7 @@ func (c *checker) checkOps(ops []paint.Op) {
 				continue
 			}
 			if o := intersect(a.at, b.at); o.Size().W > 1 && o.Size().H > 1 {
-				c.fail("text %q at %v and text %q at %v overlap", a.text, a.at, b.text, b.at)
+				c.fail(Overlaps, "text %q at %v and text %q at %v overlap", a.text, a.at, b.text, b.at)
 			}
 		}
 	}
@@ -290,14 +328,14 @@ func (c *checker) checkRun(o *paint.TextOp, r run, l layer) {
 	whole := transformed(o.Transform, glyphBox(o))
 	switch {
 	case l.clips && !within(whole, l.clip, 1):
-		c.fail("text %q at %v is cut short by a clip at %v", r.text, whole, l.clip)
+		c.fail(CutShort, "text %q at %v is cut short by a clip at %v", r.text, whole, l.clip)
 	case o.FadeTo > o.FadeFrom:
-		c.fail("text %q at %v is cut short, fading out", r.text, whole)
+		c.fail(CutShort, "text %q at %v is cut short, fading out", r.text, whole)
 	case strings.Contains(r.text, "…"):
-		c.fail("text %q at %v is cut short with an ellipsis", r.text, whole)
+		c.fail(CutShort, "text %q at %v is cut short with an ellipsis", r.text, whole)
 	}
 	if !within(r.at, c.box, 1) {
-		c.fail("text %q at %v runs outside the view", r.text, r.at)
+		c.fail(Spills, "text %q at %v runs outside the view", r.text, r.at)
 	}
 	if c.underOver(r.at) {
 		return
@@ -307,7 +345,7 @@ func (c *checker) checkRun(o *paint.TextOp, r run, l layer) {
 			continue
 		}
 		if o := intersect(r.at, p.at); o.Size().W > 1 && o.Size().H > 1 && !within(r.at, p.at, 1) {
-			c.fail("text %q at %v runs into %s at %v", r.text, r.at, p.name, p.at)
+			c.fail(Overlaps, "text %q at %v runs into %s at %v", r.text, r.at, p.name, p.at)
 		}
 	}
 }

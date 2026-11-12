@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 )
@@ -59,4 +61,16 @@ func Sheet(t testing.TB, view func() gunim.Node, sizes []geom.Size, path string)
 		d.DrawString(fmt.Sprintf("%g × %g", sizes[i].W, sizes[i].H))
 	}
 	gunimtest.WritePNG(t, path, sheet)
+}
+
+// Shots writes what a person needs to choose and check the sizes of d's window view into dir: a sheet of the view
+// at sizes, and pictures at d's least size and at the size it opens at. view makes a new view for each picture.
+func Shots(t testing.TB, view func() gunim.Node, d plug.Descriptor, sizes []geom.Size, dir string) {
+	t.Helper()
+	Sheet(t, view, sizes, filepath.Join(dir, "sheet.png"))
+	for name, s := range map[string]geom.Size{"least": d.ViewMinSize, "open": d.ViewSize} {
+		if s != (geom.Size{}) {
+			gunimtest.WritePNG(t, filepath.Join(dir, fmt.Sprintf("%s-%gx%g.png", name, s.W, s.H)), Picture(t, view(), s))
+		}
+	}
 }

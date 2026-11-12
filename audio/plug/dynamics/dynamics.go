@@ -30,6 +30,7 @@ import (
 	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/internal/least"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs, by part.
@@ -220,7 +221,9 @@ var Descriptor = plug.Descriptor{
 		{Name: "Noise gate", Params: map[uint32]float64{GateOnID: 1, GateThresholdID: -50, GateRangeID: 30,
 			GateAttackID: 0.5, GateReleaseID: 200, CompOnID: 0, LimitOnID: 0}},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{} },
+	ViewSize:    geom.Sz(880, 560),
+	ViewMinSize: geom.Sz(760, 500),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 }
 
 func init() { plug.Register(Descriptor) }

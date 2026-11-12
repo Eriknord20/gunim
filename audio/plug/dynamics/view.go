@@ -180,6 +180,8 @@ type panel struct {
 	// metersAt is where the meters' pane is.
 	tuner    *plugui.Tuner
 	metersAt geom.Rect
+	// laid is the size the panel was laid out at: its room, or its least size where the room is smaller.
+	laid geom.Size
 	// key is Key's bolt, at the right of the head of the sidechain's section, sections[keySection].
 	key *keyBolt
 }
@@ -256,9 +258,11 @@ func (p *panel) Children() []gunim.Node {
 	return append(kids, p.key, p.zero, p.tuner.Button, p.tuner.Card)
 }
 
-// Layout implements [gunim.Node].
+// Layout implements [gunim.Node]. Under its least size the panel lays
+// out at that size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := plug.AtLeast(c.Max, Descriptor.ViewMinSize)
+	p.laid = size
 	// The sound's history fills the panel; over it, on glass, the
 	// sections along the foot, in rows as many as fit, each row centred,
 	// and the meters side by side above them, centred.
@@ -295,7 +299,7 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
 	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
 	kids.At(n + 1).Place(geom.Pt(size.W-panelInset/2-max(cs.W, plugui.TunerW), panelInset/2+36))
-	return size
+	return c.Max
 }
 
 // The panel's sizes: how far in from its edges the glass stands, how
@@ -307,8 +311,10 @@ const (
 )
 
 // Paint implements [gunim.Node]: the history, then on it the meters'
-// pane, the meters, the sections and the tuner.
-func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+// pane, the meters, the sections and the tuner, clipped to the box
+// where the panel was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	defer plug.ClipTo(pt, box, p.laid)()
 	kids.At(0).Paint(pt)
 	plugui.PaintGlass(pt, f.Theme, p.metersAt, widget.CardRadius.Get(f.Theme)+4)
 	for i := 1; i < kids.Len(); i++ {
