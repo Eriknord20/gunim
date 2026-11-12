@@ -528,9 +528,9 @@ func newToastCard(t *Toasts, to Toast) *toastCard {
 func (c *toastCard) swap(to Toast, u *gunim.UI) {
 	old := c.face
 	c.face = newToastFace(c, to, false)
+	old.next = c.face
 	if !old.says(to) {
 		// The same toast shown again stands as it stood. Another one rolls in.
-		old.gone = true
 		c.face.fade.Jump(0)
 	}
 	c.key = to.Key
@@ -664,7 +664,7 @@ const toastSide = 0.45
 // toastSideText is the least width the words keep with the buttons beside them.
 const toastSideText = 120
 
-// toastRise is how far a face moves as it hands over: the old one up and out, the new one up and in.
+// toastRise is how far a face moves as it hands over: the new one up and in, the old one up and out.
 const toastRise = 14
 
 // toastFace is what a toast card shows: the title and body, the icon before them, and the action, buttons, tick box
@@ -685,9 +685,10 @@ type toastFace struct {
 	buttons *Wrap
 	close   *IconButton
 	check   *Checkbox
-	// fade runs to 1 as the face shows, and back to 0 once another takes its place, which gone says.
+	// fade runs to 1 as the face comes in. next is the face that took this one's place, or nil: this one goes
+	// out as far as that one has come in, so the faces of a card together are always as solid as one.
 	fade *anim.Float
-	gone bool
+	next *toastFace
 	// where is where the buttons sit, and beside says that is beside the words, not under them. It is worked out
 	// once for a width and text size, which decided holds.
 	where   toastButtons
@@ -858,19 +859,42 @@ func (fc *toastFace) Children() []gunim.Node {
 }
 
 // Transition implements [gunim.Transitioner]: a face that takes another's place fades in, and the one it takes the
-// place of fades out, at the same pace, so the card is never bare. A face that leaves with its card goes as the
-// card does.
+// place of goes out as far as that one has come, so the card is never bare. It leaves once the new one stands.
 func (fc *toastFace) Transition(p gunim.Presence, f gunim.Frame) bool {
-	switch p {
-	case gunim.Entering:
+	if p == gunim.Entering {
 		fc.fade.Animate(1, Settle.Get(f.Theme))
-	case gunim.Exiting:
-		if fc.gone {
-			fc.fade.Animate(0, Settle.Get(f.Theme))
-		}
-	case gunim.Present:
+	}
+	if p == gunim.Exiting && fc.next != nil {
+		// Gone once a face after it stands whole, whichever that is: one shown and replaced within a frame never
+		// comes in itself.
+		_, left := fc.rolled()
+		return left <= 0.001
 	}
 	return !fc.fade.Active()
+}
+
+// in is how far the face's words have come in, from 0 to 1. They change over in the middle of the roll, so the
+// old words and the new are both half clear for a moment only.
+func (fc *toastFace) in() float32 {
+	a := min(max((fc.fade.Value()-0.25)/0.5, 0), 1)
+	return a * a * (3 - 2*a)
+}
+
+// rolled is how far the faces that came after this one have rolled in, from 0 to 1, and left what they leave of
+// this one to see.
+func (fc *toastFace) rolled() (rolled, left float32) {
+	left = 1
+	for n := fc.next; n != nil; n = n.next {
+		rolled = max(rolled, min(max(n.fade.Value(), 0), 1))
+		left *= 1 - n.in()
+	}
+	return rolled, left
+}
+
+// alpha is how solid the face is drawn: as far as it has come in, less what the faces after it have taken.
+func (fc *toastFace) alpha() float32 {
+	_, left := fc.rolled()
+	return fc.in() * left
 }
 
 // Layout implements [gunim.Node]. The icon sits before the title, and the text after it. The body shows three lines,
@@ -1086,21 +1110,16 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 
 // Paint implements [gunim.Node]. A face handing over is drawn part clear, a little above or below its place.
 func (fc *toastFace) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	x := min(max(fc.fade.Value(), 0), 1)
-	// The words change over in the middle of the roll, so the old and the new are both half clear for a moment
-	// only, and one of them is always more than half there.
-	a := min(max((x-0.25)/0.5, 0), 1)
-	a = a * a * (3 - 2*a)
+	a := fc.alpha()
 	if a <= 0.001 {
 		return
 	}
-	if x < 0.999 {
-		rise := toastRise * (1 - x)
-		if fc.gone {
-			rise = -rise
-		}
+	x := min(max(fc.fade.Value(), 0), 1)
+	if rolled, _ := fc.rolled(); x < 0.999 || rolled > 0.001 {
+		// Coming in, it rises to its place. Going out, it rises on from it.
+		rise := toastRise * (1 - x - rolled)
 		r := geom.Rect{Max: box.Point()}
-		defer p.Layer(paint.LayerOpts{Bounds: r.Inset(geom.Uniform(-toastRise)), Opacity: a})()
+		defer p.Layer(paint.LayerOpts{Bounds: r.Inset(geom.Uniform(-2 * toastRise)), Opacity: a})()
 		defer p.Push(paint.Translate(geom.Pt(0, rise)))()
 	}
 	for k := range kids.All {

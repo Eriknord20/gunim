@@ -1,6 +1,8 @@
 package widget
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +72,7 @@ func TestAToastThatTakesAnothersPlaceNeverShowsABareCard(t *testing.T) {
 				t.Fatalf("the card is only %v solid as its words change", solid)
 			}
 			if words < 0.45 {
-				t.Fatalf("the card is bare: its words show only %v (old %v, new %v)", words, old.fade.Value(), card.face.fade.Value())
+				t.Fatalf("the card is bare: its words show only %v (old %v, new %v)", words, old.alpha(), card.face.alpha())
 			}
 			if h := card.size.H; h < was-0.5 || h-was > 12 {
 				t.Fatalf("the card's height went from %v to %v in a frame", was, h)
@@ -81,7 +83,7 @@ func TestAToastThatTakesAnothersPlaceNeverShowsABareCard(t *testing.T) {
 			if foot := card.y.Value() + card.size.H; foot < stack.Size().H-0.5 || foot > stack.Size().H+0.5 {
 				t.Fatalf("the card's foot is at %v in a stack %v tall", foot, stack.Size().H)
 			}
-			if o, n := old.fade.Value(), card.face.fade.Value(); o > 0.2 && n > 0.2 {
+			if o, n := old.alpha(), card.face.alpha(); o > 0.2 && n > 0.2 {
 				mid = true
 			}
 		})
@@ -336,5 +338,47 @@ func TestAClickDuringTheHandoverReachesOnlyTheNewToast(t *testing.T) {
 	frames(2, func() {})
 	if got := sent(w); len(got) != 1 || got[0] != (undone{2}) || ts.Len() != 0 {
 		t.Fatalf("a click on the new toast's button sent %v and left %d toasts", got, ts.Len())
+	}
+}
+
+// Toasts that take each other's place faster than one can roll in still never leave the card bare: together the
+// faces are as solid as one, and one of them shows well.
+func TestToastsThatChangeFastNeverShowABareCard(t *testing.T) {
+	ts := &Toasts{Life: time.Minute}
+	w, on, frames := toastFrame(t, ts)
+	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Undid 0", Key: "k"}, u) })
+	frames(60, func() {})
+	card := ts.cards[0]
+	faces := []*toastFace{card.face}
+	check := func() {
+		t.Helper()
+		var sum float32
+		for _, fc := range faces {
+			sum += fc.alpha()
+		}
+		if sum < 0.99 || sum > 1.01 {
+			t.Fatalf("the card's %d faces are %v solid together, want 1", len(faces), sum)
+		}
+		if solid, words := drawnAlpha(w.Offscreen().Ops()); solid < 0.99 || words < 0.2 {
+			t.Fatalf("the card is %v solid and its words show only %v", solid, words)
+		}
+	}
+	for i := range 12 {
+		// A new toast every other frame, as Ctrl+Z held down.
+		on(func(u *gunim.UI) {
+			if i == 5 {
+				// Two within a frame: the first of them never gets a frame to come in.
+				ts.Show(Toast{Title: "Undid in passing", Key: "k"}, u)
+				faces = append(faces, card.face)
+			}
+			ts.Show(Toast{Title: "Undid " + strconv.Itoa(i+1), Body: strings.Repeat("more ", i%3), Key: "k"}, u)
+		})
+		faces = append(faces, card.face)
+		check()
+		frames(1, check)
+	}
+	frames(90, check)
+	if card.faces != 1 || card.face.alpha() < 0.999 || card.face.title.Text != "Undid 12" {
+		t.Fatalf("at rest the card holds %d faces, the last %v solid, reading %q", card.faces, card.face.alpha(), card.face.title.Text)
 	}
 }
