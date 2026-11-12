@@ -25,8 +25,7 @@ import (
 func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreen(size, root)
-	t.Cleanup(w.Close)
-	t.Cleanup(func() { Check(t, w) })
+	closeAtEnd(t, w)
 	return w
 }
 
@@ -36,9 +35,18 @@ func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 func NewWith(t testing.TB, o gunim.WindowOptions) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreenWith(o)
-	t.Cleanup(w.Close)
-	t.Cleanup(func() { Check(t, w) })
+	closeAtEnd(t, w)
 	return w
+}
+
+// closeAtEnd checks and closes w as t ends, and then lets go of it, as testing keeps a finished test's cleanups
+// until the package ends.
+func closeAtEnd(t testing.TB, w *gunim.Window) {
+	t.Cleanup(func() {
+		Check(t, w)
+		w.Close()
+		w = nil
+	})
 }
 
 // Check fails t for each stray w has kept since it was last asked. A
