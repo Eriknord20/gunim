@@ -49,8 +49,8 @@ func TestTheWheelTurnsTheKnobUnderThePointer(t *testing.T) {
 	}
 }
 
-// A wheel event turns the knob by how far the wheel turned: three notches three times one, a touchpad's small steps
-// as far as the same distance on a wheel, and a quarter as far with Shift.
+// A wheel event turns the knob by how far the wheel turned: three notches three times one, and a quarter as far with
+// Shift. A touchpad's small steps turn it as a drag of the same length does.
 func TestTheWheelTurnsByHowFarItTurned(t *testing.T) {
 	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
 	for _, c := range []struct {
@@ -61,7 +61,7 @@ func TestTheWheelTurnsByHowFarItTurned(t *testing.T) {
 	}{
 		{"one notch", []float32{1}, 0, 0.025},
 		{"three notches at once", []float32{3}, 0, 0.075},
-		{"a touchpad's ten tenths", []float32{0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}, 0, 0.025},
+		{"a touchpad's ten tenths, 10 px", []float32{0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1}, 0, 10.0 / 180},
 		{"one notch with Shift", []float32{1}, input.ModShift, 0.025 / 4},
 		{"two notches down", []float32{-2}, 0, -0.05},
 	} {
@@ -79,7 +79,8 @@ func TestTheWheelTurnsByHowFarItTurned(t *testing.T) {
 	}
 }
 
-// A stepped knob takes a step for each notch, and a touchpad's fractions add up to one.
+// A stepped knob takes a step for each notch, and a touchpad takes one for as far as a drag takes one: a third of
+// 180 px for three steps.
 func TestTheWheelStepsASteppedKnob(t *testing.T) {
 	slope := plug.Param{ID: 1, Name: "Slope", Min: 12, Max: 48, Steps: 3}
 	h := &host{values: map[uint32]float64{1: 12}}
@@ -89,11 +90,11 @@ func TestTheWheelStepsASteppedKnob(t *testing.T) {
 	if h.values[1] != 24 {
 		t.Fatalf("a notch up turned the slope to %v, want 24", h.values[1])
 	}
-	for range 4 {
-		wheelAt(w, geom.Pt(KnobW/2, 20), 0.25, 0)
+	for range 61 {
+		wheelAt(w, geom.Pt(KnobW/2, 20), 0.1, 0)
 	}
 	if h.values[1] != 36 {
-		t.Errorf("four quarters of a notch turned the slope to %v, want 36", h.values[1])
+		t.Errorf("61 px of a touchpad turned the slope to %v, want 36", h.values[1])
 	}
 }
 

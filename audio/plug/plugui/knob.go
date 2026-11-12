@@ -41,6 +41,16 @@ const (
 	wheelRun   = 500 * time.Millisecond
 )
 
+// dragPx is how far a drag moves the pointer to turn a knob all the way round, in logical pixels.
+const dragPx = 180
+
+// The touchpad: how far the fingers move for each notch it gives, in logical pixels, as the desktop counts them on
+// macOS; and how far round one run of it turns a knob at most, so the glide after the fingers lift stops short.
+const (
+	touchpadPx  = 10
+	touchpadRun = 0.5
+)
+
 // knobFollows is how soon a value set after the last one makes the needle follow at once rather than glide, as an
 // automation ramp moving it on every frame.
 const knobFollows = 60 * time.Millisecond
@@ -58,7 +68,8 @@ const (
 // ten times finer with Shift; the arrow keys step it; a double click
 // sets it back to its default. The wheel turns the knob under the
 // pointer, 2.5% of the way round a notch, a quarter of that with Shift.
-// Inside a view that the wheel would scroll, the knob takes the wheel
+// A touchpad turns it as a drag of the same length, at most half way
+// round a swipe. Ctrl or Super with the wheel passes it by. Inside a view that the wheel would scroll, the knob takes the wheel
 // only while it has the keyboard, and leaves it to the view otherwise.
 // Each turn is one gesture, wheel notches in a run included,
 // one step to undo. A run ends half a second after its last notch, or
@@ -105,10 +116,11 @@ type Knob struct {
 	glide anim.Spring
 	aimed time.Duration
 	// wheeling says a turn by the wheel is under way, until wheelStop's timer or wheelClose, as the window closes,
-	// ends it; wheelRest is the part of a step the wheel has turned a stepped knob so far.
+	// ends it; wheelRest is the part of a step the wheel has turned a stepped knob so far, and wheelFrom how far round
+	// the knob was as the run began.
 	wheeling              bool
 	wheelStop, wheelClose func()
-	wheelRest             float64
+	wheelRest, wheelFrom  float64
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -545,7 +557,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		if !k.held {
 			return false
 		}
-		px := float32(180)
+		px := float32(dragPx)
 		if e.Mods.Has(input.ModShift) {
 			px *= 10
 		}
@@ -559,11 +571,16 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
 	case input.Scroll:
-		n := wheelNotches(e)
-		if e.Touch || n == 0 || k.held || !k.focused && u.ScrollsAround(k, e.Delta) {
+		// Ctrl or Super with the wheel is the window's, as its zoom: the knob leaves it be.
+		if e.Touch || k.held || e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModSuper) ||
+			!k.focused && u.ScrollsAround(k, e.Delta) {
 			return false
 		}
-		k.wheel(n, u)
+		by, steps, pad := wheelTurn(e, k.p.Steps)
+		if by == 0 {
+			return false
+		}
+		k.wheel(by, steps, pad, u)
 	case input.KeyPress:
 		// Ctrl, Alt or Super with a key is the window's shortcut, such as
 		// Alt+Left to the loop's start: the knob leaves it be.
@@ -592,9 +609,10 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
-// wheelNotches returns how many notches e turned the wheel up, a fraction from a touchpad, and a quarter as many with
-// Shift.
-func wheelNotches(e input.Scroll) float64 {
+// wheelTurn returns how far e turns a knob of steps steps up, of the way round, and how many steps for a stepped one;
+// pad says e came from a touchpad. A wheel turns 2.5% of the way a notch, a quarter of that with Shift. A touchpad
+// turns as far as a drag of the same length, ten times finer with Shift.
+func wheelTurn(e input.Scroll, steps int) (by, stepsBy float64, pad bool) {
 	n := float64(e.Notches.Y)
 	if n == 0 && e.Mods.Has(input.ModShift) {
 		// Some systems turn the wheel with Shift held into a sideways one
@@ -603,21 +621,37 @@ func wheelNotches(e input.Scroll) float64 {
 	if n == 0 {
 		n = float64(e.Delta.Y) / 40
 	}
-	if e.Mods.Has(input.ModShift) {
+	shift := e.Mods.Has(input.ModShift)
+	// A wheel turns in whole notches, and a touchpad in fractions of one
+	if pad = n != math.Round(n); pad {
+		px := float64(dragPx)
+		if shift {
+			px *= 10
+		}
+		by = n * touchpadPx / px
+		return by, by * float64(steps), true
+	}
+	if shift {
 		n /= 4
 	}
-	return n
+	return n * wheelNotch, n, false
 }
 
-// wheel turns the knob by n notches of the wheel, in the gesture of the wheel's run, which ends wheelRun after the
-// last notch.
-func (k *Knob) wheel(n float64, u *gunim.UI) {
-	to := k.turnOf(k.v) + n*wheelNotch
+// wheel turns the knob by of the way round, or a stepped one by steps, in the gesture of the wheel's run, which ends
+// wheelRun after the last notch. A run of a touchpad, pad, turns it at most touchpadRun from where the run began.
+func (k *Knob) wheel(by, steps float64, pad bool, u *gunim.UI) {
+	if !k.wheeling {
+		k.wheelFrom = k.turnOf(k.v)
+	}
+	to := k.turnOf(k.v) + by
 	if k.p.Steps > 0 {
-		k.wheelRest += n
+		k.wheelRest += steps
 		whole := math.Trunc(k.wheelRest)
 		k.wheelRest -= whole
 		to = k.turnOf(k.v) + whole*k.stepSize()
+	}
+	if pad {
+		to = min(max(to, k.wheelFrom-touchpadRun), k.wheelFrom+touchpadRun)
 	}
 	v := k.p.Clamp(k.valueAt(to))
 	if !k.wheeling && v != k.v {
