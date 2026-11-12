@@ -321,20 +321,7 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
 			paint.Shadow{Blur: 12 * hover, Color: paint.Faded(accent, 0.35*hover)})
 	}
-	// The turn runs three quarters round, clockwise from bottom left.
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	arc := func(t0, t1 float64, w float32, col color.NRGBA) {
-		if t1 < t0 {
-			t0, t1 = t1, t0
-		}
-		n := max(int((t1-t0)*32), 1)
-		for i := range n {
-			a0 := from + sweep*(t0+(t1-t0)*float64(i)/float64(n))
-			a1 := from + sweep*(t0+(t1-t0)*float64(i+1)/float64(n))
-			audioui.Segment(p, geom.Pt(c.X+r*float32(math.Cos(a0)), c.Y+r*float32(math.Sin(a0))),
-				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
-		}
-	}
+	arc := func(t0, t1 float64, w float32, col color.NRGBA) { arcRibbon(p, c, r, t0, t1, w, col) }
 	arc(0, 1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	t := k.needle()
 	zero := 0.0
@@ -352,7 +339,7 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
 		paint.Shadow{Offset: geom.Pt(0, 2), Blur: 4, Color: color.NRGBA{A: 0x90}})
 	capRing(p, c, r, k.ring.Value(), th)
-	a := from + sweep*t
+	a := knobFrom + knobSweep*t
 	audioui.Segment(p, geom.Pt(c.X+(r-13)*float32(math.Cos(a)), c.Y+(r-13)*float32(math.Sin(a))),
 		geom.Pt(c.X+(r-7)*float32(math.Cos(a)), c.Y+(r-7)*float32(math.Sin(a))), 2, ink)
 	name := audioui.Shaped(k.p.Name, text, false, false)
@@ -363,6 +350,48 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		col = accent
 	}
 	val.Paint(p, geom.Pt((box.W-val.Advance)/2, c.Y+r+4+name.Height()), col)
+}
+
+// The turn runs three quarters round, clockwise from bottom left: from where it starts, in radians, and how far.
+const knobFrom, knobSweep = 0.75 * math.Pi, 1.5 * math.Pi
+
+// arcRibbon draws the arc of a knob's turn from t0 to t1, of radius rad about c, w wide in col, as one ribbon with
+// round ends.
+func arcRibbon(p *paint.Painter, c geom.Point, rad float32, t0, t1 float64, w float32, col color.NRGBA) {
+	if t1 < t0 {
+		t0, t1 = t1, t0
+	}
+	length := float64(rad) * knobSweep * (t1 - t0)
+	if length < 0.01 {
+		return
+	}
+	// About one point per 3 px, and two more at each end to round it
+	const capPts = 2
+	n := max(int(math.Ceil(length/3)), 1)
+	var buf [64]paint.RibbonPoint
+	pts := buf[:0]
+	h := w / 2
+	at := func(t float64) (geom.Point, geom.Point) {
+		a := knobFrom + knobSweep*t
+		sin, cos := math.Sincos(a)
+		return geom.Pt(c.X+rad*float32(cos), c.Y+rad*float32(sin)), geom.Pt(-float32(sin), float32(cos))
+	}
+	round := func(end, dir geom.Point, out float32, from, to int, step int) {
+		for j := from; j != to; j += step {
+			th := float64(j) / capPts * math.Pi / 2
+			d := h * float32(math.Sin(th)) * out
+			pts = append(pts, paint.RibbonPoint{At: end.Add(dir.Mul(d)), Width: w * float32(math.Cos(th)), Color: col})
+		}
+	}
+	start, dir := at(t0)
+	round(start, dir, -1, capPts, 0, -1)
+	for i := range n + 1 {
+		pt, _ := at(t0 + (t1-t0)*float64(i)/float64(n))
+		pts = append(pts, paint.RibbonPoint{At: pt, Width: w, Color: col})
+	}
+	end, dir := at(t1)
+	round(end, dir, 1, 1, capPts+1, 1)
+	p.Ribbon(pts)
 }
 
 // capRing draws the focus ring of a knob of radius r about c, at strength t, between its cap and its arc.
@@ -377,10 +406,8 @@ func capRing(p *paint.Painter, c geom.Point, r, t float32, th *theme.Live) {
 // value as the control reaches, or all round where
 // control sets the value; and a dot on the arc at the value heard, all in ring.
 func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, ring color.NRGBA) {
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	out := r + 5
 	at := func(t float64, rad float32) geom.Point {
-		a := from + sweep*t
+		a := knobFrom + knobSweep*t
 		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
 	}
 	n := k.normalAt(k.needle())
@@ -388,13 +415,8 @@ func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point
 	if m.Sets {
 		t0, t1, a = 0, 1, 0.35
 	}
-	if t1 < t0 {
-		t0, t1 = t1, t0
-	}
-	if n := int((t1 - t0) * 40); n > 0 {
-		for i := range n {
-			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, paint.Faded(ring, a))
-		}
+	if math.Abs(t1-t0) >= 1.0/40 {
+		arcRibbon(p, c, r+5, t0, t1, 1.5, paint.Faded(ring, a))
 	}
 	dot := at(k.turnOf(m.Now), r)
 	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: paint.Faded(ring, 0.6)})

@@ -13,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
 )
 
 // host is a host for tests, which notes the gestures it is sent.
@@ -337,5 +338,29 @@ func TestASectionsSwitchSaysItsTitleAsWritten(t *testing.T) {
 		if got := s.Switch.Access().Name; got != title {
 			t.Errorf("the switch of %q is named %q, want the title as written", title, got)
 		}
+	}
+}
+
+// A knob draws each arc, its groove, its fill and a control's reach, as one ribbon: no chain of short rotated bars.
+func TestAKnobDrawsItsArcsAsRibbons(t *testing.T) {
+	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
+	h := &menuHost{host: host{values: map[uint32]float64{1: 0.5}},
+		mod: map[uint32]plug.Modulation{1: {Low: -0.2, High: 0.2, Now: 0.6}}}
+	k := NewKnob(h, mix)
+	k.Layout(gunim.Tight(geom.Sz(KnobW, KnobH)), gunim.Frame{}, gunim.Children{})
+	var p paint.Painter
+	k.Paint(&p, gunim.Frame{Scale: 1}, geom.Sz(KnobW, KnobH), gunim.Children{})
+	ribbons, rrects := 0, 0
+	for _, op := range p.Ops() {
+		switch op.(type) {
+		case *paint.RibbonOp:
+			ribbons++
+		case *paint.RRectOp:
+			rrects++
+		}
+	}
+	// The groove, the fill and the reach; the needle, the cap and the dot heard are the rounded rects.
+	if ribbons != 3 || rrects > 3 {
+		t.Errorf("the knob draws %d ribbons and %d rounded rects, want 3 ribbons and 3 rects at most", ribbons, rrects)
 	}
 }

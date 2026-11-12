@@ -2,7 +2,6 @@ package plugui
 
 import (
 	"image/color"
-	"math"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -121,18 +120,8 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
 			paint.Shadow{Blur: 12 + 8*glow, Color: paint.Faded(accent, 0.35*hover+0.6*glow)})
 	}
-	// The arc, as a knob's, three quarters round from bottom left: its
-	// groove, and how far the task has got.
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	arc := func(t1 float64, w float32, col color.NRGBA) {
-		n := max(int(t1*32), 1)
-		for i := range n {
-			a0 := from + sweep*t1*float64(i)/float64(n)
-			a1 := from + sweep*t1*float64(i+1)/float64(n)
-			audioui.Segment(p, geom.Pt(c.X+r*float32(math.Cos(a0)), c.Y+r*float32(math.Sin(a0))),
-				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
-		}
-	}
+	// The arc, as a knob's: its groove, and how far the task has got.
+	arc := func(t1 float64, w float32, col color.NRGBA) { arcRibbon(p, c, r, 0, t1, w, col) }
 	arc(1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	if t := float64(min(max(d.progress.Value(), 0), 1)); t > 0.005 {
 		arc(t, 3.5, accent)
