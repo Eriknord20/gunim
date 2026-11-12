@@ -133,3 +133,33 @@ func TestAToastsIconSitsBesideTheTitlesFirstLine(t *testing.T) {
 		t.Fatalf("beside a wrapped title the icon's top is at %v, beside one line at %v, want the same", a, b)
 	}
 }
+
+func TestAWarningToastsIconFadesInWhole(t *testing.T) {
+	_, masks := showToast(t, Toast{Title: "Low", Kind: ToastWarning}, 3)
+	ms := masks()
+	if len(ms) != 1 {
+		t.Fatalf("arriving, the toast drew %d icons", len(ms))
+	}
+	if s := strokeOf(t, ms[0]); !s.Settled() {
+		t.Fatalf("three frames in, the warning sign is drawn %v of the way, want whole", s.Progress)
+	}
+}
+
+func TestAWarningToastHasAnAmberEdge(t *testing.T) {
+	amber := ToastWarningInk.Default()
+	edged := func(kind ToastKind) bool {
+		showToast(t, Toast{Title: "Low", Kind: kind}, 60)
+		for _, op := range lastOps {
+			if o, ok := op.(*paint.RRectOp); ok && o.Fill.Solid == amber && o.Rect.Max.X-o.Rect.Min.X == toastEdge {
+				return true
+			}
+		}
+		return false
+	}
+	if !edged(ToastWarning) {
+		t.Fatal("a warning toast drew no amber edge")
+	}
+	if edged(ToastInfo) {
+		t.Fatal("an info toast drew an amber edge")
+	}
+}

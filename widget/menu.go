@@ -817,6 +817,10 @@ func (m *Menu) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom
 	}
 	m.row, m.pad = MenuRowHeight.Get(th), MenuPadding.Get(th)
 	m.gut, m.iconSpace = m.gutter(), m.iconRoom(th)
+	if m.parent != nil && m.list.ticks {
+		// A submenu with ticks keeps its parent's room between tick and text
+		m.iconSpace = max(m.iconSpace, m.parent.iconSpace)
+	}
 	w := max(m.MinWidth, m.gut+m.iconSpace+m.measure(faceIn(Font, th), TextSize.Get(th))+2*MenuRowPadding.Get(th))
 	y := m.content()
 	h := y + 2*m.pad
