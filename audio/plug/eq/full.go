@@ -65,6 +65,8 @@ type full struct {
 	// matchAt, rowAt and barAt are where the match button, the band's
 	// row and the bar along the top are.
 	matchAt, rowAt, barAt geom.Rect
+	// Room lays the view out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 }
 
 // matchWords are the match button's words at rest, matchShort its
@@ -286,9 +288,10 @@ func (v *full) done(words string, u *gunim.UI) {
 }
 
 // Step implements [gunim.Animator]: the shimmer runs along the bar
-// while the track is read.
+// while the track is read, and the view scrolls.
 func (v *full) Step(dt time.Duration) bool {
 	moving := v.Group.Step(dt)
+	moving = v.Room.Step(dt) || moving
 	if v.listening {
 		v.shimmer += float32(dt.Seconds()) * 0.8
 		v.shimmer -= float32(int(v.shimmer))
@@ -357,9 +360,9 @@ const (
 	rowFoot = 30
 )
 
-// Layout implements [gunim.Node]. Under its least size the view lays out at that size.
+// Layout implements [gunim.Node], at least at the view's least size.
 func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
-	v.size = plug.AtLeast(c.Max, Descriptor.ViewMinSize)
+	v.size = v.Lay(c.Max, Descriptor.ViewMinSize)
 	size := v.size
 	// The bar along the top, a pane of glass over the graph, in from its
 	// edges: on it the switch at the left, the knobs at the right, and
@@ -462,11 +465,11 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 
 // Paint implements [gunim.Node]: the bar along the top, the graph and
 // its row faded out as the list fades in, and the bar of how far the
-// track is read under the match button; clipped to the box where the
-// view was laid out larger.
-func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	defer plug.ClipTo(p, box, v.size)()
-	box = v.size
+// track is read under the match button; clipped to the view's box and
+// scrolled where it was laid out larger.
+func (v *full) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer v.Room.Paint(p, f)()
+	box := v.size
 	th := f.Theme
 	listed := min(max(v.listed.Value(), 0), 1)
 	fade := func(i int, alpha float32, dy float32) {

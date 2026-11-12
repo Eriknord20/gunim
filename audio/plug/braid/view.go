@@ -250,6 +250,8 @@ type panel struct {
 	lay  layout
 	pts  []paint.RibbonPoint
 	size geom.Size
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 }
 
 // The panel's channels' names, and their IDs by channel.
@@ -353,10 +355,9 @@ const (
 
 // Layout implements [gunim.Node]: the meters at either end, the stages
 // spread between them, the lanes under the row of controls, in the
-// middle of a taller panel. Under its least size the panel lays out at
-// that size.
+// middle of a taller panel, laid out at least at its least size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	p.size = plug.AtLeast(c.Max, Descriptor.ViewMinSize)
+	p.size = p.Lay(c.Max, Descriptor.ViewMinSize)
 	l := &p.lay
 	// The braid stands in the middle of a panel taller than it needs.
 	top := max((p.size.H-braidH)/2, 0) + rowTop
@@ -387,10 +388,10 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 }
 
 // Paint implements [gunim.Node]: the meters, In and Out, under their
-// names; the ribbons; the controls over them; clipped to the box where
-// the panel was laid out larger.
-func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	defer plug.ClipTo(pt, box, p.size)()
+// names; the ribbons; the controls over them; clipped to the panel's box
+// and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	th := f.Theme
 	ink := widget.Ink.Get(th)
 	l := p.lay
@@ -413,14 +414,15 @@ func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 }
 
 // Step implements [gunim.Animator]: the ribbons glide, the meters
-// move, and the light flows while sound comes in.
+// move, the light flows while sound comes in, and the panel scrolls.
 func (p *panel) Step(dt time.Duration) bool {
 	moving := p.Group.Step(dt)
+	scrolling := p.Room.Step(dt)
 	in, out := p.in.step(dt), p.out.step(dt)
 	if p.in.heard {
 		p.flow += dt.Seconds()
 	}
-	return moving || in || out
+	return moving || scrolling || in || out
 }
 
 // Follow implements [plug.Follower]: the controls glide to a value set

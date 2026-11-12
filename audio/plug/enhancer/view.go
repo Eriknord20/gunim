@@ -815,8 +815,8 @@ type panel struct {
 	// touched is the band last touched, which the curve shows while the
 	// pointer is on no band.
 	touched int
-	// laid is the size the panel was laid out at: its room, or its least size where the room is smaller.
-	laid geom.Size
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 }
 
 func newPanel(h plug.Host) *panel {
@@ -876,14 +876,12 @@ func (p *panel) Children() []gunim.Node {
 // panelInset is how far in from the panel's edges the glass stands.
 const panelInset = 16
 
-// Layout implements [gunim.Node]: the display fills the panel; the
-// sections along its foot; the output at its top left, and the curve
-// at its top right, beside the tuner; and the bars between them and the
-// sections.
-// Under its least size the panel lays out at that size.
+// Layout implements [gunim.Node]: the display fills the panel, laid
+// out at least at its least size; the sections along its foot; the
+// output at its top left, and the curve at its top right, beside the
+// tuner; and the bars between them and the sections.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := plug.AtLeast(c.Max, Descriptor.ViewMinSize)
-	p.laid = size
+	size := p.Lay(c.Max, Descriptor.ViewMinSize)
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	top := plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
@@ -905,10 +903,9 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	return c.Max
 }
 
-// Paint implements [gunim.Node].
-// It clips to its box where it was laid out larger.
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	defer plug.ClipTo(pt, box, p.laid)()
+// Paint implements [gunim.Node], clipped to the panel's box and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}

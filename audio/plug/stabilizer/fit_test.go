@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/plugtest"
 	"github.com/marrasen/gunim/geom"
 )
@@ -51,4 +52,25 @@ func TestSheet(t *testing.T) {
 		sizes = append(sizes, geom.Sz(s[0], s[1]))
 	}
 	plugtest.Shots(t, func() gunim.Node { return showing(t) }, Descriptor, sizes, dir)
+}
+
+// The Full view, which a host shows in a window, lays out at least at the least size; the Panel view lays out in its
+// box.
+func TestOnlyTheWindowViewKeepsTheLeastSize(t *testing.T) {
+	h := plugtest.NewHost(&Descriptor)
+	pl, ok := Descriptor.New(h).(plug.Viewer)
+	if !ok {
+		t.Fatal("the plugin has no views")
+	}
+	box := geom.Sz(400, 300)
+	for s, want := range map[plug.Size]geom.Size{plug.Panel: box, plug.Full: Descriptor.ViewMinSize} {
+		p, ok := pl.View(s, h).(*panel)
+		if !ok {
+			t.Fatalf("the view at size %d is of another type", s)
+		}
+		plugtest.Misfits(t, p, box, plugtest.Fit{})
+		if got := p.Laid(); got != want {
+			t.Errorf("in %v, the view at size %d laid out at %v, want %v", box, s, got, want)
+		}
+	}
 }

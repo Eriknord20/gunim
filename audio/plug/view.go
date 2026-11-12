@@ -7,7 +7,6 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
-	"github.com/marrasen/gunim/paint"
 )
 
 // ErrNoEditor is the error, wrapped, of an editor opened on a plugin
@@ -44,27 +43,18 @@ type Viewer interface {
 	View(s Size, h Host) gunim.Node
 }
 
-// MinSizer is a view whose least size changes with its state, as a section folded out. A host asks as it shows the
-// view and each time it lays the view out, and keeps the view's window no smaller.
-type MinSizer interface {
+// ViewMinSizer is a view whose least size changes with its state, as a section folded out. A host asks as it shows
+// the view and each time it lays the view out, and keeps the view's window no smaller.
+type ViewMinSizer interface {
 	gunim.Node
-	// MinViewSize returns the view's least size now, in logical pixels, or zero for [Descriptor.ViewMinSize].
-	MinViewSize() geom.Size
+	// ViewMinSize returns the view's least size now, in logical pixels, or zero for [Descriptor.ViewMinSize].
+	ViewMinSize() geom.Size
 }
 
-// AtLeast returns the size a view lays itself out in given room: room, grown to least on each side where it is
-// smaller. A view laid out larger than its room paints through [ClipTo].
-func AtLeast(room, least geom.Size) geom.Size {
-	return geom.Sz(max(room.W, least.W), max(room.H, least.H))
-}
-
-// ClipTo clips what a view paints to its box where it was laid out larger, at laid, and returns the function that
-// ends the clip.
-func ClipTo(p *paint.Painter, box, laid geom.Size) func() {
-	if laid.W <= box.W && laid.H <= box.H {
-		return func() {}
-	}
-	return p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Clip: true, Opacity: 1})
+// AtLeast returns the size a view lays itself out at in a box: box, grown to least on each side where it is
+// smaller. [Room] lays a view out so.
+func AtLeast(box, least geom.Size) geom.Size {
+	return geom.Sz(max(box.W, least.W), max(box.H, least.H))
 }
 
 // Follower is a view that follows its parameters as they change by

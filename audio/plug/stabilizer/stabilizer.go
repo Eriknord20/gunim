@@ -220,8 +220,10 @@ func (p *plugin) View(s plug.Size, h plug.Host) gunim.Node {
 	switch s {
 	case plug.Chip:
 		return newChip(h)
-	case plug.Panel, plug.Full:
-		return newPanel(h)
+	case plug.Panel:
+		return newPanel(h, false)
+	case plug.Full:
+		return newPanel(h, true)
 	default:
 		return nil
 	}

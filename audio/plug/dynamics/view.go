@@ -180,8 +180,8 @@ type panel struct {
 	// metersAt is where the meters' pane is.
 	tuner    *plugui.Tuner
 	metersAt geom.Rect
-	// laid is the size the panel was laid out at: its room, or its least size where the room is smaller.
-	laid geom.Size
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 	// key is Key's bolt, at the right of the head of the sidechain's section, sections[keySection].
 	key *keyBolt
 }
@@ -258,11 +258,9 @@ func (p *panel) Children() []gunim.Node {
 	return append(kids, p.key, p.zero, p.tuner.Button, p.tuner.Card)
 }
 
-// Layout implements [gunim.Node]. Under its least size the panel lays
-// out at that size.
+// Layout implements [gunim.Node], at least at the panel's least size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := plug.AtLeast(c.Max, Descriptor.ViewMinSize)
-	p.laid = size
+	size := p.Lay(c.Max, Descriptor.ViewMinSize)
 	// The sound's history fills the panel; over it, on glass, the
 	// sections along the foot, in rows as many as fit, each row centred,
 	// and the meters side by side above them, centred.
@@ -311,10 +309,10 @@ const (
 )
 
 // Paint implements [gunim.Node]: the history, then on it the meters'
-// pane, the meters, the sections and the tuner, clipped to the box
-// where the panel was laid out larger.
-func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	defer plug.ClipTo(pt, box, p.laid)()
+// pane, the meters, the sections and the tuner, clipped to the panel's
+// box and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	kids.At(0).Paint(pt)
 	plugui.PaintGlass(pt, f.Theme, p.metersAt, widget.CardRadius.Get(f.Theme)+4)
 	for i := 1; i < kids.Len(); i++ {

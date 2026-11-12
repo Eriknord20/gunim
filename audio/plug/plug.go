@@ -127,12 +127,14 @@ type Descriptor struct {
 	// reads. A host offers them where it shows the plugin, and runs
 	// them through its [Actor].
 	Actions []Action
-	// ViewSize is the size, in logical pixels, that the view a host shows in a window of its own opens at: the
-	// plugin's [Full] view, or its [Panel] view where it has no Full one. It leaves out what the host draws round the
-	// view, as a title bar. Zero leaves the size to the host.
+	// ViewSize is the size, in logical pixels, that the plugin's window view opens at in a window of its own, leaving
+	// out what the host draws round it, as a title bar. The window view is what [Viewer.View] gives for [Full], or for
+	// [Panel] where it gives nil for Full. Zero leaves the size to the host.
 	ViewSize geom.Size
-	// ViewMinSize is the least size of that view, the smallest at which it looks right: a host keeps the window no
-	// smaller. Zero leaves it to the host. A view whose least size changes with its state is a [MinSizer] too.
+	// ViewMinSize is the window view's least size, the smallest at which it looks right. A host keeps the view's
+	// window no smaller. The window view lays itself out at least at this size wherever it shows, and scrolls in a
+	// smaller box; the plugin's other views do not. Zero leaves the size to the host. A view whose least size changes
+	// with its state is a [ViewMinSizer] too.
 	ViewMinSize geom.Size
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
