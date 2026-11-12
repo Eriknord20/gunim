@@ -17,6 +17,7 @@ type pagesState struct{ Page int }
 // shown stays the same node.
 func TestPagesFadeOneOutAsTheNextComesIn(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(400, 300), nil)
+	w.PaintWhenLooked(false)
 	labels := []*widget.Label{widget.NewLabel("one"), widget.NewLabel("two")}
 	var pages *widget.Pages
 	var ui *gunim.UI

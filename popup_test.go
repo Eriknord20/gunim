@@ -693,3 +693,17 @@ func TestAPopupSlidInsideItsWindowIsToldTheRoomFromWhereItAsked(t *testing.T) {
 		t.Fatalf("the room is %v left and %v right, want 710 and 890, from x 710", m.room.Left, m.room.Right)
 	}
 }
+
+func TestAPopupMovedWhereItIsOwesNoFrame(t *testing.T) {
+	w, _, _, pop := openMenu(t, nil)
+	pop.Move(geom.Rc(0, 50, 100, 0))
+	run(w, 1)
+	pop.Move(geom.Rc(0, 50, 100, 0))
+	if w.ui.invalid {
+		t.Fatal("a popup moved to where it is has its window draw again")
+	}
+	pop.Move(geom.Rc(0, 60, 100, 0))
+	if !w.ui.invalid {
+		t.Fatal("a popup moved elsewhere has its window draw nothing")
+	}
+}

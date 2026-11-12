@@ -405,6 +405,11 @@ func (w *Window) followClock() {
 		return
 	}
 	u.onHeld, u.stepped, u.byFrames = false, u.wasStepped, u.wasByFrames
+	if !u.lazy {
+		// A frame a held step laid out and left unpainted is owed no more: the next frame paints, and painting
+		// the owed one before it, unasked of the driver, would record that next frame into ops still read.
+		u.owed, u.owedFrame = false, framePaint{}
+	}
 	u.moveTime(time.Now())
 	for _, t := range u.timers {
 		t.held = false
@@ -449,6 +454,9 @@ func (w *Window) heldFrame() bool {
 	if !w.free() || w.waitsForPopups() {
 		return false
 	}
+	// From here the window builds a frame that paints, on the room found above.
+	w.building = true
+	defer func() { w.building = false }()
 	if st := w.step; st != nil {
 		w.step = nil
 		w.applyPending()

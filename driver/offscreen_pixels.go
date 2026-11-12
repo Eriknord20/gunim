@@ -56,7 +56,7 @@ var drawOps = func([]paint.Op, int, int, float32, color.NRGBA) (*image.RGBA, err
 func (w *OffscreenWindow) Pixels() (*image.RGBA, error) {
 	w.looked()
 	w.mu.Lock()
-	ops, size, scale, zoom, under := w.ops, w.drawnSize, w.drawnScale, w.drawnZoom, w.under
+	ops, size, scale, zoom, under := w.keptOps(), w.drawnSize, w.drawnScale, w.drawnZoom, w.under
 	w.mu.Unlock()
 	if ops == nil {
 		return nil, errors.New("driver: the window has drawn no frame")

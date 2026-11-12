@@ -48,6 +48,7 @@ func newHeroStage(t *testing.T) *heroStage {
 	thumb.Fit = FitFill
 	s.thumb = NewHero("pic", thumb)
 	s.w = gunimtest.New(t, geom.Sz(400, 400), nil)
+	s.w.PaintWhenLooked(false)
 	gunim.RegisterView(s.w, "grid", func(struct{}) gunim.Node {
 		return &spot2{at: geom.Rc(10, 10, 40, 30), child: s.thumb}
 	}, nil)
@@ -494,6 +495,7 @@ func TestAnAnchorHeroStaysPutAndTakesItsCounterpartBack(t *testing.T) {
 	thumbPic, bigPic := picture(10, 10), picture(10, 10)
 	var thumb *Hero
 	w := gunimtest.New(t, geom.Sz(400, 400), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "grid", func(struct{}) gunim.Node {
 		img := NewImage(thumbPic)
 		img.Fit = FitFill
