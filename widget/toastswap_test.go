@@ -316,28 +316,67 @@ func TestAClickDuringTheHandoverReachesOnlyTheNewToast(t *testing.T) {
 	})
 	frames(40, func() {})
 	card := ts.cards[0]
-	link := boundsOf(on, card.face.action)[0].Center()
+	old := card.face
 	// A press on the old toast, held as the new one takes its place.
 	w.Input(input.PointerMove{Pos: geom.Pt(40, 20), Time: time.Now()})
 	w.Input(input.PointerDown{Pos: geom.Pt(40, 20), Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
 	on(func(u *gunim.UI) {
-		ts.Show(Toast{Title: "Exported song.wav", Key: "k", Buttons: []ToastButton{{Label: "Show", OnClick: func(bool, *gunim.UI) gunim.Intent { return undone{2} }}}}, u)
+		ts.Show(Toast{Title: "Removed Pad", Key: "k", Action: "Undo", OnClick: Sends(undone{2})}, u)
 	})
 	w.Input(input.PointerUp{Pos: geom.Pt(40, 20), Button: input.ButtonPrimary, Time: time.Now()})
 	frames(2, func() {})
-	// Where the old toast's Undo still fades.
+	if got := sent(w); len(got) != 0 || ts.Len() != 1 {
+		t.Fatalf("a press held through the handover sent %v and left %d toasts", got, ts.Len())
+	}
+	// With the old toast's Undo still fading, a click on the new toast's Undo, where it is drawn part way in, is
+	// the new toast's.
+	if old.alpha() < 0.2 || card.faces != 2 {
+		t.Fatalf("the old toast is %v solid on a card of %d faces: the handover is over", old.alpha(), card.faces)
+	}
+	link := boundsOf(on, card.face.action)[0].Center()
 	click(w, link.X, link.Y)
 	frames(2, func() {})
-	if got := sent(w); len(got) != 0 || ts.Len() != 1 {
-		t.Fatalf("mid handover the clicks sent %v and left %d toasts", got, ts.Len())
-	}
-	// The new toast's button answers once the card has grown to hold it.
-	frames(40, func() {})
-	show := boundsOf(on, card.face.buttons.Children()[0])[0].Center()
-	click(w, show.X, show.Y)
-	frames(2, func() {})
 	if got := sent(w); len(got) != 1 || got[0] != (undone{2}) || ts.Len() != 0 {
-		t.Fatalf("a click on the new toast's button sent %v and left %d toasts", got, ts.Len())
+		t.Fatalf("mid handover a click on Undo sent %v and left %d toasts", got, ts.Len())
+	}
+}
+
+// The pointer that makes a toast grow keeps its button under it: the button stays at the card's foot on every
+// frame, as the card glides taller, and a click begun before the growth lands.
+func TestAToastsButtonKeepsToTheCardsFootAsItGrows(t *testing.T) {
+	ts := &Toasts{}
+	w, on, frames := toastFrame(t, ts)
+	body := strings.Repeat("A sentence of the long body. ", 12)
+	clicked := 0
+	on(func(u *gunim.UI) {
+		ts.Show(Toast{Title: "Could not make the folder", Body: body, Kind: ToastError,
+			Buttons: []ToastButton{{Label: "Try again", OnClick: func(bool, *gunim.UI) gunim.Intent { clicked++; return nil }}}}, u)
+	})
+	frames(60, func() {})
+	card := ts.cards[0]
+	button := card.face.buttons.Children()[0]
+	// How far the button's foot is from the card's.
+	gap := func() float32 {
+		r := boundsOf(on, card, button)
+		return r[0].Max.Y - r[1].Max.Y
+	}
+	rest, short := gap(), card.size.H
+	at := boundsOf(on, button)[0].Center()
+	// The press moves the pointer onto the toast, which grows; the release comes a frame later.
+	w.Input(input.PointerMove{Pos: at, Time: time.Now()})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	for range 3 {
+		if g := gap(); g < rest-0.5 || g > rest+0.5 {
+			t.Fatalf("as the card grows its button is %v from the foot, was %v", g, rest)
+		}
+	}
+	if card.size.H <= short+1 || !card.h.Active() {
+		t.Fatalf("the card is %v tall, was %v, and glides %v: the body did not grow under the pointer", card.size.H, short, card.h.Active())
+	}
+	w.Input(input.PointerUp{Pos: boundsOf(on, button)[0].Center(), Button: input.ButtonPrimary, Time: time.Now()})
+	frames(2, func() {})
+	if clicked != 1 {
+		t.Fatalf("the click on the button of a toast growing under the pointer was heard %d times", clicked)
 	}
 }
 

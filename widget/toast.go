@@ -542,6 +542,15 @@ func (c *toastCard) swap(to Toast, u *gunim.UI) {
 	u.Invalidate()
 }
 
+// spare is how much taller the card is drawn than a face of the height given, and less than zero where it is
+// shorter: what the card has yet to glide.
+func (c *toastCard) spare(height float32) float32 {
+	if !c.sized {
+		return 0
+	}
+	return max(c.h.Value(), 0) - height
+}
+
 // stays reports whether the card stays until it is closed: a toast that
 // asks, or an error.
 func (c *toastCard) stays() bool { return c.face.close != nil }
@@ -691,8 +700,10 @@ type toastFace struct {
 	next *toastFace
 	// where is where the buttons sit, and beside says that is beside the words, not under them. It is worked out
 	// once for a width and text size, which decided holds.
-	where   toastButtons
-	beside  bool
+	where  toastButtons
+	beside bool
+	// cut is the part of the body that shows while the buttons under it stand higher than their place, or empty.
+	cut     geom.Rect
 	decided toastFit
 	laid    bool
 	size    geom.Size
@@ -1046,9 +1057,12 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 	type put struct {
 		k gunim.Child
 		y float32
+		// foot says it stands at the foot of the face: the tick box and the buttons under the words.
+		foot bool
 	}
 	var puts []put
-	var title geom.Size
+	var title, body geom.Size
+	var bodyAt float32
 	// line is the height of the title's first line, which the icon sits beside.
 	var line float32
 	var y float32
@@ -1069,10 +1083,13 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 			y += 4
 		}
 		s := k.Layout(kc)
-		puts = append(puts, put{k, y})
-		if n == gunim.Node(fc.title) {
+		puts = append(puts, put{k, y, n == gunim.Node(fc.buttons) || n == gunim.Node(fc.check)})
+		switch n {
+		case gunim.Node(fc.title):
 			title = s
 			line = fc.title.paragraph(f, r).LineHeight
+		case gunim.Node(fc.body):
+			body, bodyAt = s, y
 		}
 		y += s.H + 4
 	}
@@ -1085,10 +1102,22 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 	} else if beside {
 		x = left + bodyRoom + Gap.Get(th)
 	}
-	at := max(pad.Top+(block-buttons.H)/2, from)
+	// While the card glides to the face's height, what stands at the face's foot keeps to the card's foot, so a
+	// button stays under the pointer that made the toast grow. The body gives it the room, cut short meanwhile.
+	spare := fc.card.spare(pad.Top + block + pad.Bottom)
+	at := max(pad.Top+(block+spare-buttons.H)/2, from, min(pad.Top, pad.Top+(block-buttons.H)/2))
 	top := pad.Top + (block-words)/2
+	lift := max(spare, -body.H)
+	fc.cut = geom.Rect{}
 	for _, p := range puts {
-		p.k.Place(geom.Pt(left, top+p.y))
+		y := top + p.y
+		if p.foot {
+			y += lift
+			if lift < -0.5 {
+				fc.cut = geom.Rect{Min: geom.Pt(left, top+bodyAt), Max: geom.Pt(left+body.W, top+bodyAt+body.H+lift)}
+			}
+		}
+		p.k.Place(geom.Pt(left, y))
 	}
 	for k := range kids.All {
 		switch k.Node() {
@@ -1111,9 +1140,11 @@ func (fc *toastFace) words(f gunim.Frame, kids gunim.Children, w, left, room, ti
 // Paint implements [gunim.Node]. A face handing over is drawn part clear, a little above or below its place.
 func (fc *toastFace) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
 	a := fc.alpha()
-	if a <= 0.001 {
+	if a <= 0.001 && fc.next != nil {
 		return
 	}
+	// A face on its way in is painted from its first frame, clear as it is, so its words are in the window to
+	// find and to read out as soon as the toast is shown.
 	x := min(max(fc.fade.Value(), 0), 1)
 	if rolled, _ := fc.rolled(); x < 0.999 || rolled > 0.001 {
 		// Coming in, it rises to its place. Going out, it rises on from it.
@@ -1123,6 +1154,13 @@ func (fc *toastFace) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids 
 		defer p.Push(paint.Translate(geom.Pt(0, rise)))()
 	}
 	for k := range kids.All {
+		if k.Node() == gunim.Node(fc.body) && !fc.cut.Empty() {
+			// The body ends where the buttons under it stand, while they keep to the card's foot.
+			end := p.Layer(paint.LayerOpts{Bounds: fc.cut, Opacity: 1, Clip: true})
+			k.Paint(p)
+			end()
+			continue
+		}
 		k.Paint(p)
 	}
 }
