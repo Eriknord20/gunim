@@ -35,6 +35,8 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"Image.SetSource":         func() { NewImage(nil).SetSource(nil, u) },
 		"NumberField.SetValue":    func() { NewNumberField(0, 10).SetValue(5, u) },
 		"ProgressBar.SetValue":    func() { NewProgressBar().SetValue(0.5, u) },
+		"RadioGroup.SetSelected":  func() { NewRadioGroup(RadioItem{Label: "a"}, RadioItem{Label: "b"}).SetSelected(1, u) },
+		"RadioGroup.SetItems":     func() { NewRadioGroup().SetItems([]RadioItem{{Label: "a"}}, u) },
 		"Palette.SetItems":        func() { NewPalette().SetItems([]PaletteItem{{Title: "a"}}, u) },
 		"Palette.SetStatus":       func() { NewPalette().SetStatus("s", u) },
 		"Palette.SetQuery":        func() { NewPalette().SetQuery("q", u) },

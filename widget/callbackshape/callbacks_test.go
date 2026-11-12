@@ -125,6 +125,8 @@ var structs = []any{
 	(*widget.PaletteItem)(nil),
 	(*widget.PartTip)(nil),
 	(*widget.ProgressBar)(nil),
+	(*widget.RadioGroup)(nil),
+	(*widget.RadioItem)(nil),
 	(*widget.RichSpan)(nil),
 	(*widget.RichText)(nil),
 	(*widget.Scroll)(nil),

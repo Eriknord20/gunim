@@ -242,7 +242,7 @@ func buildGallery(Gallery) *gallery {
 	notes.Placeholder = "Notes: several lines, wrapped to the width"
 
 	list := widget.NewList()
-	body := &galleryPage{parts: []gunim.Node{header, icons(), moreIcons(), places(), callout, notes}, list: widget.NewScroll(list)}
+	body := &galleryPage{parts: []gunim.Node{header, icons(), moreIcons(), places(), choices(), callout, notes}, list: widget.NewScroll(list)}
 	return &gallery{page: widget.NewScroll(widget.NewPad(body)), body: body, list: list, toasts: widget.NewToasts()}
 }
 
@@ -488,4 +488,15 @@ func writeShot(ctx context.Context, c gunim.Client, path string) error {
 		return err
 	}
 	return errors.Join(png.Encode(f, img), f.Close())
+}
+
+// choices lays out a card with a radio group: one choice of three, each with a line that explains it.
+func choices() *widget.Card {
+	g := widget.NewRadioGroup(
+		widget.RadioItem{Label: "Put them back", Detail: "Your PCs get the old versions. The newer ones stay in the history."},
+		widget.RadioItem{Label: "Copy them to a folder", Detail: "Your libraries stay as they are."},
+		widget.RadioItem{Label: "Do nothing yet"},
+	)
+	g.Tooltip = "Restore"
+	return widget.NewCard(widget.Row(widget.NewSized(g, 360, 0)))
 }
