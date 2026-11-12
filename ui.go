@@ -2616,19 +2616,39 @@ func (u *UI) Remove(n Node) bool {
 // out of the tree or under a popup's window.
 func (u *UI) Bounds(n Node) (geom.Rect, bool) {
 	s, ok := u.index[n]
-	if !ok || s.drawn != u.seq || u.surfaceOf(s) != nil {
+	if !ok || s.drawn == 0 || s.drawn != u.seq || u.surfaceOf(s) != nil {
 		return geom.Rect{}, false
 	}
 	return u.rectIn(s, u.root), true
 }
 
-// Drawn reports whether the last frame drew n, in the window or in a popup's; false on a nil UI.
+// Drawn reports whether n's parent painted it in the last frame, in the window or in a popup's. A node clipped away or
+// covered by another reads true. It reads false before the window's first frame, during a frame until the node is
+// painted, and on a nil UI.
 func (u *UI) Drawn(n Node) bool {
 	if u == nil {
 		return false
 	}
 	s, ok := u.index[n]
-	return ok && s.drawn == u.seq
+	return ok && s.drawn != 0 && s.drawn == u.seq
+}
+
+// ScrollsAround reports whether a [WheelScroller] around n would scroll for a wheel turned by delta, for a node that
+// leaves the wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
+func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	if !ok {
+		return false
+	}
+	for s = s.parent; s != nil; s = s.parent {
+		if w, ok := s.node.(WheelScroller); ok && w.WouldScroll(delta) {
+			return true
+		}
+	}
+	return false
 }
 
 // Presence reports where n is in its lifecycle.

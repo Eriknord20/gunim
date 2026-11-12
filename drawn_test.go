@@ -67,3 +67,31 @@ func TestDrawnSaysWhetherTheLastFrameDrewANode(t *testing.T) {
 		t.Error("a nil UI says the leaf is drawn")
 	}
 }
+
+// Before the window's first frame, Drawn and Bounds say no node is drawn.
+func TestNoNodeIsDrawnBeforeTheFirstFrame(t *testing.T) {
+	leaf := drawnLeaf{}
+	h := &hider{child: &leaf}
+	w := gunimtest.New(t, geom.Sz(100, 100), nil)
+	gunim.RegisterView(w, "h", func(struct{}) gunim.Node { return h }, nil)
+	if err := w.Client().Mount(gunim.Root, "h", "h", nil); err != nil {
+		t.Fatal(err)
+	}
+	read := false
+	gunim.RegisterPatch(w, "h", func(h *hider, _ bool, u *gunim.UI) {
+		read = true
+		if u.Drawn(&leaf) {
+			t.Error("before the first frame, Drawn says the leaf is drawn")
+		}
+		if _, ok := u.Bounds(&leaf); ok {
+			t.Error("before the first frame, Bounds gives the leaf a box")
+		}
+	})
+	if err := w.Client().Patch("h", true); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	if !read {
+		t.Fatal("the patch never ran")
+	}
+}
