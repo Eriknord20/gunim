@@ -21,7 +21,8 @@ func TestACheckedMenuItemShowsACheck(t *testing.T) {
 		if got := strokeOf(t, ms[k]).Icon; got != icon.Check {
 			t.Fatalf("item %d is marked with %s, want a check", i, got.Name)
 		}
-		want := geom.Rc(m.card.Min.X+MenuRowPadding.Default()+menuTick/2-1-s/2, m.rowY(i)+(m.row-s)/2, s, s)
+		// In the middle of the tick's room, 4 px clear of the row's padding at the edge and of the text after it.
+		want := geom.Rc(m.card.Min.X+MenuRowPadding.Default()+4, m.rowY(i)+(m.row-s)/2, s, s)
 		if ms[k].Rect != want || ms[k].Color != Ink.Default() {
 			t.Errorf("item %d's check is at %v in %v, want at %v in the ink", i, ms[k].Rect, ms[k].Color, want)
 		}
