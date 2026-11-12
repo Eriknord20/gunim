@@ -39,8 +39,10 @@ type OffscreenWindow struct {
 	pinned, cloaked bool
 	// zoom multiplies scale, and divides the size the content is laid out in.
 	zoom float32
-	rate float64
-	ops  []paint.Op
+	// least is the least size the content is laid out in; see SetMinSize.
+	least geom.Size
+	rate  float64
+	ops   []paint.Op
 	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
 	drawnSize             geom.Size
 	drawnScale, drawnZoom float32
@@ -391,11 +393,35 @@ func (w *OffscreenWindow) KeyboardCover() float32 {
 	return w.keyboard
 }
 
-// Resize changes the window's size for the next frame.
+// Resize changes the window's size for the next frame, as the user sizes it: no smaller than its least size.
 func (w *OffscreenWindow) Resize(size geom.Size) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.size = size
+	w.growLocked()
+}
+
+var _ MinSizer = (*OffscreenWindow)(nil)
+
+// SetMinSize implements [MinSizer]: the window grows to s where it is smaller, and Resize takes it no smaller.
+func (w *OffscreenWindow) SetMinSize(s geom.Size) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.least = geom.Sz(max(s.W, 0), max(s.H, 0))
+	w.growLocked()
+	return nil
+}
+
+// MinSize returns the least size last set with SetMinSize.
+func (w *OffscreenWindow) MinSize() geom.Size {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.least
+}
+
+// growLocked grows the window to its least size at its zoom. It runs with mu held.
+func (w *OffscreenWindow) growLocked() {
+	w.size = geom.Sz(max(w.size.W, w.least.W*w.zoom), max(w.size.H, w.least.H*w.zoom))
 }
 
 // OffscreenHandle is the handle an offscreen window hands out as its
@@ -613,6 +639,7 @@ func (w *OffscreenWindow) SetZoom(z float32) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.zoom = z
+	w.growLocked()
 }
 
 // Zoom returns the factor the window's content is zoomed by.

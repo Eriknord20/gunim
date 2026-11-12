@@ -150,6 +150,8 @@ type Window struct {
 	// placing says Place is sizing the window, which then waits for no frame at the new size. It is used on the main
 	// thread.
 	placing bool
+	// least is the window's least size in logical pixels; see SetMinSize. It is used on the main thread.
+	least geom.Size
 	// region is where the window takes the pointer, in logical pixels, and regionSet says it is limited at all; see
 	// SetPointerRegion. They are used on the main thread.
 	region    []geom.Rect
@@ -393,6 +395,7 @@ func (w *Window) SetZoom(z float32) {
 	}
 	w.in.Push(driver.Redraw{})
 	w.d.post(w.pointerAgain)
+	w.d.post(w.minSizeAgain)
 }
 
 // pointerAgain reads the pointer again, as the window's scale changes
@@ -1054,6 +1057,7 @@ func (w *Window) install() {
 		w.debugf("content scale %v", x)
 		w.flyoutRescaled()
 		remeasure()
+		w.minSizeAgain()
 		w.updateColor(false)
 	})
 	_, _ = gw.SetPosCallback(func(_ *glfw.Window, x, y int) {

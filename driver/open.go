@@ -447,6 +447,13 @@ type Reshaper interface {
 	Reshape(by geom.Insets) error
 }
 
+// A MinSizer is a [Window] that keeps a least size, which the user cannot size it under.
+type MinSizer interface {
+	// SetMinSize sets the least size in the logical pixels the window's content is laid out in, and grows the window
+	// to it where it is smaller. The limit follows the monitor's scale and the window's zoom. Zero sets none.
+	SetMinSize(s geom.Size) error
+}
+
 // MoveStarted is sent on [Window.Input] when the user starts moving or sizing the window by its frame or its title
 // bar, where the system takes the press that starts it for itself. It closes what a press outside would.
 type MoveStarted struct{}

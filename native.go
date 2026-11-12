@@ -54,6 +54,30 @@ func (u *UI) Reshape(by geom.Insets) error {
 	return nil
 }
 
+// SetMinSize sets the window's least size, in logical pixels, as [WindowOptions.MinSize] does: the user cannot size
+// the window smaller, and a window that is smaller grows to it, keeping its top left corner where it can. The limit
+// follows the monitor's scale and the window's zoom. Zero sets none. Windows, macOS and X11 keep it; on a driver that
+// cannot, as the web's and Android's, it only notes the size for [UI.MinSize], and returns nil.
+func (u *UI) SetMinSize(s geom.Size) error {
+	s = geom.Sz(max(s.W, 0), max(s.H, 0))
+	if s == u.minSize {
+		return nil
+	}
+	u.minSize = s
+	m, ok := u.w.dw.(driver.MinSizer)
+	if !ok {
+		return nil
+	}
+	if err := m.SetMinSize(s); err != nil {
+		return fmt.Errorf("gunim: least window size: %w", err)
+	}
+	u.invalid = true
+	return nil
+}
+
+// MinSize returns the window's least size, as last set, or zero for none.
+func (u *UI) MinSize() geom.Size { return u.minSize }
+
 // noteNativeNode notes s while its node is a [NativeHost], so a frame tells it where it stands. [UI.forget] lets it
 // go.
 func (u *UI) noteNativeNode(s *state) {

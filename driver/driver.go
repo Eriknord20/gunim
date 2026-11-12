@@ -196,6 +196,9 @@ type Options struct {
 	// change of monitor scale, goes on as ever. A maximized Place opens
 	// at its bounds instead.
 	Fixed bool
+	// MinSize, for a [KindNormal] or [KindUtility] window, is the least size the window takes, in logical pixels: it
+	// opens no smaller, and the user cannot size it smaller. Zero sets none. See [MinSizer].
+	MinSize geom.Size
 	// NoColorManagement draws the window's sRGB colours to the display
 	// as they are, unconverted, whatever the display's profile; see
 	// [ColorInfo]. A window with a Parent takes the parent's.
