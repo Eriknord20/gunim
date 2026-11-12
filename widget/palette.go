@@ -22,7 +22,7 @@ import (
 // Palette tokens.
 var (
 	PaletteWidth     = theme.Length("palette.width", 560)
-	PaletteRowHeight = theme.Length("palette.row", 32)
+	PaletteRowHeight = theme.TextRow("palette.row", 32)
 	// PaletteMark sits behind the letters a query matched.
 	PaletteMark = theme.Color("palette.mark", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0x50})
 	// PaletteHint colours an item's hint, such as its shortcut.
@@ -788,7 +788,12 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		}
 		i = j + 1
 	}
-	ink := Ink.Get(th)
+	lit := min(max(r.hot.Value(), 0), 1)
+	ink := anim.Mix(anim.ColorCodec, Ink.Get(th), inkOr(MenuHotInk, th), lit)
+	quiet := PaletteHint.Get(th)
+	if th.Sets(MenuHotInk.Key()) {
+		quiet = anim.Mix(anim.ColorCodec, quiet, MenuHotInk.Get(th), lit)
+	}
 	if item.Problem {
 		ink = DialogProblem.Get(th)
 	}
@@ -798,7 +803,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	}
 	run.Paint(p, geom.Pt(lead, top), ink)
 	if item.Hint != "" {
-		hint.Paint(p, geom.Pt(box.W-pad-hint.Advance, (box.H-hint.Height())/2), PaletteHint.Get(th))
+		hint.Paint(p, geom.Pt(box.W-pad-hint.Advance, (box.H-hint.Height())/2), quiet)
 	}
 	if item.Checked {
 		s := IconSize.Get(th)
@@ -809,7 +814,7 @@ func (r *paletteRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		if detail.Advance > end-x {
 			detail = cutRunWith(detail, face.Shape("…", detail.Size), end-x)
 		}
-		detail.Paint(p, geom.Pt(x, (box.H-detail.Height())/2), PaletteHint.Get(th))
+		detail.Paint(p, geom.Pt(x, (box.H-detail.Height())/2), quiet)
 	}
 }
 

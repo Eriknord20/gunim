@@ -266,6 +266,37 @@ func (a *App) TrayNotify(title, body string) error {
 	return tn.TrayNotify(title, body)
 }
 
+// SystemLook is what the user chose in the system's settings for how applications look and move; see
+// [driver.SystemLook].
+type SystemLook = driver.SystemLook
+
+// ContrastColors are the colours of a contrast theme; see [driver.ContrastColors].
+type ContrastColors = driver.ContrastColors
+
+// ErrNoSystemLook says the platform has no look settings to read. Only Windows' are read so far.
+var ErrNoSystemLook = driver.ErrNoSystemLook
+
+// SystemLook reads the user's settings for light or dark, fewer animations, text size and a contrast theme.
+// [github.com/marrasen/gunim/widget.ForLook] turns them into a theme.
+func (a *App) SystemLook() (SystemLook, error) {
+	lr, ok := a.drv.(driver.LookReader)
+	if !ok {
+		return SystemLook{}, ErrNoSystemLook
+	}
+	return lr.SystemLook()
+}
+
+// WatchSystemLook calls fn, on a goroutine of gunim's, each time the user changes one of the settings
+// [App.SystemLook] reads, until stop is called. fn gets an error when the settings could not be read again. stop
+// returns once a call to fn in progress has returned, and no call comes after, so call it from outside fn.
+func (a *App) WatchSystemLook(fn func(SystemLook, error)) (stop func(), err error) {
+	lr, ok := a.drv.(driver.LookReader)
+	if !ok {
+		return func() {}, ErrNoSystemLook
+	}
+	return lr.WatchSystemLook(fn)
+}
+
 // HotKey is a key that reaches the application from any program; see
 // [driver.HotKey].
 type HotKey = driver.HotKey

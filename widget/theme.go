@@ -17,7 +17,7 @@ var (
 	// Accent marks focus and selection.
 	Accent = theme.Color("accent", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0xff})
 	// TextSize is the body text size.
-	TextSize = theme.Length("text.size", 14)
+	TextSize = theme.FontSize("text.size", 14)
 	// Font is the face text is set in, BoldFont the face for strong text, ItalicFont and BoldItalicFont the faces
 	// for emphasis, and MonoFont the face for code and logs.
 	Font           = theme.Choice("text.font", text.Default())
@@ -56,13 +56,15 @@ var (
 	// ButtonPrimaryInk is the ink on a primary button, for a theme that
 	// wants it apart from a dangerous one's.
 	ButtonPrimaryInk = theme.Foreground("button.primary.ink", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
+	// ButtonInk is the ink on a plain button where a theme sets it, as a contrast theme does, and else [Ink].
+	ButtonInk = theme.Foreground("button.ink", color.NRGBA{R: 0xec, G: 0xef, B: 0xf4, A: 0xff})
 	// ButtonShadow is the shadow a button casts down and to the right,
 	// as a theme drawn in the old boxes of a text screen has. Clear, as
 	// it is unless a theme sets it, casts none.
 	ButtonShadow  = theme.Color("button.shadow", color.NRGBA{})
 	ButtonRadius  = theme.Length("button.radius", 8)
 	ButtonPadding = theme.Length("button.padding", 16)
-	ButtonHeight  = theme.Length("button.height", 36)
+	ButtonHeight  = theme.TextRow("button.height", 36)
 	// ButtonSquash is how far a press shrinks the button, as a fraction
 	// of its size.
 	ButtonSquash = theme.Length("button.squash", 0.035)
@@ -86,7 +88,7 @@ var (
 	// DialogTitleSize was the size of the heading a dialog drew its
 	// title in. A dialog now shows its title in a title bar, in
 	// [TextSize], and nothing in gunim reads this.
-	DialogTitleSize = theme.Length("dialog.title.size", 17)
+	DialogTitleSize = theme.FontSize("dialog.title.size", 17)
 	DialogWidth     = theme.Length("dialog.width", 420)
 	// DialogHeight is a dialog's height until its first layout, which
 	// sizes it to its title bar, body and buttons.
@@ -110,6 +112,22 @@ var (
 	// ListSelected fills the row a [List] shows as picked.
 	ListSelected = theme.Color("list.selected", color.NRGBA{R: 0x2b, G: 0x3b, B: 0x5c, A: 0xff})
 )
+
+// inkOr returns t in th where th sets it, and else [Ink], for text on a fill that only some themes make strong.
+func inkOr(t theme.Token[color.NRGBA], th *theme.Live) color.NRGBA {
+	if th.Sets(t.Key()) {
+		return t.Get(th)
+	}
+	return Ink.Get(th)
+}
+
+// covered returns how much of a span at top, h tall, a span at at, h2 tall, covers, from 0 to 1.
+func covered(top, h, at, h2 float32) float32 {
+	if h <= 0 {
+		return 0
+	}
+	return max(0, min(top+h, at+h2)-max(top, at)) / h
+}
 
 // Light is a light theme. It changes more than colour: padding and
 // radii grow and motion softens, so switching to it shows every kind of
@@ -294,7 +312,7 @@ var (
 	CardRadius  = theme.Length("card.radius", 10)
 	CardPadding = theme.Insets("card.padding", geom.Insets{Top: 10, Right: 12, Bottom: 10, Left: 14})
 	// HeadingSize is the size of a heading's text.
-	HeadingSize = theme.Length("text.heading.size", 22)
+	HeadingSize = theme.FontSize("text.heading.size", 22)
 )
 
 // Text field tokens.
@@ -303,7 +321,7 @@ var (
 	FieldBorder  = theme.Color("field.border", color.NRGBA{R: 0x3a, G: 0x40, B: 0x50, A: 0xff})
 	Selection    = theme.Color("field.selection", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0x55})
 	Placeholder  = theme.Foreground("field.placeholder", color.NRGBA{R: 0x8a, G: 0x90, B: 0x9c, A: 0xff})
-	FieldHeight  = theme.Length("field.height", 36)
+	FieldHeight  = theme.TextRow("field.height", 36)
 	FieldWidth   = theme.Length("field.width", 240)
 	FieldPadding = theme.Length("field.padding", 10)
 	FieldRadius  = theme.Length("field.radius", 8)
@@ -338,14 +356,16 @@ var (
 	MenuFill   = theme.Color("menu.fill", color.NRGBA{R: 0x24, G: 0x28, B: 0x33, A: 0xff})
 	MenuBorder = theme.Color("menu.border", color.NRGBA{R: 0x3a, G: 0x40, B: 0x50, A: 0xff})
 	MenuShadow = theme.Color("menu.shadow", color.NRGBA{A: 0x90})
-	// MenuHot is the highlight behind the item under the pointer.
-	MenuHot = theme.Color("menu.hot", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0x48})
+	// MenuHot is the highlight behind the item under the pointer, and MenuHotInk colours the item on it where a theme
+	// sets it, as a contrast theme does, and else [Ink].
+	MenuHot    = theme.Color("menu.hot", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0x48})
+	MenuHotInk = theme.Foreground("menu.hot.ink", color.NRGBA{R: 0xec, G: 0xef, B: 0xf4, A: 0xff})
 	// MenuHint colours an item's hint, such as its shortcut.
 	MenuHint   = theme.Color("menu.hint", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
 	MenuRadius = theme.Length("menu.radius", 8)
 	// MenuPadding is the space between a menu's edge and its items.
 	MenuPadding    = theme.Length("menu.padding", 4)
-	MenuRowHeight  = theme.Length("menu.row.height", 28)
+	MenuRowHeight  = theme.TextRow("menu.row.height", 28)
 	MenuRowPadding = theme.Length("menu.row.padding", 12)
 	// MenuMargin is the room a popup leaves around itself for its
 	// shadow.
@@ -353,7 +373,7 @@ var (
 
 	TooltipFill    = theme.Color("tooltip.fill", color.NRGBA{R: 0xec, G: 0xef, B: 0xf4, A: 0xf4})
 	TooltipInk     = theme.Foreground("tooltip.ink", color.NRGBA{R: 0x16, G: 0x18, B: 0x1e, A: 0xff})
-	TooltipSize    = theme.Length("tooltip.size", 12.5)
+	TooltipSize    = theme.FontSize("tooltip.size", 12.5)
 	TooltipRadius  = theme.Length("tooltip.radius", 6)
 	TooltipPadding = theme.Insets("tooltip.padding", geom.Insets{Top: 4, Right: 8, Bottom: 5, Left: 8})
 	// TooltipMaxWidth is as wide as a tooltip's words run before they wrap.
@@ -367,7 +387,7 @@ var Crossfade = theme.Spring("motion.crossfade", anim.Gentle)
 var (
 	// ControlHeight is the least height a control takes, so a row of
 	// them lines up with buttons and fields.
-	ControlHeight = theme.Length("control.height", 28)
+	ControlHeight = theme.TextRow("control.height", 28)
 	// ControlGap is the space between a control and its label.
 	ControlGap  = theme.Length("control.gap", 8)
 	CheckSize   = theme.Length("check.size", 18)
@@ -386,7 +406,7 @@ var (
 	SliderTrack = theme.Length("slider.track", 4)
 	// SliderRestMark marks a slider's resting value on its track.
 	SliderRestMark = theme.Color("slider.rest", color.NRGBA{R: 0xa4, G: 0xab, B: 0xbb, A: 0xc0})
-	TabHeight      = theme.Length("tab.height", 38)
+	TabHeight      = theme.TextRow("tab.height", 38)
 	TabPadding     = theme.Length("tab.padding", 14)
 	// TabGap is the room between the line under a [Tabs]' titles and its
 	// page.

@@ -21,7 +21,7 @@ var (
 	ToastWidth = theme.Length("toast.width", 340)
 	ToastGap   = theme.Length("toast.gap", 10)
 	// ToastMoreHeight is the height of the card that stands for the toasts the stack has no room for.
-	ToastMoreHeight = theme.Length("toast.more.height", 30)
+	ToastMoreHeight = theme.TextRow("toast.more.height", 30)
 	// ToastInfoInk, ToastSuccessInk, ToastWarningInk and ToastErrorInk colour the icon of each kind of toast.
 	ToastInfoInk    = theme.Color("toast.info", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0xff})
 	ToastSuccessInk = theme.Color("toast.success", color.NRGBA{R: 0x4c, G: 0xc3, B: 0x8a, A: 0xff})

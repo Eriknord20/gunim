@@ -54,6 +54,8 @@ type declared struct {
 	typ  reflect.Type
 	def  any
 	kind Kind
+	// text marks a length declared with [FontSize].
+	text bool
 }
 
 // New declares a token with its own codec. The key names it within a
@@ -112,6 +114,42 @@ func fadeThrough(from, to color.NRGBA, p float32) color.NRGBA {
 // font size.
 func Length(key string, def float32) Token[float32] {
 	return declare(key, def, anim.FloatCodec, KindLength)
+}
+
+// FontSize declares a length token for a size of text, which [ScaleText] scales.
+func FontSize(key string, def float32) Token[float32] {
+	t := declare(key, def, anim.FloatCodec, KindLength)
+	keysMu.Lock()
+	d := keys[key]
+	d.text = true
+	keys[key] = d
+	keysMu.Unlock()
+	return t
+}
+
+// TextRow declares a length token for room that holds a line of text, as a row's or a button's height, which
+// [ScaleText] scales with the text.
+func TextRow(key string, def float32) Token[float32] { return FontSize(key, def) }
+
+// ScaleText returns a copy of th with every token declared by [FontSize] or [TextRow] multiplied by s, as for the
+// user's text size setting. Scale the theme as made, not one scaled already.
+func ScaleText(th Theme, s float32) Theme {
+	keysMu.Lock()
+	sizes := map[string]float32{}
+	for k, d := range keys {
+		if def, ok := d.def.(float32); ok && d.text {
+			sizes[k] = def
+		}
+	}
+	keysMu.Unlock()
+	out := th.With()
+	for k, def := range sizes {
+		if v, ok := th.values[k].(float32); ok {
+			def = v
+		}
+		out.values[k] = def * s
+	}
+	return out
 }
 
 // Number declares a plain number token: a strength, a share, a count.

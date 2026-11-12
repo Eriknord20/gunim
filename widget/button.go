@@ -334,6 +334,9 @@ func kindColours(k ButtonKind, th *theme.Live) (rest, hover, ink theme.Token[col
 		return ButtonDangerFill, ButtonDangerHover, ButtonStrongInk
 	case ButtonPlain:
 	}
+	if th.Sets(ButtonInk.Key()) {
+		return ButtonFill, ButtonHover, ButtonInk
+	}
 	return ButtonFill, ButtonHover, Ink
 }
 

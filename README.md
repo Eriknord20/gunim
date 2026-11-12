@@ -350,6 +350,15 @@ and `UI`:
   `App.TrayNotify` a message from it. With `App.StayOpen` the
   application runs on with no window open. Linux speaks
   StatusNotifierItem.
+- **The system's look.** `App.SystemLook` reads what the user chose
+  for every application: light or dark, fewer animations, a text size
+  and a contrast theme. `App.WatchSystemLook` hears each change.
+  `widget.ForLook` turns them into a theme. It scales every size
+  declared with `theme.FontSize` or `theme.TextRow`, sets `theme.Scale`
+  to 0 for fewer animations, and gives every widget colour one of the
+  contrast theme's colours. `calendar`, `widget/graph`, `widget/dock`
+  and `audioui` each add theirs with a `Contrast` of their own. Windows
+  alone is read so far.
 - **Keys from every program.** `App.RegisterHotKey` hears a key
   whatever program has the keyboard, on Windows and on X11.
 - **Media controls.** `App.SetNowPlaying` tells the system what plays,
@@ -788,6 +797,12 @@ A theme can also set `theme.Scale`, how long every animation takes:
 takes the theme sets it for the whole program with `anim.SetScale`.
 It leaves flings alone, and any value marked `RealTime`, such as a
 fade in sound or a meter's needle.
+
+Declare a size of text with `theme.FontSize` rather than
+`theme.Length`. `theme.ScaleText` then scales it with the rest, as
+for the user's text size setting. Declare the height of a row,
+a button or anything else that holds a line of text with
+`theme.TextRow`, so it grows with the text.
 
 Colours blend through Oklab, so a switch keeps its brightness and its
 hues. Text colours are declared with `theme.Foreground`: they fade out

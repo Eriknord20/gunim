@@ -25,7 +25,7 @@ import (
 var (
 	// CodeSize is the code's font size, and CodeLineHeight each line's
 	// height as a multiple of the font's.
-	CodeSize       = theme.Length("code.size", 13)
+	CodeSize       = theme.FontSize("code.size", 13)
 	CodeLineHeight = theme.Number("code.line.height", 1.45)
 	// CodeTab is how many columns apart tab stops are.
 	CodeTab = theme.Number("code.tab", 4)

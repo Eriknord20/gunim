@@ -17,7 +17,7 @@ import (
 // Theme tokens for an [AddressBar].
 var (
 	// AddressHeight is the bar's height.
-	AddressHeight = theme.Length("address.height", 34)
+	AddressHeight = theme.TextRow("address.height", 34)
 	// AddressCrumbInk colours the places before the last, and AddressChevron the chevrons between them.
 	AddressCrumbInk = theme.Foreground("address.crumb", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
 	AddressChevron  = theme.Foreground("address.chevron", color.NRGBA{R: 0x6b, G: 0x72, B: 0x80, A: 0xff})

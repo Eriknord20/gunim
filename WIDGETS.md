@@ -125,6 +125,8 @@ knows.
 ChipFill   = theme.Color("chip.fill", color.NRGBA{...})        // a colour
 ChipInk    = theme.Foreground("chip.ink", color.NRGBA{...})    // a colour drawn on top: text, icons
 ChipRadius = theme.Length("chip.radius", 12)                   // a size in logical pixels
+ChipSize   = theme.FontSize("chip.size", 12)                   // a size of text, which the user's text size scales
+ChipHeight = theme.TextRow("chip.height", 24)                  // room for a line of text, which grows with it
 ```
 
 - **Keys** read `<widget>.<part>[.<state>]`: `button.primary.hover`, `scroll.bar.width`, `menu.row.height`.

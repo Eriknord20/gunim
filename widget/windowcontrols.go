@@ -30,7 +30,7 @@ const (
 )
 
 // TitleBarCompactHeight is the height of a compact title bar, such as a small window's kept beside others.
-var TitleBarCompactHeight = theme.Length("titlebar.compact.height", 26)
+var TitleBarCompactHeight = theme.TextRow("titlebar.compact.height", 26)
 
 // windowButton is one of the buttons at the end of a title bar.
 type windowButton int

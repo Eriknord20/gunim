@@ -19,7 +19,7 @@ var (
 	// StatusSwitchHeight is its height, StatusSwitchPadding the room at
 	// its ends, and StatusSwitchGap the room between its words, its
 	// Extra and its switch.
-	StatusSwitchHeight  = theme.Length("statusswitch.height", 28)
+	StatusSwitchHeight  = theme.TextRow("statusswitch.height", 28)
 	StatusSwitchPadding = theme.Length("statusswitch.padding", 10)
 	StatusSwitchGap     = theme.Length("statusswitch.gap", 8)
 	// StatusSwitchTrackWidth and StatusSwitchTrackHeight size its

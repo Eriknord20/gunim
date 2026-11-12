@@ -22,7 +22,7 @@ var (
 	SliderRowLabel = theme.Length("sliderrow.label", 96)
 	SliderRowValue = theme.Length("sliderrow.value", 56)
 	// SliderRowSize is the size of a slider row's text.
-	SliderRowSize = theme.Length("sliderrow.size", 13)
+	SliderRowSize = theme.FontSize("sliderrow.size", 13)
 	// SliderRowInk is the colour of a slider row's readout.
 	SliderRowInk = theme.Color("sliderrow.ink", color.NRGBA{R: 0xa4, G: 0xab, B: 0xbb, A: 0xff})
 	// SliderRowActive fills the row the keys act on, and its bar marks it.

@@ -934,19 +934,18 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		defer m.scroll.layer(p, card, th)()
 		bar = ScrollbarGrabWidth.Get(th)
 	}
-	if on := m.hotOn.Value(); on > 0.01 {
+	hotY, hotOn := m.hotY.Value()-m.scroll.Offset(), min(max(m.hotOn.Value(), 0), 1)
+	if hotOn > 0.01 {
 		c := MenuHot.Get(th)
-		c.A = uint8(float32(c.A) * min(on, 1))
+		c.A = uint8(float32(c.A) * hotOn)
 		inset := m.pad
-		y := m.hotY.Value() - m.scroll.Offset()
-		p.RRect(geom.Rc(card.Min.X+inset, y, card.Size().W-2*inset, m.row), max(0, radius-inset), paint.Solid(c))
+		p.RRect(geom.Rc(card.Min.X+inset, hotY, card.Size().W-2*inset, m.row), max(0, radius-inset), paint.Solid(c))
 	}
+	hotInk := inkOr(MenuHotInk, th)
+	// onHot is how far the hot row's fill covers row i, from 0 to 1, for its ink to follow the fill as it glides
+	onHot := func(i int) float32 { return hotOn * covered(m.rowY(i), m.row, hotY, m.row) }
 	ink := Ink.Get(th)
-	dim := ink
-	dim.A /= 3
 	hint := MenuHint.Get(th)
-	dimHint := hint
-	dimHint.A /= 3
 	pad := MenuRowPadding.Get(th)
 	face, size := faceIn(Font, th), TextSize.Get(th)
 	from, to := m.inView()
@@ -962,9 +961,15 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 	room := card.Size().W - 2*pad - m.gut - m.iconSpace - bar
 	for i := from; i < to; i++ {
 		r := m.rowText(i)
-		col := ink
+		lit := onHot(i)
+		col := anim.Mix(anim.ColorCodec, ink, hotInk, lit)
+		rowHint := hint
+		if th.Sets(MenuHotInk.Key()) {
+			rowHint = anim.Mix(anim.ColorCodec, hint, hotInk, lit)
+		}
 		if !m.enabled(i) {
-			col = dim
+			col.A /= 3
+			rowHint.A /= 3
 		}
 		if m.isCaption(i) {
 			small := size * 0.85
@@ -989,19 +994,13 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		}
 		fits := room
 		if len(it.subItems()) > 0 {
-			c := hint
-			if !m.enabled(i) {
-				c = dimHint
-			}
+			c := rowHint
 			s := IconSize.Get(th)
 			drawIcon(p, th, icon.ChevronRight, geom.Rc(card.Max.X-pad-bar-s+4, m.rowY(i)+(m.row-s)/2, s, s), c, 1)
 			fits -= menuSubRoom
 		} else if it.Hint != "" {
 			h := r.hint.shape(face, it.Hint, size*0.9)
-			c := hint
-			if !m.enabled(i) {
-				c = dimHint
-			}
+			c := rowHint
 			h.Paint(p, geom.Pt(card.Max.X-pad-bar-h.Advance, m.rowY(i)+(m.row-h.Height())/2), c)
 			fits -= menuHintGap + h.Advance
 		}

@@ -317,7 +317,7 @@ func size(n int) string {
 }
 
 // NoteSize is the size of the line under a view.
-var NoteSize = theme.Length("viewer.note.size", 12)
+var NoteSize = theme.FontSize("viewer.note.size", 12)
 
 // Kind returns how the view shows its file.
 func (v *View) Kind() Kind { return v.kind }

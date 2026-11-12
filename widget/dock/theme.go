@@ -12,7 +12,7 @@ import (
 var (
 	// BarHeight is how tall a bar of tabs is over a pane, and BarSpace
 	// the room between the bar and what its tab in front shows.
-	BarHeight = theme.Length("dock.bar.height", 30)
+	BarHeight = theme.TextRow("dock.bar.height", 30)
 	BarSpace  = theme.Length("dock.bar.space", 4)
 	// BarFill is a bar's background, and BarRadius rounds it.
 	BarFill   = theme.Color("dock.bar.fill", color.NRGBA{R: 0x1d, G: 0x20, B: 0x28, A: 0xe6})

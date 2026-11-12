@@ -179,7 +179,7 @@ func (v *View) newHeader() *widget.Flex {
 }
 
 var (
-	titleSize   = theme.Length("chat.title.size", 16)
+	titleSize   = theme.FontSize("chat.title.size", 16)
 	zeroGap     = theme.Length("chat.gap.none", 0)
 	composerPad = theme.Insets("chat.composer.pad", geom.Insets{Top: 0, Right: 16, Bottom: 16, Left: 16})
 )

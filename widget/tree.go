@@ -18,7 +18,7 @@ import (
 
 // Tree tokens.
 var (
-	TreeRowHeight = theme.Length("tree.row", 26)
+	TreeRowHeight = theme.TextRow("tree.row", 26)
 	// TreeIndent is how far each level sits in from the one above it.
 	TreeIndent = theme.Length("tree.indent", 16)
 	// TreeHover lights the row under the pointer, and TreeSelected the cursor's row.

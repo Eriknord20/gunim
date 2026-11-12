@@ -23,7 +23,7 @@ var (
 	// PanelRadius rounds a panel's corners.
 	PanelRadius = theme.Length("panel.radius", 12)
 	// PanelTitleHeight is how tall a panel's title bar stands.
-	PanelTitleHeight = theme.Length("panel.title.height", 40)
+	PanelTitleHeight = theme.TextRow("panel.title.height", 40)
 	// PanelGrip is how far in from a panel's edge a press resizes it.
 	PanelGrip = theme.Length("panel.grip", 6)
 )

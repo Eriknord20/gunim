@@ -181,7 +181,7 @@ func (m *MiniMonth) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		n.Paint(p, geom.Pt(miniWeekW-6-n.Advance, c.Center().Y-n.Height()/2), faint)
 	}
 	// The marked days join into one band along each week.
-	marked := widget.MenuHot.Get(th)
+	marked := hotFill(th)
 	if b := m.band.Value(); !b.Empty() {
 		p.RRect(b, b.Size().H/2, paint.Solid(marked))
 	}

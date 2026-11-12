@@ -15,6 +15,8 @@ var bothThemes = map[string]bool{
 	"button.strong.ink": true, "button.primary.ink": true, "check.mark": true, "window.close.hot": true,
 	// None, unless a theme casts one.
 	"button.shadow": true,
+	// Inks that follow Ink unless a theme sets them, as a contrast theme does.
+	"button.ink": true, "menu.hot.ink": true,
 	// Tints over content, the same on dark and light.
 	"grid.mark": true, "table.mark": true,
 	// Light on the histogram's own dark fill, which the light theme keeps dark too.

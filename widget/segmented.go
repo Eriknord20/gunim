@@ -16,7 +16,7 @@ import (
 // Segmented tokens.
 var (
 	// SegmentedHeight is a segmented control's height.
-	SegmentedHeight = theme.Length("segmented.height", 28)
+	SegmentedHeight = theme.TextRow("segmented.height", 28)
 	// SegmentedPadding is the room either side of an option's icon and label.
 	SegmentedPadding = theme.Length("segmented.padding", 12)
 	// SegmentedTrack fills the track the options sit in, a shade apart from a card or the window behind it.

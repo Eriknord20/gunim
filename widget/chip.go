@@ -16,7 +16,7 @@ import (
 
 // Chip tokens.
 var (
-	ChipHeight = theme.Length("chip.height", 24)
+	ChipHeight = theme.TextRow("chip.height", 24)
 	ChipFill   = theme.Color("chip.fill", color.NRGBA{R: 0x2b, G: 0x2f, B: 0x3a, A: 0xff})
 	ChipHover  = theme.Color("chip.hover", color.NRGBA{R: 0x3d, G: 0x45, B: 0x58, A: 0xff})
 	// ChipLead colours a chip's lead, the part before its label, such as

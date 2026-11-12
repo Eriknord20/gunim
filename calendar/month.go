@@ -669,7 +669,7 @@ func (m *Month) paintSprite(p *paint.Painter, th *theme.Live, s *sprite) {
 		t.Paint(p, geom.Pt(r.Min.X+7, r.Center().Y-t.Size.H/2), ink)
 	} else {
 		if lift > 0.01 {
-			hot := widget.MenuHot.Get(th)
+			hot := hotFill(th)
 			hot.A = uint8(float32(hot.A) * lift)
 			p.ShadowRRect(r, round, paint.Solid(hot), paint.Shadow{Color: color.NRGBA{A: uint8(0x40 * lift)}, Blur: 8 * lift,
 				Offset: geom.Pt(0, 2*lift)})

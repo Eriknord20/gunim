@@ -21,12 +21,16 @@ import (
 // main thread for the event loop and runs the tests beside it.
 var display *Driver
 
+// pump is the driver running for the tests, which a machine with no OpenGL has too.
+var pump *Driver
+
 func TestMain(m *testing.M) {
 	d, err := Open()
 	if err != nil {
 		os.Exit(m.Run())
 	}
 	display = d
+	pump = d
 	d.stayOpen = true
 	ctx, cancel := context.WithCancel(context.Background())
 	code := make(chan int, 1)

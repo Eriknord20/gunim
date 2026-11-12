@@ -18,7 +18,7 @@ import (
 
 // Table tokens.
 var (
-	TableRowHeight = theme.Length("table.row", 26)
+	TableRowHeight = theme.TextRow("table.row", 26)
 	TableHeader    = theme.Color("table.header", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
 	// TableCursor lights the row the keys are on, and TableMark the rows
 	// marked.

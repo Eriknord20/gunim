@@ -16,7 +16,7 @@ var (
 	// LogViewHeight is a log view's height, LogViewSize its words', and
 	// LogViewLine a line's height as a share of LogViewSize.
 	LogViewHeight = theme.Length("logview.height", 440)
-	LogViewSize   = theme.Length("logview.size", 12.5)
+	LogViewSize   = theme.FontSize("logview.size", 12.5)
 	LogViewLine   = theme.Length("logview.line", 1.55)
 	// LogViewPadding is the room round its lines, and LogViewLeadGap the
 	// room after a line's lead.

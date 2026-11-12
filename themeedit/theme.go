@@ -38,8 +38,8 @@ var (
 	TextRoom = theme.Length("themeedit.text.room", 200)
 	// TitleSize is the size of the header's title, and KeySize of a
 	// token's key under its name in All values.
-	TitleSize = theme.Length("themeedit.title.size", 16)
-	KeySize   = theme.Length("themeedit.key.size", 11.5)
+	TitleSize = theme.FontSize("themeedit.title.size", 16)
+	KeySize   = theme.FontSize("themeedit.key.size", 11.5)
 	// DotSize is the size of the dot after a changed row's name, and
 	// DotGap the room between the name and the dot.
 	DotSize = theme.Length("themeedit.dot.size", 6)
@@ -55,7 +55,7 @@ var (
 	// CompactHeight and CompactWidth are the size of a field for a
 	// number in All values, as tall as a swatch's button, so every row
 	// there is as tall as its words.
-	CompactHeight = theme.Length("themeedit.compact.height", 28)
+	CompactHeight = theme.TextRow("themeedit.compact.height", 28)
 	CompactWidth  = theme.Length("themeedit.compact.width", 80)
 	// TabInset is how far in the tabs' titles start and their line
 	// ends: the page's own padding, so they line up with the cards.
@@ -76,7 +76,7 @@ var (
 	// PreviewRadius rounds the window the preview draws, and
 	// PreviewTitleHeight is the height of its title bar.
 	PreviewRadius      = theme.Length("themeedit.preview.radius", 10)
-	PreviewTitleHeight = theme.Length("themeedit.preview.title.height", 30)
+	PreviewTitleHeight = theme.TextRow("themeedit.preview.title.height", 30)
 	// TerminalSize is the size of the preview terminal's text.
-	TerminalSize = theme.Length("themeedit.terminal.size", 12)
+	TerminalSize = theme.FontSize("themeedit.terminal.size", 12)
 )

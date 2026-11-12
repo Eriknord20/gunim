@@ -119,7 +119,7 @@ func buildChat(s Chat) *chatView {
 }
 
 var (
-	sidebarTitle = theme.Length("chat.title.size", 16)
+	sidebarTitle = theme.FontSize("chat.title.size", 16)
 	zeroGap      = theme.Length("chat.gap.none", 0)
 )
 
