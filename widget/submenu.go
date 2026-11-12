@@ -49,16 +49,15 @@ func (m *Menu) keyMenu() *Menu {
 	return m
 }
 
-// subKey closes a submenu for Left or Escape, and reports whether it did. Left closes the submenu the keys are in,
-// and gives them back to the menu it is beside. Escape closes that one too, or first a submenu open beside the menu
-// that has the keys.
+// subKey closes one submenu for Left or Escape, and reports whether it did: a submenu open beside the menu that has
+// the keys, as the pointer opens one, or else the submenu the keys are in, giving them back to the menu it is beside.
 func (m *Menu) subKey(k input.KeyPress) bool {
 	if k.Key != input.KeyLeft && k.Key != input.KeyEscape {
 		return false
 	}
 	km := m.keyMenu()
 	switch {
-	case k.Key == input.KeyEscape && km.sub != nil:
+	case km.sub != nil:
 		km.closeSub()
 	case km != m:
 		km.parent.closeSub()
@@ -124,9 +123,18 @@ func (m *Menu) closeSub() {
 		return
 	}
 	m.sub = nil
-	s.menu.leaving = true
-	s.menu.stopWait()
+	s.menu.leave()
 	s.popup.Close()
+}
+
+// leave marks the menu on its way out, at once, as whatever holds it closes it: a submenu waiting for the pointer to
+// rest is called off, and the submenu open closes, and those open from it. Without it a menu learns it is leaving
+// only once the engine has its exit under way, a frame later, and a rest that ends in that frame opens a submenu
+// beside a menu already gone.
+func (m *Menu) leave() {
+	m.leaving = true
+	m.stopWait()
+	m.closeSub()
 }
 
 // pickSub counts a pick in a submenu, at path, and runs OnPickSub.

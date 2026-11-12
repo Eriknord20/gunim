@@ -123,3 +123,22 @@ func TestARevealOfANodeLeavingIsDropped(t *testing.T) {
 		t.Fatalf("after the row left, %d reveals happened and %d wait", len(r.reveals), len(w.ui.revealing))
 	}
 }
+
+func TestRevealRectAsksForAPartOfANode(t *testing.T) {
+	w, r := mountRevealer(t, 3)
+	// The lower half of the third row, which starts at 80.
+	w.ui.RevealRect(r.kids[2], geom.Rc(0, 20, 10, 20))
+	if !w.ui.needsFrame() {
+		t.Fatal("a reveal left the window idle: it would wait for the next input")
+	}
+	if len(r.reveals) != 1 || r.reveals[0].Min.Y != 100 || r.reveals[0].Max.Y != 120 || r.reveals[0].Max.X != 10 {
+		t.Fatalf("the revealer was asked %v, want the part from 100 to 120, 10 wide", r.reveals)
+	}
+	// A node not in the tree, and a nil UI, ask for nothing.
+	w.ui.RevealRect(newFadePanel(), geom.Rc(0, 0, 10, 10))
+	var none *UI
+	none.RevealRect(r.kids[0], geom.Rc(0, 0, 10, 10))
+	if len(r.reveals) != 1 {
+		t.Fatalf("a node out of the tree asked the revealer for %v", r.reveals[1:])
+	}
+}
