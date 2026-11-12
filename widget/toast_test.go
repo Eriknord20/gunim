@@ -115,8 +115,8 @@ func TestAToastsActionSendsItsIntentAndDismissesIt(t *testing.T) {
 	var r, title geom.Rect
 	var ok bool
 	on(func(u *gunim.UI) {
-		r, ok = u.Bounds(card.action)
-		title, _ = u.Bounds(card.title)
+		r, ok = u.Bounds(card.face.action)
+		title, _ = u.Bounds(card.face.title)
 	})
 	if !ok {
 		t.Fatal("the toast drew no action")
@@ -171,9 +171,9 @@ func TestAToastThatAsksStaysTakesNoKeyboardAndAnswersWithItsTickBox(t *testing.T
 	card := h.t.cards[0]
 	var box, upload, body geom.Rect
 	on(func(u *gunim.UI) {
-		box, _ = u.Bounds(card.check)
-		upload, _ = u.Bounds(card.buttons.Children()[0])
-		body, _ = u.Bounds(card.title)
+		box, _ = u.Bounds(card.face.check)
+		upload, _ = u.Bounds(card.face.buttons.Children()[0])
+		body, _ = u.Bounds(card.face.title)
 		focused = u.Focused()
 	})
 	if focused != gunim.Node(h) {
@@ -187,8 +187,8 @@ func TestAToastThatAsksStaysTakesNoKeyboardAndAnswersWithItsTickBox(t *testing.T
 	wait(100 * time.Millisecond)
 	click(w, box.Min.X+4, box.Center().Y)
 	wait(100 * time.Millisecond)
-	if n := h.t.Len(); n != 1 || !card.check.Checked() {
-		t.Fatalf("after clicks on the text and the box, %d toasts show, ticked %v", n, card.check.Checked())
+	if n := h.t.Len(); n != 1 || !card.face.check.Checked() {
+		t.Fatalf("after clicks on the text and the box, %d toasts show, ticked %v", n, card.face.check.Checked())
 	}
 	_ = sent(w)
 	click(w, upload.Center().X, upload.Center().Y)
@@ -239,8 +239,8 @@ func TestAnErrorToastStaysUntilClosedAndItsTextCopies(t *testing.T) {
 	card := h.t.cards[0]
 	var body, closer geom.Rect
 	on(func(u *gunim.UI) {
-		body, _ = u.Bounds(card.body)
-		closer, _ = u.Bounds(card.close)
+		body, _ = u.Bounds(card.face.body)
+		closer, _ = u.Bounds(card.face.close)
 	})
 	if closer.Empty() {
 		t.Fatal("the error drew no close button")
@@ -285,9 +285,9 @@ func TestAnErrorToastKeepsItsActionBesideItsCloseButton(t *testing.T) {
 	card := h.t.cards[0]
 	var act, closer, title geom.Rect
 	on(func(u *gunim.UI) {
-		act, _ = u.Bounds(card.action)
-		closer, _ = u.Bounds(card.close)
-		title, _ = u.Bounds(card.title)
+		act, _ = u.Bounds(card.face.action)
+		closer, _ = u.Bounds(card.face.close)
+		title, _ = u.Bounds(card.face.title)
 	})
 	if act.Empty() || closer.Empty() {
 		t.Fatalf("the action is at %v and the close button at %v", act, closer)
@@ -324,7 +324,7 @@ func TestAToastsButtonsWrapRatherThanClip(t *testing.T) {
 	on(func(u *gunim.UI) { h.t.Show(Toast{Title: "Hej", Key: "k", Buttons: bs}, u) })
 	wait(time.Second)
 	card := h.t.cards[0]
-	kids := card.buttons.Children()
+	kids := card.face.buttons.Children()
 	if len(kids) != len(labels) {
 		t.Fatalf("%d buttons", len(kids))
 	}
