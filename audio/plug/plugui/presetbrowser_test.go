@@ -840,3 +840,23 @@ func TestARowActsOnTheRelease(t *testing.T) {
 		t.Fatalf("a click on Pads shows %s", b.group)
 	}
 }
+
+// With a group clicked to show, other than the playing preset's, next plays that group's first preset and previous
+// its last.
+func TestSkipsStartInTheGroupShown(t *testing.T) {
+	for _, c := range []struct {
+		by   int
+		want string
+	}{{1, "Bass 0"}, {-1, "Bass 2"}} {
+		src := kits(4)
+		src.cur = src.list[5]
+		b := NewPresetBrowser(src)
+		mountBrowser(t, b)
+		b.showGroup("Factory", "Bass", nil)
+		b.Skip(c.by, nil)
+		if want := []string{c.want}; !slices.Equal(src.picked, want) || b.group != "Bass" {
+			t.Errorf("a skip of %d from Kits with Bass shown picked %v and shows %s, want %v in Bass", c.by, src.picked,
+				b.group, want)
+		}
+	}
+}

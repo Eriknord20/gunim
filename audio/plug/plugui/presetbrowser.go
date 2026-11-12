@@ -282,7 +282,8 @@ func (b *PresetBrowser) pick(p plug.Preset, u *gunim.UI) {
 }
 
 // Skip plays the preset by from the one playing, in the order the browser lists them, on into the group after or
-// before and round from the last to the first; during a search, through what it finds. The browser shows the group
+// before and round from the last to the first; during a search, through what it finds. With another group shown than
+// the playing preset's, it plays the first preset of that group, or its last going back. The browser shows the group
 // of the preset it plays.
 func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 	list, i := b.listed()
@@ -292,11 +293,23 @@ func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 	if len(list) == 0 {
 		return
 	}
-	if i < 0 {
-		// Nothing listed plays: step from just before the group shown, or from its first preset going back.
-		i = max(slices.IndexFunc(list, func(p plug.Preset) bool { return p.Bank == b.bank && p.Group == b.group }), 0)
-		if by > 0 {
-			i--
+	shown := func(p plug.Preset) bool { return p.Bank == b.bank && p.Group == b.group }
+	if i < 0 || b.query == "" && !shown(list[i]) {
+		// Step into the group shown, as one clicked: from just before its first preset, or just after its last.
+		lo, hi := slices.IndexFunc(list, shown), 0
+		for j := range list {
+			if shown(list[j]) {
+				hi = j
+			}
+		}
+		if i = lo - 1; by < 0 {
+			i = hi + 1
+		}
+		if lo < 0 {
+			i = -1
+			if by < 0 {
+				i = 0
+			}
 		}
 	}
 	i = ((i+by)%len(list) + len(list)) % len(list)
