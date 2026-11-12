@@ -450,7 +450,8 @@ type Reshaper interface {
 // A MinSizer is a [Window] that keeps a least size, which the user cannot size it under.
 type MinSizer interface {
 	// SetMinSize sets the least size in the logical pixels the window's content is laid out in, and grows the window
-	// to it where it is smaller. The limit follows the monitor's scale and the window's zoom. Zero sets none.
+	// to it where it is smaller. The limit follows the monitor's scale and the window's zoom, and is capped at the
+	// monitor's work area. Zero sets none, and a negative side counts as zero.
 	SetMinSize(s geom.Size) error
 }
 

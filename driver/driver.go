@@ -197,7 +197,8 @@ type Options struct {
 	// at its bounds instead.
 	Fixed bool
 	// MinSize, for a [KindNormal] or [KindUtility] window, is the least size the window takes, in logical pixels: it
-	// opens no smaller, and the user cannot size it smaller. Zero sets none. See [MinSizer].
+	// opens no smaller, and the user cannot size it smaller. Zero sets none, and a negative side counts as zero. See
+	// [MinSizer].
 	MinSize geom.Size
 	// NoColorManagement draws the window's sRGB colours to the display
 	// as they are, unconverted, whatever the display's profile; see
