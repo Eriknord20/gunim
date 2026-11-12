@@ -159,7 +159,12 @@ type MenuItem struct {
 	// Break draws a line above the item, grouping the menu. A line above the first item draws nothing.
 	Break bool
 	// Sub makes the item open a submenu of its items, beside the menu, in place of being picked. The item shows a
-	// chevron at the right in place of a hint. A [Menu] and a [ContextMenu] open it; a pick in it runs their OnPickSub.
+	// chevron at the right in place of a hint. A [Menu], a [ContextMenu] and a [Menubar] open it; a pick in it runs
+	// their OnPickSub.
+	//
+	// A Sub with no items opens nothing: the item is a plain one, with no chevron, and a pick on it runs OnPick. So an
+	// "Open recent" with no files yet is picked like any other line. To show such a line but have nothing happen, set
+	// Disabled as well.
 	Sub *Submenu
 }
 
@@ -421,10 +426,11 @@ func (m *Menu) Highlighted() int { return m.hot }
 // It is for the node that opened the menu, which keeps the keyboard, to
 // pass keys on. It reports whether it used the key.
 //
-// With a submenu open, Right on an item with a submenu opens it and
-// moves the keys there, Left closes it and brings them back, and Escape
-// closes the submenu the keys are in, or one open beside it. The menu
-// passes the other keys on to the submenu that has the keys.
+// Right on an item with a submenu opens it and moves the keys there.
+// Left and Escape close one submenu at a time: one open beside the menu
+// that has the keys, as the pointer opens one, or else the submenu the
+// keys are in, bringing them back. The menu passes the other keys on to
+// the submenu that has the keys.
 func (m *Menu) Key(k input.KeyPress, u *gunim.UI) bool {
 	if m.subKey(k) {
 		return true
@@ -531,8 +537,7 @@ func (m *Menu) Transition(p gunim.Presence, f gunim.Frame) bool {
 		m.in.Animate(1, Quick.Get(f.Theme))
 	case gunim.Exiting:
 		m.in.Animate(0, Quick.Get(f.Theme))
-		m.leaving = true
-		m.stopWait()
+		m.leave()
 	case gunim.Present:
 	}
 	return !m.in.Active()
@@ -1298,6 +1303,7 @@ func (d *Dropdown) close(u *gunim.UI) { d.shut(u.Theme()) }
 // shut closes the list.
 func (d *Dropdown) shut(th *theme.Live) {
 	if d.popup != nil {
+		d.menu.leave()
 		d.popup.Close()
 		d.popup = nil
 	}
@@ -1577,6 +1583,7 @@ func (c *ContextMenu) close(u *gunim.UI) {
 	if c.popup == nil {
 		return
 	}
+	c.menu.leave()
 	c.popup.Close()
 	c.popup = nil
 	if u.Focused() == c {
