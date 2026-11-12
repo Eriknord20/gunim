@@ -147,7 +147,7 @@ func (p *Power) Handle(e input.Event, u *gunim.UI) bool {
 		p.click.Press(e, 0)
 		p.squash.Animate(1, widget.Quick.Get(u.Theme()))
 	case input.PointerUp:
-		if !p.held {
+		if !p.held || e.Button != input.ButtonPrimary {
 			return false
 		}
 		p.held = false

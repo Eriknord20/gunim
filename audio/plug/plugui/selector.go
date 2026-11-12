@@ -16,8 +16,9 @@ import (
 // as under a knob, its title and the chosen option's name, or the name
 // of the one under the pointer. A press squashes a lamp, and its release
 // over the same lamp picks the option; a press dragged away picks
-// nothing. The arrow keys step through the options. The wheel passes it
-// by, to scroll the pane it is in.
+// nothing. The arrow keys move through the lamps as they stand in the
+// grid, and Home and End go to the first and the last. The wheel passes
+// it by, to scroll the pane it is in.
 // Lamps light and dim gliding, the name turns over as it changes, and
 // each lamp's tooltip says what its option does. Tab brings the keyboard
 // to it, and a focus ring fades in round it.
@@ -44,6 +45,8 @@ type Selector struct {
 	Columns int
 	// Title is what it picks, written under its lamps as a knob's name.
 	Title string
+	// Name, where set, names the selector for a screen reader in place of Title.
+	Name  string
 	tip   widget.PartTip
 	cells []geom.Rect
 	size  geom.Size
@@ -274,13 +277,13 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 		i := s.at(e.Pos)
 		s.click.Press(e, i)
 		if i < 0 {
-			return false
+			return true
 		}
 		s.held, s.pressed = true, i
 		s.press.Animate(1, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
 	case input.PointerUp:
-		if !s.held {
+		if !s.held || e.Button != input.ButtonPrimary {
 			return false
 		}
 		s.held = false
@@ -296,18 +299,46 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
 			return false
 		}
-		switch e.Key {
-		case input.KeyLeft, input.KeyUp:
-			s.pick(s.sel-1, u)
-		case input.KeyRight, input.KeyDown:
-			s.pick(s.sel+1, u)
-		default:
+		i, ok := s.move(e.Key)
+		if !ok {
 			return false
 		}
+		s.pick(i, u)
 	default:
 		return false
 	}
 	return true
+}
+
+// move returns the option key moves to from the one chosen, and false for a key that moves nothing.
+func (s *Selector) move(key input.Key) (int, bool) {
+	cols, rows := s.grid()
+	i, n := s.sel, len(s.names)
+	switch key {
+	case input.KeyLeft:
+		i--
+	case input.KeyRight:
+		i++
+	case input.KeyUp, input.KeyDown:
+		d := 1
+		if rows > 1 {
+			d = cols
+		}
+		if key == input.KeyUp {
+			d = -d
+		}
+		// A lamp past the grid's edge leaves the choice where it is.
+		if i+d >= 0 && i+d < n {
+			i += d
+		}
+	case input.KeyHome:
+		i = 0
+	case input.KeyEnd:
+		i = n - 1
+	default:
+		return 0, false
+	}
+	return min(max(i, 0), n-1), true
 }
 
 func isLeave(e input.Event) bool {
@@ -316,9 +347,12 @@ func isLeave(e input.Event) bool {
 }
 
 // Access implements [gunim.Accessible]: a list of tabs named by its
-// title, one an option, as a segmented control reads.
+// Name or its title, one an option, as a segmented control reads.
 func (s *Selector) Access() access.Info {
 	info := access.Info{Role: access.RoleTabList, Name: s.Title, Value: s.names[s.sel]}
+	if s.Name != "" {
+		info.Name = s.Name
+	}
 	if s.Locked {
 		info.State = access.StateDisabled
 	}
