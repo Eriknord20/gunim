@@ -14,12 +14,13 @@ const MaxChordTones = 8
 // room for.
 const MaxChordAhead = 16 * time.Second
 
-// ChordNews is news of the chords a plugin's notes play over, for a
-// plugin with a [Descriptor.ChordAhead].
+// ChordNews is news of the chords the music plays over, for a plugin
+// with a [Descriptor.ChordAhead].
 //
-// The host follows each lane that plays the plugin, and the chords the
-// lane reads, voiced as the lane's own notes are voiced from them. It
-// tells of each chord once, with Coming, as the chord comes within
+// For an instrument, the host follows each lane that plays it, and the
+// chords the lane reads, voiced as the lane's own notes are voiced from
+// them. For an effect, the host picks the chords it follows. It tells
+// of each chord once, with Coming, as the chord comes within
 // ChordAhead, and with Moved or Removed as an edit changes it. A chord
 // has no event of its own as it starts: it starts at its Coming's
 // Frame, or its last Moved's, and sounds for Length frames, or until
@@ -63,7 +64,8 @@ type ChordNews struct {
 	ID int32
 	// Group is the lane whose chord it is, as an [Event]'s: the notes of
 	// that group play over it. Lanes that read different chords may
-	// play one plugin, each in a group of its own.
+	// play one plugin, each in a group of its own. An effect's chords
+	// come in the groups the host picks.
 	Group int32
 	// Length is how many frames the chord sounds from Frame, as the
 	// music has it, cut where a loop ends. Like a note's, it is news,

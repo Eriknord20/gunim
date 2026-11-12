@@ -40,12 +40,12 @@ type Processor interface {
 	Tail() int
 	// Reset drops the sound held from before, as playing jumps to
 	// another place. An instrument ends every note, lifts every group's
-	// pedal, returns each expression to its rest and forgets the notes
-	// told of in [Block.Upcoming], the chords told of in [Block.Chords]
-	// and the chord sounding; the host then starts the notes and puts
-	// down the pedals that sound at the new place, tells of the notes
-	// and chords coming within the look-ahead there, and of the chord
-	// sounding there, with a [ChordNow].
+	// pedal and returns each expression to its rest. A plugin forgets the
+	// notes told of in [Block.Upcoming], the chords told of in
+	// [Block.Chords] and the chord sounding; the host then starts the
+	// notes and puts down the pedals that sound at the new place, tells
+	// of the notes and chords coming within the look-ahead there, and of
+	// the chord sounding there, with a [ChordNow].
 	Reset()
 }
 
@@ -112,8 +112,9 @@ type Block struct {
 	// order the host sends it, for a plugin with a
 	// [Descriptor.LookAhead]. It holds as the block starts.
 	Upcoming []Upcoming
-	// Chords is news of the chords the notes play over, in the order
-	// the host sends it, for a plugin with a [Descriptor.ChordAhead].
+	// Chords is news of the chords the music plays over, in the order
+	// the host sends it, for a plugin with a [Descriptor.ChordAhead],
+	// an instrument or an effect.
 	Chords []ChordNews
 	// Position is where the block starts.
 	Position Position
