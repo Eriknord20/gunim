@@ -1252,6 +1252,15 @@ func (w *Window) Paint() {
 	w.ui.paintOwed()
 }
 
+// Still reports whether nothing in the window moves: no animation runs and nothing waits to be applied. A redraw
+// owed for a change already applied and timers set for later do not count. It must be called from the goroutine
+// calling Frame.
+func (w *Window) Still() bool {
+	defer w.drive()()
+	return !w.ui.animating && !w.queued() && len(w.popupIn) == 0 && len(w.dragIn) == 0 && len(w.leave) == 0 &&
+		len(w.fade) == 0
+}
+
 // Input hands the window a platform event, as a driver would: a pointer
 // move, a click, a key, the close button as [driver.CloseAsked]. It is
 // for a window driven with [Window.Frame],
