@@ -567,6 +567,7 @@ func TestTheSelectorsSetTheModeAndTheTarget(t *testing.T) {
 	}
 	pn.target.Layout(gunim.Constraints{Max: geom.Sz(selectorW, 100)}, gunim.Frame{}, gunim.Children{})
 	pn.target.Handle(input.PointerDown{Pos: pn.target.Cell(1).Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	pn.target.Handle(input.PointerUp{Pos: pn.target.Cell(1).Center(), Button: input.ButtonPrimary}, nil)
 	if h.values[TargetID] != 1 || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("the music slope picked, the target is %v, by %v", h.values[TargetID], h.log)
 	}
@@ -587,6 +588,7 @@ func TestTheSelectorsSetTheModeAndTheTarget(t *testing.T) {
 	h.log = nil
 	pn.mode.Layout(gunim.Constraints{Max: geom.Sz(selectorW, 100)}, gunim.Frame{}, gunim.Children{})
 	pn.mode.Handle(input.PointerDown{Pos: pn.mode.Cell(Cut).Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	pn.mode.Handle(input.PointerUp{Pos: pn.mode.Cell(Cut).Center(), Button: input.ButtonPrimary}, nil)
 	if h.values[ModeID] != Cut || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("Cut picked, the mode is %v, by %v", h.values[ModeID], h.log)
 	}
