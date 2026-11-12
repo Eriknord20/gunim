@@ -159,7 +159,8 @@ type MenuItem struct {
 	// Break draws a line above the item, grouping the menu. A line above the first item draws nothing.
 	Break bool
 	// Sub makes the item open a submenu of its items, beside the menu, in place of being picked. The item shows a
-	// chevron at the right in place of a hint. A [Menu] and a [ContextMenu] open it; a pick in it runs their OnPickSub.
+	// chevron at the right in place of a hint. A [Menu], a [ContextMenu] and a [Menubar] open it; a pick in it runs
+	// their OnPickSub.
 	Sub *Submenu
 }
 

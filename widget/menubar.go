@@ -54,6 +54,18 @@ type BarMenu struct {
 // menu, and F10 or Alt pressed alone puts the keyboard on the bar with
 // the first title lit, for Left, Right and Down to work. While Alt is
 // held, or the keyboard opened the bar, the access keys are underlined.
+//
+// An item of a bar's menu may open a submenu ([MenuItem.Sub]), as in a
+// [Menu]: once the pointer rests on it, or at once on a click, Enter or
+// Right. Left and Escape come back out of the submenu one level at a
+// time, and only with no submenu open do Left and Right move between the
+// bar's menus, or back to a compact bar's list. A pick in a submenu
+// closes the bar's menus as any pick does, and runs OnPickSub:
+//
+//	b := widget.NewMenubar(widget.BarMenu{Title: "&View", Items: []widget.MenuItem{
+//		{Label: "&Zoom", Sub: &widget.Submenu{Items: widget.Labels("Zoom &in", "Zoom &out")}},
+//	}})
+//	b.OnPickSub = func(menu int, path []int, u *gunim.UI) gunim.Intent { ... } // path [0 1] is Zoom out
 type Menubar struct {
 	anim.Group
 	Menus []BarMenu
@@ -69,6 +81,11 @@ type Menubar struct {
 	// once the menu has closed. It may act in the window through u; a
 	// non-nil result is sent to the application as the bar's intent.
 	OnPick func(menu, item int, u *gunim.UI) gunim.Intent
+	// OnPickSub runs in the same way when an item of a submenu is picked,
+	// with the menu and the item's path: the item of the menu whose
+	// submenu holds it, then the item in that submenu, and on down for a
+	// submenu in a submenu; see [Menu.OnPickSub].
+	OnPickSub func(menu int, path []int, u *gunim.UI) gunim.Intent
 	// OnHighlight runs on the UI goroutine when the highlight moves,
 	// with the open menu and the item highlighted on it, -1 for none.
 	// Closing the menus runs it with -1 for both. A non-nil result is sent
@@ -155,10 +172,7 @@ func (b *Menubar) Open(i int, u *gunim.UI) {
 		b.highlight(i, item, u)
 		return nil
 	}
-	menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
-		b.pick(i, item, u)
-		return nil
-	}
+	b.listen(menu, i)
 	b.menu = menu
 	span := b.span(i)
 	b.popup = u.OpenPopup(b, menu, gunim.PopupOptions{
@@ -279,10 +293,7 @@ func (b *Menubar) openBeside(i int, u *gunim.UI) {
 		b.highlight(i, item, u)
 		return nil
 	}
-	menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
-		b.pick(i, item, u)
-		return nil
-	}
+	b.listen(menu, i)
 	b.menu = menu
 	u.Insert(b.panel, menu)
 	b.highlight(i, -1, u)
@@ -309,12 +320,65 @@ func (b *Menubar) highlight(menu, item int, u *gunim.UI) {
 	}
 }
 
+// listen has the bar hear the picks in m, menu i, and in its submenus.
+func (b *Menubar) listen(m *Menu, i int) {
+	m.OnPick = func(item int, u *gunim.UI) gunim.Intent {
+		b.pick(i, item, u)
+		return nil
+	}
+	m.OnPickSub = func(path []int, u *gunim.UI) gunim.Intent {
+		b.pickSub(i, path, u)
+		return nil
+	}
+}
+
 // pick closes the menus and runs OnPick.
 func (b *Menubar) pick(menu, item int, u *gunim.UI) {
 	b.Close(u)
 	if b.OnPick != nil {
 		send(u, b, b.OnPick(menu, item, u))
 	}
+}
+
+// pickSub closes the menus, submenus and all, and runs OnPickSub.
+func (b *Menubar) pickSub(menu int, path []int, u *gunim.UI) {
+	b.Close(u)
+	if b.OnPickSub != nil {
+		send(u, b, b.OnPickSub(menu, path, u))
+	}
+}
+
+// subKey works the submenus of the menu open for Right, Left and Escape, and reports whether it took the key. Right
+// on an item with a submenu opens it and goes in; inside a submenu, or with one open, Right goes no further. Left
+// and Escape come back out of one submenu. With no submenu open the key is left to the bar, to move between its
+// menus or close them.
+func (b *Menubar) subKey(k input.KeyPress, u *gunim.UI) bool {
+	m := b.menu
+	if m == nil {
+		return false
+	}
+	km := m.keyMenu()
+	switch k.Key {
+	case input.KeyRight:
+		if km.hasSub(km.hot) {
+			m.Key(k, u)
+			return true
+		}
+		return m.sub != nil
+	case input.KeyLeft:
+		switch {
+		case km != m:
+			m.Key(k, u)
+		case m.sub != nil:
+			m.closeSub()
+		default:
+			return false
+		}
+		return true
+	case input.KeyEscape:
+		return m.sub != nil && m.Key(k, u)
+	}
+	return false
 }
 
 // Close closes the open menu, and a compact bar's list, and gives the
@@ -639,6 +703,10 @@ func (b *Menubar) key(k input.KeyPress, u *gunim.UI) bool {
 	if b.open < 0 {
 		return false
 	}
+	if b.subKey(k, u) {
+		u.Invalidate()
+		return true
+	}
 	n := len(b.Menus)
 	switch k.Key {
 	case input.KeyLeft:
@@ -677,6 +745,10 @@ func (b *Menubar) compactKey(k input.KeyPress, u *gunim.UI) bool {
 	if !b.IsOpen() {
 		return false
 	}
+	if k.Key == input.KeyEscape && b.subKey(k, u) {
+		u.Invalidate()
+		return true
+	}
 	if k.Key == input.KeyEscape || k.Key == input.KeyF10 {
 		u.Cue(gunim.CueClose, b)
 		b.Close(u)
@@ -689,6 +761,8 @@ func (b *Menubar) compactKey(k input.KeyPress, u *gunim.UI) bool {
 	var used bool
 	switch {
 	case altOnly(k.Mods) && b.openByKey(keyRune(k), u):
+		used = true
+	case b.inMenu && (k.Key == input.KeyLeft || k.Key == input.KeyRight) && b.subKey(k, u):
 		used = true
 	case b.inMenu && k.Key == input.KeyLeft:
 		// Back out to the list, the menu left open beside it.
