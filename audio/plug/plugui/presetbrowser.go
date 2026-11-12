@@ -66,6 +66,19 @@ type PresetBrowser struct {
 	// revealing is a reveal asked for and not yet laid out, revealJump says it puts new content in place at once,
 	// and laid that the columns have had room before.
 	revealing, revealJump, laid bool
+	// picked is the preset the browser last played, and asked what the source's Current gave as it did. While
+	// pending, picked stands for the preset playing, until the source's Current moves on from asked.
+	picked    placed
+	hasPicked bool
+	pending   bool
+	asked     plug.Preset
+	askedOK   bool
+}
+
+// placed names a preset by its place in the list: the preset, and how many of the same name come before it.
+type placed struct {
+	p   plug.Preset
+	nth int
 }
 
 // NewPresetBrowser returns a browser of src's presets.
@@ -83,7 +96,8 @@ func NewPresetBrowser(src PresetSource) *PresetBrowser {
 	b.groups = &groupList{b: b, hover: -1, pill: anim.NewFloat(0), lit: anim.NewFloat(0), hoverY: anim.NewFloat(0),
 		ring: anim.NewFloat(0), press: rowPress{down: anim.NewFloat(0)}}
 	b.presets = &presetList{b: b, hover: -1, pill: anim.NewFloat(0), shown: anim.NewFloat(0), lit: anim.NewFloat(0),
-		hoverY: anim.NewFloat(0), ring: anim.NewFloat(0), press: rowPress{click: widget.Clicker{Repeats: true}, down: anim.NewFloat(0)}}
+		hoverY: anim.NewFloat(0), ring: anim.NewFloat(0),
+		press: rowPress{click: widget.Clicker{Repeats: true}, down: anim.NewFloat(0)}}
 	b.Add(b.groups.pill, b.groups.lit, b.groups.hoverY, b.groups.ring, b.groups.press.down, b.presets.pill,
 		b.presets.shown, b.presets.lit, b.presets.hoverY, b.presets.ring, b.presets.press.down)
 	b.gs, b.ps = widget.NewScroll(b.groups), widget.NewScroll(b.presets)
@@ -96,7 +110,7 @@ func NewPresetBrowser(src PresetSource) *PresetBrowser {
 func (b *PresetBrowser) Refresh(u *gunim.UI) {
 	b.list = b.src.Presets()
 	b.field.Placeholder = fmt.Sprintf("Search %d presets", len(b.list))
-	if cur, ok := b.src.Current(); ok {
+	if cur, ok := b.current(); ok {
 		b.bank, b.group = cur.Bank, cur.Group
 	}
 	if !b.hasGroup(b.bank, b.group) {
@@ -119,7 +133,61 @@ func (b *PresetBrowser) hasGroup(bank, group string) bool {
 }
 
 // current is the preset playing, or false.
-func (b *PresetBrowser) current() (plug.Preset, bool) { return b.src.Current() }
+func (b *PresetBrowser) current() (plug.Preset, bool) {
+	if i := b.playing(); i >= 0 {
+		return b.list[i], true
+	}
+	return plug.Preset{}, false
+}
+
+// playing returns the place in the list of the preset playing, or -1. That is the one the browser last played, until
+// the source's Current moves on from what it gave then; after, the source's Current, the one the browser played where
+// two share its name.
+func (b *PresetBrowser) playing() int {
+	cur, ok := b.src.Current()
+	if b.pending {
+		if ok == b.askedOK && (!ok || cur.Same(b.asked)) {
+			if i := b.indexOf(b.picked); i >= 0 {
+				return i
+			}
+		}
+		b.pending = false
+	}
+	if !ok {
+		return -1
+	}
+	if b.hasPicked && b.picked.p.Same(cur) {
+		if i := b.indexOf(b.picked); i >= 0 {
+			return i
+		}
+	}
+	return slices.IndexFunc(b.list, cur.Same)
+}
+
+// placeOf returns the place of the preset at i in the list.
+func (b *PresetBrowser) placeOf(i int) placed {
+	n := 0
+	for _, p := range b.list[:i] {
+		if p.Same(b.list[i]) {
+			n++
+		}
+	}
+	return placed{p: b.list[i], nth: n}
+}
+
+// indexOf returns where the preset at place pl stands in the list, or -1.
+func (b *PresetBrowser) indexOf(pl placed) int {
+	n := 0
+	for i, p := range b.list {
+		if p.Same(pl.p) {
+			if n == pl.nth {
+				return i
+			}
+			n++
+		}
+	}
+	return -1
+}
 
 // banks are the banks, in the order the presets come.
 func (b *PresetBrowser) banks() []string {
@@ -132,13 +200,13 @@ func (b *PresetBrowser) banks() []string {
 	return out
 }
 
-// search returns the presets that match the query, word by word.
-func (b *PresetBrowser) search() []plug.Preset {
+// search returns where the presets that match the query, word by word, stand in the list.
+func (b *PresetBrowser) search() []int {
 	words := strings.Fields(strings.ToLower(b.query))
-	var out []plug.Preset
-	for _, p := range b.list {
+	var out []int
+	for i, p := range b.list {
 		if p.Matches(words) {
-			out = append(out, p)
+			out = append(out, i)
 		}
 	}
 	return out
@@ -272,9 +340,11 @@ func (b *PresetBrowser) showGroup(bank, group string, u *gunim.UI) {
 	b.ps.JumpTo(0)
 }
 
-// pick plays p.
-func (b *PresetBrowser) pick(p plug.Preset, u *gunim.UI) {
-	b.src.Pick(p, u)
+// pick plays the preset at i in the list.
+func (b *PresetBrowser) pick(i int, u *gunim.UI) {
+	b.asked, b.askedOK = b.src.Current()
+	b.picked, b.hasPicked, b.pending = b.placeOf(i), true, true
+	b.src.Pick(b.list[i], u)
 	b.glide(u)
 	if b.Picked != nil {
 		b.Picked(u)
@@ -282,77 +352,81 @@ func (b *PresetBrowser) pick(p plug.Preset, u *gunim.UI) {
 }
 
 // Skip plays the preset by from the one playing, in the order the browser lists them, on into the group after or
-// before and round from the last to the first; during a search, through what it finds. With another group shown than
-// the playing preset's, it plays the first preset of that group, or its last going back. The browser shows the group
-// of the preset it plays.
+// before and round from the last to the first; during a search, through what it finds, from its first or its last
+// where the preset playing is not among them. With the browser drawn and another group shown than the playing
+// preset's, it plays the first preset of that group, or its last going back; closed, it steps from the preset
+// playing. The browser shows the group of the preset it plays.
 func (b *PresetBrowser) Skip(by int, u *gunim.UI) {
 	list, i := b.listed()
 	if b.query == "" {
 		list, i = b.all()
 	}
-	if len(list) == 0 {
+	n := len(list)
+	if n == 0 {
 		return
 	}
-	shown := func(p plug.Preset) bool { return p.Bank == b.bank && p.Group == b.group }
-	if i < 0 || b.query == "" && !shown(list[i]) {
+	from := i
+	if from < 0 {
+		from = -1
+		if by < 0 {
+			from = 0
+		}
+	}
+	shown := func(j int) bool { p := b.list[j]; return p.Bank == b.bank && p.Group == b.group }
+	if b.query == "" && u.Drawn(b) && (i < 0 || !shown(list[i])) {
 		// Step into the group shown, as one clicked: from just before its first preset, or just after its last.
-		lo, hi := slices.IndexFunc(list, shown), 0
-		for j := range list {
-			if shown(list[j]) {
-				hi = j
+		if lo := slices.IndexFunc(list, shown); lo >= 0 {
+			hi := lo
+			for hi+1 < n && shown(list[hi+1]) {
+				hi++
 			}
-		}
-		if i = lo - 1; by < 0 {
-			i = hi + 1
-		}
-		if lo < 0 {
-			i = -1
+			from = lo - 1
 			if by < 0 {
-				i = 0
+				from = hi + 1
 			}
 		}
 	}
-	i = ((i+by)%len(list) + len(list)) % len(list)
-	b.pick(list[i], u)
+	b.pick(list[((from+by)%n+n)%n], u)
 	b.Follow(u)
 }
 
-// all returns every preset, group by group in the order the groups column lists them, and the index of the one
-// playing among them, or -1.
-func (b *PresetBrowser) all() (list []plug.Preset, at int) {
+// all returns where every preset stands in the list, group by group in the order the groups column lists them, and
+// the index among them of the one playing, or -1.
+func (b *PresetBrowser) all() (list []int, at int) {
 	type key struct{ bank, group string }
-	of := map[key][]plug.Preset{}
-	for _, p := range b.list {
+	of := map[key][]int{}
+	for i, p := range b.list {
 		k := key{p.Bank, p.Group}
-		of[k] = append(of[k], p)
+		of[k] = append(of[k], i)
 	}
 	at = -1
-	cur, ok := b.current()
-	list = make([]plug.Preset, 0, len(b.list))
+	cur := b.playing()
+	list = make([]int, 0, len(b.list))
 	for _, r := range b.groups.rows {
 		if r.header {
 			continue
 		}
-		for _, p := range of[key{r.bank, r.group}] {
-			if ok && at < 0 && p.Same(cur) {
+		for _, i := range of[key{r.bank, r.group}] {
+			if i == cur {
 				at = len(list)
 			}
-			list = append(list, p)
+			list = append(list, i)
 		}
 	}
 	return list, at
 }
 
-// listed returns the presets the column lists, and the index of the one playing among them, or -1.
-func (b *PresetBrowser) listed() (list []plug.Preset, at int) {
+// listed returns where the presets the column lists stand in the list, and the index among them of the one playing,
+// or -1.
+func (b *PresetBrowser) listed() (list []int, at int) {
 	at = -1
-	cur, ok := b.current()
+	cur := b.playing()
 	for _, r := range b.presets.rows {
 		if !r.header {
-			if ok && at < 0 && r.p.Same(cur) {
+			if r.at == cur {
 				at = len(list)
 			}
-			list = append(list, r.p)
+			list = append(list, r.at)
 		}
 	}
 	return list, at
@@ -489,7 +563,9 @@ type listRow struct {
 	label       string
 	count       int
 	p           plug.Preset
-	y, h        float32
+	// at is where an item's preset stands in the browser's list.
+	at   int
+	y, h float32
 	// key names the row by what it shows, apart from every other row of
 	// its column (keyRows).
 	key uint64
@@ -511,39 +587,57 @@ type groupList struct {
 	press                   rowPress
 }
 
-// rowPress follows a click on a column's rows: the row pressed lights a little more, and the click lands on the
-// release over the same row.
+// rowPress follows a click on a column's rows: the row pressed lights a little more while the pointer stays on it,
+// and the click lands on the release over the same row.
 type rowPress struct {
 	click widget.Clicker
-	// down is how far the press shows, and held says it is still down.
+	// down is how far the press shows on row, and held says it is still down.
 	down *anim.Float
+	row  int
 	held bool
 }
 
 // start takes e, a press on row i or on none for a negative i, and reports whether it took it.
 func (r *rowPress) start(e input.PointerDown, i int, u *gunim.UI) bool {
-	r.click.Press(e, i)
 	if e.Button != input.ButtonPrimary {
 		return false
 	}
+	r.click.Press(e, i)
 	if r.held = i >= 0; !r.held {
 		r.down.Animate(0, widget.Quick.Get(u.Theme()))
 		return false
 	}
+	r.row = i
 	r.down.Animate(1, widget.Quick.Get(u.Theme()))
 	u.Invalidate()
 	return true
 }
 
+// over takes the pointer moved over row i while the press is held: the press shows only on the row pressed.
+func (r *rowPress) over(i int, u *gunim.UI) {
+	if r.held {
+		r.down.Animate(anim.OnOff(i == r.row), widget.Quick.Get(u.Theme()))
+		u.Invalidate()
+	}
+}
+
 // end takes e, the release over row i, and reports whether the click lands and whether a press was held.
 func (r *rowPress) end(e input.PointerUp, i int, u *gunim.UI) (lands, held bool) {
-	if !r.held {
+	if !r.held || e.Button != input.ButtonPrimary {
 		return false, false
 	}
 	r.held = false
 	r.down.Animate(0, widget.Quick.Get(u.Theme()))
 	u.Invalidate()
 	return r.click.Release(e, i), true
+}
+
+// paint draws the press on its row of rows, in a column w wide.
+func (r *rowPress) paint(p *paint.Painter, rows []listRow, w float32, ink color.NRGBA) {
+	if d := r.down.Value(); d > 0.01 && r.row < len(rows) {
+		const inset = 6
+		p.RRect(geom.Rc(inset, rows[r.row].y, w-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*d)))
+	}
 }
 
 // Focusable implements [gunim.Focusable]: a click or Tab puts the keyboard in the groups.
@@ -609,6 +703,7 @@ func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
 		return e.Mods == 0 && g.move(e.Key, u)
 	case input.PointerMove:
 		g.setHover(g.at(e.Pos.Y), u)
+		g.press.over(g.item(e.Pos.Y), u)
 		return false
 	case input.PointerLeave:
 		g.setHover(-1, u)
@@ -670,8 +765,9 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := g.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a+0.06*g.press.down.Value())))
+		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
+	g.press.paint(p, g.rows, box.W, ink)
 	if g.index(g.b.bank, g.b.group) >= 0 {
 		y := rowY(g.rows, g.pill.Value())
 		p.RRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.2)))
@@ -778,29 +874,30 @@ func (l *presetList) fill() {
 			return
 		}
 		add(listRow{header: true, bank: l.b.bank, group: l.b.group, label: l.b.group, h: headH})
-		for _, p := range l.b.list {
+		for i, p := range l.b.list {
 			if p.Bank == l.b.bank && p.Group == l.b.group {
-				add(listRow{bank: p.Bank, group: p.Group, p: p, label: p.Name, h: rowH})
+				add(listRow{bank: p.Bank, group: p.Group, p: p, at: i, label: p.Name, h: rowH})
 			}
 		}
 		return
 	}
-	for _, p := range l.b.search() {
+	for _, i := range l.b.search() {
+		p := l.b.list[i]
 		if n := len(l.rows); n == 0 || l.rows[n-1].bank != p.Bank || l.rows[n-1].group != p.Group {
 			add(listRow{header: true, bank: p.Bank, group: p.Group, label: p.Group, h: headH})
 		}
-		add(listRow{bank: p.Bank, group: p.Group, p: p, label: p.Name, h: rowH})
+		add(listRow{bank: p.Bank, group: p.Group, p: p, at: i, label: p.Name, h: rowH})
 	}
 }
 
 // current returns the row of the preset playing, or -1.
 func (l *presetList) current() int {
-	cur, ok := l.b.current()
-	if !ok {
+	cur := l.b.playing()
+	if cur < 0 {
 		return -1
 	}
 	for i, r := range l.rows {
-		if !r.header && r.p.Same(cur) {
+		if !r.header && r.at == cur {
 			return i
 		}
 	}
@@ -852,6 +949,7 @@ func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 		return true
 	case input.PointerMove:
 		l.setHover(l.at(e.Pos.Y), u)
+		l.press.over(l.item(e.Pos.Y), u)
 		return false
 	case input.PointerLeave:
 		l.setHover(-1, u)
@@ -863,7 +961,7 @@ func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 		lands, held := l.press.end(e, i, u)
 		if lands {
 			u.Cue(gunim.CuePress, l)
-			l.b.pick(l.rows[i].p, u)
+			l.b.pick(l.rows[i].at, u)
 		}
 		return held
 	}
@@ -888,8 +986,9 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := l.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a+0.06*l.press.down.Value())))
+		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
 	}
+	l.press.paint(p, l.rows, box.W, ink)
 	if a := l.shown.Value(); a > 0.01 {
 		y := rowY(l.rows, l.pill.Value())
 		p.ShadowRRect(geom.Rc(inset, y, box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(accent, 0.28*a)),
@@ -958,7 +1057,7 @@ func (l *presetList) AccessAct(r access.Request, u *gunim.UI) bool {
 	if !ok || l.rows[i].header {
 		return false
 	}
-	l.b.pick(l.rows[i].p, u)
+	l.b.pick(l.rows[i].at, u)
 	return true
 }
 

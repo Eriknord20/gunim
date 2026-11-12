@@ -851,9 +851,11 @@ func TestSkipsStartInTheGroupShown(t *testing.T) {
 		src := kits(4)
 		src.cur = src.list[5]
 		b := NewPresetBrowser(src)
-		mountBrowser(t, b)
-		b.showGroup("Factory", "Bass", nil)
-		b.Skip(c.by, nil)
+		w := mountBrowser(t, b)
+		patch(t, w, func(b *PresetBrowser, u *gunim.UI) {
+			b.showGroup("Factory", "Bass", u)
+			b.Skip(c.by, u)
+		})
 		if want := []string{c.want}; !slices.Equal(src.picked, want) || b.group != "Bass" {
 			t.Errorf("a skip of %d from Kits with Bass shown picked %v and shows %s, want %v in Bass", c.by, src.picked,
 				b.group, want)
