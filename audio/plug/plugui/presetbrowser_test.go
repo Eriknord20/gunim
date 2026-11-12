@@ -750,3 +750,52 @@ func TestTabIntoAColumnKeepsThePresetPlayingInView(t *testing.T) {
 	shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), "the preset playing")
 	shows(t, w, b.gs, b.groups.rowRect(b.groups.index(b.bank, b.group)), "the group shown")
 }
+
+// A click on a preset or a group acts on the release over the same row. A press dragged off the row does nothing.
+func TestARowActsOnTheRelease(t *testing.T) {
+	src := newPresetHost()
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	w360 := float32(360)
+	gw := float32(int(w360 * groupsW))
+	top := float32(fieldH + colGap)
+	sub := slices.IndexFunc(b.presets.rows, func(r listRow) bool { return !r.header && r.p.Name == "Sub" })
+	subAt := geom.Pt(gw+colGap+20, top+b.presets.rows[sub].y+rowH/2)
+	pads := b.groups.index("Factory", "Pads")
+	padsAt := geom.Pt(20, top+b.groups.rows[pads].y+rowH/2)
+	click := func(down, up geom.Point) {
+		w.Input(input.PointerMove{Pos: down})
+		w.Input(input.PointerDown{Pos: down, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		frames(w, 1)
+		w.Input(input.PointerMove{Pos: up})
+		w.Input(input.PointerUp{Pos: up, Button: input.ButtonPrimary, Time: time.Now()})
+		frames(w, 30)
+	}
+	w.Input(input.PointerMove{Pos: subAt})
+	w.Input(input.PointerDown{Pos: subAt, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	frames(w, 1)
+	if len(src.picked) != 0 {
+		t.Fatalf("the press alone picked %v", src.picked)
+	}
+	if v := b.presets.press.down.Value(); v <= 0 {
+		t.Errorf("pressed, the row shows no press: %v", v)
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(subAt.X, 470)})
+	w.Input(input.PointerUp{Pos: geom.Pt(subAt.X, 470), Button: input.ButtonPrimary, Time: time.Now()})
+	frames(w, 30)
+	if len(src.picked) != 0 {
+		t.Fatalf("a press dragged off the row picked %v", src.picked)
+	}
+	click(padsAt, geom.Pt(padsAt.X, 470))
+	if b.group != "Bass" {
+		t.Fatalf("a press dragged off Pads showed %s", b.group)
+	}
+	click(subAt, subAt)
+	if want := []string{"Sub"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("a click on Sub picked %v, want %v", src.picked, want)
+	}
+	click(padsAt, padsAt)
+	if b.group != "Pads" {
+		t.Fatalf("a click on Pads shows %s", b.group)
+	}
+}

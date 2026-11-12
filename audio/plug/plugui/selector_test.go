@@ -2,6 +2,7 @@ package plugui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -16,6 +17,7 @@ func TestASelectorPicksByLampAndKeys(t *testing.T) {
 	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
 	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
 	s.Handle(input.PointerDown{Pos: s.cells[2].Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	s.Handle(input.PointerUp{Pos: s.cells[2].Center(), Button: input.ButtonPrimary}, nil)
 	// The wheel passes it by, to scroll the pane it is in.
 	if s.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || s.Selected() != 2 {
 		t.Fatalf("the wheel took the selector from 2 to %d", s.Selected())
@@ -134,5 +136,49 @@ func TestArrowsWithCtrlAltOrSuperPassTheSelectorBy(t *testing.T) {
 		if s.Handle(input.KeyPress{Key: input.KeyRight, Mods: m}, nil) || s.Selected() != 0 {
 			t.Errorf("Right with %v took the selector to %d", m, s.Selected())
 		}
+	}
+}
+
+// A click on a lamp picks its option on the release. A press dragged off the lamp, or onto another, picks nothing.
+func TestASelectorPicksOnTheRelease(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	var picked []int
+	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
+	w := stageNode(t, s)
+	at := func(i int) geom.Point { return s.Cell(i).Center() }
+	down := func(p geom.Point) {
+		w.Input(input.PointerMove{Pos: p})
+		w.Input(input.PointerDown{Pos: p, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		w.Frame(time.Second / 60)
+	}
+	up := func(p geom.Point) {
+		w.Input(input.PointerMove{Pos: p})
+		w.Input(input.PointerUp{Pos: p, Button: input.ButtonPrimary, Time: time.Now()})
+		frames(w, 30)
+	}
+	down(at(2))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("the press alone picked %d", s.Selected())
+	}
+	w.Frame(time.Second / 60)
+	if v := s.press.Value(); v <= 0 {
+		t.Errorf("pressed, the lamp shows no press: %v", v)
+	}
+	up(geom.Pt(at(2).X, 300))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("a press dragged away picked %d", s.Selected())
+	}
+	if v := s.press.Value(); v != 0 {
+		t.Errorf("let go away, the lamp still shows a press of %v", v)
+	}
+	down(at(2))
+	up(at(1))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("a press dragged onto another lamp picked %d", s.Selected())
+	}
+	down(at(2))
+	up(at(2))
+	if s.Selected() != 2 || len(picked) != 1 || picked[0] != 2 {
+		t.Fatalf("a click on C picked %v, want [2]", picked)
 	}
 }

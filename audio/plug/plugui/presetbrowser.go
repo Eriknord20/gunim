@@ -80,11 +80,11 @@ func NewPresetBrowser(src PresetSource) *PresetBrowser {
 		return nil
 	}
 	b.groups = &groupList{b: b, hover: -1, pill: anim.NewFloat(0), lit: anim.NewFloat(0), hoverY: anim.NewFloat(0),
-		ring: anim.NewFloat(0)}
+		ring: anim.NewFloat(0), press: rowPress{down: anim.NewFloat(0)}}
 	b.presets = &presetList{b: b, hover: -1, pill: anim.NewFloat(0), shown: anim.NewFloat(0), lit: anim.NewFloat(0),
-		hoverY: anim.NewFloat(0), ring: anim.NewFloat(0)}
-	b.Add(b.groups.pill, b.groups.lit, b.groups.hoverY, b.groups.ring, b.presets.pill, b.presets.shown, b.presets.lit,
-		b.presets.hoverY, b.presets.ring)
+		hoverY: anim.NewFloat(0), ring: anim.NewFloat(0), press: rowPress{click: widget.Clicker{Repeats: true}, down: anim.NewFloat(0)}}
+	b.Add(b.groups.pill, b.groups.lit, b.groups.hoverY, b.groups.ring, b.groups.press.down, b.presets.pill,
+		b.presets.shown, b.presets.lit, b.presets.hoverY, b.presets.ring, b.presets.press.down)
 	b.gs, b.ps = widget.NewScroll(b.groups), widget.NewScroll(b.presets)
 	b.Refresh(nil)
 	return b
@@ -460,6 +460,42 @@ type groupList struct {
 	// far the focus ring shows.
 	pill, lit, hoverY, ring *anim.Float
 	size                    geom.Size
+	press                   rowPress
+}
+
+// rowPress follows a click on a column's rows: the row pressed lights a little more, and the click lands on the
+// release over the same row.
+type rowPress struct {
+	click widget.Clicker
+	// down is how far the press shows, and held says it is still down.
+	down *anim.Float
+	held bool
+}
+
+// start takes e, a press on row i or on none for a negative i, and reports whether it took it.
+func (r *rowPress) start(e input.PointerDown, i int, u *gunim.UI) bool {
+	r.click.Press(e, i)
+	if e.Button != input.ButtonPrimary {
+		return false
+	}
+	if r.held = i >= 0; !r.held {
+		r.down.Animate(0, widget.Quick.Get(u.Theme()))
+		return false
+	}
+	r.down.Animate(1, widget.Quick.Get(u.Theme()))
+	u.Invalidate()
+	return true
+}
+
+// end takes e, the release over row i, and reports whether the click lands and whether a press was held.
+func (r *rowPress) end(e input.PointerUp, i int, u *gunim.UI) (lands, held bool) {
+	if !r.held {
+		return false, false
+	}
+	r.held = false
+	r.down.Animate(0, widget.Quick.Get(u.Theme()))
+	u.Invalidate()
+	return r.click.Release(e, i), true
 }
 
 // Focusable implements [gunim.Focusable]: a click or Tab puts the keyboard in the groups.
@@ -514,7 +550,7 @@ func (g *groupList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children)
 func (g *groupList) at(y float32) int { return rowAt(g.rows, y) }
 
 // Handle implements [gunim.Handler]: the pointer lights a group, and a
-// click shows its presets. Up, Down, Home, End, Page Up and Page Down
+// click shows its presets on the release. Up, Down, Home, End, Page Up and Page Down
 // show the group they move to.
 func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
 	if followRing(g.ring, e, u) {
@@ -530,18 +566,25 @@ func (g *groupList) Handle(e input.Event, u *gunim.UI) bool {
 		g.setHover(-1, u)
 		return false
 	case input.PointerDown:
-		if e.Button != input.ButtonPrimary {
-			return false
+		return g.press.start(e, g.item(e.Pos.Y), u)
+	case input.PointerUp:
+		i := g.item(e.Pos.Y)
+		lands, held := g.press.end(e, i, u)
+		if lands {
+			u.Cue(gunim.CuePress, g)
+			g.b.showGroup(g.rows[i].bank, g.rows[i].group, u)
 		}
-		i := g.at(e.Pos.Y)
-		if i < 0 || g.rows[i].header {
-			return false
-		}
-		u.Cue(gunim.CuePress, g)
-		g.b.showGroup(g.rows[i].bank, g.rows[i].group, u)
-		return true
+		return held
 	}
 	return false
+}
+
+// item returns the group at y, or -1 for a caption or nothing.
+func (g *groupList) item(y float32) int {
+	if i := g.at(y); i >= 0 && !g.rows[i].header {
+		return i
+	}
+	return -1
 }
 
 // move shows the group key moves to from the group shown, and reports whether key moves.
@@ -579,7 +622,7 @@ func (g *groupList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := g.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, g.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a+0.06*g.press.down.Value())))
 	}
 	if g.index(g.b.bank, g.b.group) >= 0 {
 		y := rowY(g.rows, g.pill.Value())
@@ -667,6 +710,7 @@ type presetList struct {
 	// shows, at hoverY, and ring how far the focus ring shows.
 	pill, shown, lit, hoverY, ring *anim.Float
 	size                           geom.Size
+	press                          rowPress
 }
 
 // Focusable implements [gunim.Focusable]: a click or Tab puts the keyboard in the presets.
@@ -736,7 +780,7 @@ func (l *presetList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children
 func (l *presetList) at(y float32) int { return rowAt(l.rows, y) }
 
 // Handle implements [gunim.Handler]: the pointer lights a preset, and a
-// click picks it. Home, End, Page Up and Page Down play the preset they
+// click picks it on the release. Home, End, Page Up and Page Down play the preset they
 // move to; Up and Down go on to the browser.
 func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 	if followRing(l.ring, e, u) {
@@ -765,18 +809,25 @@ func (l *presetList) Handle(e input.Event, u *gunim.UI) bool {
 		l.setHover(-1, u)
 		return false
 	case input.PointerDown:
-		if e.Button != input.ButtonPrimary {
-			return false
+		return l.press.start(e, l.item(e.Pos.Y), u)
+	case input.PointerUp:
+		i := l.item(e.Pos.Y)
+		lands, held := l.press.end(e, i, u)
+		if lands {
+			u.Cue(gunim.CuePress, l)
+			l.b.pick(l.rows[i].p, u)
 		}
-		i := l.at(e.Pos.Y)
-		if i < 0 || l.rows[i].header {
-			return false
-		}
-		u.Cue(gunim.CuePress, l)
-		l.b.pick(l.rows[i].p, u)
-		return true
+		return held
 	}
 	return false
+}
+
+// item returns the preset at y, or -1 for a caption or nothing.
+func (l *presetList) item(y float32) int {
+	if i := l.at(y); i >= 0 && !l.rows[i].header {
+		return i
+	}
+	return -1
 }
 
 func (l *presetList) setHover(i int, u *gunim.UI) {
@@ -789,7 +840,7 @@ func (l *presetList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 	vis, culled := p.Visible()
 	inset := float32(6)
 	if a := l.lit.Value(); a > 0.01 {
-		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a)))
+		p.RRect(geom.Rc(inset, l.hoverY.Value(), box.W-2*inset, rowH), 7, paint.Solid(paint.Faded(ink, 0.06*a+0.06*l.press.down.Value())))
 	}
 	if a := l.shown.Value(); a > 0.01 {
 		y := rowY(l.rows, l.pill.Value())
