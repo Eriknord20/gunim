@@ -543,6 +543,9 @@ func (m *Menu) Transition(p gunim.Presence, f gunim.Frame) bool {
 	return !m.in.Active()
 }
 
+// WouldScroll implements [gunim.WheelScroller]: true while the wheel would scroll the rows.
+func (m *Menu) WouldScroll(delta geom.Point) bool { return m.scroll.WouldScroll(delta) }
+
 // Handle implements [gunim.Handler].
 func (m *Menu) Handle(e input.Event, u *gunim.UI) bool {
 	defer m.toldUnlessPicked(m.hot, m.picks, u)

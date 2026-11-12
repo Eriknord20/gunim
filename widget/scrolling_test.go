@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -139,5 +140,38 @@ func TestAListSaysWhereTheWheelWouldScrollIt(t *testing.T) {
 	if !l.WouldScroll(geom.Pt(0, 40)) || l.WouldScroll(geom.Pt(0, -40)) {
 		t.Errorf("at the end, the wheel would scroll it up %v and down %v; want up alone",
 			l.WouldScroll(geom.Pt(0, 40)), l.WouldScroll(geom.Pt(0, -40)))
+	}
+}
+
+// Every view in the package that scrolls its content with the wheel says when it would, so a control inside it leaves
+// it the wheel.
+func TestEveryViewThatScrollsWithTheWheelSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		n    any
+	}{
+		{"Scroll", (*Scroll)(nil)}, {"VirtualList", (*VirtualList)(nil)}, {"TileGrid", (*TileGrid)(nil)},
+		{"Menu", (*Menu)(nil)}, {"Table", (*Table)(nil)}, {"the address bar's places", (*crumbBar)(nil)},
+	} {
+		if _, ok := c.n.(gunim.WheelScroller); !ok {
+			t.Errorf("%s scrolls with the wheel and is no WheelScroller", c.name)
+		}
+	}
+}
+
+// A menu taller than its card says the wheel would scroll it down from its top, and not up.
+func TestAMenuSaysWhereTheWheelWouldScrollIt(t *testing.T) {
+	var items []MenuItem
+	for i := range 80 {
+		items = append(items, MenuItem{Label: strconv.Itoa(i)})
+	}
+	m := NewMenu(items)
+	_, run := stage(t, m)
+	run(2)
+	if !m.scroll.scrollable() {
+		t.Fatal("the menu fits its card, with nothing to scroll")
+	}
+	if wm, ok := any(m).(gunim.WheelScroller); !ok || !wm.WouldScroll(geom.Pt(0, -40)) || wm.WouldScroll(geom.Pt(0, 40)) {
+		t.Errorf("at its top, the menu is a WheelScroller %v; want one the wheel scrolls down and not up", ok)
 	}
 }
