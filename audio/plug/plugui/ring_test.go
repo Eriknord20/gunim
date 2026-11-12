@@ -74,17 +74,20 @@ func ringedControls() []ringed {
 	// words is where a knob-shaped control of cap radius r writes its name and value.
 	words := func(r float32, size geom.Size) geom.Rect { return geom.Rc(-20, 4+2*r+4, size.W+40, size.H) }
 	return []ringed{
-		{"knob", k, func() *anim.Float { return k.ring }, geom.Sz(KnobW, KnobH), true, words(17, geom.Sz(KnobW, KnobH))},
+		{"knob", k, func() *anim.Float { return k.ring }, geom.Sz(KnobW, KnobH), true,
+			words(17, geom.Sz(KnobW, KnobH))},
 		{"compact knob", ck, func() *anim.Float { return ck.ring }, geom.Sz(CompactW, CompactH), true,
 			words(14, geom.Sz(CompactW, CompactH))},
 		{"trim pot", tp, func() *anim.Float { return tp.ring }, geom.Sz(TrimPotSize, TrimPotSize), false, geom.Rect{}},
-		{"selector", s, func() *anim.Float { return s.ring }, geom.Sz(64, SelectorH), true, words(17, geom.Sz(64, SelectorH))},
+		{"selector", s, func() *anim.Float { return s.ring }, geom.Sz(64, SelectorH), true,
+			words(17, geom.Sz(64, SelectorH))},
 		{"selector in a grid", grid, func() *anim.Float { return grid.ring }, geom.Sz(48, SelectorH), true,
 			words(17, geom.Sz(48, SelectorH))},
 		// A section writes its title 3 px right of its switch; the ring keeps 2 px from it.
 		{"power", p, func() *anim.Float { return p.ring }, geom.Sz(PowerSize, PowerSize), false,
 			geom.Rc(PowerSize+1, -10, 100, 40)},
-		{"action dial", d, func() *anim.Float { return d.ring }, geom.Sz(KnobW, KnobH), true, words(17, geom.Sz(KnobW, KnobH))},
+		{"action dial", d, func() *anim.Float { return d.ring }, geom.Sz(KnobW, KnobH), true,
+			words(17, geom.Sz(KnobW, KnobH))},
 	}
 }
 
@@ -168,7 +171,8 @@ func TestAKnobsRingRunsBetweenCapAndArc(t *testing.T) {
 			if o, ok := op.(*paint.RRectOp); ok && o.Stroke.Width == 2 && o.Fill == (paint.Fill{}) {
 				in, out := o.Rect.Size().W/2-1, o.Rect.Size().W/2+1
 				if in <= r-6 || out >= r-1.75 {
-					t.Errorf("compact %v: the ring runs %v to %v from the middle, want it between the cap, %v, and the arc, %v",
+					t.Errorf("compact %v: the ring runs %v to %v from the middle, want it between the cap, %v, "+
+						"and the arc, %v",
 						compact, in, out, r-6, r-1.75)
 				}
 			}

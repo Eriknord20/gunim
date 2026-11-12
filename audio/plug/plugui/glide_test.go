@@ -92,8 +92,8 @@ func TestLampsSetElsewhereGlide(t *testing.T) {
 	}
 }
 
-// glides runs frames at 120 Hz until the knob's needle rests at want, and fails where it overshoots, stands still before it
-// arrives, or takes longer than within to rest. It returns how long it took.
+// glides runs frames at 120 Hz until the knob's needle rests at want, and fails where it overshoots, stands still
+// before it arrives, or takes longer than within to rest. It returns how long it took.
 func glides(t *testing.T, w *gunim.Window, k *Knob, want float32, within time.Duration) time.Duration {
 	t.Helper()
 	const frame = time.Second / 120

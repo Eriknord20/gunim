@@ -81,7 +81,8 @@ func TestASkipDuringASearchMissingThePresetPlayingStartsAtAnEnd(t *testing.T) {
 			b.Skip(c.by, u)
 		})
 		if want := []string{c.want}; !slices.Equal(src.picked, want) {
-			t.Errorf("a skip of %d through a search for bass, Piano playing, picked %v, want %v", c.by, src.picked, want)
+			t.Errorf("a skip of %d through a search for bass, Piano playing, picked %v, want %v", c.by, src.picked,
+				want)
 		}
 	}
 }
@@ -194,7 +195,8 @@ func TestAPressShowsOnTheRowPressedAlone(t *testing.T) {
 	frames(w, 30)
 	pressed := b.presets.press.row
 	if b.presets.rows[pressed].p.Name != "Sub" || b.presets.press.down.Value() != 1 {
-		t.Fatalf("pressed on Sub, the press shows %v on %s", b.presets.press.down.Value(), b.presets.rows[pressed].p.Name)
+		t.Fatalf("pressed on Sub, the press shows %v on %s", b.presets.press.down.Value(),
+			b.presets.rows[pressed].p.Name)
 	}
 	w.Input(input.PointerMove{Pos: growl})
 	frames(w, 30)

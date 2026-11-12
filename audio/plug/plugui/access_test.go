@@ -34,7 +34,8 @@ func TestEachControlReadsItsNameValueAndState(t *testing.T) {
 	} {
 		info := c.node.Access()
 		if info.Name != c.name || info.Value != c.value || info.State&c.state != c.state {
-			t.Errorf("the %s reads as %q = %q, state %v; want %q = %q, state %v", c.what, info.Name, info.Value, info.State,
+			t.Errorf("the %s reads as %q = %q, state %v; want %q = %q, state %v", c.what, info.Name, info.Value,
+				info.State,
 				c.name, c.value, c.state)
 		}
 	}
