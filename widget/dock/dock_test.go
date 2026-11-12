@@ -26,6 +26,7 @@ func (p *pane) Paint(*paint.Painter, gunim.Frame, geom.Size, gunim.Children)    
 func stage(t *testing.T, d *Dock, l Layout) (w *gunim.Window, run func(int), sent func() []gunim.Intent) {
 	t.Helper()
 	w = gunimtest.New(t, geom.Sz(800, 500), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "v", func(Layout) *Dock { return d }, func(d *Dock, l Layout, u *gunim.UI) { d.SetLayout(l, u) })
 	gunim.RegisterPatch(w, "v", func(_ *Dock, call uiCall, u *gunim.UI) { call(u) })
 	if err := w.Client().Mount(gunim.Root, "v", "v", l, "v"); err != nil {

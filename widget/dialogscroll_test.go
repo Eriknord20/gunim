@@ -25,6 +25,7 @@ func tallDialog(t *testing.T) (w *gunim.Window, s *Scroll, fields []*TextField, 
 	d.Body = focusScroll{s, form}
 	d.SetButtons("OK", "Cancel")
 	w = gunimtest.New(t, geom.Sz(800, 500), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -104,6 +105,7 @@ func TestATallFormScrollsInItsDialog(t *testing.T) {
 	d.Body = form
 	d.SetButtons("OK", "Cancel")
 	w := gunimtest.New(t, geom.Sz(800, 500), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -148,6 +150,7 @@ func TestADialogThatOnlyJustFitsKeepsItsMargin(t *testing.T) {
 		d.Body = form
 		d.SetButtons("OK", "Cancel")
 		w := gunimtest.New(t, geom.Sz(800, h), nil)
+		w.PaintWhenLooked(false)
 		gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 		if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 			t.Fatal(err)

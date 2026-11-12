@@ -25,6 +25,7 @@ func barStage(t *testing.T, title string, set func(*Dialog)) (*spot, geom.Rect, 
 func barWindow(t *testing.T, title string, set func(*Dialog)) (*Dialog, *spot, *gunim.Window) {
 	t.Helper()
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	body := newSpot(100, 40)
 	gunim.RegisterView(w, "dialog", func(title string) *Dialog {
@@ -154,6 +155,7 @@ func compactTitleBar(t *testing.T, title string) (ops []paint.Op, height float32
 	})
 	t.Cleanup(func() { gunim.RegisterTitleBar(func() gunim.TitleBar { return NewTitleBar("") }) })
 	w := gunimtest.New(t, geom.Sz(600, 300), nil)
+	w.PaintWhenLooked(false)
 	w.MakeChromeless(true)
 	sp := newSpot(100, 50)
 	type do struct{}

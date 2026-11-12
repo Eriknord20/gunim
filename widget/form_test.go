@@ -30,6 +30,7 @@ func newSignInStage(t *testing.T) (*gunim.Window, *Form, [3]gunim.Node, func(int
 		return signIn{Host: host.Text(), Password: pass.Text(), Remember: remember.Checked()}
 	}
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -132,6 +133,7 @@ func TestADialogWithAProblemStaysOpenAndShakes(t *testing.T) {
 		return ""
 	}
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -176,6 +178,7 @@ func TestADialogsExtraButtonSendsItsAnswer(t *testing.T) {
 	d.OnAccept = Sends(answered{"replace"})
 	d.AddButton("Leave It", func(u *gunim.UI) gunim.Intent { return answered{"leave"} })
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -207,6 +210,7 @@ func TestADefaultFirstDialogTabsToOKFirst(t *testing.T) {
 	d.AddButton("Replace", func(u *gunim.UI) gunim.Intent { return answered{"replace"} })
 	d.DefaultFirst = true
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
@@ -266,6 +270,7 @@ func TestADialogsProblemGlidesIn(t *testing.T) {
 	say := "Say which server."
 	d.Check = func() string { return say }
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "d", func(struct{}) gunim.Node { return d }, nil)
 	if err := w.Client().Mount(gunim.Root, "d", "d", nil); err != nil {
 		t.Fatal(err)
