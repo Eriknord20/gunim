@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marrasen/gunim/geom"
 )
 
 func TestClampTurnsNaNToTheDefaultAndInfinityToTheEnds(t *testing.T) {
@@ -116,6 +118,12 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Trigger: true, Measures: MeasureGate}}},
 		"unknown measure": {ID: "test.measwhat", Name: "X", New: newer,
 			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Measures: Measure(99)}}},
+		"view of a negative size":   {ID: "test.viewneg", Name: "X", New: newer, ViewSize: geom.Sz(-800, 500)},
+		"view at least of no width": {ID: "test.viewflat", Name: "X", New: newer, ViewMinSize: geom.Sz(0, 300)},
+		"view opening under its least size": {ID: "test.viewunder", Name: "X", New: newer, ViewSize: geom.Sz(600, 400),
+			ViewMinSize: geom.Sz(640, 300)},
+		"view of an endless size": {ID: "test.viewinf", Name: "X", New: newer,
+			ViewSize: geom.Sz(float32(math.Inf(1)), 400)},
 	} {
 		func() {
 			defer func() {
@@ -153,6 +161,21 @@ func TestPortsAreFoundByKey(t *testing.T) {
 	} {
 		if c.got != c.want {
 			t.Errorf("%s is at %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// A view's sizes may be left out, or given one without the other, or both with the least fitting the size it opens at.
+func TestRegisterTakesViewSizes(t *testing.T) {
+	newer := func(Host) Plugin { return nil }
+	for _, d := range []Descriptor{
+		{ID: "test.views", Name: "X", New: newer},
+		{ID: "test.views", Name: "X", New: newer, ViewSize: geom.Sz(800, 500)},
+		{ID: "test.views", Name: "X", New: newer, ViewMinSize: geom.Sz(600, 400)},
+		{ID: "test.views", Name: "X", New: newer, ViewSize: geom.Sz(800, 500), ViewMinSize: geom.Sz(800, 400)},
+	} {
+		if err := check(&d); err != nil {
+			t.Errorf("a view opening at %v, at least %v, was refused: %v", d.ViewSize, d.ViewMinSize, err)
 		}
 	}
 }

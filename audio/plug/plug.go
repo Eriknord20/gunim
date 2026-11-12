@@ -127,6 +127,13 @@ type Descriptor struct {
 	// reads. A host offers them where it shows the plugin, and runs
 	// them through its [Actor].
 	Actions []Action
+	// ViewSize is the size, in logical pixels, that the view a host shows in a window of its own opens at: the
+	// plugin's [Full] view, or its [Panel] view where it has no Full one. It leaves out what the host draws round the
+	// view, as a title bar. Zero leaves the size to the host.
+	ViewSize geom.Size
+	// ViewMinSize is the least size of that view, the smallest at which it looks right: a host keeps the window no
+	// smaller. Zero leaves it to the host. A view whose least size changes with its state is a [MinSizer] too.
+	ViewMinSize geom.Size
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
 }
@@ -616,6 +623,9 @@ func check(d *Descriptor) error {
 	if err := checkPorts(d); err != nil {
 		return err
 	}
+	if err := checkViewSizes(d); err != nil {
+		return err
+	}
 	seen := map[uint32]bool{}
 	for _, p := range d.Params {
 		if seen[p.ID] {
@@ -647,6 +657,26 @@ func check(d *Descriptor) error {
 				return fmt.Errorf("%s: patch %q sets %d, which is no parameter it may set", d.ID, pt.Name, id)
 			}
 		}
+	}
+	return nil
+}
+
+// checkViewSizes returns what is wrong with d's view sizes, if anything: each is zero, or a size of two finite
+// widths above zero, and the least size fits in the size the view opens at.
+func checkViewSizes(d *Descriptor) error {
+	sane := func(s geom.Size) bool {
+		if s == (geom.Size{}) {
+			return true
+		}
+		finite := !math.IsInf(float64(s.W), 0) && !math.IsInf(float64(s.H), 0)
+		return finite && s.W > 0 && s.H > 0
+	}
+	if !sane(d.ViewSize) || !sane(d.ViewMinSize) {
+		return fmt.Errorf("%s opens its view at %v, and at least %v: each is zero or above zero both ways", d.ID,
+			d.ViewSize, d.ViewMinSize)
+	}
+	if d.ViewSize != (geom.Size{}) && (d.ViewMinSize.W > d.ViewSize.W || d.ViewMinSize.H > d.ViewSize.H) {
+		return fmt.Errorf("%s opens its view at %v, under its least size %v", d.ID, d.ViewSize, d.ViewMinSize)
 	}
 	return nil
 }
