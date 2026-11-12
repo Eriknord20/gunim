@@ -36,6 +36,7 @@ func grouped(t *testing.T, keys []string, texts ...string) (*gunim.Window, []*Vi
 	col := widget.Column(nodes...)
 	col.Cross = widget.CrossStretch
 	w := gunimtest.New(t, geom.Sz(400, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "g", func(struct{}) gunim.Node { return col }, nil)
 	if err := w.Client().Mount(gunim.Root, "g", "g", nil); err != nil {
 		t.Fatal(err)

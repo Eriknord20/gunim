@@ -13,6 +13,7 @@ import (
 
 func TestDialogAnimatesInAndOut(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "confirm", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -52,6 +53,7 @@ func TestDialogAnimatesInAndOut(t *testing.T) {
 
 func TestADangerButtonFadesInFromThePlainColours(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "confirm", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -85,6 +87,7 @@ func TestADangerButtonFadesInFromThePlainColours(t *testing.T) {
 
 func TestADangerDialogOpensOnCancelSoEnterCancels(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "confirm", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -118,6 +121,7 @@ func TestADangerDialogOpensOnCancelSoEnterCancels(t *testing.T) {
 
 func TestADialogWithNoCancelHasOKAlone(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "note", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -155,6 +159,7 @@ func TestADialogWithNoCancelHasOKAlone(t *testing.T) {
 
 func TestAnActionLeavesTheDialogOpen(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	var box *Checkbox
 	field := NewTextField()
@@ -204,6 +209,7 @@ func TestAnActionLeavesTheDialogOpen(t *testing.T) {
 
 func TestADialogWidensForItsButtons(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(1000, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	var u *gunim.UI
 	gunim.RegisterView(w, "many", func(title string) *Dialog {
@@ -245,6 +251,7 @@ func TestADialogWidensForItsButtons(t *testing.T) {
 // A careful dialog opens on Cancel too, and keeps OK its usual colour.
 func TestACarefulDialogOpensOnCancelInItsUsualColours(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "trust", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -304,6 +311,7 @@ type ownDialog struct {
 
 func TestADialogEmbeddedInAViewClosesItself(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	w.Offscreen().ListenForAccess()
 	var v *ownDialog
 	gunim.RegisterView(w, "own", func(title string) *ownDialog {
@@ -432,6 +440,7 @@ func (s *shortcuts) Handle(e input.Event, _ *gunim.UI) bool {
 func TestADialogKeepsItsKeysFromTheWindowBehind(t *testing.T) {
 	keys := &shortcuts{Flex: Column()}
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	d := NewDialog("Edit")
 	d.Body = NewForm().Add("Name", NewTextField())
 	d.OnAccept = Sends("ok")
@@ -458,6 +467,7 @@ func TestADialogKeepsItsKeysFromTheWindowBehind(t *testing.T) {
 // whose Enter then does it, and Left back to Cancel.
 func TestADangerDialogRingsCancelAndTheArrowsMoveAlong(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	gunim.RegisterView(w, "confirm", func(title string) *Dialog {
 		d = NewDialog(title)
@@ -509,6 +519,7 @@ func TestADangerDialogRingsCancelAndTheArrowsMoveAlong(t *testing.T) {
 // and Buttons are its buttons as they stand.
 func TestADialogsKeysComeFirst(t *testing.T) {
 	w := gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	var d *Dialog
 	var heard []input.Key
 	gunim.RegisterView(w, "confirm", func(title string) *Dialog {
