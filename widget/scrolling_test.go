@@ -161,7 +161,7 @@ func TestEveryViewThatScrollsWithTheWheelSaysSo(t *testing.T) {
 
 // A menu taller than its card says the wheel would scroll it down from its top, and not up.
 func TestAMenuSaysWhereTheWheelWouldScrollIt(t *testing.T) {
-	var items []MenuItem
+	items := make([]MenuItem, 0, 80)
 	for i := range 80 {
 		items = append(items, MenuItem{Label: strconv.Itoa(i)})
 	}

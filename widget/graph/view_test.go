@@ -434,7 +434,7 @@ func TestThePlaneSaysTheWheelWouldMoveIt(t *testing.T) {
 		t.Fatal("the graph view scrolls with the wheel and is no WheelScroller")
 	}
 	if !ws.WouldScroll(geom.Pt(0, 40)) || !ws.WouldScroll(geom.Pt(40, 0)) || ws.WouldScroll(geom.Point{}) {
-		t.Errorf("the plane says a notch would move it up %v and sideways %v, and no turn %v; want true, true, false",
+		t.Errorf("the plane says a notch would move it up %v and sideways %v, and no turn %v; want it to move both ways and not for no turn",
 			ws.WouldScroll(geom.Pt(0, 40)), ws.WouldScroll(geom.Pt(40, 0)), ws.WouldScroll(geom.Point{}))
 	}
 }

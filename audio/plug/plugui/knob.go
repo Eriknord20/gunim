@@ -224,6 +224,7 @@ func (k *Knob) Transition(p gunim.Presence, f gunim.Frame) bool {
 		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
 	case gunim.Exiting:
 		k.endWheel(f.UI())
+	case gunim.Present:
 	}
 	return true
 }
@@ -618,7 +619,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
-// wheelTurn returns how far e turns a knob of steps steps up, of the way round, and how many steps for a stepped one;
+// wheelTurn returns how far e turns a knob up, of the way round, and how many steps for a knob of the given steps;
 // pad says e came from a touchpad. A wheel turns 2.5% of the way a notch, a quarter of that with Shift. A touchpad
 // turns as far as a drag of the same length, ten times finer with Shift.
 func wheelTurn(e input.Scroll, steps int) (by, stepsBy float64, pad bool) {
