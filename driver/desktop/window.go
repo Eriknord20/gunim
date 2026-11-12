@@ -152,6 +152,8 @@ type Window struct {
 	placing bool
 	// least is the window's least size in logical pixels; see SetMinSize. It is used on the main thread.
 	least geom.Size
+	// leastArea is the work area the least size was last capped at. It is used on the main thread.
+	leastArea geom.Rect
 	// region is where the window takes the pointer, in logical pixels, and regionSet says it is limited at all; see
 	// SetPointerRegion. They are used on the main thread.
 	region    []geom.Rect
@@ -1063,6 +1065,9 @@ func (w *Window) install() {
 	_, _ = gw.SetPosCallback(func(_ *glfw.Window, x, y int) {
 		w.debugf("moved to %d,%d", x, y)
 		remeasure()
+		if w.least != (geom.Size{}) {
+			w.d.post(w.minSizeMoved)
+		}
 		// Onto another monitor, which may have colours of its own.
 		w.updateColor(false)
 		w.noteNormal()
@@ -1076,6 +1081,9 @@ func (w *Window) install() {
 		w.chrome.mu.Unlock()
 		if maximized {
 			w.forgetMaximized()
+		} else if w.least != (geom.Size{}) {
+			// Restored to a size noted before a larger least size was set.
+			w.d.post(w.minSizeAgain)
 		}
 		w.in.Push(driver.WindowMaximized{Maximized: maximized})
 	})
@@ -1093,6 +1101,9 @@ func (w *Window) install() {
 	})
 	_, _ = gw.SetIconifyCallback(func(_ *glfw.Window, iconified bool) {
 		w.in.Push(driver.WindowShown{Shown: !iconified})
+		if !iconified && w.least != (geom.Size{}) {
+			w.d.post(w.minSizeAgain)
+		}
 	})
 	_, _ = gw.SetFocusCallback(func(_ *glfw.Window, focused bool) {
 		w.focused.Store(focused)

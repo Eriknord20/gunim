@@ -535,6 +535,7 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		size = geom.Sz(800, 600)
 	}
 	least := o.Kind == driver.KindNormal || o.Kind == driver.KindUtility
+	o.MinSize = noNegative(o.MinSize)
 	if least {
 		size = geom.Sz(max(size.W, o.MinSize.W), max(size.H, o.MinSize.H))
 	}
@@ -663,9 +664,10 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 	}
 	w.measure()
 	if least && o.MinSize != (geom.Size{}) {
-		// A placement saved smaller than the least size grows to it.
+		// A placement saved smaller than the least size grows to it, and one the least size made larger than the
+		// work area fits it.
 		w.least = o.MinSize
-		if err := w.applyMinSize(); err != nil {
+		if err := w.applyMinSize(fitToLimit); err != nil {
 			_ = gw.Destroy()
 			return nil, fmt.Errorf("desktop: least size: %w", err)
 		}

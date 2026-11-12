@@ -35,13 +35,7 @@ func (w *Window) Reshape(by geom.Insets) error {
 // It runs on the main thread.
 func (w *Window) setBoundsOnScreen(x, y, ww, wh int) error {
 	// The frame the system draws round a window that keeps it counts as the window keeps on its monitor.
-	fl, ft, fr, fb := 0, 0, 0, 0
-	if !w.Chromeless() {
-		var err error
-		if fl, ft, fr, fb, err = w.gw.GetFrameSize(); err != nil {
-			fl, ft, fr, fb = 0, 0, 0, 0
-		}
-	}
+	fl, ft, fr, fb := w.frameSize()
 	area := workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2)))
 	if !area.Empty() {
 		x = keepOn(x, ww, fl, fr, int(area.Min.X), int(area.Max.X))
