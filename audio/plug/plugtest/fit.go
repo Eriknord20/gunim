@@ -87,7 +87,8 @@ func UnderLeast(t testing.TB, view func() gunim.Node, size, least geom.Size) {
 		if p.name == w.name && within(p.at, w.at, 0.5) && within(w.at, p.at, 0.5) {
 			continue
 		}
-		if wrong++; wrong <= 5 {
+		wrong++
+		if wrong <= 5 {
 			t.Errorf("at %v×%v %s lies at %v; at the least size %v×%v, %s lies at %v", size.W, size.H, p.name, p.at,
 				least.W, least.H, w.name, w.at)
 		}

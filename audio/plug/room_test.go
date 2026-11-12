@@ -54,7 +54,7 @@ func show(t *testing.T, size geom.Size, n gunim.Node) *gunim.Window {
 
 // frames runs n frames of a sixtieth of a second, and returns how far v was scrolled after each.
 func frames(w *gunim.Window, v *roomy, n int) []geom.Point {
-	var at []geom.Point
+	at := make([]geom.Point, 0, n)
 	for range n {
 		w.Frame(time.Second / 60)
 		at = append(at, v.Scrolled())
