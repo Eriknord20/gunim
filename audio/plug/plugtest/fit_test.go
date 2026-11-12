@@ -1,6 +1,8 @@
 package plugtest
 
 import (
+	"fmt"
+	"image/color"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +22,8 @@ type spots struct {
 	at    []geom.Rect
 	texts []string
 	where []geom.Point
+	// ribbon is a ribbon drawn under the children.
+	ribbon []paint.RibbonPoint
 }
 
 func (s *spots) Children() []gunim.Node { return s.kids }
@@ -33,6 +37,9 @@ func (s *spots) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 }
 
 func (s *spots) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	if len(s.ribbon) > 0 {
+		p.Ribbon(s.ribbon)
+	}
 	for i, t := range s.texts {
 		audioui.Shaped(t, 12, false, false).Paint(p, s.where[i], widget.Ink.Get(f.Theme))
 	}
@@ -96,3 +103,99 @@ func TestFitsLetsAPartLieOverOthers(t *testing.T) {
 		t.Errorf("a card laid over a knob on purpose misfits: %v", got)
 	}
 }
+
+// has reports whether got holds a misfit of kind k that says want.
+func has(got []Misfit, k MisfitKind, want string) bool {
+	return slices.ContainsFunc(got, func(m Misfit) bool { return m.Kind == k && strings.Contains(m.Text, want) })
+}
+
+// A small control lying wholly inside a larger one, beside it in the tree, overlaps it, unless the larger one is a
+// backdrop.
+func TestFitsNamesASmallControlOverALargerOne(t *testing.T) {
+	gain := knob("Gain")
+	v := &spots{kids: []gunim.Node{gain, widget.NewButton("X")},
+		at: []geom.Rect{geom.Rc(10, 30, plugui.KnobW, plugui.KnobH), geom.Rc(20, 40, 24, 20)}}
+	if got := Misfits(t, v, geom.Sz(200, 140), Fit{}); !has(got, Overlaps, `"Gain" (*plugui.Knob)`) {
+		t.Errorf("a button laid on a knob is not named as overlapping it: %v", got)
+	}
+	if got := Misfits(t, v, geom.Sz(200, 140), Fit{Backdrops: []gunim.Node{gain}}); len(got) != 0 {
+		t.Errorf("a button laid on a knob named as a backdrop misfits: %v", got)
+	}
+}
+
+// A part squeezed to nothing is named, unless it is hidden on purpose. A knob given no room lays out at its own size,
+// as a zero bound sets no limit, so it is not squeezed.
+func TestFitsNamesAPartSqueezedToNothing(t *testing.T) {
+	for _, at := range []geom.Rect{geom.Rc(10, 30, 0, 0), geom.Rc(10, 30, 0, 76)} {
+		meter := &spots{}
+		k := knob("Knee")
+		v := &spots{kids: []gunim.Node{meter, k}, at: []geom.Rect{at, geom.Rc(100, 30, 0, 0)}}
+		f := Fit{Least: map[gunim.Node]geom.Size{meter: geom.Sz(30, 40)}}
+		if got := Misfits(t, v, geom.Sz(200, 140), f); !has(got, Squeezed, "*plugtest.spots is squeezed") ||
+			len(got) != 1 {
+			t.Errorf("a meter laid out at %v×%v, and a knob given no room, misfit: %v", at.Size().W, at.Size().H, got)
+		}
+		f.Hidden = []gunim.Node{meter}
+		if got := Misfits(t, v, geom.Sz(200, 140), f); len(got) != 0 {
+			t.Errorf("a meter hidden on purpose at %v×%v misfits: %v", at.Size().W, at.Size().H, got)
+		}
+	}
+}
+
+// A ribbon drawn past the view's edge spills.
+func TestFitsNamesARibbonOutsideTheView(t *testing.T) {
+	ink := color.NRGBA{R: 0xff, A: 0xff}
+	v := &spots{ribbon: []paint.RibbonPoint{{At: geom.Pt(20, 20), Width: 2, Color: ink},
+		{At: geom.Pt(900, 700), Width: 2, Color: ink}}}
+	if got := Misfits(t, v, geom.Sz(200, 140), Fit{}); !has(got, Spills, "drawn outside the view") {
+		t.Errorf("a ribbon drawn to 900,700 in a 200×140 view is not named: %v", got)
+	}
+}
+
+// squeezing lays its knob out at its box's right edge, however small the box is.
+type squeezing struct {
+	plug.Room
+	least geom.Size
+	k     *plugui.Knob
+}
+
+func (s *squeezing) Children() []gunim.Node { return []gunim.Node{s.k} }
+
+func (s *squeezing) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	laid := s.Lay(c.Max, s.least)
+	kids.At(0).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
+	kids.At(0).Place(geom.Pt(laid.W-plugui.KnobW-8, 8))
+	return c.Max
+}
+
+func (s *squeezing) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer s.Room.Paint(p, f)()
+	kids.At(0).Paint(p)
+}
+
+// UnderLeast passes a view that lays out at its least size and clips, and names one that squeezes into a smaller box.
+func TestUnderLeastNamesAViewThatSqueezes(t *testing.T) {
+	least := geom.Sz(300, 200)
+	ok := &fakeT{TB: t}
+	UnderLeast(ok, func() gunim.Node { return &squeezing{least: least, k: knob("Gain")} }, geom.Sz(150, 100), least)
+	if len(ok.errs) != 0 {
+		t.Errorf("a view that lays out at its least size and clips is named: %v", ok.errs)
+	}
+	bad := &fakeT{TB: t}
+	UnderLeast(bad, func() gunim.Node { return &squeezing{k: knob("Gain")} }, geom.Sz(150, 100), least)
+	if len(bad.errs) == 0 {
+		t.Error("a view that squeezes into a box under its least size is not named")
+	}
+}
+
+// fakeT is a testing.TB that notes its errors in place of failing.
+type fakeT struct {
+	testing.TB
+	errs []string
+}
+
+func (f *fakeT) Errorf(format string, args ...any) {
+	f.errs = append(f.errs, fmt.Sprintf(format, args...))
+}
+
+func (f *fakeT) Helper() {}

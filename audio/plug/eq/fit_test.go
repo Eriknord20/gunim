@@ -31,17 +31,29 @@ func showing(t *testing.T) gunim.Node {
 	return v
 }
 
+// backdrop names the graph and the panel it stands in, which fill the view and take keys, as lying under the rest on
+// purpose.
+func backdrop(t *testing.T, v gunim.Node) plugtest.Fit {
+	t.Helper()
+	f, ok := v.(*full)
+	if !ok {
+		t.Fatal("the window's view is of another type")
+	}
+	return plugtest.Fit{Backdrops: []gunim.Node{f.panel, f.g}}
+}
+
 // The view fits at its least size, at the size it opens at, and on a large screen.
 func TestTheViewFitsItsSizes(t *testing.T) {
 	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1536, 864)} {
 		v := showing(t)
-		plugtest.Fits(t, v, s, plugtest.Fit{})
+		plugtest.Fits(t, v, s, backdrop(t, v))
 	}
 }
 
-// Under its least size the view lays out at it and draws nothing outside its box.
-func TestUnderItsLeastSizeTheViewClips(t *testing.T) {
-	plugtest.Inside(t, showing(t), geom.Sz(Descriptor.ViewMinSize.W/2, Descriptor.ViewMinSize.H/2))
+// Under its least size the view lays out at it, scrolled to its start, and draws nothing outside its box.
+func TestUnderItsLeastSizeTheViewLaysOutAtItAndClips(t *testing.T) {
+	under := geom.Sz(Descriptor.ViewMinSize.W/2, Descriptor.ViewMinSize.H/2)
+	plugtest.UnderLeast(t, func() gunim.Node { return showing(t) }, under, Descriptor.ViewMinSize)
 }
 
 // TestSheet draws the view at a range of sizes into GUNIM_SHEETS, for a person to look at.
@@ -70,7 +82,7 @@ func TestTheBandListFitsTheViewsSizes(t *testing.T) {
 		v.views.SetSelected(1, nil)
 		v.listed.Jump(1)
 		v.list.show(nil)
-		for _, m := range plugtest.Misfits(t, v, s, plugtest.Fit{}) {
+		for _, m := range plugtest.Misfits(t, v, s, backdrop(t, v)) {
 			if m.Kind != plugtest.Overlaps || !strings.HasPrefix(m.Text, "text ") {
 				t.Errorf("at %v×%v: %s", s.W, s.H, m)
 			}

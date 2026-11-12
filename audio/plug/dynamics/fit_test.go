@@ -55,9 +55,10 @@ func TestThePanelFitsItsSizes(t *testing.T) {
 	}
 }
 
-// Under its least size the panel lays out at it and draws nothing outside its box.
-func TestUnderItsLeastSizeThePanelClips(t *testing.T) {
-	plugtest.Inside(t, showing(t), geom.Sz(480, 320))
+// Under its least size the panel lays out at it, scrolled to its start, and draws nothing outside its box.
+func TestUnderItsLeastSizeThePanelLaysOutAtItAndClips(t *testing.T) {
+	under := geom.Sz(480, 320)
+	plugtest.UnderLeast(t, func() gunim.Node { return showing(t) }, under, Descriptor.ViewMinSize)
 }
 
 // TestSheet draws the panel at a range of sizes into GUNIM_SHEETS, for a person to look at.

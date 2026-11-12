@@ -33,9 +33,10 @@ func TestTheViewFitsItsSizes(t *testing.T) {
 	}
 }
 
-// Under its least size the view lays out at it and draws nothing outside its box.
-func TestUnderItsLeastSizeTheViewClips(t *testing.T) {
-	plugtest.Inside(t, showing(t), geom.Sz(Descriptor.ViewMinSize.W/2, Descriptor.ViewMinSize.H/2))
+// Under its least size the view lays out at it, scrolled to its start, and draws nothing outside its box.
+func TestUnderItsLeastSizeTheViewLaysOutAtItAndClips(t *testing.T) {
+	under := geom.Sz(Descriptor.ViewMinSize.W/2, Descriptor.ViewMinSize.H/2)
+	plugtest.UnderLeast(t, func() gunim.Node { return showing(t) }, under, Descriptor.ViewMinSize)
 }
 
 // TestSheet draws the view at a range of sizes into GUNIM_SHEETS, for a person to look at.

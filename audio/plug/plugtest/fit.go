@@ -24,8 +24,14 @@ type Fit struct {
 	// here counts as a control in the checks for overlaps and room.
 	Least map[gunim.Node]geom.Size
 	// Over are parts that lie over others on purpose, as a card that opens over the panel or a pot set in a meter.
-	// Overlaps with them and with the parts inside them are allowed.
+	// Overlaps with them and with the parts inside them are allowed, texts' too.
 	Over []gunim.Node
+	// Backdrops are parts that take keys and lie under the rest on purpose, as a graph that fills the view. They count
+	// as no control, and texts are still checked over them.
+	Backdrops []gunim.Node
+	// Hidden are parts kept out of sight on purpose, as a knob the mode set does not use. They and the parts inside
+	// them are not checked.
+	Hidden []gunim.Node
 	// Frames is how many frames of a sixtieth of a second run before the view is checked. Zero runs 30.
 	Frames int
 }
@@ -36,15 +42,22 @@ type Fit struct {
 //   - a control lies partly outside the view;
 //   - a text runs partly outside the view, out of a control or over another text;
 //   - a text is cut short: clipped, faded where it is cut, or ended with an ellipsis;
-//   - a shape is drawn more than 3 px outside the view;
-//   - a part is smaller than its least size: a [plugui.Knob] under its natural size, a [widget.Shrinker] under its
-//     least width, or a part in f.Least under the size given there.
+//   - a shape, a ribbon, a picture or another drawing lies more than 3 px outside the view;
+//   - a part is smaller than its least size, or squeezed to nothing: a [plugui.Knob] under its natural size, a
+//     [widget.Shrinker] under its least width, or a part in f.Least under the size given there.
 //
-// A control is a node that can take the keyboard ([gunim.Focusable]); one that holds another control is a container,
-// and only its parts are checked. A part inside a view that scrolls ([gunim.Revealer]) counts only where it shows, and
-// a text may cross the scrolling view's edge. A text may reach 2 px past a control's box, as a glyph's room does. A text's box is worked out from its glyphs'
-// places and its size, so it may be off by part of a glyph at its end. Fits cannot see a curve or a meter squeezed
-// out of shape, a part drawn over another without text, or text drawn in a picture.
+// A control is a node that can take the keyboard ([gunim.Focusable]), or a part in f.Least. One that holds another
+// control under it in the tree is a container, and only its parts are checked. A part inside a view that scrolls
+// ([gunim.Revealer]) counts only where it shows, and a text may cross the scrolling view's edge. A text may reach 2 px
+// past a control's box, as a glyph's room does. A text's box is worked out from its glyphs' places and its size, so
+// it may be off by part of a glyph at its end.
+//
+// Fits cannot see:
+//
+//   - a part that takes no keys and is not in f.Least lying outside the view or over another part;
+//   - a curve or a meter squeezed out of shape, or a part drawn over another without text;
+//   - text drawn in a picture;
+//   - any state but the one the test sets up, so set the longest values and labels by hand to check they fit.
 func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 	t.Helper()
 	for _, m := range Misfits(t, view, size, f) {
@@ -52,20 +65,41 @@ func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 	}
 }
 
-// Inside lays view out and paints it at size, as Fits does, and fails t where it draws anything outside its box: for
-// a view under its least size, which lays itself out larger and clips.
-func Inside(t testing.TB, view gunim.Node, size geom.Size) {
+// UnderLeast lays out and paints a view made by view at size, under its least size least, and fails t where it lays
+// its parts out other than at least, or draws anything outside its box.
+func UnderLeast(t testing.TB, view func() gunim.Node, size, least geom.Size) {
 	t.Helper()
-	for _, m := range Misfits(t, view, size, Fit{}) {
+	want := check(t, view(), least, Fit{}).laid
+	c := check(t, view(), size, Fit{})
+	for _, m := range c.out {
 		if m.Kind == Spills {
 			t.Errorf("at %v×%v: %s", size.W, size.H, m)
 		}
+	}
+	if len(c.laid) != len(want) {
+		t.Errorf("at %v×%v the view lays out %d parts, and at its least size %v×%v %d", size.W, size.H, len(c.laid),
+			least.W, least.H, len(want))
+		return
+	}
+	wrong := 0
+	for i, p := range c.laid {
+		w := want[i]
+		if p.name == w.name && within(p.at, w.at, 0.5) && within(w.at, p.at, 0.5) {
+			continue
+		}
+		if wrong++; wrong <= 5 {
+			t.Errorf("at %v×%v %s lies at %v; at the least size %v×%v, %s lies at %v", size.W, size.H, p.name, p.at,
+				least.W, least.H, w.name, w.at)
+		}
+	}
+	if wrong > 5 {
+		t.Errorf("at %v×%v, %d parts in all lie other than at the least size", size.W, size.H, wrong)
 	}
 }
 
 // Misfit is one thing wrong with a view, as [Fits] finds it.
 type Misfit struct {
-	Kind Kind
+	Kind MisfitKind
 	// Text says what is wrong, naming the parts.
 	Text string
 }
@@ -73,16 +107,16 @@ type Misfit struct {
 // String returns m's Text.
 func (m Misfit) String() string { return m.Text }
 
-// Kind is what sort of thing is wrong with a view.
-type Kind uint8
+// MisfitKind is what sort of thing is wrong with a view.
+type MisfitKind uint8
 
-// The kinds.
+// The kinds of misfit.
 const (
 	// Overlaps is two controls, two texts, or a text and a control over each other.
-	Overlaps Kind = iota
+	Overlaps MisfitKind = iota
 	// Outside is a control lying partly outside the view.
 	Outside
-	// Spills is a text or a shape drawn outside the view.
+	// Spills is a text or a drawing outside the view.
 	Spills
 	// CutShort is a text clipped, faded where it is cut, or ended with an ellipsis.
 	CutShort
@@ -93,6 +127,12 @@ const (
 // Misfits returns what [Fits] fails t for, without failing it.
 func Misfits(t testing.TB, view gunim.Node, size geom.Size, f Fit) []Misfit {
 	t.Helper()
+	return check(t, view, size, f).out
+}
+
+// check lays view out and paints it at size, and returns what it found.
+func check(t testing.TB, view gunim.Node, size geom.Size, f Fit) *checker {
+	t.Helper()
 	pr := &probe{kid: view}
 	w := mount(t, size, pr)
 	frames := f.Frames
@@ -102,14 +142,16 @@ func Misfits(t testing.TB, view gunim.Node, size geom.Size, f Fit) []Misfit {
 	for range frames {
 		w.Frame(time.Second / 60)
 	}
+	c := &checker{fit: f, box: geom.Rect{Max: size.Point()}}
 	if pr.u == nil {
-		return []Misfit{{Kind: Outside, Text: "the view was never laid out"}}
+		c.fail(Outside, "the view was never laid out")
+		return c
 	}
-	c := checker{u: pr.u, frame: pr.f, fit: f, box: geom.Rect{Max: size.Point()}}
+	c.u, c.frame = pr.u, pr.f
 	c.walk(view, nil, false)
 	c.checkParts()
 	c.checkOps(w.Offscreen().Ops())
-	return c.out
+	return c
 }
 
 // mount returns an offscreen window of size with n mounted in it.
@@ -158,6 +200,12 @@ type part struct {
 	up      []gunim.Node
 }
 
+// placed is a node as it is laid out, whether it shows or not: its name and its box.
+type placed struct {
+	name string
+	at   geom.Rect
+}
+
 // checker gathers what is wrong with a view.
 type checker struct {
 	u     *gunim.UI
@@ -165,38 +213,72 @@ type checker struct {
 	fit   Fit
 	box   geom.Rect
 	parts []part
-	out   []Misfit
+	// laid is every node under the view laid out at a size, in the tree's order, whether it shows or not.
+	laid []placed
+	out  []Misfit
 	// scrolls are where views that scroll show, which cut what they hold at their edges.
 	scrolls []geom.Rect
 }
 
-func (c *checker) fail(k Kind, format string, args ...any) {
+func (c *checker) fail(k MisfitKind, format string, args ...any) {
 	c.out = append(c.out, Misfit{Kind: k, Text: fmt.Sprintf(format, args...)})
+}
+
+// roomer is a view that says the size it laid itself out at, as one that embeds a [plug.Room] does.
+type roomer interface {
+	Laid() geom.Size
+}
+
+// scrolls reports whether a, a view that scrolls, at bounds, holds more than shows: a [roomer] laid out at its box
+// holds no more.
+func scrolls(a gunim.Node, bounds geom.Rect) bool {
+	r, ok := a.(roomer)
+	if !ok {
+		return true
+	}
+	laid := r.Laid()
+	return laid.W > bounds.Size().W+0.5 || laid.H > bounds.Size().H+0.5
 }
 
 // walk notes n and the nodes under it that were drawn, each with the nodes above it.
 func (c *checker) walk(n gunim.Node, up []gunim.Node, over bool) {
 	at, ok := c.u.Bounds(n)
-	if !ok || at.Empty() {
+	if !ok {
 		return
+	}
+	if slices.Contains(c.fit.Hidden, n) {
+		return
+	}
+	if at.Empty() {
+		if least, ok := c.leastOf(n); ok && least != (geom.Size{}) {
+			c.fail(Squeezed, "%s is squeezed to %v×%v, under its least size %v×%v", nameOf(n), at.Size().W,
+				at.Size().H, least.W, least.H)
+		}
+		return
+	}
+	if len(up) > 0 {
+		c.laid = append(c.laid, placed{name: nameOf(n), at: at})
 	}
 	over = over || slices.Contains(c.fit.Over, n)
 	whole := at
 	// A part in a view that scrolls shows only within it; one scrolled out of sight is left out.
 	for _, a := range up {
-		if _, ok := a.(gunim.Revealer); ok {
-			if sa, ok := c.u.Bounds(a); ok {
-				if at = intersect(at, sa); at.Empty() {
-					return
-				}
-				c.scrolls = append(c.scrolls, sa)
-			}
+		if _, ok := a.(gunim.Revealer); !ok {
+			continue
+		}
+		if sa, ok := c.u.Bounds(a); ok && scrolls(a, sa) {
+			at = intersect(at, sa)
+			c.scrolls = append(c.scrolls, sa)
 		}
 	}
-	_, least := c.fit.Least[n]
-	fo, focusable := n.(gunim.Focusable)
-	control := len(up) > 0 && (least || focusable && fo != nil)
-	c.parts = append(c.parts, part{n: n, at: at, whole: whole, name: nameOf(n), control: control, over: over, up: up})
+	if !at.Empty() {
+		_, least := c.fit.Least[n]
+		fo, focusable := n.(gunim.Focusable)
+		backdrop := slices.Contains(c.fit.Backdrops, n)
+		control := len(up) > 0 && !backdrop && (least || focusable && fo != nil)
+		c.parts = append(c.parts, part{n: n, at: at, whole: whole, name: nameOf(n), control: control, over: over,
+			up: up})
+	}
 	if co, ok := n.(gunim.Composite); ok {
 		up = append(slices.Clip(up), n)
 		for _, k := range co.Children() {
@@ -219,10 +301,10 @@ func nameOf(n gunim.Node) string {
 // checkParts checks the parts' room, sizes and overlaps.
 func (c *checker) checkParts() {
 	const slack = 0.5
-	// A control that holds another, as a pane that takes keys, is a container: its parts are checked, not it.
+	// A control with another under it, as a pane that takes keys, is a container: its parts are checked, not it.
 	for i, p := range c.parts {
 		for _, q := range c.parts {
-			if p.control && q.control && p.n != q.n && within(q.at, p.at, slack) && q.at != p.at {
+			if p.control && q.control && slices.Contains(q.up, p.n) {
 				c.parts[i].control = false
 				break
 			}
@@ -233,8 +315,8 @@ func (c *checker) checkParts() {
 			c.fail(Outside, "%s at %v lies partly outside the view", p.name, p.at)
 		}
 		if least, ok := c.leastOf(p.n); ok && (p.whole.Size().W < least.W-slack || p.whole.Size().H < least.H-slack) {
-			c.fail(Squeezed, "%s is %v×%v, under its least size %v×%v", p.name, p.whole.Size().W, p.whole.Size().H, least.W,
-				least.H)
+			c.fail(Squeezed, "%s is %v×%v, under its least size %v×%v", p.name, p.whole.Size().W, p.whole.Size().H,
+				least.W, least.H)
 		}
 		if !p.control || p.over {
 			continue
@@ -316,11 +398,11 @@ func (c *checker) checkOps(ops []paint.Op) {
 			}
 			c.checkRun(o, r, top)
 			runs = append(runs, r)
-		case *paint.RRectOp:
-			if top.opacity < 0.05 {
+		default:
+			r, ok := drawn(op)
+			if !ok || top.opacity < 0.05 {
 				continue
 			}
-			r := transformed(o.Transform, o.Rect)
 			if top.clips {
 				r = intersect(r, top.clip)
 			}
@@ -334,7 +416,7 @@ func (c *checker) checkOps(ops []paint.Op) {
 		}
 	}
 	if spills > 0 {
-		c.fail(Spills, "%d shapes are drawn outside the view, within %v", spills, spilt)
+		c.fail(Spills, "%d drawings are drawn outside the view, within %v", spills, spilt)
 	}
 	for i, a := range runs {
 		if c.underOver(a.at) {
@@ -349,6 +431,38 @@ func (c *checker) checkOps(ops []paint.Op) {
 			}
 		}
 	}
+}
+
+// drawn returns the box op draws in, in the window's space, for an op other than a text or a layer.
+func drawn(op paint.Op) (geom.Rect, bool) {
+	switch o := op.(type) {
+	case *paint.RRectOp:
+		return transformed(o.Transform, o.Rect), true
+	case *paint.ImageOp:
+		return transformed(o.Transform, o.Rect), true
+	case *paint.MaskOp:
+		return transformed(o.Transform, o.Rect), true
+	case *paint.SceneOp:
+		return transformed(o.Transform, o.Rect), true
+	case *paint.CellsOp:
+		return transformed(o.Transform, geom.Rect{Min: o.At, Max: o.At.Add(o.Size.Point())}), true
+	case *paint.RibbonOp:
+		if len(o.Points) == 0 {
+			return geom.Rect{}, false
+		}
+		var r geom.Rect
+		for i, pt := range o.Points {
+			w := pt.Width / 2
+			b := geom.Rect{Min: geom.Pt(pt.At.X-w, pt.At.Y-w), Max: geom.Pt(pt.At.X+w, pt.At.Y+w)}
+			if i == 0 {
+				r = b
+			} else {
+				r = r.Union(b)
+			}
+		}
+		return transformed(o.Transform, r), true
+	}
+	return geom.Rect{}, false
 }
 
 // checkRun checks one text: that it is whole, inside the view, and inside or clear of each control.
