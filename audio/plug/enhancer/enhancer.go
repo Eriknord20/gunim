@@ -18,6 +18,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/xover"
+	"github.com/marrasen/gunim/geom"
 )
 
 // bands is how many bands the enhancer splits the sound into.
@@ -74,15 +75,17 @@ func driveFmt(v float64) string { return fmt.Sprintf("%.1f dB", v) }
 // Descriptor is the plugin, as it is registered.
 var Descriptor = func() plug.Descriptor {
 	d := plug.Descriptor{
-		ID:        "marrasen.enhancer",
-		Name:      "Enhancer",
-		Vendor:    "Marras",
-		Version:   "0.1.0",
-		Kind:      "Fx|Distortion|Mastering",
-		Tagline:   "Harmonics, band by band",
-		KeepsMono: true,
-		Keywords:  []string{"exciter", "saturation", "harmonics", "drive", "warmth", "presence", "air", "distortion", "multiband"},
-		New:       func(h plug.Host) plug.Plugin { return &plugin{} },
+		ID:          "marrasen.enhancer",
+		Name:        "Enhancer",
+		Vendor:      "Marras",
+		Version:     "0.1.0",
+		Kind:        "Fx|Distortion|Mastering",
+		Tagline:     "Harmonics, band by band",
+		KeepsMono:   true,
+		Keywords:    []string{"exciter", "saturation", "harmonics", "drive", "warmth", "presence", "air", "distortion", "multiband"},
+		ViewSize:    geom.Sz(960, 560),
+		ViewMinSize: geom.Sz(800, 480),
+		New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 	}
 	homes := [bands - 1][3]float64{{30, 1000, 120}, {200, 5000, 1200}, {1000, 16000, 6000}}
 	for i, x := range homes {
