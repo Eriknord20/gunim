@@ -40,7 +40,9 @@ type Fit struct {
 //   - a part is smaller than its least size: a [plugui.Knob] under its natural size, a [widget.Shrinker] under its
 //     least width, or a part in f.Least under the size given there.
 //
-// A control is a node that can take the keyboard ([gunim.Focusable]). A text's box is worked out from its glyphs'
+// A control is a node that can take the keyboard ([gunim.Focusable]); one that holds another control is a container,
+// and only its parts are checked. A part inside a view that scrolls ([gunim.Revealer]) counts only where it shows, and
+// a text may cross the scrolling view's edge. A text may reach 2 px past a control's box, as a glyph's room does. A text's box is worked out from its glyphs'
 // places and its size, so it may be off by part of a glyph at its end. Fits cannot see a curve or a meter squeezed
 // out of shape, a part drawn over another without text, or text drawn in a picture.
 func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
@@ -146,8 +148,10 @@ func (p *probe) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.
 
 // part is a node drawn in the view: where, its name, the parts it lies in, and whether it lies over others on purpose.
 type part struct {
-	n       gunim.Node
-	at      geom.Rect
+	n  gunim.Node
+	at geom.Rect
+	// whole is where the part is laid out, at where it shows.
+	whole   geom.Rect
 	name    string
 	control bool
 	over    bool
@@ -162,6 +166,8 @@ type checker struct {
 	box   geom.Rect
 	parts []part
 	out   []Misfit
+	// scrolls are where views that scroll show, which cut what they hold at their edges.
+	scrolls []geom.Rect
 }
 
 func (c *checker) fail(k Kind, format string, args ...any) {
@@ -175,10 +181,22 @@ func (c *checker) walk(n gunim.Node, up []gunim.Node, over bool) {
 		return
 	}
 	over = over || slices.Contains(c.fit.Over, n)
+	whole := at
+	// A part in a view that scrolls shows only within it; one scrolled out of sight is left out.
+	for _, a := range up {
+		if _, ok := a.(gunim.Revealer); ok {
+			if sa, ok := c.u.Bounds(a); ok {
+				if at = intersect(at, sa); at.Empty() {
+					return
+				}
+				c.scrolls = append(c.scrolls, sa)
+			}
+		}
+	}
 	_, least := c.fit.Least[n]
 	fo, focusable := n.(gunim.Focusable)
 	control := len(up) > 0 && (least || focusable && fo != nil)
-	c.parts = append(c.parts, part{n: n, at: at, name: nameOf(n), control: control, over: over, up: up})
+	c.parts = append(c.parts, part{n: n, at: at, whole: whole, name: nameOf(n), control: control, over: over, up: up})
 	if co, ok := n.(gunim.Composite); ok {
 		up = append(slices.Clip(up), n)
 		for _, k := range co.Children() {
@@ -201,12 +219,22 @@ func nameOf(n gunim.Node) string {
 // checkParts checks the parts' room, sizes and overlaps.
 func (c *checker) checkParts() {
 	const slack = 0.5
+	// A control that holds another, as a pane that takes keys, is a container: its parts are checked, not it.
+	for i, p := range c.parts {
+		for _, q := range c.parts {
+			if p.control && q.control && p.n != q.n && within(q.at, p.at, slack) && q.at != p.at {
+				c.parts[i].control = false
+				break
+			}
+		}
+	}
 	for i, p := range c.parts {
 		if p.control && !within(p.at, c.box, slack) {
 			c.fail(Outside, "%s at %v lies partly outside the view", p.name, p.at)
 		}
-		if least, ok := c.leastOf(p.n); ok && (p.at.Size().W < least.W-slack || p.at.Size().H < least.H-slack) {
-			c.fail(Squeezed, "%s is %v×%v, under its least size %v×%v", p.name, p.at.Size().W, p.at.Size().H, least.W, least.H)
+		if least, ok := c.leastOf(p.n); ok && (p.whole.Size().W < least.W-slack || p.whole.Size().H < least.H-slack) {
+			c.fail(Squeezed, "%s is %v×%v, under its least size %v×%v", p.name, p.whole.Size().W, p.whole.Size().H, least.W,
+				least.H)
 		}
 		if !p.control || p.over {
 			continue
@@ -327,7 +355,7 @@ func (c *checker) checkOps(ops []paint.Op) {
 func (c *checker) checkRun(o *paint.TextOp, r run, l layer) {
 	whole := transformed(o.Transform, glyphBox(o))
 	switch {
-	case l.clips && !within(whole, l.clip, 1):
+	case l.clips && !within(whole, l.clip, 1) && !c.atScrollEdge(whole):
 		c.fail(CutShort, "text %q at %v is cut short by a clip at %v", r.text, whole, l.clip)
 	case o.FadeTo > o.FadeFrom:
 		c.fail(CutShort, "text %q at %v is cut short, fading out", r.text, whole)
@@ -344,10 +372,20 @@ func (c *checker) checkRun(o *paint.TextOp, r run, l layer) {
 		if !p.control || p.over {
 			continue
 		}
-		if o := intersect(r.at, p.at); o.Size().W > 1 && o.Size().H > 1 && !within(r.at, p.at, 1) {
+		if o := intersect(r.at, p.at); o.Size().W > 2 && o.Size().H > 2 && !within(r.at, p.at, 2) {
 			c.fail(Overlaps, "text %q at %v runs into %s at %v", r.text, r.at, p.name, p.at)
 		}
 	}
+}
+
+// atScrollEdge reports whether r crosses the edge of a view that scrolls, which cuts what it holds there.
+func (c *checker) atScrollEdge(r geom.Rect) bool {
+	for _, sa := range c.scrolls {
+		if !intersect(r, sa).Empty() && !within(r, sa, 1) {
+			return true
+		}
+	}
+	return false
 }
 
 // underOver reports whether a text at r touches a part that lies over others on purpose: the part's own text, or
@@ -370,7 +408,8 @@ func glyphBox(o *paint.TextOp) geom.Rect {
 		r.Min.X, r.Max.X = min(r.Min.X, g.At.X), max(r.Max.X, g.At.X)
 		r.Min.Y, r.Max.Y = min(r.Min.Y, g.At.Y), max(r.Max.Y, g.At.Y)
 	}
-	r.Max.X += 0.55 * o.Size
+	last := o.Glyphs[len(o.Glyphs)-1]
+	r.Max.X += advance(last, o.Size)
 	r.Min.Y -= 0.72 * o.Size
 	r.Max.Y += 0.2 * o.Size
 	return r
@@ -397,11 +436,42 @@ func within(r, in geom.Rect, slack float32) bool {
 		r.Max.Y <= in.Max.Y+slack
 }
 
-// spelled maps each face's glyphs back to the characters a view's labels are written in.
+// spelled maps each face's glyphs back to the characters a view's labels are written in, and advances to how far
+// each glyph moves the pen at a size of 1.
 var (
 	spelledMu sync.Mutex
 	spelled   = map[uint32]map[uint32]rune{}
+	advances  = map[uint32]map[uint32]float32{}
 )
+
+// advance returns how far g moves the pen at size: as measured where [spell] knows it, and a broad guess where not.
+func advance(g paint.Glyph, size float32) float32 {
+	spelledMu.Lock()
+	defer spelledMu.Unlock()
+	learn(g.Face)
+	if a, ok := advances[g.Face][g.ID]; ok {
+		return a * size
+	}
+	return 0.6 * size
+}
+
+// learn maps face's glyphs back to the characters that make them, once. It runs with spelledMu held.
+func learn(id uint32) {
+	if _, ok := spelled[id]; ok {
+		return
+	}
+	m, adv := map[uint32]rune{}, map[uint32]float32{}
+	if face, ok := text.Lookup(id); ok {
+		for _, ch := range spellable {
+			if r := face.Shape(string(ch), 100); len(r.Glyphs) == 1 && r.Glyphs[0].Face == id {
+				if _, taken := m[r.Glyphs[0].ID]; !taken {
+					m[r.Glyphs[0].ID], adv[r.Glyphs[0].ID] = ch, r.Advance/100
+				}
+			}
+		}
+	}
+	spelled[id], advances[id] = m, adv
+}
 
 // spellable are the characters [spell] reads back.
 const spellable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~" +
@@ -413,21 +483,8 @@ func spell(o *paint.TextOp) string {
 	defer spelledMu.Unlock()
 	var b strings.Builder
 	for _, g := range o.Glyphs {
-		m, ok := spelled[g.Face]
-		if !ok {
-			m = map[uint32]rune{}
-			if face, ok := text.Lookup(g.Face); ok {
-				for _, ch := range spellable {
-					if r := face.Shape(string(ch), 12); len(r.Glyphs) == 1 && r.Glyphs[0].Face == g.Face {
-						if _, taken := m[r.Glyphs[0].ID]; !taken {
-							m[r.Glyphs[0].ID] = ch
-						}
-					}
-				}
-			}
-			spelled[g.Face] = m
-		}
-		if ch, ok := m[g.ID]; ok {
+		learn(g.Face)
+		if ch, ok := spelled[g.Face][g.ID]; ok {
 			b.WriteRune(ch)
 		} else {
 			b.WriteRune('?')
