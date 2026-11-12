@@ -290,6 +290,14 @@ type Revealer interface {
 	Reveal(r geom.Rect, u *UI)
 }
 
+// A WheelScroller is a node that scrolls with the wheel, as a scroll view does. WouldScroll reports whether a wheel
+// turned by delta, as [input.Scroll] carries it, would move it now, and false at the end it would move toward.
+// [UI.ScrollsAround] asks it for a node inside it.
+type WheelScroller interface {
+	Node
+	WouldScroll(delta geom.Point) bool
+}
+
 // A Shaped node draws on part of its box: a popup's card inside a
 // window kept at its largest size, so the window need not follow the
 // card as it grows. A point Covers reports false for is not the node's,

@@ -26,6 +26,24 @@ func (u *UI) wheelZoomerAt(root *state, p geom.Point) bool {
 	return false
 }
 
+// ScrollsAround reports whether a [WheelScroller] around n would scroll for a wheel turned by delta, for a node that
+// leaves the wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
+func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	if !ok {
+		return false
+	}
+	for s = s.parent; s != nil; s = s.parent {
+		if w, ok := s.node.(WheelScroller); ok && w.WouldScroll(delta) {
+			return true
+		}
+	}
+	return false
+}
+
 // Zoomed is reported when the user zooms the window with [WindowOptions.ZoomKeys], so the application can remember
 // the zoom for next time.
 type Zoomed struct {

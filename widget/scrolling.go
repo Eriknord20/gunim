@@ -377,6 +377,12 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
+// WouldScroll implements [gunim.WheelScroller]: true while the content can move the way a wheel turned by delta
+// moves it.
+func (s *scrolling) WouldScroll(delta geom.Point) bool {
+	return delta.Y != 0 && s.scrollable() && s.clamp(s.base()-delta.Y) != s.base()
+}
+
 // edgeScroll scrolls for a drag held at p, in the widget's space, over
 // a frame of dt, and returns how far the content moved. It scrolls as
 // [gunim.EdgeSpeed] says.

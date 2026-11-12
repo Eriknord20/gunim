@@ -124,3 +124,20 @@ func TestTheWheelTakesOverAFlingFromWhereItIs(t *testing.T) {
 		t.Fatalf("the wheel took over at %v and ended at %v, want 40 further", at, got)
 	}
 }
+
+// A list says the wheel would scroll it only where its content can move that way: down from the top, and up from the
+// end.
+func TestAListSaysWhereTheWheelWouldScrollIt(t *testing.T) {
+	_, l, run := newVirtual(t, keys(200), 40)
+	run(2)
+	if l.WouldScroll(geom.Pt(0, 40)) || !l.WouldScroll(geom.Pt(0, -40)) || l.WouldScroll(geom.Pt(40, 0)) {
+		t.Errorf("at the top, the wheel would scroll it up %v, down %v and sideways %v; want down alone",
+			l.WouldScroll(geom.Pt(0, 40)), l.WouldScroll(geom.Pt(0, -40)), l.WouldScroll(geom.Pt(40, 0)))
+	}
+	l.JumpTo(1e6)
+	run(2)
+	if !l.WouldScroll(geom.Pt(0, 40)) || l.WouldScroll(geom.Pt(0, -40)) {
+		t.Errorf("at the end, the wheel would scroll it up %v and down %v; want up alone",
+			l.WouldScroll(geom.Pt(0, 40)), l.WouldScroll(geom.Pt(0, -40)))
+	}
+}
