@@ -66,10 +66,10 @@ type PresetBrowser struct {
 	// revealing is a reveal asked for and not yet laid out, revealJump says it puts new content in place at once,
 	// and laid that the columns have had room before.
 	revealing, revealJump, laid bool
-	// picked is the preset the browser last played, and asked what the source's Current gave as it did. While
-	// pending, picked stands for the preset playing, until the source's Current moves on from asked.
-	picked    placed
-	hasPicked bool
+	// played is the preset the browser last played, and asked what the source's Current gave as it did. While
+	// pending, played stands for the preset playing, until the source's Current moves on from asked.
+	played    placed
+	hasPlayed bool
 	pending   bool
 	asked     plug.Preset
 	askedOK   bool
@@ -147,7 +147,7 @@ func (b *PresetBrowser) playing() int {
 	cur, ok := b.src.Current()
 	if b.pending {
 		if ok == b.askedOK && (!ok || cur.Same(b.asked)) {
-			if i := b.indexOf(b.picked); i >= 0 {
+			if i := b.indexOf(b.played); i >= 0 {
 				return i
 			}
 		}
@@ -156,8 +156,8 @@ func (b *PresetBrowser) playing() int {
 	if !ok {
 		return -1
 	}
-	if b.hasPicked && b.picked.p.Same(cur) {
-		if i := b.indexOf(b.picked); i >= 0 {
+	if b.hasPlayed && b.played.p.Same(cur) {
+		if i := b.indexOf(b.played); i >= 0 {
 			return i
 		}
 	}
@@ -343,7 +343,7 @@ func (b *PresetBrowser) showGroup(bank, group string, u *gunim.UI) {
 // pick plays the preset at i in the list.
 func (b *PresetBrowser) pick(i int, u *gunim.UI) {
 	b.asked, b.askedOK = b.src.Current()
-	b.picked, b.hasPicked, b.pending = b.placeOf(i), true, true
+	b.played, b.hasPlayed, b.pending = b.placeOf(i), true, true
 	b.src.Pick(b.list[i], u)
 	b.glide(u)
 	if b.Picked != nil {
