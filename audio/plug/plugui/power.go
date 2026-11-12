@@ -3,6 +3,8 @@ package plugui
 import (
 	"image/color"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -52,7 +54,9 @@ type Power struct {
 	OnChange func(on bool, u *gunim.UI) gunim.Intent
 	// Name is what it switches, for its tooltip and for access.
 	Name string
-	tip  widget.PartTip
+	// Tooltip, where set, replaces the default tooltip, which says whether Name is on and what a click does.
+	Tooltip string
+	tip     widget.PartTip
 }
 
 // NewPower returns a power lamp, off, switching name.
@@ -95,12 +99,21 @@ func (p *Power) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 	PaintPower(pt, mid, p.on.Value(), p.hover.Value(), widget.Accent.Get(th), widget.Ink.Get(th))
 }
 
-// tooltip says what a click does.
+// tooltip says whether it is on and what a click does, as "Follow song is on. Click to turn it off.".
 func (p *Power) tooltip() string {
-	if p.checked {
-		return "Switch the " + p.Name + " off"
+	if p.Tooltip != "" {
+		return p.Tooltip
 	}
-	return "Switch the " + p.Name + " on"
+	now, to := "off", "on"
+	if p.checked {
+		now, to = "on", "off"
+	}
+	click := "Click to turn it " + to + "."
+	if p.Name == "" {
+		return click
+	}
+	r, n := utf8.DecodeRuneInString(p.Name)
+	return string(unicode.ToUpper(r)) + p.Name[n:] + " is " + now + ". " + click
 }
 
 // Focusable implements [gunim.Focusable].

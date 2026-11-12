@@ -135,11 +135,11 @@ func TestAPowerLampSwitchesAndGlides(t *testing.T) {
 		told = append(told, on)
 		return nil
 	}
-	if p.Checked() || p.tooltip() != "Switch the gate on" {
+	if p.Checked() || p.tooltip() != "Gate is off. Click to turn it on." {
 		t.Errorf("new, it is on %v and says %q", p.Checked(), p.tooltip())
 	}
 	p.SetChecked(true, nil)
-	if !p.Checked() || p.on.Value() != 1 || p.tooltip() != "Switch the gate off" {
+	if !p.Checked() || p.on.Value() != 1 || p.tooltip() != "Gate is on. Click to turn it off." {
 		t.Errorf("set on, it is on %v, lit %v, and says %q", p.Checked(), p.on.Value(), p.tooltip())
 	}
 	if s := p.Layout(gunim.Constraints{Max: geom.Sz(100, 100)}, gunim.Frame{}, gunim.Children{}); s != geom.Sz(PowerSize, PowerSize) {
@@ -298,5 +298,24 @@ func TestAKnobGlidesToGreyAndStartsThereWithoutAGlide(t *testing.T) {
 	}
 	if k.Step(time.Second / 120) {
 		t.Error("settled, the knob still asks for frames")
+	}
+}
+
+// The default tooltip reads right for any name, and a caller's own takes its place.
+func TestAPowerLampsTooltipReadsRight(t *testing.T) {
+	p := NewPower("Follow song")
+	if got := p.tooltip(); got != "Follow song is off. Click to turn it on." {
+		t.Errorf("off, it says %q", got)
+	}
+	p.SetChecked(true, nil)
+	if got := p.tooltip(); got != "Follow song is on. Click to turn it off." {
+		t.Errorf("on, it says %q", got)
+	}
+	p.Tooltip = "Keep the view on the playhead"
+	if got := p.tooltip(); got != p.Tooltip {
+		t.Errorf("given its own, it says %q", got)
+	}
+	if got := NewPower("").tooltip(); got != "Click to turn it on." {
+		t.Errorf("with no name, it says %q", got)
 	}
 }
