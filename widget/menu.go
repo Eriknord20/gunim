@@ -543,8 +543,9 @@ func (m *Menu) Transition(p gunim.Presence, f gunim.Frame) bool {
 	return !m.in.Active()
 }
 
-// WouldScroll implements [gunim.WheelScroller]: true while the wheel would scroll the rows.
-func (m *Menu) WouldScroll(delta geom.Point) bool { return m.scroll.WouldScroll(delta) }
+// ScrollsAlong implements [gunim.WheelScroller]: true for a wheel turned up or down while the rows are taller than
+// the card.
+func (m *Menu) ScrollsAlong(delta geom.Point) bool { return m.scroll.ScrollsAlong(delta) }
 
 // Handle implements [gunim.Handler].
 func (m *Menu) Handle(e input.Event, u *gunim.UI) bool {

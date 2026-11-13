@@ -1048,8 +1048,8 @@ func (v *View) cancel(u *gunim.UI) {
 	u.Invalidate()
 }
 
-// WouldScroll implements [gunim.WheelScroller]: true for any turn of the wheel, which the plane always takes.
-func (v *View) WouldScroll(delta geom.Point) bool { return delta != geom.Point{} }
+// ScrollsAlong implements [gunim.WheelScroller]: true for any turn of the wheel, which the plane always takes.
+func (v *View) ScrollsAlong(delta geom.Point) bool { return delta != geom.Point{} }
 
 // scroll moves the plane by the wheel, or zooms it with Ctrl.
 func (v *View) scroll(e input.Scroll, th *theme.Live) {

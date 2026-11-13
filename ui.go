@@ -2673,8 +2673,8 @@ func (u *UI) Drawn(n Node) bool {
 	return ok && s.drawn != 0 && s.drawn == u.seq
 }
 
-// ScrollsAround reports whether a [WheelScroller] around n would scroll for a wheel turned by delta, for a node that
-// leaves the wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
+// ScrollsAround reports whether a [WheelScroller] around n takes a wheel turned by delta, for a node that leaves the
+// wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
 func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
 	if u == nil {
 		return false
@@ -2684,7 +2684,7 @@ func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
 		return false
 	}
 	for s = s.parent; s != nil; s = s.parent {
-		if w, ok := s.node.(WheelScroller); ok && w.WouldScroll(delta) {
+		if w, ok := s.node.(WheelScroller); ok && w.ScrollsAlong(delta) {
 			return true
 		}
 	}

@@ -127,15 +127,23 @@ func TestOneTurnOfTheWheelIsOneUndoStep(t *testing.T) {
 // stageScroll mounts a knob at the top of a scroll view of content tall, the view 100 tall, and returns the window.
 func stageScroll(t *testing.T, k *Knob, tall float32) *gunim.Window {
 	t.Helper()
+	w, _ := stageInScroll(t, k, tall)
+	return w
+}
+
+// stageInScroll mounts n at the top of a scroll view of content tall, the view 100 tall, as the view "s", and returns
+// the window and the view.
+func stageInScroll(t *testing.T, n gunim.Node, tall float32) (*gunim.Window, *widget.Scroll) {
+	t.Helper()
 	w := gunimtest.New(t, geom.Sz(200, 100), nil)
-	content := &column{kids: []gunim.Node{k}, tall: tall}
+	content := &column{kids: []gunim.Node{n}, tall: tall}
 	sv := widget.NewScroll(content)
 	gunim.RegisterView(w, "s", func(struct{}) gunim.Node { return sv }, nil)
 	if err := w.Client().Mount(gunim.Root, "s", "s", nil); err != nil {
 		t.Fatal(err)
 	}
 	frames(w, 2)
-	return w
+	return w, sv
 }
 
 // column lays its children out from the top, in a box tall high.
@@ -162,8 +170,8 @@ func (c *column) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.
 	}
 }
 
-// Inside a view the wheel would scroll, the knob leaves the wheel to the view unless it has the keyboard; where the
-// view cannot scroll that way, the knob takes it.
+// Inside a view with room to scroll, the knob leaves the wheel to the view unless it has the keyboard, at the view's
+// top too.
 func TestAKnobInAScrollingViewLeavesItTheWheel(t *testing.T) {
 	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
 	h := &host{values: map[uint32]float64{1: 0.5}}
@@ -176,13 +184,13 @@ func TestAKnobInAScrollingViewLeavesItTheWheel(t *testing.T) {
 		t.Fatalf("in a view that scrolls, the wheel turned the knob without the keyboard to %v", h.values[1])
 	}
 	frames(w, 30)
-	// The view is at its top, so a wheel turned up has nowhere to scroll it, and turns the knob.
+	// At the view's top, a wheel turned up is still the view's, and leaves the knob be.
 	h2 := &host{values: map[uint32]float64{1: 0.5}}
 	k2 := NewKnob(h2, mix)
 	w2 := stageScroll(t, k2, 400)
 	wheelAt(w2, over, 1, 0)
-	if !near(h2.values[1], 0.525) {
-		t.Errorf("at the view's top, a notch up turned the knob to %v, want 0.525", h2.values[1])
+	if h2.values[1] != 0.5 {
+		t.Errorf("at the view's top, a notch up turned the knob to %v", h2.values[1])
 	}
 	// With the keyboard, the knob takes the wheel the view would scroll by.
 	h3 := &host{values: map[uint32]float64{1: 0.5}}

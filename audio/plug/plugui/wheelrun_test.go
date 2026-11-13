@@ -10,7 +10,7 @@ import (
 )
 
 // A run of the wheel that scrolls the view round a knob to its end goes on scrolling nothing, and leaves the knob
-// be; a notch after the run has rested turns the knob.
+// be; a notch after the run has rested leaves it be too.
 func TestAWheelRunThatScrollsAViewToItsEndLeavesTheKnobBe(t *testing.T) {
 	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
 	for _, c := range []struct {
@@ -37,8 +37,8 @@ func TestAWheelRunThatScrollsAViewToItsEndLeavesTheKnobBe(t *testing.T) {
 			}
 			frames(w, 60)
 			wheelAt(w, over, c.notch, 0)
-			if h.values[1] == 0.5 {
-				t.Errorf("a notch %s after the run rested, the view at its end, left the knob be", c.what)
+			if h.values[1] != 0.5 {
+				t.Errorf("a notch %s after the run rested, the view at its end, turned the knob to %v", c.what, h.values[1])
 			}
 		})
 	}
