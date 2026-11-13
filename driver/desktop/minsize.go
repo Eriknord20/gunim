@@ -30,10 +30,8 @@ func noNegative(s geom.Size) geom.Size { return geom.Sz(max(s.W, 0), max(s.H, 0)
 type leastSizing uint8
 
 const (
-	// limitOnly sets the limit and leaves the window's size.
-	limitOnly leastSizing = iota
 	// growToLimit grows the window to the limit where it is smaller.
-	growToLimit
+	growToLimit leastSizing = iota
 	// fitToLimit grows the window to the limit, and brings it down to the limit on a side where the work area caps it.
 	fitToLimit
 )
@@ -67,10 +65,7 @@ func (w *Window) applyMinSize(how leastSizing) error {
 		mw, mh = max(min(mw, aw), 1), max(min(mh, ah), 1)
 	}
 	free := !w.FullScreen() && !attrib(w.gw, glfw.Maximized) && !attrib(w.gw, glfw.Iconified)
-	nw, nh := ww, wh
-	if how != limitOnly {
-		nw, nh = max(ww, mw), max(wh, mh)
-	}
+	nw, nh := max(ww, mw), max(wh, mh)
 	if how == fitToLimit {
 		if capped[0] {
 			nw = mw
@@ -79,10 +74,11 @@ func (w *Window) applyMinSize(how leastSizing) error {
 			nh = mh
 		}
 	}
-	// Sized before it is limited: a limit set first grows the window where it stands, off the work area.
+	// Sized before it is limited, on the work area it was capped at: a limit set first grows the window where it
+	// stands, off the work area.
 	if free && (nw != ww || nh != wh) {
 		w.debugf("sized from %dx%d to %dx%d for its least size", ww, wh, nw, nh)
-		if err := w.setBoundsOnScreen(x, y, nw, nh); err != nil {
+		if err := w.setBoundsOn(w.leastArea, x, y, nw, nh); err != nil {
 			return err
 		}
 	}
@@ -113,8 +109,8 @@ func (w *Window) minSizeAgain() {
 	}
 }
 
-// minSizeMoved caps the least size again at the work area of the monitor the window moved onto. It runs on the main
-// thread.
+// minSizeMoved caps the least size again at the work area of the monitor the window moved onto, and grows the window
+// to it where the cap rose. It runs on the main thread.
 func (w *Window) minSizeMoved() {
 	if w.closed || w.least == (geom.Size{}) {
 		return
@@ -130,7 +126,7 @@ func (w *Window) minSizeMoved() {
 	if workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2))) == w.leastArea {
 		return
 	}
-	if err := w.applyMinSize(limitOnly); err != nil {
+	if err := w.applyMinSize(growToLimit); err != nil {
 		w.debugf("least size not capped again: %v", err)
 	}
 }

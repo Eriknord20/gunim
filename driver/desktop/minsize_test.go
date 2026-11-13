@@ -10,6 +10,7 @@ import (
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/internal/glfw"
 	"github.com/marrasen/gunim/paint"
 )
 
@@ -89,6 +90,37 @@ func TestAWindowGrowingToItsLeastSizeKeepsOnTheWorkArea(t *testing.T) {
 		}
 		r, area = outer(t, w)
 		onArea(t, "given a least size of 700×500 near the corner", r, area)
+	}
+}
+
+// A window whose least size a smaller monitor capped, moved onto a monitor with room for it, grows to it and keeps on
+// the work area.
+func TestAWindowMovedOntoALargerMonitorGrowsOnTheWorkArea(t *testing.T) {
+	probe := leastWindow(t, driver.Options{Title: "gunim least probe", Size: geom.Sz(100, 100)})
+	_, area := outer(t, probe)
+	f := probe.coordsPerLogical()
+	place := &driver.Placement{CoordsPerLogical: f, Bounds: geom.Rect{
+		Min: geom.Pt(area.Max.X-20-300*f, area.Max.Y-20-200*f), Max: geom.Pt(area.Max.X-20, area.Max.Y-20)}}
+	w := leastWindow(t, driver.Options{Title: "gunim least moved", Size: geom.Sz(300, 200), Place: place})
+	// As though the least size of 700×500 were capped at 300×200 by the work area of the monitor the window came from.
+	if err := display.call(func() error {
+		ww, wh, err := w.gw.GetSize()
+		if err != nil {
+			return err
+		}
+		if err := w.gw.SetSizeLimits(ww, wh, glfw.DontCare, glfw.DontCare); err != nil {
+			return err
+		}
+		w.least, w.leastArea = geom.Sz(700, 500), geom.Rc(area.Min.X, area.Min.Y, 1, 1)
+		w.minSizeMoved()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r, area := outer(t, w)
+	onArea(t, "moved onto a monitor with room for its least size of 700×500", r, area)
+	if r.Size().W < 700*f || r.Size().H < 500*f {
+		t.Errorf("moved onto a monitor with room for its least size of 700×500, the window is %v", r.Size())
 	}
 }
 

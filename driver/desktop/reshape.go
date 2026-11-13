@@ -34,9 +34,14 @@ func (w *Window) Reshape(by geom.Insets) error {
 // setBoundsOnScreen sets the window's bounds in screen coordinates, moved whole to keep on its monitor's work area.
 // It runs on the main thread.
 func (w *Window) setBoundsOnScreen(x, y, ww, wh int) error {
+	return w.setBoundsOn(workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2))), x, y, ww, wh)
+}
+
+// setBoundsOn sets the window's bounds in screen coordinates, moved whole to keep on area, or where they are for an
+// empty area. It runs on the main thread.
+func (w *Window) setBoundsOn(area geom.Rect, x, y, ww, wh int) error {
 	// The frame the system draws round a window that keeps it counts as the window keeps on its monitor.
 	fl, ft, fr, fb := w.frameSize()
-	area := workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2)))
 	if !area.Empty() {
 		x = keepOn(x, ww, fl, fr, int(area.Min.X), int(area.Max.X))
 		y = keepOn(y, wh, ft, fb, int(area.Min.Y), int(area.Max.Y))
