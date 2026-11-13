@@ -179,6 +179,8 @@ type Driver struct {
 	// errs carries the errors of what the driver does on its own, as the
 	// backlight's writes while it fades; see Errors.
 	errs chan error
+	// lost carries what ends Run on its own: the touch screen gone.
+	lost chan error
 
 	// panelW and panelH are the panel's own size in pixels; picW and picH
 	// the picture's, turned.
@@ -252,7 +254,7 @@ func Open(o Options) (*Driver, error) {
 		return nil, fmt.Errorf("kms: Rotate is %d: want 0, 90, 180 or 270", o.Rotate)
 	}
 	d := &Driver{o: o, turn: t, cmds: make(chan func(), 8), quit: make(chan struct{}), done: make(chan struct{}),
-		ended: make(chan struct{}), wake: -1, stop: -1, errs: make(chan error, 8),
+		ended: make(chan struct{}), wake: -1, stop: -1, errs: make(chan error, 8), lost: make(chan error, 1),
 		lightTo: make(chan int, 1), lightDone: make(chan struct{})}
 	if err := d.open(); err != nil {
 		// The render thread, if it started, has ended.
@@ -452,11 +454,18 @@ func (d *Driver) inputsLine() string {
 	return s
 }
 
+// ErrTouchGone ends Run where the touch screen goes away, as when its
+// cable comes loose or its driver resets. Nothing else wakes a screen that
+// is off, so it would stay off for ever. The program ends instead, and
+// whatever started it, as systemd, starts it again to find the screen.
+var ErrTouchGone = errors.New("kms: the touch screen has gone")
+
 // Run implements [driver.Driver]. The render thread and the input readers
 // pump the events, so Run waits for ctx to end, the last window to close,
-// the render thread to fail, or SIGHUP, SIGINT or SIGTERM. It then gives
-// back the screen, the VT and the backlight as it found them. A signal is
-// a normal end, as ctx ending is: Run returns nil for it.
+// the render thread to fail, the touch screen to go (ErrTouchGone), or
+// SIGHUP, SIGINT or SIGTERM. It then gives back the screen, the VT and the
+// backlight as it found them. A signal is a normal end, as ctx ending is:
+// Run returns nil for it.
 func (d *Driver) Run(ctx context.Context, ready func()) error {
 	ready()
 	var stop <-chan time.Time
@@ -465,11 +474,14 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 		defer t.Stop()
 		stop = t.C
 	}
+	var lost error
 	for {
 		select {
 		case <-ctx.Done():
 		case <-d.quit:
 		case <-d.done:
+		case lost = <-d.lost:
+			log.Printf("gunim: kms: %v: giving the screen back", lost)
 		case s := <-d.sigs:
 			log.Printf("gunim: kms: %v: giving the screen back", s)
 		case <-stop:
@@ -478,7 +490,18 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 		}
 		break
 	}
-	return d.Close()
+	if err := d.Close(); lost == nil {
+		return err
+	}
+	return lost
+}
+
+// lose ends Run with err.
+func (d *Driver) lose(err error) {
+	select {
+	case d.lost <- err:
+	default:
+	}
 }
 
 // logSecond logs the last second's frames, for GUNIM_DEBUG_FRAMES.
@@ -655,16 +678,25 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 	}
 	w.hidden = o.Hidden
 	d.windows = append(d.windows, w)
-	hidden := d.hidden
-	d.mu.Unlock()
 	// A window that opens while the screen doesn't show it hears so at once,
-	// as the others did.
-	if hidden {
+	// as the others did. It hears it under mu, as tell tells the windows,
+	// so a wake just after can't reach it first (#430). Push takes only the
+	// inbox's own lock, and never waits.
+	if d.hidden {
 		w.in.Push(driver.WindowShown{Shown: false})
+	}
+	d.mu.Unlock()
+	if newWindowGap != nil {
+		newWindowGap()
 	}
 	d.kick()
 	return w, nil
 }
+
+// newWindowGap, if set, runs as NewWindow lets go of mu: a test runs a
+// wake there, where it once came between the window's adding and its
+// hearing it is hidden.
+var newWindowGap func()
 
 // screenLocked returns the picture in logical pixels. It runs with mu
 // held, though nothing in it changes.
@@ -751,12 +783,18 @@ func (d *Driver) tell() {
 		return
 	}
 	d.hidden = !shown
-	d.mu.Unlock()
-	if shown {
-		d.pushAll(driver.WindowShown{Shown: true}, driver.Redraw{})
-	} else {
-		d.pushAll(driver.WindowShown{Shown: false})
+	// The windows hear it under mu, so a window opening meanwhile hears the
+	// hide it opened under before this, never after. Push takes only the
+	// inbox's own lock, and never waits.
+	for _, w := range d.windows {
+		if shown {
+			w.in.Push(driver.WindowShown{Shown: true})
+			w.in.Push(driver.Redraw{})
+		} else {
+			w.in.Push(driver.WindowShown{Shown: false})
+		}
 	}
+	d.mu.Unlock()
 }
 
 // DisplayOn asks the kernel whether the display controller is on: the

@@ -608,3 +608,39 @@ func TestASecondStartLeavesTheLiveRunsVTAlone(t *testing.T) {
 		t.Fatalf("the live run's VT was touched: %v", c.calls)
 	}
 }
+
+// A touch screen that goes away ends Run with ErrTouchGone, after the
+// screen is given back: nothing else would wake a screen that is off.
+func TestATouchScreenThatGoesEndsRun(t *testing.T) {
+	d := idleDriver(t)
+	d.lost = make(chan error, 1)
+	d.done = make(chan struct{})
+	go func() {
+		<-d.quit
+		close(d.done)
+	}()
+	var p [2]int
+	if err := unix.Pipe(p[:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = unix.Close(p[1]) // the device is gone: its end hangs up
+	defer func() { _ = unix.Close(p[0]) }()
+	dev := &inputDev{fd: p[0], path: "/dev/input/event1", touch: true, slots: 5,
+		x: absInfo{maximum: 719}, y: absInfo{maximum: 1279}}
+	ran := make(chan error, 1)
+	go func() { ran <- d.Run(context.Background(), func() {}) }()
+	d.readTouch(dev)
+	select {
+	case err := <-ran:
+		if !errors.Is(err, ErrTouchGone) {
+			t.Fatalf("Run returned %v, want ErrTouchGone", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not end as the touch screen went")
+	}
+	select {
+	case <-d.Closed():
+	default:
+		t.Fatal("Run ended with the screen not given back")
+	}
+}

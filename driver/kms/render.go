@@ -901,18 +901,6 @@ func (r *renderThread) returned(now time.Time) {
 	d.tell()
 }
 
-// pushAll sends evs to every window.
-func (d *Driver) pushAll(evs ...any) {
-	d.mu.Lock()
-	ws := append([]*Window(nil), d.windows...)
-	d.mu.Unlock()
-	for _, w := range ws {
-		for _, ev := range evs {
-			w.in.Push(ev)
-		}
-	}
-}
-
 // putUint64 is the eventfd's count, as it takes it.
 func putUint64(n uint64) [8]byte {
 	var b [8]byte

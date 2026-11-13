@@ -176,6 +176,10 @@ that proves it is alive from a window's timer, as to systemd's watchdog, asks it
 window whose timers stop while the screen shows is hung, and one whose timers wait while the
 screen doesn't show is waiting.
 
+A touch screen that goes away, as when its cable comes loose, ends `Run` with `ErrTouchGone`, after
+the screen is given back. Nothing else wakes a screen that is off, so the program ends, and
+whatever started it, as systemd with `Restart=`, starts it again to find the screen.
+
 ## Measuring
 
 - `tools/kmsbench` checks the goals of [docs/plans/kms-touch.md](../../docs/plans/kms-touch.md) on

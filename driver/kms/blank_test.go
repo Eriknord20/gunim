@@ -610,3 +610,27 @@ func TestShowingTurnsTrueAsTheKernelSwitchesBack(t *testing.T) {
 		t.Fatal("the switch back with the render thread hung leaves Showing false")
 	}
 }
+
+// A window opened as the screen comes back hears it is hidden before it
+// hears it is shown, never after: a wake that comes just as NewWindow lets
+// go of the driver's lock, where the hide was once pushed, reaches it
+// second (#430).
+func TestAWindowOpenedAsTheScreenComesBackHearsTheShowLast(t *testing.T) {
+	d := testDriver(0, 1)
+	r := &renderThread{d: d}
+	r.left()
+	newWindowGap = func() { r.returned(after(time.Minute)) }
+	defer func() { newWindowGap = nil }()
+	w, _ := d.NewWindow(driver.Options{})
+	win := w.(*Window)
+	defer func() { _ = win.Close() }()
+	if shown(t, win) {
+		t.Fatal("the window heard it is shown first")
+	}
+	if !shown(t, win) {
+		t.Fatal("the window heard it is hidden last, and stays blank")
+	}
+	if !d.Showing() {
+		t.Fatal("the screen came back, but doesn't count as showing")
+	}
+}

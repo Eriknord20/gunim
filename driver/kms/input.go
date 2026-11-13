@@ -3,6 +3,7 @@
 package kms
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -223,6 +224,9 @@ func (d *Driver) readTouch(dev *inputDev) {
 		if cs := dec.liftAll(); cs != nil {
 			d.touchReport(m, cs, time.Now())
 		}
+		// Nothing else wakes the screen: the program ends, to be started
+		// again and find the screen afresh.
+		d.lose(fmt.Errorf("%w: %s", ErrTouchGone, dev.path))
 	}
 }
 
