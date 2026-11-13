@@ -13,6 +13,7 @@ import (
 func TestASurfaceKeepsItsViewsClearOfAPhonesBars(t *testing.T) {
 	s := NewSurface()
 	w := gunimtest.New(t, geom.Sz(400, 800), s)
+	w.PaintWhenLooked(false)
 	w.Offscreen().SetSafeArea(geom.Insets{Top: 48, Bottom: 24, Left: 10})
 	spot := &probe{}
 	gunim.RegisterView(w, "view", func(struct{}) gunim.Node { return spot }, nil)

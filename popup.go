@@ -109,8 +109,11 @@ func (p *Popup) Input(ev any) {
 	p.u.popupEvent(popupEvent{s: p.s, ev: ev})
 }
 
-// Move attaches the popup to a new anchor, in the opener's space.
+// Move attaches the popup to a new anchor, in the opener's space, and does nothing where the anchor is the same.
 func (p *Popup) Move(anchor geom.Rect) {
+	if p.s.opts.Anchor == anchor {
+		return
+	}
 	p.s.opts.Anchor = anchor
 	p.u.invalid = true
 }

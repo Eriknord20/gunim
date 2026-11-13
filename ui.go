@@ -577,8 +577,13 @@ type Window struct {
 	// the last one was, and due is when the frame most recently drawn is
 	// predicted to be. All belong to the UI goroutine.
 	unshown, unreleased int
-	shown               time.Time
-	due                 time.Time
+	// building says a held frame that paints is being built: its
+	// commands, its timers and its painting. A frame owed painted
+	// meanwhile is a second frame painted before the driver is asked
+	// again whether it has let one go.
+	building bool
+	shown    time.Time
+	due      time.Time
 	// dues holds the due time of each frame handed and not yet shown,
 	// oldest first. late is how long after its due time a frame lights
 	// the screen, smoothed over the frames shown, and lateKnown says a
@@ -1261,6 +1266,15 @@ func (w *Window) TimeByFrames(on bool) {
 func (w *Window) Paint() {
 	defer w.drive()()
 	w.ui.paintOwed()
+}
+
+// Still reports whether nothing in the window moves: no animation runs and nothing waits to be applied. A redraw
+// owed for a change already applied and timers set for later do not count. It must be called from the goroutine
+// calling Frame.
+func (w *Window) Still() bool {
+	defer w.drive()()
+	return !w.ui.animating && !w.queued() && len(w.popupIn) == 0 && len(w.dragIn) == 0 && len(w.leave) == 0 &&
+		len(w.fade) == 0
 }
 
 // Input hands the window a platform event, as a driver would: a pointer
@@ -3156,6 +3170,12 @@ func (u *UI) paintOwed() {
 		// Held, a frame owed paints only into buffers the driver is done with, else the next painted frame shows
 		// it, and one painted is in flight as a frame drawn is.
 		if !u.w.free() {
+			return
+		}
+		// Asked for as a frame is built, the frame owed and the one built are two frames painted on one check
+		// for room. The painter keeps two frames' buffers, so both have room only once the driver has let every
+		// frame go; else the second would record into ops the driver still reads.
+		if u.w.building && u.w.unreleased > 0 {
 			return
 		}
 		u.paintFrame(u.owedFrame)

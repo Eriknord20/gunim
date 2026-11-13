@@ -170,3 +170,40 @@ func TestReadsOfWhatAnOffscreenWindowDrewAreLooks(t *testing.T) {
 		t.Fatal("a read looked with no hook set")
 	}
 }
+
+// A frame presented and never read copies nothing, and a frame read later is the last one presented.
+func TestAnOffscreenWindowCopiesAFrameOnlyAsItIsRead(t *testing.T) {
+	w := Offscreen(geom.Sz(200, 200))
+	mesh := paint.NewBox(geom.V3(1, 1, 1), color.NRGBA{A: 0xff})
+	var p, alone paint.Painter
+	g := newGame(mesh)
+	n := 0
+	present := func() {
+		n++
+		g.frame(&p, n)
+		if err := w.Present(p.Ops(), []geom.Rect{paint.Everything}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	present()
+	present()
+	if allocs := testing.AllocsPerRun(20, func() {
+		if err := w.Present(p.Ops(), []geom.Rect{paint.Everything}); err != nil {
+			t.Fatal(err)
+		}
+	}); allocs > 0 {
+		t.Fatalf("presenting a frame allocates %v times", allocs)
+	}
+	present()
+	kept := w.Ops()
+	newGame(mesh).frame(&alone, n)
+	if !reflect.DeepEqual(kept, alone.Ops()) {
+		t.Fatalf("the frame read is not the last presented:\n%#v\n%#v", kept, alone.Ops())
+	}
+	for range 4 {
+		present()
+		if !reflect.DeepEqual(kept, alone.Ops()) {
+			t.Fatalf("frame %d changed the ops read before it", n)
+		}
+	}
+}

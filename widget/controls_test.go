@@ -233,6 +233,7 @@ func TestTabsTakePagesMountedUnderThemAndSkipDisabledOnes(t *testing.T) {
 	tabs := NewTabs([]string{"One", "Two", "Three"})
 	tabs.Disabled = []bool{false, true}
 	w := gunimtest.New(t, geom.Sz(600, 400), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "tabs", func(struct{}) *Tabs { return tabs }, nil)
 	pages := []*spot{newSpot(10, 10), newSpot(10, 10), newSpot(10, 10)}
 	for i, p := range pages {
@@ -272,6 +273,7 @@ func TestTabsTakePagesMountedUnderThemAndSkipDisabledOnes(t *testing.T) {
 func TestTabsCanBeSelectedBeforeTheirPagesArrive(t *testing.T) {
 	tabs := NewTabs([]string{"One", "Two", "Three"})
 	w := gunimtest.New(t, geom.Sz(600, 400), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "tabs", func(struct{}) *Tabs { return tabs }, func(tb *Tabs, _ struct{}, u *gunim.UI) { tb.SetSelected(2, u) })
 	page := newSpot(10, 10)
 	gunim.RegisterView(w, "page", func(struct{}) *spot { return page }, nil)

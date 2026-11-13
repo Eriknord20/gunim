@@ -55,6 +55,7 @@ func TestAWrapStartsANewRowWhereTheNextChildWouldPassItsWidth(t *testing.T) {
 	wrap := NewWrap()
 	wrap.Gap = tableNoGap
 	w := gunimtest.New(t, geom.Sz(320, 200), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "wrap", func(struct{}) gunim.Node { return wrap },
 		func(n gunim.Node, _ struct{}, u *gunim.UI) {
 			for _, k := range []gunim.Node{a, b, c} {
@@ -78,6 +79,7 @@ func TestAWrapCanCentreEachChildInItsRow(t *testing.T) {
 	wrap := NewWrap()
 	wrap.Gap, wrap.Cross = tableNoGap, CrossCenter
 	w := gunimtest.New(t, geom.Sz(320, 200), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "wrap", func(struct{}) gunim.Node { return wrap },
 		func(n gunim.Node, _ struct{}, u *gunim.UI) {
 			for _, k := range []gunim.Node{a, b, c} {
@@ -270,6 +272,7 @@ func TestAWrapPackedAtTheEnd(t *testing.T) {
 	wrap.Gap = tableNoGap
 	wrap.Justify = JustifyEnd
 	w := gunimtest.New(t, geom.Sz(320, 200), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "wrap", func(struct{}) gunim.Node { return wrap },
 		func(n gunim.Node, _ struct{}, u *gunim.UI) {
 			for _, k := range []gunim.Node{a, b, c, d} {

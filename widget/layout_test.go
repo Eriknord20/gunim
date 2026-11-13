@@ -99,6 +99,7 @@ func spotColumn(n int) (spots []*spot, nodes []gunim.Node) {
 func stage(t *testing.T, root gunim.Node) (w *gunim.Window, run func(n int)) {
 	t.Helper()
 	w = gunimtest.New(t, geom.Sz(800, 600), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "stage", func(struct{}) gunim.Node { return root }, nil)
 	if err := w.Client().Mount(gunim.Root, "stage", "stage", nil); err != nil {
 		t.Fatal(err)

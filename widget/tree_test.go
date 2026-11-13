@@ -42,6 +42,7 @@ func newTreeStage(t *testing.T) (w *gunim.Window, tr *Tree, run func(int), apply
 	tr.Item = m.item
 	tr.OnActivate = func(k Key, u *gunim.UI) gunim.Intent { return treeActivated{k} }
 	w = gunimtest.New(t, geom.Sz(300, 200), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "t", func(struct{}) *Tree { return tr },
 		func(tr *Tree, _ struct{}, u *gunim.UI) { tr.SetKeys(m.keys("", nil), u) })
 	if err := w.Client().Mount(gunim.Root, "t", "t", nil); err != nil {
@@ -180,6 +181,7 @@ func TestATreeTipsARowCutShort(t *testing.T) {
 	long := strings.Repeat("a long name ", 20)
 	tr.Item = func(Key) TreeItem { return TreeItem{Text: long} }
 	w := gunimtest.New(t, geom.Sz(200, 100), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "t", func(struct{}) *Tree { return tr },
 		func(tr *Tree, _ struct{}, u *gunim.UI) { tr.SetKeys([]Key{"x"}, u) })
 	if err := w.Client().Mount(gunim.Root, "t", "t", nil); err != nil {

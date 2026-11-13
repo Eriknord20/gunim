@@ -42,7 +42,9 @@ type OffscreenWindow struct {
 	// least is the least size the content is laid out in; see SetMinSize.
 	least geom.Size
 	rate  float64
-	ops   []paint.Op
+	// ops are the last frame's commands, and raw says they are still the engine's own; see keptOps.
+	ops []paint.Op
+	raw bool
 	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
 	drawnSize             geom.Size
 	drawnScale, drawnZoom float32
@@ -263,12 +265,19 @@ func (w *OffscreenWindow) Post(ev any) { w.input <- ev }
 func (w *OffscreenWindow) Present(ops []paint.Op, damage []geom.Rect) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// The engine reuses its buffers, the ops themselves among them, two
-	// frames on, so keep a copy for Ops to return.
-	w.ops = keepOps(ops)
+	w.ops, w.raw = ops, true
 	w.drawnSize, w.drawnScale, w.drawnZoom = w.size, w.scale, w.zoom
 	w.damage = append(w.damage[:0], damage...)
 	return nil
+}
+
+// keptOps returns the last frame's ops, copied the first time they are read, as the engine reuses its buffers two
+// frames on. It must be called with w.mu held.
+func (w *OffscreenWindow) keptOps() []paint.Op {
+	if w.raw {
+		w.ops, w.raw = keepOps(w.ops), false
+	}
+	return w.ops
 }
 
 // keepOps copies ops deep enough that later frames leave the copy as
@@ -358,7 +367,7 @@ func (w *OffscreenWindow) Ops() []paint.Op {
 	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.ops
+	return w.keptOps()
 }
 
 // SetSafeArea has the window play one a phone's bars lie over, in from
