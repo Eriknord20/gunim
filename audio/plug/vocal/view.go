@@ -17,9 +17,10 @@ import (
 	"github.com/marrasen/gunim/theme"
 )
 
-// The chain's colours: how far the de-esser, and each compressor, turn
-// the voice down.
+// The chain's colours: how far the gate, the de-esser, and each
+// compressor, turn the voice down.
 var (
+	GateColor  = theme.Color("vocal.gate", color.NRGBA{R: 0x6c, G: 0x7c, B: 0xff, A: 0xff})
 	DeEssColor = theme.Color("vocal.deess", color.NRGBA{R: 0x5a, G: 0xc8, B: 0xff, A: 0xff})
 	PeakColor  = theme.Color("vocal.peak", color.NRGBA{R: 0xff, G: 0x5a, B: 0x4f, A: 0xff})
 	GlueColor  = theme.Color("vocal.glue", color.NRGBA{R: 0xff, G: 0xb0, B: 0x4a, A: 0xff})
@@ -113,8 +114,9 @@ func (c *chip) Step(dt time.Duration) bool {
 func (c *chip) Access() access.Info { return c.label.Access() }
 
 // panel is the voice's history, filling the panel, with how far the
-// de-esser and the compressors turn it down; over it, on glass, the
-// macros and Learn, and, in full, a section for each part of the chain.
+// gate, the de-esser and the compressors turn it down; over it, on
+// glass, the macros and Learn, and, in full, a section for each part of
+// the chain.
 type panel struct {
 	p        *plugin
 	h        plug.Host
@@ -142,6 +144,7 @@ func newPanel(pl *plugin, h plug.Host, full bool) *panel {
 		p.values[prm.ID] = h.Param(prm.ID)
 	}
 	p.hist = plugui.NewHistory(h, []plugui.Reduction{
+		{IDs: []uint32{GateGRID}, Color: GateColor},
 		{IDs: []uint32{DeEssGRID}, Color: DeEssColor},
 		{IDs: []uint32{PeakGRID, GlueGRID}, Color: GlueColor},
 		{IDs: []uint32{PeakGRID}, Color: PeakColor, Line: true},
@@ -164,6 +167,7 @@ func newPanel(pl *plugin, h plug.Host, full bool) *panel {
 	if full {
 		p.least = Descriptor.ViewMinSize
 		p.sections = append(p.sections,
+			plugui.NewSection(h, &Descriptor, "GATE", GateOnID, GateThresholdID, GateRangeID, GateReleaseID),
 			plugui.NewSection(h, &Descriptor, "DE-ESSER", DeEssOnID, DeEssFreqID, DeEssThresholdID, DeEssRangeID),
 			plugui.NewSection(h, &Descriptor, "LEVELS", 0, InputID, OutputID, WidthFreqID),
 			plugui.NewSection(h, &Descriptor, "CLEAN EQ", CleanOnID, LowShelfFqID, LowShelfID, MudFreqID, MudGainID, MudQID),
@@ -176,9 +180,9 @@ func newPanel(pl *plugin, h plug.Host, full bool) *panel {
 }
 
 // Learn's tooltip.
-const learnTip = "Read the voice as it reaches the chain, and set the chain for it: Input and Output to the target, " +
-	"the EQs to its balance, the de-esser to its hiss, and each compressor to take about 2 dB. The macros stay as " +
-	"they are. Undo puts the chain back."
+const learnTip = "Read the voice as it reaches the chain, and set the chain for it: the gate over its noise, Input and " +
+	"Output to the target, the EQs to its balance, the de-esser to its hiss, and each compressor to take about 2 dB. " +
+	"The macros stay as they are. Undo puts the chain back."
 
 // learnable shows Learn at rest: greyed where there is no voice to
 // read; else what it would read, the loop or the whole track, greyed

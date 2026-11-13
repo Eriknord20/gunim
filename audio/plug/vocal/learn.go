@@ -18,13 +18,15 @@ import (
 // over, on a goroutine of its own:
 //
 //  1. Once as it is, for its loudness, which sets Input to bring it to
-//     the target, and for its balance, its power a sixth of an octave
-//     at a time, which sets the EQs: the low shelf by how much rumble
-//     and boom there is under the voice; the mud cut at the boxiest
-//     ring between 280 and 700 Hz, as deep as it stands out; the
-//     presence lift into the dip it finds between 2.5 and 5 kHz, as far
-//     as the voice lacks bite; the air by how dull the top is; and the
-//     de-esser at the band where the hiss stands out.
+//     the target; for the peaks of its moments, which set the gate
+//     between its noise and the singing, where the two stand apart, and
+//     turn it off otherwise; and for its balance, its power a sixth of
+//     an octave at a time, which sets the EQs: the low shelf by how
+//     much rumble and boom there is under the voice; the mud cut at the
+//     boxiest ring between 280 and 700 Hz, as deep as it stands out;
+//     the presence lift into the dip it finds between 2.5 and 5 kHz, as
+//     far as the voice lacks bite; the air by how dull the top is; and
+//     the de-esser at the band where the hiss stands out.
 //  2. Once for the hiss, over the de-esser's band, which sets its
 //     threshold just under the loudest S's.
 //  3. Through the chain as set so far, again and again, to find the
@@ -62,6 +64,13 @@ const (
 	specBlock   = 4096
 	specQuiet   = -65
 	learnActive = 25
+	// learnGateGap is how far the singing must stand over the noise for
+	// Learn to set the gate, in decibels; learnGateAt how far of the way
+	// up from the noise its threshold goes; and learnGateKeep how many
+	// decibels short of the way down its range stops.
+	learnGateGap  = 24
+	learnGateAt   = 0.4
+	learnGateKeep = 6
 )
 
 // learned is what Learn found: the parameters it set, by ID; and
@@ -270,12 +279,13 @@ func learnChain(ctx context.Context, d plug.Document, src plug.Source, values ma
 	}
 	target := set[TargetID]
 
-	// 1. The voice's loudness and balance.
-	loud, levels, err := listen(ctx, v)
+	// 1. The voice's loudness, noise and balance.
+	loud, peaks, levels, err := listen(ctx, v)
 	if err != nil {
 		return learned{}, err
 	}
 	set[InputID] = round(param(InputID).Clamp(target-loud), 10)
+	setGate(peaks, set)
 	balance(levels, set)
 
 	// 2. The hiss.
@@ -339,6 +349,7 @@ func valueOr(values map[uint32]float64, id uint32) float64 {
 // learnedIDs are the parameters Learn sets.
 var learnedIDs = []uint32{
 	InputID, OutputID,
+	GateThresholdID, GateRangeID,
 	DeEssFreqID, DeEssThresholdID,
 	LowShelfID, MudFreqID, MudGainID,
 	PresenceFreqID, PresenceGainID, AirGainID,
@@ -348,9 +359,25 @@ var learnedIDs = []uint32{
 // round returns v to the nearest 1/per.
 func round(v, per float64) float64 { return math.Round(v*per) / per }
 
+// setGate sets the gate in set from the peaks of the voice's moments:
+// between the noise, the quietest tenth, and the singing, the loudest
+// tenth, where the two stand learnGateGap apart, and off otherwise.
+func setGate(peaks []float64, set map[uint32]float64) {
+	set[GateThresholdID] = GateOff
+	if len(peaks) == 0 {
+		return
+	}
+	noise, sung := percentile(peaks, 0.1), percentile(peaks, 0.9)
+	if gap := sung - noise; gap >= learnGateGap {
+		set[GateThresholdID] = math.Round(noise + learnGateAt*gap)
+		set[GateRangeID] = math.Round(min(param(GateRangeID).Default, gap-learnGateKeep))
+	}
+}
+
 // listen reads the voice as it is and returns its integrated loudness,
-// in LUFS, and its power about each of specFreqs, in decibels.
-func listen(ctx context.Context, v *voice) (loud float64, levels []float64, err error) {
+// in LUFS; the peak of each of its moments over GateOff, in decibels;
+// and its power about each of specFreqs, in decibels.
+func listen(ctx context.Context, v *voice) (loud float64, peaks, levels []float64, err error) {
 	meter := audio.NewLoudnessMeter(int(v.rate))
 	fft := audio.NewFFT(specBlock)
 	window := make([]float64, specBlock)
@@ -379,9 +406,13 @@ func listen(ctx context.Context, v *voice) (loud float64, levels []float64, err 
 		// Half the block again, overlapping the next.
 		mid = append(mid[:0], mid[specBlock/2:]...)
 	}
+	step := moment(v.rate)
+	var peak float64
+	k := 0
 	err = v.read(ctx, func(ch [][]float32, n int, fresh bool) {
 		if fresh {
 			mid = mid[:0]
+			k, peak = 0, 0
 		}
 		for i := range n {
 			frames[2*i], frames[2*i+1] = ch[0][i], ch[1][i]
@@ -389,17 +420,25 @@ func listen(ctx context.Context, v *voice) (loud float64, levels []float64, err 
 			if len(mid) == specBlock {
 				transform()
 			}
+			peak = max(peak, math.Abs(float64(ch[0][i])), math.Abs(float64(ch[1][i])))
+			k++
+			if k == step {
+				if db := dbOf(peak); db > GateOff {
+					peaks = append(peaks, db)
+				}
+				k, peak = 0, 0
+			}
 		}
 		meter.Write(frames[:2*n])
 	})
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	loud, ok := meter.Integrated()
 	if !ok || blocks == 0 {
-		return 0, nil, errSilent
+		return 0, nil, nil, errSilent
 	}
-	return loud, bandLevels(power, float64(blocks), v.rate, specFreqs), nil
+	return loud, peaks, bandLevels(power, float64(blocks), v.rate, specFreqs), nil
 }
 
 // specFreqs are the frequencies the voice's balance is measured at: a
