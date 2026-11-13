@@ -192,3 +192,16 @@ func TestLearnStopsAtASecondClick(t *testing.T) {
 		t.Error("clicked again, the maximizer learns on")
 	}
 }
+
+// The LOUDNESS section's controls stand as far from its left edge as from its right.
+func TestTheLoudnessSectionIsCentred(t *testing.T) {
+	p, h := newMaximizer(t)
+	pn := panelOf(t, p, h)
+	w, run := stage(t, Descriptor.ViewSize, pn)
+	sec := pn.sections[len(pn.sections)-1]
+	box, first, last := boundsIn(t, w, run, sec), boundsIn(t, w, run, pn.target), boundsIn(t, w, run, pn.learn)
+	if left, right := first.Min.X-box.Min.X, box.Max.X-last.Max.X; math.Abs(float64(left-right)) > 0.5 {
+		t.Errorf("in the LOUDNESS section at %v, the controls stand %v from its left edge and %v from its right", box,
+			left, right)
+	}
+}

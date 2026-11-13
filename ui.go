@@ -430,6 +430,11 @@ type WindowOptions struct {
 	// screen's edge or with the Windows key and an arrow. A maximized Place opens at its bounds instead. Where a
 	// window manager tiles every window, it may still size the window as it will.
 	Fixed bool
+	// MinSize is the least size of an ordinary or a tool window, in logical pixels, as Size is: the user cannot size
+	// it smaller, and a window that would open smaller, at Size or at a saved place, opens at MinSize. Zero sets none,
+	// and a negative side counts as zero. [UI.SetMinSize] changes it while the window is open, where it says which
+	// platforms keep it.
+	MinSize geom.Size
 	// Hidden opens the window without showing it, as for an application
 	// that starts in the tray and may close it unseen.
 	Hidden bool
@@ -468,6 +473,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Class: o.Class, Owned: o.Owned && o.Parent != nil,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Corner: o.Corner, Text: o.Text, Place: o.Place,
 		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
+		MinSize: noNegative(o.MinSize),
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw
@@ -485,6 +491,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.placeFile = o.PlaceFile
 	w.ui.underBar = o.UnderTitleBar
 	w.ui.fixed = o.Fixed
+	w.ui.minSize = noNegative(o.MinSize)
 	w.ui.startChrome(o.TitleBar)
 	if o.Pinned {
 		if err := w.ui.SetPinned(true); err != nil {
@@ -1081,8 +1088,8 @@ func NewOffscreen(size geom.Size, root Node) *Window {
 
 // NewOffscreenWith returns an offscreen window, as [NewOffscreen]
 // does, set up by o as [App.NewWindow] sets up a window on a display:
-// its Size, Root, Title, Theme, AskToClose, ZoomKeys and Zoom. The rest
-// of o needs a display. A zero Size is 800 by 600.
+// its Size, MinSize, Root, Title, Theme, AskToClose, ZoomKeys and Zoom.
+// The rest of o needs a display. A zero Size is 800 by 600.
 //
 // It is how a test steps an application's own window: a click on the
 // close button, as [driver.CloseAsked], sends AskToClose to the
@@ -1093,6 +1100,10 @@ func NewOffscreenWith(o WindowOptions) *Window {
 	}
 	w := NewOffscreen(o.Size, o.Root)
 	w.setUp(o)
+	if o.MinSize != (geom.Size{}) {
+		// The offscreen window keeps its least size, and says no error.
+		_ = w.ui.SetMinSize(o.MinSize)
+	}
 	if o.Title != "" {
 		w.Offscreen().SetTitle(o.Title)
 	}
@@ -1878,6 +1889,8 @@ type UI struct {
 	underBar bool
 	// fixed says the user cannot size or maximize the window; see [WindowOptions.Fixed].
 	fixed bool
+	// minSize is the window's least size; see [UI.SetMinSize].
+	minSize geom.Size
 	// modals are the modals in the tree, in the order they came; see Modal.
 	modals []modalHold
 	// pinned says the window is kept above other windows; see SetPinned.

@@ -1,0 +1,82 @@
+package imager
+
+import (
+	"math"
+	"os"
+	"testing"
+
+	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug/plugtest"
+	"github.com/marrasen/gunim/geom"
+)
+
+// showing returns the plugin's window view playing music, its meters and traces moving.
+func showing(t *testing.T) gunim.Node {
+	t.Helper()
+	h := plugtest.NewHost(&Descriptor)
+	h.Trace = func(id uint32, f int64) (float32, bool) {
+		return float32(-4 + 3*math.Sin(float64(f)/9000+float64(id))), true
+	}
+	pl := Descriptor.New(h)
+	v := plugtest.WindowView(pl, h)
+	if v == nil {
+		t.Fatal("the plugin has no view for a window")
+	}
+	return v
+}
+
+// The view fits at its least size, at the size it opens at, and on a large screen.
+func TestTheViewFitsItsSizes(t *testing.T) {
+	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1536, 864)} {
+		v := showing(t)
+		plugtest.Fits(t, v, s, fitOf(v))
+	}
+}
+
+// Under its least size the view lays out at it, scrolled to its start, and draws nothing outside its box.
+func TestUnderItsLeastSizeTheViewLaysOutAtItAndClips(t *testing.T) {
+	under := geom.Sz(Descriptor.ViewMinSize.W/2, Descriptor.ViewMinSize.H/2)
+	plugtest.UnderLeast(t, func() gunim.Node { return showing(t) }, under, Descriptor.ViewMinSize)
+}
+
+// TestSheet draws the view at a range of sizes into GUNIM_SHEETS, for a person to look at.
+func TestSheet(t *testing.T) {
+	dir := os.Getenv("GUNIM_SHEETS")
+	if dir == "" {
+		t.Skip("GUNIM_SHEETS names no folder")
+	}
+	dims := [][2]float32{{400, 280}, {480, 320}, {560, 360}, {640, 400}, {720, 440}, {800, 480},
+		{880, 520}, {960, 560}, {1040, 600}, {1200, 680}, {640, 560}, {1100, 420}}
+	sizes := make([]geom.Size, 0, len(dims))
+	for _, s := range dims {
+		sizes = append(sizes, geom.Sz(s[0], s[1]))
+	}
+	plugtest.Shots(t, func() gunim.Node { return showing(t) }, Descriptor, sizes, dir)
+}
+
+// fitOf is what the fit check cannot see for itself: the scope, square, and its correlation bar under it. The bands'
+// words must keep clear of it.
+func fitOf(v gunim.Node) plugtest.Fit {
+	pn := v.(*panel)
+	return plugtest.Fit{Least: map[gunim.Node]geom.Size{pn.scope: geom.Sz(scopeW, scopeW+corrH)}}
+}
+
+// Each band's words keep clear of the scope, at the view's sizes and as the bands widen and narrow.
+func TestTheBandsWordsKeepClearOfTheScope(t *testing.T) {
+	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1100, 420),
+		geom.Sz(1536, 864)} {
+		for _, width := range []float64{0, 100, -100} {
+			v := showing(t).(*panel)
+			for b := range bands {
+				v.Follow(WidthID+uint32(b), width, nil)
+			}
+			plugtest.Misfits(t, v, s, fitOf(v))
+			for b, r := range v.disp.words {
+				if !r.Empty() && overlap(r, v.disp.scope) {
+					t.Errorf("at %v×%v with every band %v%% wide, the %s band's words at %v lie under the scope at %v",
+						s.W, s.H, width, bandNames[b], r, v.disp.scope)
+				}
+			}
+		}
+	}
+}

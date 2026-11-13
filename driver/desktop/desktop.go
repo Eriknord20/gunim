@@ -534,6 +534,11 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 	if size.W <= 0 || size.H <= 0 {
 		size = geom.Sz(800, 600)
 	}
+	least := o.Kind == driver.KindNormal || o.Kind == driver.KindUtility
+	o.MinSize = noNegative(o.MinSize)
+	if least {
+		size = geom.Sz(max(size.W, o.MinSize.W), max(size.H, o.MinSize.H))
+	}
 	gw, err := glfw.CreateWindow(int(size.W), int(size.H), o.Title, nil, share)
 	if err != nil {
 		return nil, fmt.Errorf("desktop: create window: %w", err)
@@ -658,6 +663,15 @@ func (d *Driver) openWindow(o driver.Options) (*Window, error) {
 		_ = gw.Maximize()
 	}
 	w.measure()
+	if least && o.MinSize != (geom.Size{}) {
+		// A placement saved smaller than the least size grows to it, and one the least size made larger than the
+		// work area fits it.
+		w.least = o.MinSize
+		if err := w.applyMinSize(fitToLimit); err != nil {
+			_ = gw.Destroy()
+			return nil, fmt.Errorf("desktop: least size: %w", err)
+		}
+	}
 	setupColor(w)
 	w.updateColor(true)
 	d.windows[gw] = w

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/geom"
 )
 
 // ErrNoEditor is the error, wrapped, of an editor opened on a plugin
@@ -40,6 +41,20 @@ type Viewer interface {
 	// view at a size, the host draws its own: the plugin's name in a
 	// chip, and a control for each parameter in a panel or in full.
 	View(s Size, h Host) gunim.Node
+}
+
+// ViewMinSizer is a view whose least size changes with its state, as a section folded out. A host asks as it shows
+// the view and each time it lays the view out, and keeps the view's window no smaller.
+type ViewMinSizer interface {
+	gunim.Node
+	// ViewMinSize returns the view's least size now, in logical pixels, or zero for [Descriptor.ViewMinSize].
+	ViewMinSize() geom.Size
+}
+
+// AtLeast returns the size a view lays itself out at in a box: box, grown to least on each side where it is
+// smaller. [Room] lays a view out so.
+func AtLeast(box, least geom.Size) geom.Size {
+	return geom.Sz(max(box.W, least.W), max(box.H, least.H))
 }
 
 // Follower is a view that follows its parameters as they change by

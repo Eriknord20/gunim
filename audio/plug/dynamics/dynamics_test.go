@@ -21,6 +21,8 @@ type host struct {
 	// set, is the processor whose traces the views read.
 	in, out plug.Sound
 	proc    *processor
+	// traced, where set, reads the traces in place of proc.
+	traced func(id uint32, f int64) (float32, bool)
 }
 
 func (h *host) Param(id uint32) float64 {
@@ -40,6 +42,9 @@ func (h *host) Changed(*gunim.UI)                  { h.log = append(h.log, "chan
 func (h *host) EndEdit(*gunim.UI)                  { h.log = append(h.log, "end edit") }
 func (h *host) Sound() (in, out plug.Sound)        { return h.in, h.out }
 func (h *host) Traced(id uint32, f int64) (float32, bool) {
+	if h.traced != nil {
+		return h.traced(id, f)
+	}
 	if h.proc == nil {
 		return 0, false
 	}
