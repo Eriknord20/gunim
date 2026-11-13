@@ -53,11 +53,21 @@ func run() int {
 	scale := flag.Float64("scale", 0, "device pixels per logical pixel; 0 works it out")
 	flag.BoolVar(&o.KMS.Software, "software", false, "draw on the CPU even where there is a GPU")
 	script := flag.String("script", "", "a touch recording to play; empty plays a made-up one")
-	flag.DurationVar(&o.Warm, "warm", 3*time.Second, "how long the scene moves before the figures start")
+	flag.DurationVar(&o.Warm, "warm", 3*time.Second, "how long the scene moves before the figures start; 6s on the gallery")
 	flag.DurationVar(&o.Moving, "moving", 60*time.Second, "how long to measure the scene moving")
 	flag.DurationVar(&o.Rest, "rest", 60*time.Second, "how long to measure the scene still")
 	flag.BoolVar(&o.Still, "still", false, "keep the scene still while the touch script plays: only the fingers draw")
 	flag.Parse()
+	warmSet := false
+	flag.Visit(func(f *flag.Flag) { warmSet = warmSet || f.Name == "warm" })
+	if o.Screen == "widgets" && !warmSet {
+		// The gallery's start-up toasts leave 5 s in, fading as layers of
+		// their own, and its first scroll shows text never drawn before:
+		// both are over by 6 s, so the goals hold the scrolling. What the
+		// start-up costs shows on its own line, "missed flips while warming
+		// up"; -warm 3s measures it with the scrolling, as before.
+		o.Warm = 6 * time.Second
+	}
 	o.KMS.Scale = float32(*scale)
 	if *script != "" {
 		f, err := os.Open(*script)

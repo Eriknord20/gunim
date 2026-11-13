@@ -87,6 +87,9 @@ func (r *Renderer) bigMask(shape paint.Shape, w, h int) (tex uint32, stretched b
 	g.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	g.TexImage2D(gl.TEXTURE_2D, 0, glR8, int32(w), int32(h), glRed, gl.UNSIGNED_BYTE, pix)
 	g.ActiveTexture(gl.TEXTURE0)
+	if framesDebug {
+		r.Stats.BigMasks++
+	}
 	// The batch may hold a quad reading whatever was on unit 1; flush binds it again.
 	b.sizes[shape] = append(sizes, m)
 	b.made[shape] = r.now

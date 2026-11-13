@@ -72,6 +72,15 @@ type Result struct {
 	// the frames drawn while it was still.
 	CPUMoving, CPURest float64
 	RestFrames         int
+	// Warming is the figures over the warm-up, the start of the program
+	// with them: what a person sees first, recorded apart.
+	Warming kms.Stats
+	// StillAfter is how long the screen took to go still once the scene
+	// stopped, past the settle, and Still says it did within stillWithin.
+	// RestFor is how long the rest was measured.
+	StillAfter time.Duration
+	Still      bool
+	RestFor    time.Duration
 	// AllocsPerFrame is the whole process's allocations a frame while
 	// the scene moved, the engine's and the app's with the driver's.
 	AllocsPerFrame float64
@@ -117,7 +126,10 @@ const (
 	// blankWoke is how long after the tap the screen has to wake: past
 	// the 300 ms fade up.
 	blankWoke = 700 * time.Millisecond
-	settle    = 2 * time.Second
+	// stillWithin is how long past the settle the screen may take to go
+	// still, no frame for a second, before the bench calls it moving.
+	stillWithin = 5 * time.Second
+	settle      = 2 * time.Second
 )
 
 // Bench opens the screen, shows the scene, and measures it: moving with a
@@ -215,6 +227,7 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 				return err
 			}
 		}
+		res.Warming = d.Stats()
 		logf("moving, with the touch script, for %v", o.Moving)
 		res.HeapStart = heap()
 		d.ResetStats()
@@ -232,16 +245,35 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 		if err := still(); err != nil {
 			return err
 		}
-		// The ball lands, the trails fade and a fling ends first.
+		// The ball lands, the trails fade, a fling ends and a scrollbar
+		// fades first: the rest is measured from when no frame has come for
+		// a second. It ends when it would have, as the touch script's tap
+		// for the blanking comes at a time set in advance.
+		restEnd := time.Now().Add(settle + o.Rest)
 		if !sleep(ctx, settle) {
 			return ctx.Err()
 		}
+		settled := time.Now()
+		for n := d.Stats().Frames; time.Since(settled) < stillWithin+time.Second && time.Until(restEnd) > time.Second; {
+			if !sleep(ctx, time.Second) {
+				return ctx.Err()
+			}
+			m := d.Stats().Frames
+			if m == n {
+				res.Still = true
+				break
+			}
+			n = m
+		}
+		res.StillAfter = max(time.Since(settled)-time.Second, 0)
+		res.Still = res.Still && res.StillAfter <= stillWithin
 		d.ResetStats()
 		cpu0, t0 = cpuTime(), time.Now()
-		if !sleep(ctx, o.Rest) {
+		if !sleep(ctx, time.Until(restEnd)) {
 			return ctx.Err()
 		}
-		res.CPURest = percent(cpuTime()-cpu0, time.Since(t0))
+		res.RestFor = time.Since(t0)
+		res.CPURest = percent(cpuTime()-cpu0, res.RestFor)
 		res.RestFrames = d.Stats().Frames
 		if !o.NoBlank {
 			b, err := blankAndWake(ctx, d, tapped, logf)
@@ -473,8 +505,9 @@ func (r Result) Goals() []Goal {
 		{"start to first frame", "≤ 1.0 s warm", fmt.Sprintf("%.2f s", r.Start.Seconds()), r.Start <= time.Second},
 		{"memory", "≤ 120 MB RSS", fmt.Sprintf("%.0f MB RSS", float64(r.RSS)/(1<<20)), r.RSS > 0 && r.RSS <= 120<<20},
 		{"heap growth over the run", "≤ 2 MB after GC", fmt.Sprintf("%+.1f MB (%s to %s)", float64(growth)/(1<<20), mb(r.HeapStart), mb(r.HeapEnd)), growth <= 2<<20},
-		{"CPU at rest, screen on", "≤ 0.5 % of a core", fmt.Sprintf("%.2f %%", r.CPURest), r.CPURest <= 0.5},
-		{"frames drawn at rest", "0", strconv.Itoa(r.RestFrames), r.RestFrames == 0},
+		{"went still once stopped", fmt.Sprintf("within %v", stillWithin), stillGot(r), r.Still},
+		{"CPU at rest, screen on", "≤ 0.5 % of a core", fmt.Sprintf("%.2f %% over %.0f s", r.CPURest, r.RestFor.Seconds()), r.Still && r.CPURest <= 0.5},
+		{"frames drawn at rest", "0", fmt.Sprintf("%d in %.0f s", r.RestFrames, r.RestFor.Seconds()), r.Still && r.RestFrames == 0},
 	}
 	if b := r.Blank; b != nil {
 		light := strconv.Itoa(b.Backlight)
@@ -489,11 +522,21 @@ func (r Result) Goals() []Goal {
 				fmt.Sprintf("woke %v, backlight %d, swallowed %v", b.Woke, b.WokeBacklight, b.Swallowed), b.Woke && b.Swallowed})
 		}
 	}
+	w := r.Warming
 	gs = append(gs,
+		Goal{"missed flips while warming up", "recorded", fmt.Sprintf("%d in %d (%d slow frames)", w.Missed, w.Frames, w.Late), true},
 		Goal{"CPU while moving", "recorded", fmt.Sprintf("%.1f %%", r.CPUMoving), true},
 		Goal{"allocations a frame, whole process", "recorded", fmt.Sprintf("%.0f", r.AllocsPerFrame), true},
 	)
 	return gs
+}
+
+// stillGot says how long the screen took to go still, or that it didn't.
+func stillGot(r Result) string {
+	if !r.Still {
+		return fmt.Sprintf("still drawing after %.0f s", r.StillAfter.Seconds())
+	}
+	return fmt.Sprintf("after %.1f s", r.StillAfter.Seconds())
 }
 
 // NotHere lists the goals of section 1 that the bench does not measure,

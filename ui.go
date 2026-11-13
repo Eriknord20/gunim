@@ -3036,7 +3036,7 @@ func (u *UI) springsMoving() bool {
 		return true
 	}
 	for _, r := range u.roots() {
-		if u.step(r, 0) {
+		if u.step(r, 0, r) {
 			return true
 		}
 	}
@@ -3086,7 +3086,7 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	animating := u.theme.Step(delta) || scrolled
 	u.calm = u.calm && !animating
 	for _, r := range u.roots() {
-		if u.step(r, delta) {
+		if u.step(r, delta, r) {
 			animating = true
 		}
 	}
@@ -3136,7 +3136,7 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 		u.animating = true
 	}
 	for _, r := range u.roots() {
-		if !u.animating && u.step(r, 0) {
+		if !u.animating && u.step(r, 0, r) {
 			u.animating = true
 		}
 	}
@@ -3408,10 +3408,12 @@ func (u *UI) roots() []*state {
 }
 
 // step advances animated values depth-first and reports whether
-// anything is still moving.
-func (u *UI) step(s *state, dt time.Duration) bool {
+// anything is still moving. root is the top of s's tree: the window's, or
+// a popup's. An [Ornament] that showed nowhere in the last frame painted
+// is not stepped.
+func (u *UI) step(s *state, dt time.Duration, root *state) bool {
 	animating := false
-	if a, ok := s.node.(Animator); ok && a.Step(dt) {
+	if a, ok := s.node.(Animator); ok && (!isOrnament(s.node) || showed(s, root)) && a.Step(dt) {
 		animating = true
 		s.moved = u.seq
 	}
@@ -3427,11 +3429,56 @@ func (u *UI) step(s *state, dt time.Duration) bool {
 		}
 	}
 	for _, k := range s.kids {
-		if u.step(k, dt) {
+		if u.step(k, dt, root) {
 			animating = true
 		}
 	}
 	return animating
+}
+
+func isOrnament(n Node) bool {
+	_, ok := n.(Ornament)
+	return ok
+}
+
+// showed reports whether some of s showed in the last frame painted in its
+// tree, the frame root was painted in: s was painted in it, and its box,
+// in window space, meets the clips round it and root's own box. One never
+// painted yet counts as shown, for its first frame to tell; so does one
+// under a perspective, whose box the clips can't be held against.
+func showed(s, root *state) bool {
+	switch {
+	case s.drawn == 0 || s == root || s.proj != nil:
+		return true
+	case s.drawn != root.drawn:
+		return false
+	}
+	box := windowBox(s.toWindow, s.size)
+	if b, clipped := s.clip.Bounds(); clipped && !meets(box, b) {
+		return false
+	}
+	return meets(box, geom.Rect{Max: root.size.Point()})
+}
+
+// windowBox returns the rectangle round a box of size at the origin, under
+// t.
+func windowBox(t paint.Transform, size geom.Size) geom.Rect {
+	var out geom.Rect
+	for i, q := range []geom.Point{{}, {X: size.W}, {X: size.W, Y: size.H}, {Y: size.H}} {
+		p := t.Apply(q)
+		if i == 0 {
+			out = geom.Rect{Min: p, Max: p}
+			continue
+		}
+		out.Min.X, out.Min.Y = min(out.Min.X, p.X), min(out.Min.Y, p.Y)
+		out.Max.X, out.Max.Y = max(out.Max.X, p.X), max(out.Max.Y, p.Y)
+	}
+	return out
+}
+
+// meets reports whether a and b share some area.
+func meets(a, b geom.Rect) bool {
+	return a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y
 }
 
 // settle runs each node's transition and records whether it has

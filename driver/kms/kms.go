@@ -489,6 +489,13 @@ func (d *Driver) logSecond() {
 		k := float64(drawn)
 		line += fmt.Sprintf("; a window's frame: %.0f quads, %.1f layers, %.1f flushes, %.0f %% redrawn in %.1f boxes, %.2f MB",
 			float64(sent.Quads)/k, float64(sent.Layers)/k, float64(sent.Flushes)/k, 100*sent.Redrawn/k, float64(sent.Boxes)/k, float64(sent.Bytes)/k/(1<<20))
+		if sent.FadesInPlace > 0 {
+			line += fmt.Sprintf("; %d fading layers drawn in place", sent.FadesInPlace)
+		}
+		if n := sent.Glyphs + sent.Scratches + sent.Ramps + sent.BigMasks; n > 0 {
+			line += fmt.Sprintf("; uploaded in the second: %d glyphs, %d scratch masks, %d ramps, %d big masks",
+				sent.Glyphs, sent.Scratches, sent.Ramps, sent.BigMasks)
+		}
 	}
 	log.Print(line)
 }

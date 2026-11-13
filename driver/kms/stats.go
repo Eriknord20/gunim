@@ -221,6 +221,11 @@ func (t *timeline) drew(st *render.Stats) {
 	t.sent.Layers += st.Layers
 	t.sent.Boxes += st.Boxes
 	t.sent.Redrawn += st.Redrawn
+	t.sent.Glyphs += st.Glyphs
+	t.sent.Scratches += st.Scratches
+	t.sent.Ramps += st.Ramps
+	t.sent.BigMasks += st.BigMasks
+	t.sent.FadesInPlace += st.FadesInPlace
 	t.drawn++
 }
 

@@ -105,6 +105,16 @@ type Renderer struct {
 	clock func() time.Time
 	// scratchX is where the next mask goes in the scratch strip, and scratches counts the masks put there, for tests.
 	scratchX, scratches int
+	// transparent says the window shows what is behind it where it draws
+	// nothing, and backdrop holds what lies under the bands of a layer that
+	// fades in place; see fadeInPlace.
+	transparent bool
+	backdrop    target
+	// opaque is where the frame's first op, an opaque fill, covers the
+	// canvas, in device pixels, and fading says a layer fades in place
+	// now; see fadeInPlace.
+	opaque geom.Rect
+	fading bool
 	// dual says the draw program blends each channel by a colour of its
 	// own, which glyphs on subpixels need.
 	dual bool
@@ -512,11 +522,15 @@ vec4 shade(out vec4 cover) {
 		// A faded layer fades out toward its bounds' edges, over the
 		// widths in v_extra: left, top, right and bottom.
 		vec4 f = v_extra;
-		if (f.x > 0.0) cov *= clamp((v_local.x - v_rect.x) / f.x, 0.0, 1.0);
-		if (f.y > 0.0) cov *= clamp((v_local.y - v_rect.y) / f.y, 0.0, 1.0);
-		if (f.z > 0.0) cov *= clamp((v_rect.z - v_local.x) / f.z, 0.0, 1.0);
-		if (f.w > 0.0) cov *= clamp((v_rect.w - v_local.y) / f.w, 0.0, 1.0);
-		col = texture(u_tex, v_uv) * v_color0.a * cov;
+		float fade = 1.0;
+		if (f.x > 0.0) fade *= clamp((v_local.x - v_rect.x) / f.x, 0.0, 1.0);
+		if (f.y > 0.0) fade *= clamp((v_local.y - v_rect.y) / f.y, 0.0, 1.0);
+		if (f.z > 0.0) fade *= clamp((v_rect.z - v_local.x) / f.z, 0.0, 1.0);
+		if (f.w > 0.0) fade *= clamp((v_rect.w - v_local.y) / f.w, 0.0, 1.0);
+		// A negative opacity lays what lay beneath a layer that faded in
+		// place back over it, at one less the fade.
+		if (v_color0.a < 0.0) fade = 1.0 - fade;
+		col = texture(u_tex, v_uv) * abs(v_color0.a) * cov * fade;
 	} else if (kind == 6) {
 		// A piece of a ribbon: v_local.x is how far across it the pixel
 		// lies and v_local.y its half width there, both in device
@@ -641,6 +655,7 @@ func (r *Renderer) Rebind() {
 // blends with what is behind it when transparent.
 func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 	r.textRendering = tr
+	r.transparent = transparent
 	r.subpixels = tr.Smoothing.Subpixel() && r.dual && !transparent
 	r.gamma = ratiosFor(tr.Gamma)
 }
@@ -784,6 +799,10 @@ func (r *Renderer) Release() {
 			g.DeleteTexture(t.tex)
 		}
 	}
+	if r.backdrop.tex != 0 {
+		g.DeleteFramebuffer(r.backdrop.fbo)
+		g.DeleteTexture(r.backdrop.tex)
+	}
 	for m := range r.images {
 		r.dropImage(m)
 	}
@@ -925,6 +944,15 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	g.Viewport(0, 0, int32(fbW), int32(fbH))
 	r.bindDraw()
 	bg, alpha := background(ops)
+	r.opaque = geom.Rect{}
+	if alpha == 1 {
+		// The frame starts with an opaque fill: under it, the canvas is
+		// opaque wherever the fill reaches. The window's own colour goes
+		// under the canvas only as it is laid on the window.
+		if op, ok := ops[0].(*paint.RRectOp); ok {
+			r.opaque = geom.Rect{Min: op.Rect.Min.Mul(scale), Max: op.Rect.Max.Mul(scale)}
+		}
+	}
 	if alpha == 0 && r.Under.A > 0 {
 		bg, alpha = rgba(r.Under), float32(r.Under.A)/0xff
 	}
@@ -1106,11 +1134,25 @@ func (r *Renderer) deviceBox(d geom.Rect) geom.Rect {
 
 // replay queues ops into the canvas.
 func (r *Renderer) replay(ops []paint.Op) {
+	r.replayOps(ops)
+	// A layer left open by a node that forgot to close it still shows.
+	for len(r.stack) > 0 {
+		r.closeLayer()
+	}
+}
+
+// replayOps draws ops, as replay does, and leaves open a layer they leave
+// open.
+func (r *Renderer) replayOps(ops []paint.Op) {
 	for i := 0; i < len(ops); i++ {
 		op := ops[i]
 		if l, ok := op.(*paint.LayerOp); ok && r.culled(l) {
 			// A layer that clips to a box wholly outside what the frame
 			// redraws draws nothing there, nor does anything in it.
+			i = layerEnd(ops, i)
+			continue
+		}
+		if l, ok := op.(*paint.LayerOp); ok && r.fadeInPlace(ops, i, l) {
 			i = layerEnd(ops, i)
 			continue
 		}
@@ -1140,10 +1182,116 @@ func (r *Renderer) replay(ops []paint.Op) {
 			r.ribbon(op)
 		}
 	}
-	// A layer left open by a node that forgot to close it still shows.
-	for len(r.stack) > 0 {
-		r.closeLayer()
+}
+
+// noFadeInPlace turns fadeInPlace off, for a test to draw a fading layer
+// whole.
+var noFadeInPlace bool
+
+// fadeInPlace draws a layer that clips to its bounds, opaque, and fades
+// only toward its top and bottom edges, as a scrolling list does, with no
+// target of its own, and reports whether it did. Drawn whole, such a layer
+// goes through a window-sized target, cleared, drawn and laid back: on a
+// Raspberry Pi 5's GPU, a third of a scrolling list's frame.
+//
+// It copies what lies under the two bands that fade, draws the layer's
+// contents straight onto the target, as an opaque clip does, and lays the
+// copy back over the bands, at one less the fade. Where the fade is f, a
+// pixel ends as the contents times f plus what lay beneath times one less
+// f: what the layer drawn whole gives over an opaque target. So it runs
+// only on the canvas of an opaque window; and only where text is drawn in
+// greyscale, as the layer's own target would draw it; and only where the
+// layer's bounds lie on whole device pixels, which the clip cuts exactly
+// as the layer whole would. ops[i] is the layer, and its contents follow.
+//
+// It also draws the layer whole where the copy would be laid back wrong:
+// where the frame has no opaque fill under the layer, as the canvas is
+// clear until the window's colour goes under it; inside another layer
+// fading in place, whose copy it would take; where the two bands meet, so
+// the copy would be laid twice; and inside a rounded clip, which cuts the
+// contents as they draw but not the copy.
+func (r *Renderer) fadeInPlace(ops []paint.Op, i int, op *paint.LayerOp) bool {
+	o, t := op.Opts, op.Transform
+	f := o.Fade
+	if noFadeInPlace || r.subpixels || r.transparent || r.depth != 0 || r.direct || r.fading || r.cut.on ||
+		f == (geom.Insets{}) ||
+		f.Left != 0 || f.Right != 0 || f.Top < 0 || f.Bottom < 0 || !o.Clip || o.Opacity < 1 || o.Blur > 0 ||
+		o.Backdrop > 0 || o.Ellipse || o.Radius > 0 || o.Blend == paint.BlendAdd || tilted(op) || t.B != 0 || t.D != 0 ||
+		!(t.A > 0) || !(t.E > 0) {
+		return false
 	}
+	end := layerEnd(ops, i)
+	if _, ok := ops[end].(*paint.LayerEndOp); !ok || end <= i {
+		return false
+	}
+	reg := r.region(op, true)
+	whole := func(v float32) bool { return math.Abs(float64(v)-math.Round(float64(v))) < 1e-3 }
+	if !whole(reg.Min.X) || !whole(reg.Max.X) || !whole(reg.Min.Y) || !whole(reg.Max.Y) {
+		return false
+	}
+	if !contains(r.opaque, intersect(reg, geom.Rect{Max: geom.Pt(float32(r.fbW), float32(r.fbH))})) {
+		return false
+	}
+	b := o.Bounds
+	// The bands, in the layer's own space and on the target, reaching out
+	// to whole device pixels.
+	var bands [2]geom.Rect
+	n := 0
+	if f.Top > 0 {
+		h := float32(math.Ceil(float64(f.Top * t.E * r.scale)))
+		bands[n] = geom.Rect{Min: reg.Min, Max: geom.Pt(reg.Max.X, min(reg.Min.Y+h, reg.Max.Y))}
+		n++
+	}
+	if f.Bottom > 0 {
+		h := float32(math.Ceil(float64(f.Bottom * t.E * r.scale)))
+		bands[n] = geom.Rect{Min: geom.Pt(reg.Min.X, max(reg.Max.Y-h, reg.Min.Y)), Max: reg.Max}
+		n++
+	}
+	if n == 2 && bands[0].Max.Y > bands[1].Min.Y {
+		return false
+	}
+	g := r.GL
+	// What is queued draws first: the copy takes the target as it is.
+	r.flush()
+	r.fit(&r.backdrop)
+	g.Disable(gl.SCISSOR_TEST)
+	g.BindFramebuffer(glReadFramebuffer, r.fbo(0))
+	g.BindFramebuffer(glDrawFramebuffer, r.backdrop.fbo)
+	for _, band := range bands[:n] {
+		x, y, w, h := scissor(intersect(band, r.clip), r.fbW, r.fbH)
+		if w > 0 && h > 0 {
+			g.BlitFramebuffer(x, y, x+w, y+h, x, y, x+w, y+h, glColorBufferBit, glNearest)
+		}
+	}
+	g.BindFramebuffer(gl.FRAMEBUFFER, r.fbo(0))
+	r.applyClip()
+
+	l := paint.LayerOp{Opts: paint.LayerOpts{Bounds: b, Opacity: 1, Clip: true}, Transform: t}
+	r.openLayer(&l)
+	r.fading = true
+	r.replayOps(ops[i+1 : end])
+	r.fading = false
+	r.closeLayer()
+
+	// The copy back over the bands, at one less the fade, which a
+	// negative opacity asks of the layer's look.
+	r.uses(r.backdrop.tex)
+	lk := look{kind: kindLayer, color0: [4]float32{0, 0, 0, -1}, rect: b, extra: [4]float32{0, f.Top, 0, f.Bottom}}
+	toLocal := func(y float32) float32 { return (y/r.scale - t.F) / t.E }
+	for _, band := range bands[:n] {
+		q := geom.Rect{Min: geom.Pt(b.Min.X, toLocal(band.Min.Y)), Max: geom.Pt(b.Max.X, toLocal(band.Max.Y))}
+		r.quad(corners(q, geom.Rect{}), t, r.scale, &lk)
+	}
+	r.flush()
+	if framesDebug {
+		r.Stats.FadesInPlace++
+	}
+	return true
+}
+
+// contains reports whether a holds all of b; an empty b it holds.
+func contains(a, b geom.Rect) bool {
+	return b.Empty() || b.Min.X >= a.Min.X && b.Min.Y >= a.Min.Y && b.Max.X <= a.Max.X && b.Max.Y <= a.Max.Y
 }
 
 // culled reports whether layer op, and all inside it, lies outside what
@@ -1184,6 +1332,12 @@ type Stats struct {
 	Redrawn                       float64
 	// FlushTime is spent handing vertices and draws to the driver.
 	FlushTime time.Duration
+	// Uploads counts the frame's writes into textures: new glyphs, masks
+	// in the scratch strip, gradient ramps, and big masks.
+	Glyphs, Scratches, Ramps, BigMasks int
+	// FadesInPlace counts the fading layers drawn with no target of their
+	// own; see fadeInPlace.
+	FadesInPlace int
 }
 
 // framesDebug is set by GUNIM_DEBUG_FRAMES, which has the renderer

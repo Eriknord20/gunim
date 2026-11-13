@@ -73,6 +73,11 @@ func (i *Icon) Step(dt time.Duration) bool {
 	return i.Group.Step(dt) || spin
 }
 
+// Ornament implements [gunim.Ornament]: an icon's spin and its drawing on
+// change only how it looks, so one out of sight, as on a row scrolled
+// away, is left still and lets the window rest.
+func (i *Icon) Ornament() {}
+
 // size is the icon's size in th.
 func (i *Icon) size(th *theme.Live) float32 {
 	if i.Size.Key() != "" {
