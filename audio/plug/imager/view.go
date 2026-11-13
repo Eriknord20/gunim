@@ -17,6 +17,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
@@ -93,6 +94,13 @@ type display struct {
 	// line is where the middle line runs, as the panel lays it out.
 	line float32
 	size geom.Size
+	// scope is where the scope stands over the display; away glides each band's words from its bar to below its
+	// name, where the scope would cover them on the bar, and words is where each band's words were drawn last.
+	scope geom.Rect
+	away  [bands]*anim.Float
+	words [bands]geom.Rect
+	// placed says the words have been placed once, after which they glide.
+	placed bool
 }
 
 // What a drag holds.
@@ -116,7 +124,8 @@ func newDisplay(h plug.Host, v values) *display {
 	}
 	for k := range d.bandLit {
 		d.bandLit[k] = anim.NewFloat(0)
-		d.group.Add(d.bandLit[k])
+		d.away[k] = anim.NewFloat(0)
+		d.group.Add(d.bandLit[k], d.away[k])
 	}
 	for _, p := range []*[]float32{&d.mid, &d.side, &d.midSm, &d.sideSm} {
 		*p = make([]float32, specPoints)
@@ -274,21 +283,16 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		lit := d.bandLit[b].Value()
 		p.RRect(r, 4, paint.Solid(paint.Faded(c, 0.18+0.12*lit)))
 		p.RRect(geom.Rc(r.Min.X, top-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(c))
-		words := param(WidthID).Text(d.v[WidthID+uint32(b)])
-		if st := d.v[StereoizeID+uint32(b)]; st > 0.5 {
-			words += fmt.Sprintf("  ·  stereoize %.0f%%", st)
-		}
-		label := audioui.Shaped(words, 11, true, false)
-		ly := top - 18
-		if w < 0 {
-			ly = top + 6
-		}
+		label, onBar, under := d.bandWords(b, span)
+		at := onBar.Add(under.Sub(onBar).Mul(d.away[b].Value()))
+		d.words[b] = geom.Rect{}
 		if label.Advance < span[1]-span[0]-8 {
-			label.Paint(p, geom.Pt((span[0]+span[1]-label.Advance)/2, ly), c)
+			label.Paint(p, at, c)
+			d.words[b] = geom.Rc(at.X, at.Y, label.Advance, wordsH)
 		}
 		name := audioui.Shaped(bandNames[b], 10, false, false)
 		if name.Advance < span[1]-span[0]-8 {
-			name.Paint(p, geom.Pt((span[0]+span[1]-name.Advance)/2, 26), paint.Faded(ink, 0.5))
+			name.Paint(p, geom.Pt((span[0]+span[1]-name.Advance)/2, nameY), paint.Faded(ink, 0.5))
 		}
 	}
 	for i, hz := range d.v.crossovers() {
@@ -303,6 +307,57 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		}
 		p.RRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, a)))
 	}
+}
+
+// wordsH is how tall a band's words stand, and nameY and wordsY where a band's name and, under it, its words stand.
+const (
+	wordsH = 14
+	nameY  = 26
+	wordsY = 42
+)
+
+// bandWords returns band b's words, running across span, where they stand on its bar and where below its name.
+func (d *display) bandWords(b int, span [2]float32) (label text.Run, onBar, under geom.Point) {
+	w := float32(d.v[WidthID+uint32(b)] / 100)
+	words := param(WidthID).Text(d.v[WidthID+uint32(b)])
+	if st := d.v[StereoizeID+uint32(b)]; st > 0.5 {
+		words += fmt.Sprintf("  ·  stereoize %.0f%%", st)
+	}
+	label = audioui.Shaped(words, 11, true, false)
+	top := d.line - w*d.reach()
+	ly := top - 18
+	if w < 0 {
+		ly = top + 6
+	}
+	x := (span[0] + span[1] - label.Advance) / 2
+	return label, geom.Pt(x, ly), geom.Pt(x, wordsY)
+}
+
+// placeWords sends each band's words below its name where the scope would cover them on its bar, and back where it
+// would not.
+func (d *display) placeWords() {
+	for b, span := range d.bandsAt() {
+		label, onBar, under := d.bandWords(b, span)
+		covered := func(at geom.Point) bool {
+			return overlap(d.scope, geom.Rc(at.X, at.Y, label.Advance, wordsH).Inset(geom.Uniform(-4)))
+		}
+		var to float32
+		if covered(onBar) && !covered(under) {
+			to = 1
+		}
+		switch {
+		case !d.placed:
+			d.away[b].Jump(to)
+		case d.away[b].Target() != to:
+			d.away[b].Animate(to, anim.Snappy)
+		}
+	}
+	d.placed = true
+}
+
+// overlap reports whether a and b cover some of the same room.
+func overlap(a, b geom.Rect) bool {
+	return a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y
 }
 
 // light lights what the pointer is on, gliding.
@@ -603,6 +658,8 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	sh := min(scopeW-2*scopePad, room-2*scopePad-corrH) + 2*scopePad + corrH
 	kids.At(1).Layout(gunim.Tight(geom.Sz(scopeW, max(sh, 0))))
 	kids.At(1).Place(geom.Pt(size.W-panelInset-scopeW, top-plugui.SectionGap-sh))
+	p.disp.scope = geom.Rc(size.W-panelInset-scopeW, top-plugui.SectionGap-sh, scopeW, max(sh, 0))
+	p.disp.placeWords()
 	n := 2 + len(p.sections)
 	kids.At(n).Layout(gunim.Tight(geom.Sz(32, 32)))
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))

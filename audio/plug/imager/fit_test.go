@@ -54,9 +54,29 @@ func TestSheet(t *testing.T) {
 	plugtest.Shots(t, func() gunim.Node { return showing(t) }, Descriptor, sizes, dir)
 }
 
-// fitOf is what the fit check cannot see for itself: the scope, square, and its correlation bar under it.
+// fitOf is what the fit check cannot see for itself: the scope, square, and its correlation bar under it. The bands'
+// words must keep clear of it.
 func fitOf(v gunim.Node) plugtest.Fit {
 	pn := v.(*panel)
-	return plugtest.Fit{Least: map[gunim.Node]geom.Size{pn.scope: geom.Sz(scopeW, scopeW+corrH)},
-		Over: []gunim.Node{pn.scope}}
+	return plugtest.Fit{Least: map[gunim.Node]geom.Size{pn.scope: geom.Sz(scopeW, scopeW+corrH)}}
+}
+
+// Each band's words keep clear of the scope, at the view's sizes and as the bands widen and narrow.
+func TestTheBandsWordsKeepClearOfTheScope(t *testing.T) {
+	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1100, 420),
+		geom.Sz(1536, 864)} {
+		for _, width := range []float64{0, 100, -100} {
+			v := showing(t).(*panel)
+			for b := range bands {
+				v.Follow(WidthID+uint32(b), width, nil)
+			}
+			plugtest.Misfits(t, v, s, fitOf(v))
+			for b, r := range v.disp.words {
+				if !r.Empty() && overlap(r, v.disp.scope) {
+					t.Errorf("at %v×%v with every band %v%% wide, the %s band's words at %v lie under the scope at %v",
+						s.W, s.H, width, bandNames[b], r, v.disp.scope)
+				}
+			}
+		}
+	}
 }
