@@ -113,11 +113,16 @@ var codeWave = func() shape.Stroke {
 // outdent, Enter keeps the line's indent and adds one after an opening
 // bracket, a closing brace takes one back, and Home goes to the first
 // character of the line before its start. Lines stay whole and the
-// code scrolls both ways.
+// code scrolls both ways. With TabMovesOn, the editor is one field
+// among others: Tab and Shift+Tab move focus on and back, a tab typed
+// or pasted becomes a space, and Enter keeps the line's indent and adds
+// none.
 //
 // The caret glides between places, a band follows it from line to
 // line, and a mark from [CodeEditor.SetMarks] fades in on its line
-// with its message after the code.
+// with its message after the code. A Placeholder goes at once as the
+// first character goes in, and fades back in when the code is empty
+// again.
 type CodeEditor struct {
 	anim.Group
 	editor
@@ -139,8 +144,30 @@ type CodeEditor struct {
 	Label string
 	// Numbers shows line numbers down the left. NewCodeEditor sets it.
 	Numbers bool
+	// TabMovesOn leaves Tab and Shift+Tab to move focus on and back, as
+	// in a form, rather than indent. The code then holds no tab the user
+	// types or pastes: each becomes a space. Enter keeps the line's
+	// indent and adds none after an opening bracket, and a closing brace
+	// takes none back. Set it before the editor is used: tabs typed
+	// while it was off stay in the undo history, and Redo can bring
+	// them back.
+	TabMovesOn bool
+	// Placeholder shows faintly where the first line's code would be
+	// while the editor holds none, as a hint at what to type. It is not
+	// part of the code: it cannot be selected or copied, and it is cut
+	// with an ellipsis where it is wider than the editor. A screen
+	// reader takes it as the editor's name when Label is empty.
+	//
+	// It is never drawn under code or a composition: on the frame the
+	// first character shows, typed, pasted, composed or brought back by
+	// undo or redo, it is gone, as the character takes its place. When
+	// the code is empty again it fades in from nothing on the theme's
+	// Quick spring.
+	Placeholder string
 
-	focus   *anim.Float
+	focus *anim.Float
+	// hint carries how much the placeholder shows, from 0 to 1.
+	hint    *anim.Float
 	caretAt *anim.Point
 	band    *anim.Float
 	// rows carries how many lines tall the editor is under MaxRows.
@@ -150,6 +177,9 @@ type CodeEditor struct {
 	marks   []*codeMark
 
 	held bool
+
+	// hintRun and hintEll are the placeholder and an ellipsis, shaped.
+	hintRun, hintEll shapedText
 
 	// The layout: the face, sizes and highlighter it is for, and the
 	// lines, kept up as the code changes.
@@ -223,13 +253,15 @@ func NewCodeEditor() *CodeEditor {
 		focus:      anim.NewFloat(0),
 		caretAt:    anim.NewPoint(geom.Point{}),
 		band:       anim.NewFloat(0),
+		hint:       anim.NewFloat(0),
 		rows:       anim.NewFloat(0),
 		scrollX:    anim.NewFloat(0),
 		scrollY:    anim.NewFloat(0),
 		numberRuns: map[int]text.Run{},
 	}
-	c.multiline, c.tabs, c.Numbers = true, true, true
-	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY, c.rows)
+	c.multiline, c.Numbers = true, true
+	c.tabs = func() bool { return !c.TabMovesOn }
+	c.Add(c.focus, c.caretAt, c.band, c.scrollX, c.scrollY, c.rows, c.hint)
 	c.changed = func(u *gunim.UI) {
 		if c.OnChange != nil {
 			send(u, c, c.OnChange(c.Text(), u))
@@ -482,8 +514,33 @@ func (c *CodeEditor) Handle(e input.Event, u *gunim.UI) bool {
 	if _, lost := e.(input.FocusLost); !lost {
 		c.blink.restart(u)
 	}
+	// An edit starts the placeholder's fade on the frame it shows in.
+	c.followHint(th)
 	u.Invalidate()
 	return true
+}
+
+// followHint fades the placeholder in while there is no code, nor any
+// being composed, and drops it at once when there is, even part-way
+// through fading in, so it is never drawn under the code; before the
+// first layout it jumps.
+func (c *CodeEditor) followHint(th *theme.Live) {
+	hint := float32(0)
+	if c.hintShows() {
+		hint = 1
+	}
+	switch {
+	case !c.laid || hint == 0:
+		c.hint.Jump(hint)
+	case hint != c.hint.Target():
+		c.hint.Animate(hint, Quick.Get(th))
+	}
+}
+
+// hintShows reports whether the placeholder may show: there is one,
+// and the editor holds no code and no composition.
+func (c *CodeEditor) hintShows() bool {
+	return c.Placeholder != "" && len(c.text) == 0 && len(c.preedit) == 0
 }
 
 // submits reports whether k is an Enter that runs OnCommit.
@@ -496,7 +553,7 @@ func (c *CodeEditor) submits(k input.KeyPress) bool {
 // typed at the start of a line.
 func (c *CodeEditor) typed(s string, u *gunim.UI) {
 	start, end := c.Selection()
-	if s == "}" && start == end && len(c.preedit) == 0 {
+	if s == "}" && start == end && len(c.preedit) == 0 && !c.TabMovesOn {
 		ls := c.lineStartOf(start)
 		if before := c.text[ls:start]; len(before) > 0 && onlyIndent(before) && before[len(before)-1] == '\t' {
 			c.replace(start-1, start, []rune("}"), u)
@@ -513,7 +570,7 @@ func (c *CodeEditor) codeKey(k input.KeyPress, u *gunim.UI) bool {
 	shift := k.Mods.Has(input.ModShift)
 	switch {
 	case k.Key == input.KeyTab && !ctrl && !k.Mods.Has(input.ModAlt):
-		if c.readOnly {
+		if c.readOnly || c.TabMovesOn {
 			return false // focus moves on
 		}
 		start, end := c.Selection()
@@ -527,7 +584,7 @@ func (c *CodeEditor) codeKey(k input.KeyPress, u *gunim.UI) bool {
 		}
 		return true
 	case (k.Key == input.KeyEnter || k.Key == input.KeyKPEnter) && !c.readOnly && len(c.preedit) == 0:
-		start, _ := c.Selection()
+		start, end := c.Selection()
 		ls := c.lineStartOf(start)
 		line := c.text[ls:start]
 		n := 0
@@ -535,11 +592,13 @@ func (c *CodeEditor) codeKey(k input.KeyPress, u *gunim.UI) bool {
 			n++
 		}
 		indent := string(line[:n])
-		if t := strings.TrimRightFunc(string(line), unicode.IsSpace); strings.HasSuffix(t, "{") ||
-			strings.HasSuffix(t, "(") || strings.HasSuffix(t, "[") || strings.HasSuffix(t, ":") {
+		if t := strings.TrimRightFunc(string(line), unicode.IsSpace); !c.TabMovesOn && (strings.HasSuffix(t, "{") ||
+			strings.HasSuffix(t, "(") || strings.HasSuffix(t, "[") || strings.HasSuffix(t, ":")) {
 			indent += "\t"
 		}
-		c.insert("\n"+indent, u)
+		// The indent goes in as it is, tabs and all, even where typed
+		// tabs become spaces.
+		c.replace(start, end, []rune("\n"+indent), u)
 		return true
 	case k.Key == input.KeyHome && !ctrl:
 		ls := c.lineStartOf(c.caret)
@@ -899,6 +958,7 @@ func (c *CodeEditor) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Childre
 	} else {
 		c.band.Animate(at.Y, motion)
 	}
+	c.followHint(th)
 
 	// Follow the caret when it has moved, the code has changed, or the
 	// view has changed size, so the wheel can scroll away from it.
@@ -987,6 +1047,7 @@ func (c *CodeEditor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 
 	// The code, the lines in view and the pieces of them in view.
 	lift := (c.lineH - c.glyphH) / 2
+	c.paintPlaceholder(p, th, geom.Pt(o.X, o.Y+lift))
 	for li := first; li < last; li++ {
 		l := c.laidLine(li)
 		y := o.Y + float32(li)*c.lineH + lift
@@ -1048,6 +1109,18 @@ func (c *CodeEditor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		edge.A = uint8(float32(edge.A) * focus * 0.8)
 		p.RRectStroke(all.Inset(geom.Uniform(0.5)), radius, paint.Fill{}, paint.Stroke{Width: 1, Color: edge})
 	}
+}
+
+// paintPlaceholder draws the placeholder with its top-left at at, where
+// the first line's code would be, in the code's face, faded by how much
+// it shows and cut to the width of the view.
+func (c *CodeEditor) paintPlaceholder(p *paint.Painter, th *theme.Live, at geom.Point) {
+	shown := min(max(c.hint.Value(), 0), 1)
+	if !c.hintShows() || shown <= 0 || c.laidFace == nil {
+		return
+	}
+	run := fitRun(c.hintRun.shape(c.laidFace, c.Placeholder, c.laidSize), &c.hintEll, c.view.W)
+	run.Paint(p, at, fadedBy(Placeholder.Get(th), shown))
 }
 
 // paintGutter draws the line numbers of lines first to last.

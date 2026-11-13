@@ -23,9 +23,9 @@ type editor struct {
 	multiline     bool
 	// secret keeps the text off the clipboard.
 	secret bool
-	// tabs keeps typed and pasted tabs, as code needs; otherwise a tab
-	// becomes a space.
-	tabs bool
+	// tabs, when set and reporting true, keeps typed and pasted tabs,
+	// as code needs; otherwise a tab becomes a space.
+	tabs func() bool
 	// readOnly keeps the text as it is: the caret moves and the text
 	// selects and copies, and every edit is skipped.
 	readOnly bool
@@ -920,9 +920,10 @@ func (e *editor) insert(s string, u *gunim.UI) {
 // clean returns s as the text keeps it. A single line turns newlines
 // and tabs into spaces; both keep printable text only.
 func (e *editor) clean(s string) string {
+	tabs := e.tabs != nil && e.tabs()
 	return strings.Map(func(r rune) rune {
 		switch {
-		case r == '\n' && e.multiline, r == '\t' && e.tabs:
+		case r == '\n' && e.multiline, r == '\t' && tabs:
 			return r
 		case r == '\n' || r == '\t':
 			return ' '

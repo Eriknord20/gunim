@@ -83,7 +83,11 @@ func (c *CodeEditor) Access() access.Info {
 	} else {
 		state |= access.StateEditable
 	}
-	return access.Info{Role: access.RoleTextField, Name: c.Label, Value: c.textString(), State: state}
+	name := c.Label
+	if name == "" {
+		name = c.Placeholder
+	}
+	return access.Info{Role: access.RoleTextField, Name: name, Value: c.textString(), State: state}
 }
 
 // access is what a checkbox or a switch says.
