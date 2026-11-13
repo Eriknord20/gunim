@@ -634,9 +634,10 @@ func (p *processor) Process(b *plug.Block) {
 	p.keyHits.Set(float64(p.hits.count % keyHitsWrap))
 }
 
-// keyRestDB is how near its rest the keyed gate's gain must be, in decibels, for the tail to end: the floor the
-// gains are let go to 0 at, so a wake from sleep moves the gain no further than that.
-const keyRestDB = 1e-9
+// keyRestDB is how near their rest the keyed gate's and compressor's gains must be, in decibels, for the tail to end. A
+// wake from sleep then moves the gain by at most 0.01 dB, which nobody hears. A gate of 40 dB gets there about 8
+// releases after a hit: about 1.3 s with the default release, and about 17 s with 2 s.
+const keyRestDB = 0.01
 
 // rest puts the gate and the compressor where silence on Key brings them: the gate shut, where it is on, and the
 // compressor at no reduction.
@@ -656,7 +657,7 @@ func (p *processor) rested() bool {
 		}
 		to = -g.rangeDB
 	}
-	return p.comp.gr == 0 && math.Abs(g.gain-to) <= keyRestDB
+	return p.comp.gr >= -keyRestDB && math.Abs(g.gain-to) <= keyRestDB
 }
 
 // runs is what a run of frames holds between the stages.

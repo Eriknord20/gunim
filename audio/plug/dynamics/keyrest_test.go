@@ -182,8 +182,8 @@ func TestWithKeyWiredTheTailIsEndlessUntilTheGateIsShutAndTheCompressorAtRest(t 
 		if c.gate == 1 && pr.gate.gain < -1 || c.on == 1 && pr.comp.gr > -1 {
 			t.Fatalf("%s: the hit left the gate at %v dB and the compressor at %v dB", name, pr.gate.gain, pr.comp.gr)
 		}
-		// Thirty times the release is the most the last billionth of a decibel takes.
-		most := 2 + int(30*c.release/1000*48000)/block
+		// The last hundredth of a decibel of 40 takes under nine times the release, after the hold and the gate's own fall.
+		most := 2 + int((100+10*c.release)/1000*48000)/block
 		ran := 2
 		for ; pr.Tail() != 0; ran++ {
 			if pr.Tail() != math.MaxInt32 {
@@ -194,24 +194,31 @@ func TestWithKeyWiredTheTailIsEndlessUntilTheGateIsShutAndTheCompressorAtRest(t 
 			}
 			play(pr, int64(ran*block), block, make([]float32, block), nil)
 		}
-		// Where the tail ends, the sleep's wake moves nothing that can be heard.
+		// Where the tail ends, both are within 0.01 dB of their rest.
 		rest := -40 * c.gate
-		if d := math.Abs(pr.gate.gain - rest); d > 1e-9 || pr.comp.gr != 0 || pr.hits.running() {
+		if d := math.Abs(pr.gate.gain - rest); d > keyRestDB || pr.comp.gr < -keyRestDB || pr.comp.gr > 0 || pr.hits.running() {
 			t.Errorf("%s: the tail ends after %d blocks with the gate %v dB from its rest and the compressor at %v dB", name,
 				ran, d, pr.comp.gr)
 		}
 		if took := float64((ran-2)*block) / 48; took < c.release {
 			t.Errorf("%s: the tail ends %v ms after the hit, before one release is over", name, took)
 		}
-		// A host that sleeps the device here wakes it to the same gains.
+		// A host that sleeps the device here wakes it at its rest, a step of 0.01 dB at most.
 		gate, comp := pr.gate.gain, pr.comp.gr
 		r := play(pr, int64(ran*block)+96000, block, make([]float32, block), nil)
-		if math.Abs(pr.gate.gain-gate) > 1e-9 || pr.comp.gr != comp || pr.Tail() != 0 {
-			t.Errorf("%s: a sleep after the tail's end moves the gate from %v to %v dB", name, gate, pr.gate.gain)
+		if pr.gate.gain != rest || pr.comp.gr != 0 || pr.Tail() != 0 {
+			t.Errorf("%s: a sleep after the tail's end leaves the gate at %v dB, the compressor at %v dB and a tail of %d", name,
+				pr.gate.gain, pr.comp.gr, pr.Tail())
 		}
-		for f := 1; f < block; f++ {
-			if r.gate[f] != r.gate[0] || r.comp[f] != 0 {
-				t.Fatalf("%s: on frame %d after the sleep the gate goes from %v to %v dB", name, f, r.gate[0], r.gate[f])
+		if math.Abs(pr.gate.gain-gate) > keyRestDB || math.Abs(pr.comp.gr-comp) > keyRestDB {
+			t.Errorf("%s: the wake moves the gate from %v to %v dB and the compressor from %v to %v dB, over 0.01 dB", name,
+				gate, pr.gate.gain, comp, pr.comp.gr)
+		}
+		// The frames shaped before the sleep come out first, the lookahead long, and those after it at rest.
+		for f := pr.Latency(); f < block; f++ {
+			if float64(r.gate[f]) != rest || r.comp[f] != 0 {
+				t.Fatalf("%s: on frame %d after the sleep the gate is at %v dB and the compressor at %v dB, not at rest", name, f,
+					r.gate[f], r.comp[f])
 			}
 		}
 	}
