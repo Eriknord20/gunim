@@ -322,9 +322,10 @@ type processor struct {
 	run                            runs
 	gateLeast, compLeast, limLeast float64
 
-	// hits is Key's hits as held, and holding says a hold runs, kept by Process for Tail.
-	hits    hitKey
-	holding atomic.Bool
+	// hits is Key's hits as held, and unsettled says a hold runs or the gate or the compressor is not yet at its
+	// keyed rest, kept by Process for Tail.
+	hits      hitKey
+	unsettled atomic.Bool
 	// keyWired and keyHits are what the plugin reports of Key for its panel.
 	keyWired, keyHits plug.Meter
 	// next is the host's frame after the last block run, where clocked says one ran.
@@ -570,20 +571,22 @@ func (p *processor) Process(b *plug.Block) {
 	}
 	ctl := [3][]float32{b.ControlOutput(GateOut), b.ControlOutput(CompOut), b.ControlOutput(LimitOut)}
 	hits := b.ControlInput(KeyIn)
-	// A block that starts past the last one's end comes after a sleep through silence: keyed, the gate then stands
-	// shut and the compressor at rest, as they would have come to
-	slept := p.clocked && b.Position.Frame > p.next
+	// A block that starts past the last one's end comes after a sleep through silence, and one with no block before it
+	// after a reset: keyed, both start at the keyed rest
+	slept, first := p.clocked && b.Position.Frame > p.next, !p.clocked
 	p.next, p.clocked = b.Position.Frame+int64(b.Frames), true
 	if hits == nil || slept {
 		p.hits.clear()
 	}
-	if hits != nil && slept {
-		p.comp.gr = 0
-		if g := &p.gate; g.on {
-			g.env, g.open, g.gain = 0, false, -g.rangeDB
-		}
-	}
 	next := 0
+	if hits != nil && (slept || first) {
+		// Take the block's first settings, so the gate rests as they have it
+		for next < len(b.Changes) && b.Changes[next].Frame <= 0 {
+			p.take(b.Changes[next])
+			next++
+		}
+		p.rest()
+	}
 	p.gateLeast, p.compLeast, p.limLeast = 0, 0, 1
 	for i := 0; i < b.Frames; {
 		for next < len(b.Changes) && b.Changes[next].Frame <= i {
@@ -622,13 +625,39 @@ func (p *processor) Process(b *plug.Block) {
 	p.gateGR.Set(p.gateLeast)
 	p.compGR.Set(p.compLeast)
 	p.limGR.Set(dbOf(p.limLeast))
-	p.holding.Store(p.hits.running())
+	p.unsettled.Store(hits != nil && (p.hits.running() || !p.rested()))
 	wired := 0.0
 	if hits != nil {
 		wired = 1
 	}
 	p.keyWired.Set(wired)
 	p.keyHits.Set(float64(p.hits.count % keyHitsWrap))
+}
+
+// keyRestDB is how near their rest the keyed gate's and compressor's gains must be, in decibels, for the tail to end. A
+// wake from sleep then moves the gain by at most 0.01 dB, which nobody hears. A gate of 40 dB gets there about 8
+// releases after a hit: about 1.3 s with the default release, and about 17 s with 2 s.
+const keyRestDB = 0.01
+
+// rest puts the gate and the compressor where silence on Key brings them: the gate shut, where it is on, and the
+// compressor at no reduction.
+func (p *processor) rest() {
+	p.comp.gr = 0
+	if g := &p.gate; g.on {
+		g.env, g.open, g.gain = 0, false, -g.rangeDB
+	}
+}
+
+// rested reports whether the gate and the compressor stand where rest puts them, to within keyRestDB.
+func (p *processor) rested() bool {
+	g, to := &p.gate, 0.0
+	if g.on {
+		if g.open {
+			return false
+		}
+		to = -g.rangeDB
+	}
+	return p.comp.gr >= -keyRestDB && math.Abs(g.gain-to) <= keyRestDB
 }
 
 // runs is what a run of frames holds between the stages.
@@ -874,9 +903,10 @@ func (l *limiter) smooth(low float64) float64 {
 // late.
 func (p *processor) Latency() int { return p.lim.ahead }
 
-// Tail implements [plug.Processor]: none, and no end while a hit on Key is held.
+// Tail implements [plug.Processor]: none, and with Key wired no end until a hit's hold is over, the gate shut and
+// the compressor at rest.
 func (p *processor) Tail() int {
-	if p.holding.Load() {
+	if p.unsettled.Load() {
 		return math.MaxInt32
 	}
 	return 0
@@ -900,7 +930,7 @@ func (p *processor) Reset() {
 	p.in, p.out, p.comp.makeup = p.inTo, p.outTo, p.comp.makeupTo
 	p.fresh = true
 	p.hits.clear()
-	p.holding.Store(false)
+	p.unsettled.Store(false)
 	p.clocked = false
 	p.gateGR.Set(0)
 	p.compGR.Set(0)
