@@ -137,7 +137,8 @@ func tabReveals(t testing.TB, view func() gunim.Node, size geom.Size) {
 			shown = shown && after.Max.X <= box.Max.X+0.5 && after.Max.Y <= box.Max.Y+0.5
 		}
 		if !shown {
-			if wrong++; wrong <= 3 {
+			wrong++
+			if wrong <= 3 {
 				t.Errorf("at %v×%v Tab to %s at %v left it at %v, out of sight", size.W, size.H, nameOf(n), before,
 					after)
 			}
