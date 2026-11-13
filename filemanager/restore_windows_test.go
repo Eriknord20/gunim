@@ -70,3 +70,37 @@ func TestTheRecycleBinGivesBackTwoFilesOfOneStem(t *testing.T) {
 		t.Fatalf("a.log came back holding %q", got)
 	}
 }
+
+// TestTheRecycleBinTakesAFileBeingRead trashes a file to the real Recycle
+// Bin while the app has it open to read, and takes it back out. It runs
+// only with GUNIM_FILES_RECYCLE_TEST=1.
+func TestTheRecycleBinTakesAFileBeingRead(t *testing.T) {
+	if os.Getenv("GUNIM_FILES_RECYCLE_TEST") != "1" {
+		t.Skip("set GUNIM_FILES_RECYCLE_TEST=1 to use the real Recycle Bin")
+	}
+	path := filepath.Join(t.TempDir(), "gunim-recycle-open.txt")
+	if err := os.WriteFile(path, []byte("come back"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LocalFS().Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := recycleBin{}
+	rec, err := runJob(context.Background(), job{kind: OpTrash, srcs: []string{path}}, env{fs: LocalFS(), trash: tr})
+	if cerr := f.Close(); cerr != nil {
+		t.Error(cerr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("the file is still there after the trash: %v", err)
+	}
+	if _, err := runJob(context.Background(), job{kind: OpUndo, undo: &rec}, env{fs: LocalFS(), trash: tr}); err != nil {
+		t.Fatal(err)
+	}
+	if got := contents(t, path); got != "come back" {
+		t.Fatalf("after the restore the file holds %q", got)
+	}
+}

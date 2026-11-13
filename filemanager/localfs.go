@@ -69,7 +69,7 @@ func (localFS) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
 
 // Open implements [FS].
 func (localFS) Open(path string) (io.ReadSeekCloser, error) {
-	f, err := os.Open(path)
+	f, err := openFile(path)
 	if err != nil {
 		// A nil *os.File in the interface would not be nil.
 		return nil, err
