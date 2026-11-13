@@ -69,8 +69,9 @@ const (
 // sets it back to its default. The wheel turns the knob under the
 // pointer, 2.5% of the way round a notch, a quarter of that with Shift.
 // A touchpad turns it as a drag of the same length, at most half way
-// round a swipe. Ctrl or Super with the wheel passes it by. Inside a view that the wheel would scroll, the knob takes the wheel
-// only while it has the keyboard, and leaves it to the view otherwise.
+// round a swipe. Ctrl or Super with the wheel passes it by. Inside a view with room to scroll the wheel's way, the
+// wheel is the view's, at its ends too; the knob takes it only once pressed, until the pointer leaves it, or while it
+// has the keyboard.
 // Each turn is one gesture, wheel notches in a run included,
 // one step to undo. A run ends half a second after its last notch, or
 // as the pointer leaves, a key or a press comes, or the knob goes.
@@ -102,6 +103,8 @@ type Knob struct {
 	// ring is how far the focus ring shows, and focused says the knob has the keyboard.
 	ring    *anim.Float
 	focused bool
+	// pressed says the knob was pressed and the pointer has not left it since, so it takes the wheel.
+	pressed bool
 	tip     widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
@@ -223,6 +226,7 @@ func (k *Knob) Transition(p gunim.Presence, f gunim.Frame) bool {
 	case gunim.Entering:
 		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
 	case gunim.Exiting:
+		k.pressed = false
 		k.endWheel(f.UI())
 	case gunim.Present:
 	}
@@ -537,6 +541,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.hover.Animate(1, widget.Quick.Get(u.Theme()))
 		return false
 	case input.PointerLeave:
+		k.pressed = false
 		k.endWheel(u)
 		if !k.held {
 			k.hover.Animate(0, widget.Quick.Get(u.Theme()))
@@ -555,6 +560,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		k.tip.Hide(u)
+		k.pressed = true
 		if e.Clicks == 2 {
 			k.stepTo(k.p.Default, u)
 			return true
@@ -583,7 +589,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 	case input.Scroll:
 		// Ctrl or Super with the wheel is the window's, as its zoom: the knob leaves it be.
 		if e.Touch || k.held || e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModSuper) ||
-			!k.focused && u.ScrollsAround(k, e.Delta) {
+			!k.focused && !k.pressed && u.ScrollsAround(k, e.Delta) {
 			return false
 		}
 		by, steps, pad := wheelTurn(e, k.p.Steps)
