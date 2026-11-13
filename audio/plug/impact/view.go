@@ -501,6 +501,8 @@ type panel struct {
 	disp     *display
 	sections []*plugui.Section
 	tuner    *plugui.Tuner
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 }
 
 // The knobs' tooltips.
@@ -544,11 +546,12 @@ func (p *panel) Children() []gunim.Node {
 // panelInset is how far in from the panel's edges the glass stands.
 const panelInset = 16
 
-// Layout implements [gunim.Node]: the display fills the panel; the
-// sections along its foot; the tuner at its top right; and the bars'
-// room between the top and the sections.
+// Layout implements [gunim.Node]: the display fills the panel, laid
+// out at least at its least size; the sections along its foot; the
+// tuner at its top right; and the bars' room between the top and the
+// sections.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := p.Lay(c.Max, Descriptor.ViewMinSize)
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	top := plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
@@ -562,11 +565,12 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
 	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
 	kids.At(n + 1).Place(geom.Pt(size.W-panelInset/2-max(cs.W, plugui.TunerW), panelInset/2+36))
-	return size
+	return c.Max
 }
 
-// Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// Paint implements [gunim.Node], clipped to the panel's box and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}

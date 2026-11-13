@@ -127,6 +127,10 @@ type panel struct {
 	// how far.
 	learning bool
 	stopPoll func()
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
+	// least is the size the panel lays out at least at: the window view's least size in full, and none otherwise.
+	least geom.Size
 }
 
 // The macros, in their row.
@@ -158,6 +162,7 @@ func newPanel(pl *plugin, h plug.Host, full bool) *panel {
 	learn.Add(p.learn, plugui.KnobW)
 	p.sections = []*plugui.Section{plugui.NewSection(h, &Descriptor, "MACROS", 0, macroIDs...), learn}
 	if full {
+		p.least = Descriptor.ViewMinSize
 		p.sections = append(p.sections,
 			plugui.NewSection(h, &Descriptor, "DE-ESSER", DeEssOnID, DeEssFreqID, DeEssThresholdID, DeEssRangeID),
 			plugui.NewSection(h, &Descriptor, "LEVELS", 0, InputID, OutputID, WidthFreqID),
@@ -294,21 +299,23 @@ func (p *panel) Children() []gunim.Node {
 // panelInset is how far in from the panel's edges the glass stands.
 const panelInset = 16
 
-// Layout implements [gunim.Node]: the history fills the panel, and over
-// it, on glass, the sections along the foot.
+// Layout implements [gunim.Node]: the history fills the panel, laid out
+// at least at its least size in full, and over it, on glass, the
+// sections along the foot.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := p.Lay(c.Max, p.least)
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
 		kids.At(1 + i).Layout(gunim.Tight(r.Size()))
 		kids.At(1 + i).Place(r.Min)
 	})
-	return size
+	return c.Max
 }
 
-// Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// Paint implements [gunim.Node], clipped to the panel's box and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}

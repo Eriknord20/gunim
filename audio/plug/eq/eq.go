@@ -20,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/tonal"
+	"github.com/marrasen/gunim/geom"
 )
 
 // BypassID is the ID of the bypass parameter: over 0.5 passes the
@@ -96,8 +97,10 @@ var Descriptor = plug.Descriptor{
 		Flags:  plug.Hidden,
 		Format: func(v float64) string { return fmt.Sprintf("%.0f Hz", v) },
 	}},
-	Patches: patches,
-	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },
+	Patches:     patches,
+	ViewSize:    geom.Sz(880, 520),
+	ViewMinSize: geom.Sz(640, 400),
+	New:         func(h plug.Host) plug.Plugin { return newPlugin(h) },
 }
 
 func init() { plug.Register(Descriptor) }

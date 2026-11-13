@@ -25,6 +25,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/tonal"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs: the mode and the target, how far it goes and
@@ -144,15 +145,17 @@ func speedTime(m int, v float64) float64 {
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:        "marrasen.stabilizer",
-	Name:      "Stabilizer",
-	Vendor:    "Marras",
-	Version:   "0.1.0",
-	Kind:      "Fx|EQ|Mastering",
-	Tagline:   "Self-setting EQ",
-	KeepsMono: true,
-	Keywords:  []string{"resonance", "resonant", "tonal balance", "auto eq", "dynamic eq", "soothe", "harsh", "mastering"},
-	New:       func(h plug.Host) plug.Plugin { return &plugin{} },
+	ID:          "marrasen.stabilizer",
+	Name:        "Stabilizer",
+	Vendor:      "Marras",
+	Version:     "0.1.0",
+	Kind:        "Fx|EQ|Mastering",
+	Tagline:     "Self-setting EQ",
+	KeepsMono:   true,
+	Keywords:    []string{"resonance", "resonant", "tonal balance", "auto eq", "dynamic eq", "soothe", "harsh", "mastering"},
+	ViewSize:    geom.Sz(880, 520),
+	ViewMinSize: geom.Sz(760, 440),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 	Params: []plug.Param{
 		{ID: ModeID, Name: "Mode", Max: modes - 1, Steps: modes - 1, Flags: plug.Automatable,
 			Format: func(v float64) string { return modeNames[int(math.Round(v))] }},
@@ -217,8 +220,10 @@ func (p *plugin) View(s plug.Size, h plug.Host) gunim.Node {
 	switch s {
 	case plug.Chip:
 		return newChip(h)
-	case plug.Panel, plug.Full:
-		return newPanel(h)
+	case plug.Panel:
+		return newPanel(h, false)
+	case plug.Full:
+		return newPanel(h, true)
 	default:
 		return nil
 	}

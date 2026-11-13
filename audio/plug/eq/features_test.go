@@ -857,18 +857,28 @@ func TestOnlyTheBandInFocusWritesItsThreshold(t *testing.T) {
 	}
 }
 
+// The match button says less where the bar is narrow, and hides where even that does not fit, as a long word after a
+// match does at the least size. Under its least size the view lays out at that size, so the bar is never narrower.
 func TestTheMatchButtonSaysLessWhereTheBarIsNarrow(t *testing.T) {
 	for _, c := range []struct {
 		w      float32
+		target float64
+		// told is what the button tells for a moment, or nothing for its words at rest.
+		told   string
 		words  string
 		hidden bool
-	}{{1200, matchWords(tonal.Pink), false}, {560, matchShort(tonal.Pink), false}, {380, matchShort(tonal.Pink), true}} {
+	}{{1200, 0, "", matchWords(tonal.Pink), false}, {640, 1, "", matchShort(tonal.Music), false},
+		{640, 1, matchedWords(tonal.Music), matchedWords(tonal.Music), true}} {
 		p, h := newEQ(t)
+		h.values[TargetID] = c.target
 		v, ok := p.View(plug.Full, h).(*full)
 		if !ok {
 			t.Fatal("the full view is of another type")
 		}
 		w, run := stage(t, geom.Sz(c.w, 500), v)
+		if c.told != "" {
+			v.match.Label = c.told
+		}
 		run(10)
 		views, match := boundsIn(t, w, run, v.views), boundsIn(t, w, run, v.match)
 		// Hidden, it is not drawn, so it stands nowhere.

@@ -20,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/internal/least"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs.
@@ -86,7 +87,9 @@ var Descriptor = plug.Descriptor{
 		{Name: "Loud and punchy", Params: map[uint32]float64{GainID: 8, ModeID: Punchy, CharacterID: 2, CeilingID: -0.3}},
 		{Name: "Club", Params: map[uint32]float64{GainID: 10, ModeID: Loud, CharacterID: 3, CeilingID: -0.3, TargetID: -8}},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{h: h} },
+	ViewSize:    geom.Sz(800, 480),
+	ViewMinSize: geom.Sz(640, 400),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{h: h} },
 }
 
 func init() { plug.Register(Descriptor) }

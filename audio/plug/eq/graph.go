@@ -131,6 +131,16 @@ type graph struct {
 	// point, and away as it leaves.
 	tipBand int
 	tipIn   *anim.Float
+	// under is where a part laid over the graph covers it, and dbDrawn where each dB label was drawn last, with how
+	// strongly.
+	under   geom.Rect
+	dbDrawn []dbLabel
+}
+
+// dbLabel is a dB label as drawn: where, and how strongly, from 0 to 1.
+type dbLabel struct {
+	at    geom.Rect
+	alpha float32
 }
 
 // The spectrum behind the bands: specPoints frequencies across, the
@@ -1062,6 +1072,7 @@ func (g *graph) paintGrid(p *paint.Painter, th *theme.Live, box geom.Size) {
 		}
 		audioui.Shaped(label, size, false, false).Paint(p, geom.Pt(x+4, box.H-1.6*size), paint.Faded(ink, 0.35))
 	}
+	g.dbDrawn = g.dbDrawn[:0]
 	for db := -eqRange + 6; db < eqRange; db += 6 {
 		y := g.yOf(float32(db))
 		a := float32(0.05)
@@ -1071,8 +1082,23 @@ func (g *graph) paintGrid(p *paint.Painter, th *theme.Live, box geom.Size) {
 		}
 		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(paint.Faded(ink, a)))
 		run := audioui.Shaped(label, size, false, false)
-		run.Paint(p, geom.Pt(box.W-run.Advance-6, y-1.3*size), paint.Faded(ink, 0.35))
+		at := geom.Rc(box.W-run.Advance-6, y-1.3*size, run.Advance, 1.3*size)
+		shown := g.clearOfUnder(at)
+		g.dbDrawn = append(g.dbDrawn, dbLabel{at: at, alpha: shown})
+		if shown > 0 {
+			run.Paint(p, at.Min, paint.Faded(ink, 0.35*shown))
+		}
 	}
+}
+
+// clearOfUnder returns how strongly to draw a label at r: whole clear of what covers the graph, fading out as what
+// covers it comes within 2 px of it and gone where it covers a quarter of it.
+func (g *graph) clearOfUnder(r geom.Rect) float32 {
+	if g.under.Empty() || r.Max.X <= g.under.Min.X || r.Min.X >= g.under.Max.X || r.Max.Y <= g.under.Min.Y {
+		return 1
+	}
+	gap := r.Min.Y - g.under.Max.Y - 2
+	return min(max(1+gap/(0.25*r.Size().H), 0), 1)
 }
 
 // paintCurve draws the curve the bands make together, the band picked

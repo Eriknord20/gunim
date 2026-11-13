@@ -1,7 +1,17 @@
 // Package plugtest helps test plugins: it counts what a processor
 // allocates, plays an instrument notes and tells it of them ahead,
 // drives a plugin's ports, to check what comes out, and reads the hits
-// on a trigger.
+// on a trigger. For a plugin's views, it checks that a view fits a size
+// ([Fits]), and draws one at many sizes for a person to choose its sizes
+// by ([Sheet]).
+//
+// A plugin's test checks its window's view at its least size, at the
+// size it opens at, and at a large size, as
+// [plug.Descriptor.ViewMinSize] and [plug.Descriptor.ViewSize] give them:
+//
+//	for _, s := range []geom.Size{d.ViewMinSize, d.ViewSize, geom.Sz(1536, 864)} {
+//		plugtest.Fits(t, newView(), s, plugtest.Fit{Least: map[gunim.Node]geom.Size{meter: geom.Sz(150, 90)}})
+//	}
 package plugtest
 
 import (

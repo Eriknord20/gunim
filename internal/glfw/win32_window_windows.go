@@ -1311,12 +1311,18 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 		// need it to compensate for non-client area scaling
 		if window.monitor == nil && (window.platform.scaleToMonitor || winver.IsWindows10CreatorsUpdateOrGreater()) {
 			suggested := (*_RECT)(unsafe.Pointer(lParam))
-			if err := _SetWindowPos(window.platform.handle, _HWND_TOP,
+			// gunim change: the size limits are in the old DPI's pixels, so they are lifted while the window takes
+			// the suggested rectangle, and the content scale callback sets them again.
+			minw, minh, maxw, maxh := window.minwidth, window.minheight, window.maxwidth, window.maxheight
+			window.minwidth, window.minheight, window.maxwidth, window.maxheight = DontCare, DontCare, DontCare, DontCare
+			err := _SetWindowPos(window.platform.handle, _HWND_TOP,
 				suggested.left,
 				suggested.top,
 				suggested.right-suggested.left,
 				suggested.bottom-suggested.top,
-				_SWP_NOACTIVATE|_SWP_NOZORDER); err != nil {
+				_SWP_NOACTIVATE|_SWP_NOZORDER)
+			window.minwidth, window.minheight, window.maxwidth, window.maxheight = minw, minh, maxw, maxh
+			if err != nil {
 				_glfw.errors = append(_glfw.errors, err)
 				return 0
 			}
