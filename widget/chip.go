@@ -144,6 +144,7 @@ func (c *Chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	end := box.W - box.H/2 - shown*box.H/2
 	fill := anim.Mix(anim.ColorCodec, ChipFill.Get(th), ChipHover.Get(th), c.hover.Value())
 	p.RRect(geom.Rect{Max: box.Point()}, box.H/2, paint.Solid(fill))
+	c.paintGlow(p, geom.Rect{Max: box.Point()}, box.H/2, th)
 	x := box.H / 2
 	if c.Icon != nil {
 		if s := IconSize.Get(th); x+s <= end {

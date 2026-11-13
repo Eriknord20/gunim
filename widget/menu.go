@@ -1710,6 +1710,11 @@ func (t *tipper) retext(words string) {
 // handle shows the tooltip words for owner once the pointer rests on it for delay, and hides it when the pointer
 // leaves, presses or scrolls. After a press or a scroll it stays down until the pointer leaves and comes back.
 func (t *tipper) handle(e input.Event, u *gunim.UI, owner gunim.Node, words string, delay time.Duration) {
+	if !Tooltips.Get(u.Theme()) {
+		// A theme for a finger shows none: nothing rests on a touch screen to ask for one.
+		t.hide(u)
+		return
+	}
 	t.owner, t.delay = owner, delay
 	t.retext(words)
 	switch e := e.(type) {

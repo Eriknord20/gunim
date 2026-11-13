@@ -214,6 +214,7 @@ func (b *MenuButton) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		border = Accent.Get(th)
 	}
 	p.RRectStroke(r, radius, paint.Solid(fill), paint.Stroke{Width: 1, Color: border})
+	b.paintGlow(p, r, radius, th)
 	pad := FieldPadding.Get(th)
 	if b.Icon != nil {
 		s := IconSize.Get(th)

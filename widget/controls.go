@@ -98,7 +98,7 @@ func (t *toggle) handle(n gunim.Node, e input.Event, u *gunim.UI) bool {
 		}
 		t.held = true
 		t.click.Press(e, 0)
-		t.squash.Animate(1, Quick.Get(th))
+		t.squashIn(th)
 	case input.PointerUp:
 		if !t.held {
 			return false
@@ -172,6 +172,7 @@ func (c *Checkbox) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children)
 func (c *Checkbox) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	defer c.faint(p, box)()
 	th := f.Theme
+	c.paintGlow(p, geom.Rect{Max: box.Point()}, ButtonRadius.Get(th), th)
 	s := CheckSize.Get(th)
 	r := geom.Rc(0, (box.H-s)/2, s, s)
 	radius := CheckRadius.Get(th)
@@ -232,6 +233,7 @@ func (s *Switch) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children) g
 func (s *Switch) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	defer s.faint(p, box)()
 	th := f.Theme
+	s.paintGlow(p, geom.Rect{Max: box.Point()}, ButtonRadius.Get(th), th)
 	w, h := SwitchWidth.Get(th), SwitchHeight.Get(th)
 	track := geom.Rc(0, (box.H-h)/2, w, h)
 	on := s.lit.Value()

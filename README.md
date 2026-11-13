@@ -641,6 +641,20 @@ the driver against the goals in [docs/plans/kms-touch.md](docs/plans/kms-touch.m
 such measures. Built with `-tags gunimkms`, `gunim.Main` opens the driver itself with its default
 options. The driver is for 64-bit Linux, as on a Raspberry Pi 4 or 5 with a 64-bit system.
 
+The touch kit is what a screen worked by a finger needs on top. `widget.Touch` is a theme laid over another, as
+`widget.Dark().With(widget.Touch()...)`. It sets text in Inter, built into the program, makes every target at least
+48 pixels, and turns tooltips off. Every control lights and squashes under a finger on the frame it lands, with a
+glow from the finger. `widget.Stack` goes back by a swipe from the left edge, and `widget.PinPad`,
+`widget.Keyboard` and `widget.HoldButton` take a PIN, typing and a hold to confirm. `WIDGETS.md` has the design
+language they follow. `example/kmshello` is a plant-watering panel built on them. It runs full screen on a Pi, and
+in a window the size of the 5" Touch Display 2 on a desktop, worked with a mouse:
+
+```sh
+CGO_ENABLED=0 go run ./example/kmshello
+```
+
+![kmshello](example/kmshello/kmshello.png)
+
 ## The split
 
 A gunim program is two halves that speak only in values.
@@ -1211,4 +1225,5 @@ In no set order:
 gunim is under the Apache License 2.0, in `LICENSE`. The code copied from
 Ebitengine keeps its own notices; see `internal/README.md`. The icons in
 `icon/lucide.go` are generated from Lucide's, under the ISC licence in
-`icon/LICENSE-lucide`.
+`icon/LICENSE-lucide`. The Inter font in `text/fonts` is under the SIL Open
+Font License 1.1, in `text/fonts/LICENSE-Inter.txt`.

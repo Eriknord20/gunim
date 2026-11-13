@@ -134,7 +134,7 @@ func (b *Button) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		b.held = true
 		b.click.Press(e, 0)
-		b.squash.Animate(1, Quick.Get(th))
+		b.squashIn(th)
 	case input.PointerUp:
 		if !b.held {
 			return false
@@ -264,6 +264,7 @@ func (b *Button) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		p.RRect(geom.Rect{Min: geom.Pt(r.Min.X+off, r.Min.Y+off), Max: geom.Pt(r.Max.X+off, r.Max.Y+off)}, min(radius, box.H/2), paint.Solid(shadow))
 	}
 	p.RRect(r, min(radius, box.H/2), paint.Solid(fill))
+	b.paintGlow(p, r, min(radius, box.H/2), th)
 	inked := mix(fromInk, ink)
 	if b.Ink.Key() != "" {
 		inked = b.Ink.Get(th)

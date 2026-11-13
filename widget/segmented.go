@@ -311,6 +311,7 @@ func (s *Segmented) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		fill = s.Track.Get(th)
 	}
 	p.RRect(track, h/2, paint.Solid(fill))
+	s.paintGlow(p, track, h/2, th)
 	// The options share the box Paint is given, which a parent may have
 	// squeezed since layout.
 	n := s.Len()

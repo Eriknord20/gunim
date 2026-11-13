@@ -177,15 +177,23 @@ func TestFirstFrameAfterIdleStepsOneRefresh(t *testing.T) {
 	// window stops drawing.
 	// A frame usually follows a tick within microseconds, but the UI
 	// goroutine keeps its own OS thread, and waking one can take
-	// milliseconds, so idle means no frame for a generous while.
-	for i := 0; ; i++ {
+	// milliseconds, and many more on a loaded machine or under the race
+	// detector. So idle means no frame for a generous while, after two
+	// ticks in a row: one slow frame does not pass for rest.
+	quiet := 50 * time.Millisecond
+	if raceOn {
+		quiet = 250 * time.Millisecond
+	}
+	for i, still := 0, 0; still < 2; i++ {
 		if i == 500 {
 			t.Fatal("window never went idle")
 		}
 		before := w.Stats().Frames
 		d.Tick()
-		if !within(50*time.Millisecond, func() bool { return w.Stats().Frames > before }) {
-			break
+		if within(quiet, func() bool { return w.Stats().Frames > before }) {
+			still = 0
+		} else {
+			still++
 		}
 	}
 

@@ -51,8 +51,9 @@ var (
 	ButtonPrimaryFill  = theme.Color("button.primary", color.NRGBA{R: 0x3a, G: 0x6f, B: 0xd8, A: 0xff})
 	ButtonPrimaryHover = theme.Color("button.primary.hover", color.NRGBA{R: 0x4d, G: 0x82, B: 0xe8, A: 0xff})
 	ButtonDangerFill   = theme.Color("button.danger", color.NRGBA{R: 0xc2, G: 0x3f, B: 0x38, A: 0xff})
-	ButtonDangerHover  = theme.Color("button.danger.hover", color.NRGBA{R: 0xd6, G: 0x53, B: 0x4b, A: 0xff})
-	ButtonStrongInk    = theme.Foreground("button.strong.ink", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
+	// Lit under the pointer or a finger, a danger button darkens, so white on it reads at 4.5:1 or more.
+	ButtonDangerHover = theme.Color("button.danger.hover", color.NRGBA{R: 0xb3, G: 0x36, B: 0x2f, A: 0xff})
+	ButtonStrongInk   = theme.Foreground("button.strong.ink", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
 	// ButtonPrimaryInk is the ink on a primary button, for a theme that
 	// wants it apart from a dangerous one's.
 	ButtonPrimaryInk = theme.Foreground("button.primary.ink", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
@@ -141,6 +142,13 @@ func Light() theme.Theme {
 		theme.Set(ChordInputFill, color.NRGBA{R: 0xe4, G: 0xe7, B: 0xed, A: 0xff}),
 		theme.Set(ChordInputPrompt, color.NRGBA{R: 0x5a, G: 0x63, B: 0x74, A: 0xff}),
 		theme.Set(Accent, color.NRGBA{R: 0x2f, G: 0x6f, B: 0xe0, A: 0xff}),
+		theme.Set(PressGlow, color.NRGBA{R: 0x2f, G: 0x6f, B: 0xe0, A: 0x24}),
+		theme.Set(PinDotEdge, color.NRGBA{R: 0x6a, G: 0x72, B: 0x82, A: 0xff}),
+		theme.Set(HoldGlow, color.NRGBA{R: 0x16, G: 0x18, B: 0x1e, A: 0x18}),
+		theme.Set(KeyboardKeyEdge, color.NRGBA{R: 0x6a, G: 0x72, B: 0x82, A: 0xff}),
+		theme.Set(CaptionInk, color.NRGBA{R: 0x5a, G: 0x62, B: 0x70, A: 0xff}),
+		theme.Set(KeyboardFill, color.NRGBA{R: 0xd5, G: 0xd9, B: 0xe1, A: 0xff}),
+		theme.Set(KeyboardKeyFill, color.NRGBA{R: 0xb8, G: 0xbf, B: 0xcc, A: 0xff}),
 		theme.Set(TextSize, 15),
 		theme.Set(Quick, anim.Spring{Response: 0.35, Damping: 0.9}),
 		theme.Set(Bounce, anim.Spring{Response: 0.5, Damping: 0.7}),

@@ -101,11 +101,18 @@ hover, press, the focus ring and the disabled fade. A control in `widget` embeds
 |---|---|---|
 | constructor | `newControl()`, then add the widget's own springs to its group | one `Step` for all the springs |
 | `Layout` | `c.follow(th)` | the disabled fade, jumping on the first layout |
-| `Handle`, first | `c.showTip(e, u, node)` | the tooltip, on a disabled control too |
+| `Handle`, first | `c.showTip(e, u, node)` | the tooltip, on a disabled control too, and a finger's press lit and glowing |
 | `Handle`, when `Disabled` | `return c.handleDisabled(e, u, shut)` | focus let go, right clicks passed on, anything open shut |
 | `Handle` | `c.ringFollows(e, th)` | the focus ring fading in and out |
+| `Handle`, on a press | `c.squashIn(th)` in place of animating `squash` | the squash, which waits as the light does inside something that scrolls |
 | `Paint` | `defer c.faint(p, box)()`, then `c.paintRing(p, r, radius, th)` | the disabled fade, and the one focus ring |
+| `Paint`, over the fill | `c.paintGlow(p, r, radius, th)` | the glow that spreads from a finger as it presses |
 | `Access` | `c.accessState()`, `c.accessName(label)` | disabled state and a name for screen readers |
+
+A finger's press shows on the frame it lands. `showTip` lights the control through its hover spring, `squashIn`
+squashes it, and `paintGlow` draws a soft glow out from where the finger landed. Inside something that scrolls, all
+three wait up to 80 ms for the finger to show whether it taps or scrolls, so a scroll lights none of the controls it
+starts on. A finger has no hover otherwise: the engine sends no enter or leave as it moves.
 
 An app's widget outside the package draws the same way with the exported helpers `widget.Faint`, `widget.FocusRing`
 (round a control) and `widget.GroupRing` (round a view with a cursor of its own, such as a calendar).
@@ -236,6 +243,49 @@ empty.
   renderer, in a hidden window, and returns the picture; `gunimtest.WritePNG` saves it to look at. Where no display or
   OpenGL is at hand, and on macOS and Android, the test skips. Assert on state first: a GPU rounds edges and blurs its
   own way, so a pixel check allows a little either side.
+
+## Touch: the design language
+
+The touch kit is for a screen worked by a finger, such as a Raspberry Pi with the Touch Display 2. These rules hold
+for every screen built on it, so the apps that use it look like one family. `widget.Touch` sets the tokens that carry
+them: lay it over a theme as `widget.Dark().With(widget.Touch()...)`. `example/kmshello` follows every rule here.
+
+- **Size.** Every target is at least 48 logical pixels both ways: 84 device pixels, 7.2 mm, on the 5" display at
+  scale 1.75. Spacing is on a grid of 8.
+- **Type.** Inter, built into the program, in four sizes only: `FigureSize` (40) for one big figure on a screen,
+  `HeadingSize` (24) for titles, `TextSize` (17) for body text and `CaptionSize` (14) for captions. Titles and
+  figures are semibold (`BoldFont`), everything else regular.
+- **Contrast.** Text reads at 4.5:1 or more on what it sits on, a caption too (`CaptionInk`), and an edge that shows
+  where a control is, a field's border or a key's, at 3:1 or more. `TestTheTouchKitMeetsItsContrast` checks the
+  kit's own, in both themes.
+- **Colour.** Dark by default: a screen on a shelf is often in a dim room, and a dark one glares less. One accent
+  colour. Three status colours: green for fine, amber for needs a look, and red for act now (`ToastSuccessInk`,
+  `ToastWarningInk` and `ToastErrorInk`). Colour is never the only sign: each status also has an icon and a word.
+- **Shape.** Cards are rounded by 16, buttons by 12, and chips are pills. Shadows go only under dialogs. Blurred
+  layers are left out, since one makes the damage the whole screen (`CLAUDE.md`).
+- **Motion.** The three theme springs only, and no tweens in widgets. A touch shows on the frame it lands. Things
+  arrive with `Bounce`, leave with `Settle` and answer with `Quick`. Nothing moves at rest. A clock is the one tween:
+  a `HoldButton`'s fill and a `PinPad`'s wait fill and drain at an even pace, as time passes.
+- **Layout.** One task per screen. Navigation runs down the left edge in landscape, with at most five places. Back
+  is a swipe from the left edge (`Stack`) or a back button at the top left.
+- **Touch only.** No hover, no tooltips (`Tooltips` is off), no right click. A long press is never the only way to
+  reach something.
+- **Words.** Plain English. A button says what it does: "Revoke laptop", not "OK". An error says what happened and
+  what to do.
+
+The kit's own widgets:
+
+- `Stack` pushes and pops screens. A swipe from the left edge drags the top one off, and lets go on a spring with
+  the finger's speed.
+- `PinPad` takes a PIN on large keys. Its digits show as dots, never reach a screen reader, and are cleared as they
+  are handed over. `SetWaiting` holds it after a wrong PIN.
+- `Keyboard` is a keyboard on the screen, under the content, for a screen with none of its own. It slides up while a
+  field has the focus, and types into it through the same edits a phone's keyboard makes, through `UI.Type`.
+- `HoldButton` acts only once held down for a second, for the gravest changes, on top of a PIN. It fills from start
+  to end as it is held, and shows a tick once it has acted. A screen reader's press acts at once; the PIN is the
+  guard there.
+- `Keyboard` cannot tell a keyboard plugged in. An app that sees one sets `Keyboard.Disabled`, and the keyboard on
+  the screen stays down.
 
 ## Checklist for a new widget
 

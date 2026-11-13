@@ -3,6 +3,7 @@ package widget
 import (
 	"image/color"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
@@ -67,6 +68,10 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"ColorPicker.SetValue":    func() { NewColorPicker(color.NRGBA{}).SetValue(color.NRGBA{R: 1}, u) },
 		"ColorPicker.SetOriginal": func() { NewColorPicker(color.NRGBA{}).SetOriginal(color.NRGBA{R: 1}, u) },
 		"ColorButton.SetValue":    func() { NewColorButton(color.NRGBA{}).SetValue(color.NRGBA{R: 1}, u) },
+		"Stack.Push":              func() { NewStack(newSpot(1, 1)).Push(newSpot(2, 2), u) },
+		"Stack.Pop":               func() { s := NewStack(newSpot(1, 1)); s.Push(newSpot(2, 2), u); s.Pop(u) },
+		"PinPad.SetWaiting":       func() { NewPinPad(4, "OK").SetWaiting(time.Second, u) },
+		"PinPad.Clear":            func() { NewPinPad(4, "OK").Clear(u) },
 	}
 	for name, set := range sets {
 		t.Run(name, func(t *testing.T) {

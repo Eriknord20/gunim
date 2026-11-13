@@ -416,6 +416,24 @@ func sideButton(b input.Button) bool { return b == input.ButtonBack || b == inpu
 // isAlt reports whether k is either Alt key.
 func isAlt(k input.Key) bool { return k == input.KeyLeftAlt || k == input.KeyRightAlt }
 
+// Type hands e to the focused node as if it came from the keyboard, for a keyboard drawn in the window, such as the
+// touch kit's: a key ([input.KeyPress], [input.KeyRelease]), typed text ([input.TextInput]) or an edit of the
+// focused node's text ([input.TextEdit]), which an on-screen keyboard makes from the node's [TextEditor.TextState],
+// as a phone's keyboard does. It goes where a key from the keyboard goes, and bubbles from there; the focus stays
+// where it is. It takes the way a key from the driver takes, through the same checks: a window going away, or
+// fading out, takes none, and a key during a drag speaks to the drag. Other events, and a nil UI, do nothing.
+func (u *UI) Type(e input.Event) {
+	if u == nil {
+		return
+	}
+	switch e.(type) {
+	case input.KeyPress, input.KeyRelease, input.TextInput, input.TextEdit:
+	default:
+		return
+	}
+	u.handleOn(u.root, e)
+}
+
 // keyEvent delivers a keyboard or focus event. It goes to the focused
 // node and bubbles from there, which is how a shortcut a text field
 // ignores ends up at the window. With nothing focused it goes to the
