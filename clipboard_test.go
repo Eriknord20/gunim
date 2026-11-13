@@ -149,3 +149,17 @@ func TestSensitiveTextOnAPlainClipboardIsSetAndCleared(t *testing.T) {
 		t.Fatalf("after clearing, the clipboard holds %q", s)
 	}
 }
+
+// A window says whether it marks sensitive text, so an app can warn the user where it cannot.
+func TestAWindowSaysWhetherItMarksSensitiveText(t *testing.T) {
+	if !newTestWindow().ui.MarksClipboardSensitive() {
+		t.Error("a window that marks sensitive text says it does not")
+	}
+	if newWindow(textOnly{driver.Offscreen(geom.Sz(100, 100))}, nil).ui.MarksClipboardSensitive() {
+		t.Error("a window that puts sensitive text there plainly says it marks it")
+	}
+	var none *UI
+	if none.MarksClipboardSensitive() {
+		t.Error("a nil UI says it marks sensitive text")
+	}
+}

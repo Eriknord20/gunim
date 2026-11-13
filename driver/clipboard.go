@@ -22,7 +22,8 @@ type SensitiveClipboard interface {
 	// SetClipboardSensitive replaces what the clipboard holds with s, marked sensitive; an empty s empties the
 	// clipboard. It returns an error, and leaves nothing on the clipboard, where the marks cannot be set.
 	SetClipboardSensitive(s string) error
-	// ClearClipboardIf empties the clipboard if it holds the text s, and reports whether it did, with nothing put
-	// there between the read and the emptying.
+	// ClearClipboardIf empties the clipboard if it still holds the text s that this window's program put there, and
+	// reports whether it did, with nothing put there between the check and the emptying. For the text
+	// SetClipboardSensitive put there last it goes by ownership, and reads nothing.
 	ClearClipboardIf(s string) (bool, error)
 }

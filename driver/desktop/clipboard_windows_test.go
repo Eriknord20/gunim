@@ -5,6 +5,7 @@ package desktop
 import (
 	"os"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -21,18 +22,30 @@ var (
 	testFormatAvailable  = testUser32.NewProc("IsClipboardFormatAvailable")
 	testGetClipboardData = testUser32.NewProc("GetClipboardData")
 	testGlobalLock       = windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalLock")
+	testGlobalSize       = windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalSize")
 	testGlobalUnlock     = windows.NewLazySystemDLL("kernel32.dll").NewProc("GlobalUnlock")
 )
 
-// marks reads the three sensitive marks off the clipboard: whether each is there, and the DWORD the last two hold.
-func marks(t *testing.T) (present [3]bool, values [3]uint32) {
+// openClipboardWithin opens the clipboard, trying for a while, as the history service and rdpclip open it too right
+// after a change.
+func openClipboardWithin(t *testing.T) {
 	t.Helper()
-	if r, _, err := testOpenClipboard.Call(0); r == 0 {
-		t.Fatalf("OpenClipboard: %v", err)
+	for range 100 {
+		if r, _, _ := testOpenClipboard.Call(0); r != 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("the clipboard stayed held by another program for a second")
+}
+
+// marks reads the four sensitive marks off the clipboard: whether each is there, its size, and the DWORD it holds.
+func marks(t *testing.T) (present [4]bool, sizes [4]uintptr, values [4]uint32) {
+	t.Helper()
+	openClipboardWithin(t)
 	defer func() { _, _, _ = testCloseClipboard.Call() }()
 	for i, name := range []string{"ExcludeClipboardContentFromMonitorProcessing", "CanIncludeInClipboardHistory",
-		"CanUploadToCloudClipboard"} {
+		"CanUploadToCloudClipboard", "Clipboard Viewer Ignore"} {
 		p, _ := windows.UTF16PtrFromString(name)
 		id, _, _ := testRegisterFormat.Call(uintptr(unsafe.Pointer(p)))
 		if r, _, _ := testFormatAvailable.Call(id); r == 0 {
@@ -43,23 +56,26 @@ func marks(t *testing.T) (present [3]bool, values [3]uint32) {
 		if h == 0 {
 			continue
 		}
+		sizes[i], _, _ = testGlobalSize.Call(h)
 		b, _, _ := testGlobalLock.Call(h)
 		if b != 0 {
 			values[i] = *(*uint32)(unsafe.Pointer(b)) //nolint:govet // memory GlobalLock lent
 			_, _, _ = testGlobalUnlock.Call(h)
 		}
 	}
-	return present, values
+	return present, sizes, values
 }
 
-// Sensitive text goes on the real clipboard with the marks that keep it out of Win+V history and the cloud, plain
+// Sensitive text goes on the real clipboard with the four marks that keep it out of Win+V history and the cloud, plain
 // text goes on without them, and ClearClipboardIf takes off only the text it is given. It replaces what the clipboard
 // holds, so it runs in CI, or where GUNIM_TEST_CLIPBOARD is set.
 func TestSensitiveTextGoesOnTheClipboardMarked(t *testing.T) {
 	if os.Getenv("CI") == "" && os.Getenv("GUNIM_TEST_CLIPBOARD") == "" {
 		t.Skip("replaces the clipboard; set GUNIM_TEST_CLIPBOARD=1 to run it here")
 	}
+	// A runner with no interactive desktop has no display; internal/glfw's tests cover the clipboard there.
 	if display == nil {
+		t.Log("no display: the driver's clipboard is not tested here")
 		t.Skip("no display")
 	}
 	dw, err := display.NewWindow(driver.Options{Title: "gunim clipboard", Size: geom.Sz(100, 100), Hidden: true})
@@ -75,14 +91,15 @@ func TestSensitiveTextGoesOnTheClipboardMarked(t *testing.T) {
 	if s, err := w.Clipboard(); err != nil || s != "hunter2" {
 		t.Fatalf("the clipboard holds %q, %v; want the password", s, err)
 	}
-	if present, values := marks(t); present != [3]bool{true, true, true} || values[1] != 0 || values[2] != 0 {
-		t.Fatalf("the marks are there %v, holding %v; want all three, history and cloud at 0", present, values)
+	if present, sizes, values := marks(t); present != [4]bool{true, true, true, true} || sizes != [4]uintptr{4, 4, 4, 4} ||
+		values != [4]uint32{} {
+		t.Fatalf("the marks are there %v, %v bytes, holding %v; want all four, each a DWORD of 0", present, sizes, values)
 	}
 
 	if err := w.SetClipboard("a path"); err != nil {
 		t.Fatal(err)
 	}
-	if present, _ := marks(t); present != [3]bool{} {
+	if present, _, _ := marks(t); present != [4]bool{} {
 		t.Fatalf("plain text carries the marks %v", present)
 	}
 	if cleared, err := w.ClearClipboardIf("hunter2"); cleared || err != nil {

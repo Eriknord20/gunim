@@ -34,6 +34,18 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # The tests on the real clipboard, named in the log. The ones in
+      # internal/glfw fail rather than skip in CI when they cannot run,
+      # and the step fails unless all five passed, so a rename cannot
+      # leave it passing with nothing run. The one in driver/desktop
+      # needs a display, which this runner lacks, so it skips here.
+      - name: Test the clipboard
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go test -v -count=1 -run '^TestSensitive' ./internal/glfw/ ./driver/desktop/ | tee clipboard.log
+          test "$(grep -c -- '--- PASS: TestSensitive' clipboard.log)" -ge 5
+
       - name: Build
         run: go build ./...
 
