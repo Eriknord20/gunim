@@ -77,3 +77,75 @@ func TestAClipboardThatTakesNoTextSaysSo(t *testing.T) {
 		t.Fatalf("a copy that worked sent %d intents", n)
 	}
 }
+
+// Sensitive text reaches the clipboard marked so, and comes off again only while it is still what the clipboard holds.
+func TestSensitiveTextComesOffTheClipboardOnlyWhileItIsStillThere(t *testing.T) {
+	w := newTestWindow()
+	if err := w.ui.SetClipboardSensitive("hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := w.ui.ReadClipboard(); s != "hunter2" || !w.Offscreen().ClipboardSensitive() {
+		t.Fatalf("the clipboard holds %q, sensitive %v; want the password, marked", s, w.Offscreen().ClipboardSensitive())
+	}
+	// The user copies something else: clearing leaves it alone.
+	w.ui.SetClipboard("a path")
+	if w.Offscreen().ClipboardSensitive() {
+		t.Fatal("text copied the plain way is marked sensitive")
+	}
+	if cleared, err := w.ui.ClearClipboardIf("hunter2"); cleared || err != nil {
+		t.Fatalf("clearing the password once the user copied else cleared %v, %v", cleared, err)
+	}
+	if s, _ := w.ui.ReadClipboard(); s != "a path" {
+		t.Fatalf("the clipboard holds %q, want what the user copied", s)
+	}
+	// Still there: it comes off.
+	if err := w.ui.SetClipboardSensitive("hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, err := w.ui.ClearClipboardIf("hunter2"); !cleared || err != nil {
+		t.Fatalf("clearing the password still on the clipboard cleared %v, %v", cleared, err)
+	}
+	if s, _ := w.ui.ReadClipboard(); s != "" {
+		t.Fatalf("after clearing, the clipboard holds %q", s)
+	}
+}
+
+// A clipboard that cannot be reached says so, to both calls, rather than reporting nothing to clear.
+func TestASensitiveClipboardThatCannotBeReachedSaysSo(t *testing.T) {
+	for _, plain := range []bool{false, true} {
+		off := driver.Offscreen(geom.Sz(100, 100))
+		var dw driver.Window = off
+		if plain {
+			dw = textOnly{off}
+		}
+		w := newWindow(dw, nil)
+		off.SetClipboardError(errors.New("no display"))
+		if err := w.ui.SetClipboardSensitive("hunter2"); err == nil {
+			t.Errorf("plain %v: a sensitive copy that failed said nothing", plain)
+		}
+		if cleared, err := w.ui.ClearClipboardIf("hunter2"); cleared || err == nil {
+			t.Errorf("plain %v: clearing a clipboard that could not be read gave %v, %v; want an error", plain, cleared, err)
+		}
+	}
+}
+
+// A window with no way to mark text sensitive puts it there plainly, and clears it by comparing.
+func TestSensitiveTextOnAPlainClipboardIsSetAndCleared(t *testing.T) {
+	off := driver.Offscreen(geom.Sz(100, 100))
+	w := newWindow(textOnly{off}, nil)
+	if err := w.ui.SetClipboardSensitive("hunter2"); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := off.Clipboard(); s != "hunter2" || off.ClipboardSensitive() {
+		t.Fatalf("the clipboard holds %q, sensitive %v; want the text, put plainly", s, off.ClipboardSensitive())
+	}
+	if cleared, err := w.ui.ClearClipboardIf("something else"); cleared || err != nil {
+		t.Fatalf("clearing other text cleared %v, %v", cleared, err)
+	}
+	if cleared, err := w.ui.ClearClipboardIf("hunter2"); !cleared || err != nil {
+		t.Fatalf("clearing the text there cleared %v, %v", cleared, err)
+	}
+	if s, _ := off.Clipboard(); s != "" {
+		t.Fatalf("after clearing, the clipboard holds %q", s)
+	}
+}

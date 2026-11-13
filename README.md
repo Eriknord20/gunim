@@ -380,6 +380,14 @@ and `UI`:
   text. `UI.ClipboardImage` reads a picture, and `UI.SetClipboardImage`
   and `Client.SetClipboardImage` put one there, on Windows, X11 and
   macOS.
+- **Sensitive text on the clipboard.** `UI.SetClipboardSensitive` puts
+  text such as a password on the clipboard. On Windows it is marked so
+  that Win+V history and the cloud clipboard leave it out, and clipboard
+  monitors are asked to skip it. Elsewhere it is put there plainly, and
+  a clipboard manager may keep it. `UI.ClearClipboardIf` takes it off
+  again, only if the clipboard still holds it, so a later copy of the
+  user's own survives. On Windows nothing else can reach the clipboard
+  between the check and the clearing.
 - **Drag and drop.** Files and pictures drag between windows, out to
   other programs and in from them, and a drop target lights while
   another program's files hover over it. With

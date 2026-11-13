@@ -2355,6 +2355,40 @@ func (u *UI) SetClipboard(s string) {
 	}
 }
 
+// SetClipboardSensitive puts s, such as a password, on the system clipboard marked as sensitive, and returns an error
+// where it could not.
+//
+// On Windows the system then keeps s out of the clipboard history (Win+V) and the cloud clipboard, and asks
+// clipboard monitors to skip it; where those marks cannot be set, nothing is left on the clipboard. Elsewhere it puts
+// s there as [UI.SetClipboard] does, and a clipboard manager may keep it. Pair it with [UI.ClearClipboardIf] to take
+// s off again after a while.
+func (u *UI) SetClipboardSensitive(s string) error {
+	if c, ok := u.w.dw.(driver.SensitiveClipboard); ok {
+		return c.SetClipboardSensitive(s)
+	}
+	return u.w.dw.SetClipboard(s)
+}
+
+// ClearClipboardIf empties the system clipboard if it still holds the text s, and reports whether it did: for taking
+// a password off once the user has had time to paste it, without clearing what they copied since. An error says the
+// clipboard could not be read or emptied.
+//
+// On Windows nothing can reach the clipboard between the read and the emptying. Elsewhere the clipboard is read and
+// then set to "", so text another program puts there in that moment can be lost.
+func (u *UI) ClearClipboardIf(s string) (bool, error) {
+	if c, ok := u.w.dw.(driver.SensitiveClipboard); ok {
+		return c.ClearClipboardIf(s)
+	}
+	now, err := u.w.dw.Clipboard()
+	if err != nil || now != s {
+		return false, err
+	}
+	if err := u.w.dw.SetClipboard(""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ClipboardFailed travels to the application when [UI.SetClipboard]
 // could not put text on the clipboard, with the error in Reason.
 type ClipboardFailed struct{ Reason string }

@@ -15,3 +15,14 @@ type ImageClipboard interface {
 
 // ErrNoClipboardImage is returned where a window cannot put a picture on the system clipboard.
 var ErrNoClipboardImage = errors.New("driver: no way to put a picture on the clipboard on this platform")
+
+// SensitiveClipboard is a window that marks text on the clipboard as sensitive, such as a password, so the system
+// keeps it out of the clipboard's history and the cloud clipboard. Only Windows does so far.
+type SensitiveClipboard interface {
+	// SetClipboardSensitive replaces what the clipboard holds with s, marked sensitive; an empty s empties the
+	// clipboard. It returns an error, and leaves nothing on the clipboard, where the marks cannot be set.
+	SetClipboardSensitive(s string) error
+	// ClearClipboardIf empties the clipboard if it holds the text s, and reports whether it did, with nothing put
+	// there between the read and the emptying.
+	ClearClipboardIf(s string) (bool, error)
+}

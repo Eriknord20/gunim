@@ -54,6 +54,8 @@ type OffscreenWindow struct {
 	// cursor is the pointer's shape last set.
 	cursor input.Cursor
 	clip   string
+	// clipSensitive says the clipboard's text was put there marked sensitive.
+	clipSensitive bool
 	// clipImage is the clipboard's picture, as PNG.
 	clipImage []byte
 	// clipErr is what reading the clipboard fails with, for a test.
@@ -687,8 +689,40 @@ func (w *OffscreenWindow) SetClipboard(s string) error {
 	if w.clipErr != nil {
 		return w.clipErr
 	}
-	w.clip = s
+	w.clip, w.clipSensitive = s, false
 	return nil
+}
+
+// SetClipboardSensitive implements [SensitiveClipboard] by keeping s, marked sensitive.
+func (w *OffscreenWindow) SetClipboardSensitive(s string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clipErr != nil {
+		return w.clipErr
+	}
+	w.clip, w.clipSensitive = s, s != ""
+	return nil
+}
+
+// ClearClipboardIf implements [SensitiveClipboard].
+func (w *OffscreenWindow) ClearClipboardIf(s string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clipErr != nil {
+		return false, w.clipErr
+	}
+	if w.clip != s {
+		return false, nil
+	}
+	w.clip, w.clipSensitive = "", false
+	return true, nil
+}
+
+// ClipboardSensitive reports whether the clipboard's text was put there marked sensitive.
+func (w *OffscreenWindow) ClipboardSensitive() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.clipSensitive
 }
 
 // ClipboardImage implements [ImageClipboard].
