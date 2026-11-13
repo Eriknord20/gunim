@@ -20,6 +20,8 @@ type voiceOpts struct {
 	level, hiss float64
 	// ring lifts a narrow band about ringHz, in decibels: a boxy room.
 	ring, ringHz float64
+	// noise is how loud the room's noise is under it, whatever its level.
+	noise float64
 }
 
 // makeVoice returns seconds of a sung voice, mono in two channels: in
@@ -30,6 +32,7 @@ func makeVoice(seconds float64, o voiceOpts) [2][]float32 {
 	n := int(seconds * rate)
 	out := make([]float32, n)
 	r := rand.New(rand.NewPCG(7, 11))
+	room := rand.New(rand.NewPCG(3, 5))
 	var hiss biquad
 	hiss.set(highPass, 6000, 0, 0.707, rate)
 	var hs biquadState
@@ -62,6 +65,9 @@ func makeVoice(seconds float64, o voiceOpts) [2][]float32 {
 			x = ring.run(&rs, x)
 		}
 		out[i] = float32(o.level * x)
+		if o.noise != 0 {
+			out[i] += float32(o.noise * room.NormFloat64())
+		}
 	}
 	return [2][]float32{out, append([]float32(nil), out...)}
 }
@@ -183,6 +189,96 @@ func tone(seconds, hz, a float64) [2][]float32 {
 	return [2][]float32{out, append([]float32(nil), out...)}
 }
 
+// with returns plain with over set.
+func with(over map[uint32]float64) map[uint32]float64 {
+	out := map[uint32]float64{}
+	for k, v := range plain {
+		out[k] = v
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
+}
+
+func TestTheGateShutsUnderItsThresholdAndOpensOver(t *testing.T) {
+	// Loud, then quiet for a second, then loud again.
+	loud, quiet := tone(0.5, 440, 0.5), tone(1, 440, 0.001)
+	var in [2][]float32
+	for c := range in {
+		in[c] = append(append(append([]float32(nil), loud[c]...), quiet[c]...), loud[c]...)
+	}
+	gating := with(map[uint32]float64{GateThresholdID: -40, GateRangeID: 30, GateReleaseID: 50})
+	out, pr := run(gating, in)
+	half := rate / 2
+	if got := power(out[0][half/2:half]) - power(in[0][half/2:half]); math.Abs(got) > 0.01 {
+		t.Errorf("over the threshold the gate lets the voice through %.2f dB from how it went in", got)
+	}
+	if got := power(out[0][half+rate/2:half+rate]) - power(in[0][half+rate/2:half+rate]); math.Abs(got+30) > 0.5 {
+		t.Errorf("under the threshold the gate turns the voice down %.1f dB, want its range, 30", -got)
+	}
+	if got := power(out[0][half+rate+rate/10:]) - power(in[0][half+rate+rate/10:]); math.Abs(got) > 0.01 {
+		t.Errorf("over the threshold again the gate lets the voice through %.2f dB from how it went in", got)
+	}
+	if tr := pr.Trace(GateGRID); tr == nil {
+		t.Error("the gate keeps no trace of how far it turns the voice down")
+	} else if v, ok := tr.Get(int64(half + rate - rate/10)); !ok || math.Abs(float64(v)+30) > 0.5 {
+		t.Errorf("the gate's trace reads %.1f dB, %v, while it is shut; want −30", v, ok)
+	}
+	// Switched off, or with its threshold at Off, it lets everything through.
+	for name, off := range map[string]map[uint32]float64{
+		"switched off":         with(map[uint32]float64{GateOnID: 0, GateThresholdID: -40}),
+		"its threshold at Off": with(map[uint32]float64{GateThresholdID: GateOff}),
+	} {
+		out, pr := run(off, in)
+		for i := range in[0] {
+			if out[0][i] != in[0][i] {
+				t.Fatalf("%s, the gate changes frame %d: %g in, %g out", name, i, in[0][i], out[0][i])
+			}
+		}
+		if pr.Report(GateGRID) != 0 {
+			t.Errorf("%s, the gate reports %.1f dB", name, pr.Report(GateGRID))
+		}
+	}
+}
+
+func TestTheGateStaysAsItIsJustUnderItsThreshold(t *testing.T) {
+	// A tone 2 dB under the threshold, after a loud one and after a quiet one.
+	loud, quiet, under := tone(0.5, 440, 0.5), tone(0.5, 440, 0.001), tone(0.5, 440, 0.008)
+	var in [2][]float32
+	for c := range in {
+		for _, part := range [][2][]float32{loud, under, quiet, under} {
+			in[c] = append(in[c], part[c]...)
+		}
+	}
+	out, _ := run(with(map[uint32]float64{GateThresholdID: -40, GateRangeID: 30, GateReleaseID: 50}), in)
+	half := rate / 2
+	if got := power(out[0][half+half/2:2*half]) - power(in[0][half+half/2:2*half]); math.Abs(got) > 0.01 {
+		t.Errorf("open, the gate turns a voice just under its threshold down %.2f dB, want it left open", -got)
+	}
+	if got := power(out[0][3*half+half/2:]) - power(in[0][3*half+half/2:]); math.Abs(got+30) > 0.5 {
+		t.Errorf("shut, the gate turns a voice just under its threshold down %.1f dB, want it left shut, 30", -got)
+	}
+}
+
+func TestTheGateHearsEitherChannel(t *testing.T) {
+	in := tone(1, 440, 0.5)
+	clear(in[0])
+	out, _ := run(with(map[uint32]float64{GateThresholdID: -40, GateRangeID: 30, GateReleaseID: 50}), in)
+	if got := power(out[1][rate/2:]) - power(in[1][rate/2:]); math.Abs(got) > 0.01 {
+		t.Errorf("the gate turns a voice in the right channel alone down %.2f dB, want it open", -got)
+	}
+}
+
+func TestTheGateHearsTheVoiceBeforeInput(t *testing.T) {
+	// A voice under the threshold as it comes in, and over it once Input has brought it up.
+	in := tone(1, 440, 0.003)
+	out, _ := run(with(map[uint32]float64{InputID: 20, GateThresholdID: -40, GateRangeID: 30, GateReleaseID: 50}), in)
+	if got := power(out[0][rate/2:]) - power(in[0][rate/2:]); math.Abs(got+10) > 0.5 {
+		t.Errorf("the voice comes out %.1f dB from how it went in, want Input's 20 less the gate's 30", got)
+	}
+}
+
 func TestTheDeEsserTurnsDownHissAndLeavesTheVoice(t *testing.T) {
 	deEss := map[uint32]float64{}
 	for k, v := range plain {
@@ -272,7 +368,8 @@ func TestProcessingAllocatesNothing(t *testing.T) {
 		ch := [][]float32{v[0][512*i : 512*(i+1)], v[1][512*i : 512*(i+1)]}
 		blocks[i] = &plug.Block{In: ch, Out: ch, Frames: 512, Position: plug.Position{Frame: int64(512 * i)},
 			Changes: []plug.Change{{ID: ParallelID, Value: float64(i)}, {ID: TapeID, Value: float64(i)},
-				{ID: OctaveID, Value: float64(i)}, {ID: MudFreqID, Value: float64(300 + i)}}}
+				{ID: OctaveID, Value: float64(i)}, {ID: MudFreqID, Value: float64(300 + i)},
+				{ID: GateThresholdID, Value: float64(-60 + 2*i)}}}
 	}
 	made := plugtest.AllocsUnder(t, "vocal.(*processor).Process", func() {
 		for _, b := range blocks {
@@ -290,9 +387,9 @@ func TestSilenceAfterTheVoiceLeavesNothingSubnormalHeld(t *testing.T) {
 	// The voice, and then forty seconds of silence.
 	silence := int(40 * rate)
 	frames := [2][]float32{append(v[0], make([]float32, silence)...), append(v[1], make([]float32, silence)...)}
-	_, pr := run(map[uint32]float64{ParallelID: 50, TapeID: 50, OctaveID: 50}, frames)
+	_, pr := run(map[uint32]float64{ParallelID: 50, TapeID: 50, OctaveID: 50, GateThresholdID: -40}, frames)
 	subnormal := func(x float64) bool { return x != 0 && math.Abs(x) < 0x1p-1022 }
-	held := []float64{pr.deEssGR.gr, pr.peak.gr, pr.glue.gr, pr.par.gr, pr.glueMS, pr.parMS, pr.octEnv}
+	held := []float64{pr.gateEnv, pr.gateGain, pr.deEssGR.gr, pr.peak.gr, pr.glue.gr, pr.par.gr, pr.glueMS, pr.parMS, pr.octEnv}
 	for _, s := range append(append(pr.deEssSt[:], pr.deEssLo[:]...), pr.tapeSt[:]...) {
 		held = append(held, s.z1, s.z2)
 	}
@@ -462,6 +559,44 @@ func TestLearnFindsTheBoxyRingAndCutsIt(t *testing.T) {
 		if g := got.values[MudGainID]; g > -3 {
 			t.Errorf("a ring 9 dB over the voice at %.0f Hz is cut only %.1f dB", hz, g)
 		}
+	}
+}
+
+func TestLearnSetsTheGateBetweenTheNoiseAndTheSinging(t *testing.T) {
+	// A voice peaking near −24 dB, over a room's noise peaking near −60.
+	src := &memSource{frames: makeVoice(secs(8, 3), voiceOpts{level: 0.1, hiss: 0.1, noise: 0.0003})}
+	got := learn(t, memDoc{src: src}, defaults(map[uint32]float64{GateOnID: 0}))
+	thr, depth := got.values[GateThresholdID], got.values[GateRangeID]
+	if thr < -56 || thr > -34 {
+		t.Errorf("the gate's threshold is %.0f dB, want it between the noise, near −60, and the singing, near −24", thr)
+	}
+	if depth < 20 || depth > 40 {
+		t.Errorf("the gate's range is %.0f dB, want most of the way from the singing to the noise", depth)
+	}
+	if _, ok := got.values[GateOnID]; ok {
+		t.Error("Learn sets the gate's switch, which is the user's")
+	}
+	// The gate learned, alone: the end of each gap comes out quieter, and the middle of each phrase as it was.
+	in := src.frames
+	out, _ := run(with(map[uint32]float64{GateThresholdID: thr, GateRangeID: depth}), in)
+	for s := 1; s+1 < len(in[0])/rate; s++ {
+		gap := [2]int{s*rate + rate*95/100, (s + 1) * rate}
+		if got := power(out[0][gap[0]:gap[1]]) - power(in[0][gap[0]:gap[1]]); got > -6 {
+			t.Errorf("the noise at the end of the gap in second %d comes out %.1f dB from how it went in, want it gated", s, got)
+		}
+		for i := s*rate + rate*3/10; i < s*rate+rate*5/10; i++ {
+			if out[0][i] != in[0][i] {
+				t.Fatalf("the gate changes the singing at frame %d: %g in, %g out", i, in[0][i], out[0][i])
+			}
+		}
+	}
+
+	// With silence between the phrases, there is no noise to gate.
+	clean := &memSource{frames: makeVoice(secs(8, 3), voiceOpts{level: 0.1, hiss: 0.1})}
+	set := learn(t, memDoc{src: clean}, defaults(map[uint32]float64{GateThresholdID: -30, GateRangeID: 12}))
+	if set.values[GateThresholdID] != GateOff || set.values[GateRangeID] != 12 {
+		t.Errorf("a voice over silence gets the gate at %.0f dB, range %.0f; want it off, its range as it was, 12",
+			set.values[GateThresholdID], set.values[GateRangeID])
 	}
 }
 

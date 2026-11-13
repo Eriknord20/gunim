@@ -110,8 +110,8 @@ func TestEverySectionShowsInFullAndNoneOverlaps(t *testing.T) {
 	pn := p.View(plug.Full, h).(*panel)
 	size := geom.Sz(1180, 620)
 	w, run := stage(t, size, pn)
-	if len(pn.sections) != 8 {
-		t.Fatalf("%d sections in full, want the macros, Learn and six parts of the chain", len(pn.sections))
+	if len(pn.sections) != 9 {
+		t.Fatalf("%d sections in full, want the macros, Learn and seven parts of the chain", len(pn.sections))
 	}
 	seen := make([]geom.Rect, 0, len(pn.sections))
 	for _, s := range pn.sections {

@@ -1,8 +1,10 @@
 // Package vocal is a vocal chain in one plugin: the chain a producer
-// builds of a de-esser, two EQs and two compressors in series, packed
-// into one, with a row of macro knobs over it, as a rack of devices
-// under a combinator's knobs. The voice goes through, in order:
+// builds of a gate, a de-esser, two EQs and two compressors in series,
+// packed into one, with a row of macro knobs over it, as a rack of
+// devices under a combinator's knobs. The voice goes through, in order:
 //
+//   - a gate, which shuts between the phrases, so the noise under the
+//     voice is not brought up by what comes after;
 //   - a de-esser, which turns down the hiss of an S or a T before
 //     anything after it hears it, so the compressors do not pump on it;
 //   - Input, the gain that brings the voice to the level the rest is
@@ -26,9 +28,10 @@
 // belongs on a send, where every voice shares it.
 //
 // Learn reads the voice, as it reaches the plugin, and sets the chain
-// for it: Input to bring it to the target loudness; the clean EQ's cut
-// to its own boxy ring, the low shelf and the lifts to its balance, and
-// the de-esser to its own hiss; the compressors' thresholds so each
+// for it: the gate between its noise and the singing, where the two
+// stand apart; Input to bring it to the target loudness; the clean EQ's
+// cut to its own boxy ring, the low shelf and the lifts to its balance,
+// and the de-esser to its own hiss; the compressors' thresholds so each
 // takes its couple of decibels; and Output to bring it back to the
 // target. Where the host loops, as a [plug.Looper] tells, it reads the
 // loop alone, so the chorus can be learned apart from the verse.
@@ -100,12 +103,22 @@ const (
 
 	WidthFreqID uint32 = 71
 
-	// How far the de-esser and each compressor turn the voice down now,
-	// in decibels, as the plugin reports it, and keeps it by frame.
+	GateOnID        uint32 = 80
+	GateThresholdID uint32 = 81
+	GateRangeID     uint32 = 82
+	GateReleaseID   uint32 = 83
+
+	// How far the de-esser, each compressor and the gate turn the voice
+	// down now, in decibels, as the plugin reports it, and keeps it by
+	// frame.
 	DeEssGRID uint32 = 90
 	PeakGRID  uint32 = 91
 	GlueGRID  uint32 = 92
+	GateGRID  uint32 = 93
 )
+
+// GateOff is the gate's threshold at which it is off.
+const GateOff = -80.0
 
 func db(v float64) string {
 	if math.Abs(v) >= 10 {
@@ -136,6 +149,14 @@ func ratio(v float64) string { return fmt.Sprintf("%.1f:1", v) }
 
 func lufs(v float64) string { return fmt.Sprintf("%.0f LUFS", v) }
 
+// gateDB writes the gate's threshold: Off at GateOff.
+func gateDB(v float64) string {
+	if v < GateOff+0.5 {
+		return "Off"
+	}
+	return db(v)
+}
+
 func onOff(v float64) string {
 	if v > 0.5 {
 		return "On"
@@ -154,7 +175,7 @@ var Descriptor = plug.Descriptor{
 	Version:  "0.1.0",
 	Kind:     "Fx|EQ|Dynamics",
 	Tagline:  "Voice in one plugin",
-	Keywords: []string{"vocal", "voice", "de-esser", "sibilance", "compressor", "eq", "singer", "podcast", "dialog"},
+	Keywords: []string{"vocal", "voice", "gate", "noise", "de-esser", "sibilance", "compressor", "eq", "singer", "podcast", "dialog"},
 	Params: []plug.Param{
 		{ID: DeEssID, Name: "De-Ess", Unit: "%", Max: 200, Default: 100, Flags: auto, Format: percent},
 		{ID: RumbleID, Name: "Rumble", Unit: "%", Max: 200, Default: 100, Flags: auto, Format: percent},
@@ -168,6 +189,11 @@ var Descriptor = plug.Descriptor{
 		{ID: InputID, Name: "Input", Unit: "dB", Min: -24, Max: 24, Flags: auto, Format: signed},
 		{ID: OutputID, Name: "Output", Unit: "dB", Min: -24, Max: 24, Flags: auto, Format: signed},
 		{ID: TargetID, Name: "Target", Unit: "LUFS", Min: -30, Max: -10, Default: -18, Steps: 20, Format: lufs},
+
+		{ID: GateOnID, Name: "Gate", Max: 1, Default: 1, Steps: 1, Flags: auto, Format: onOff},
+		{ID: GateThresholdID, Name: "Threshold", Unit: "dB", Min: GateOff, Max: 0, Default: GateOff, Flags: auto, Format: gateDB},
+		{ID: GateRangeID, Name: "Range", Unit: "dB", Min: 0, Max: 60, Default: 40, Flags: auto, Format: db},
+		{ID: GateReleaseID, Name: "Release", Unit: "ms", Min: 20, Max: 2000, Default: 250, Log: true, Flags: auto, Format: ms},
 
 		{ID: DeEssOnID, Name: "De-esser", Max: 1, Default: 1, Steps: 1, Flags: auto, Format: onOff},
 		{ID: DeEssFreqID, Name: "Frequency", Unit: "Hz", Min: 3000, Max: 12000, Default: 6500, Log: true, Flags: auto, Format: hz},
@@ -206,6 +232,7 @@ var Descriptor = plug.Descriptor{
 		{ID: DeEssGRID, Name: "De-essing", Unit: "dB", Min: -24, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: PeakGRID, Name: "Peak compression", Unit: "dB", Min: -40, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: GlueGRID, Name: "Glue compression", Unit: "dB", Min: -40, Max: 0, Flags: plug.ReadOnly, Format: db},
+		{ID: GateGRID, Name: "Gating", Unit: "dB", Min: -60, Max: 0, Flags: plug.ReadOnly, Format: db},
 	},
 	Patches: []plug.Patch{
 		{Name: "Default", Category: "Vocal"},
