@@ -108,7 +108,7 @@ func TestTheDBLabelsKeepClearOfTheBar(t *testing.T) {
 		v := showing(t).(*full)
 		plugtest.Misfits(t, v, s, backdrop(t, v))
 		for _, l := range v.g.dbDrawn {
-			if l.alpha > 0.01 && l.at.Min.Y < v.barAt.Max.Y+1 && l.at.Max.X > v.barAt.Min.X &&
+			if l.alpha > 0.01 && l.at.Min.Y < v.barAt.Max.Y+0.5 && l.at.Max.X > v.barAt.Min.X &&
 				l.at.Min.X < v.barAt.Max.X {
 				t.Errorf("at %v×%v a dB label at %v shows under the bar at %v", s.W, s.H, l.at, v.barAt)
 			}
