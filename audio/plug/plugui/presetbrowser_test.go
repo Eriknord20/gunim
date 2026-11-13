@@ -75,20 +75,61 @@ func TestTheBrowserShowsTheGroupOfThePresetPlaying(t *testing.T) {
 	}
 }
 
-func TestSkipsGoRoundTheGroup(t *testing.T) {
+// Next and previous run on into the group after or before, in the order the browser lists them, and round from the
+// last to the first; the browser shows the group of each preset they play.
+func TestSkipsRunOnAcrossGroups(t *testing.T) {
 	src := newPresetHost()
 	b := NewPresetBrowser(src)
 	w := mountBrowser(t, b)
 	gunim.RegisterPatch(w, "browser", func(b *PresetBrowser, by int, u *gunim.UI) { b.Skip(by, u) })
-	for _, by := range []int{1, 1, -1} {
+	groups := make([]string, 0, 5)
+	for _, by := range []int{1, 1, 1, -1, -1} {
 		if err := w.Client().Patch("browser", by); err != nil {
 			t.Fatal(err)
 		}
 		w.Frame(time.Second / 60)
+		groups = append(groups, b.group)
 	}
-	want := []string{"Sub", "Growl", "Sub"}
-	if len(src.picked) != 3 || src.picked[0] != want[0] || src.picked[1] != want[1] || src.picked[2] != want[2] {
+	// Listed: User's Mine (Warm), then Factory's Bass (Sub, Growl) and Pads (Glass). From Growl.
+	if want := []string{"Glass", "Warm", "Sub", "Warm", "Glass"}; !slices.Equal(src.picked, want) {
 		t.Fatalf("the skips picked %v, want %v", src.picked, want)
+	}
+	if want := []string{"Pads", "Mine", "Bass", "Mine", "Pads"}; !slices.Equal(groups, want) {
+		t.Fatalf("the skips showed %v, want %v", groups, want)
+	}
+}
+
+// With one preset in each group, next and previous still step from group to group.
+func TestSkipsStepThroughGroupsOfOne(t *testing.T) {
+	src := &presetHost{}
+	for _, g := range []string{"Bass", "Keys", "Pads"} {
+		src.list = append(src.list, plug.Preset{Bank: "Factory", Group: g, Name: g + " 1"})
+	}
+	src.cur = src.list[0]
+	b := NewPresetBrowser(src)
+	mountBrowser(t, b)
+	for range 3 {
+		b.Skip(1, nil)
+	}
+	b.Skip(-1, nil)
+	if want := []string{"Keys 1", "Pads 1", "Bass 1", "Pads 1"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("the skips picked %v, want %v", src.picked, want)
+	}
+}
+
+// During a search, next and previous step through what it finds, across its groups.
+func TestSkipsStepThroughASearch(t *testing.T) {
+	src := newPresetHost()
+	src.list = append(src.list, plug.Preset{Bank: "Factory", Group: "Pads", Name: "Warm pad"})
+	b := NewPresetBrowser(src)
+	mountBrowser(t, b)
+	b.query = "warm"
+	b.fill(nil)
+	src.cur = src.list[0]
+	b.Skip(1, nil)
+	b.Skip(1, nil)
+	if want := []string{"Warm pad", "Warm"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("the skips through a search picked %v, want %v", src.picked, want)
 	}
 }
 
@@ -749,4 +790,75 @@ func TestTabIntoAColumnKeepsThePresetPlayingInView(t *testing.T) {
 	}
 	shows(t, w, b.ps, b.presets.rowRect(b.presets.current()), "the preset playing")
 	shows(t, w, b.gs, b.groups.rowRect(b.groups.index(b.bank, b.group)), "the group shown")
+}
+
+// A click on a preset or a group acts on the release over the same row. A press dragged off the row does nothing.
+func TestARowActsOnTheRelease(t *testing.T) {
+	src := newPresetHost()
+	b := NewPresetBrowser(src)
+	w := mountBrowser(t, b)
+	w360 := float32(360)
+	gw := float32(int(w360 * groupsW))
+	top := float32(fieldH + colGap)
+	sub := slices.IndexFunc(b.presets.rows, func(r listRow) bool { return !r.header && r.p.Name == "Sub" })
+	subAt := geom.Pt(gw+colGap+20, top+b.presets.rows[sub].y+rowH/2)
+	pads := b.groups.index("Factory", "Pads")
+	padsAt := geom.Pt(20, top+b.groups.rows[pads].y+rowH/2)
+	click := func(down, up geom.Point) {
+		w.Input(input.PointerMove{Pos: down})
+		w.Input(input.PointerDown{Pos: down, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		frames(w, 1)
+		w.Input(input.PointerMove{Pos: up})
+		w.Input(input.PointerUp{Pos: up, Button: input.ButtonPrimary, Time: time.Now()})
+		frames(w, 30)
+	}
+	w.Input(input.PointerMove{Pos: subAt})
+	w.Input(input.PointerDown{Pos: subAt, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	frames(w, 1)
+	if len(src.picked) != 0 {
+		t.Fatalf("the press alone picked %v", src.picked)
+	}
+	if v := b.presets.press.down.Value(); v <= 0 {
+		t.Errorf("pressed, the row shows no press: %v", v)
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(subAt.X, 470)})
+	w.Input(input.PointerUp{Pos: geom.Pt(subAt.X, 470), Button: input.ButtonPrimary, Time: time.Now()})
+	frames(w, 30)
+	if len(src.picked) != 0 {
+		t.Fatalf("a press dragged off the row picked %v", src.picked)
+	}
+	click(padsAt, geom.Pt(padsAt.X, 470))
+	if b.group != "Bass" {
+		t.Fatalf("a press dragged off Pads showed %s", b.group)
+	}
+	click(subAt, subAt)
+	if want := []string{"Sub"}; !slices.Equal(src.picked, want) {
+		t.Fatalf("a click on Sub picked %v, want %v", src.picked, want)
+	}
+	click(padsAt, padsAt)
+	if b.group != "Pads" {
+		t.Fatalf("a click on Pads shows %s", b.group)
+	}
+}
+
+// With a group clicked to show, other than the playing preset's, next plays that group's first preset and previous
+// its last.
+func TestSkipsStartInTheGroupShown(t *testing.T) {
+	for _, c := range []struct {
+		by   int
+		want string
+	}{{1, "Bass 0"}, {-1, "Bass 2"}} {
+		src := kits(4)
+		src.cur = src.list[5]
+		b := NewPresetBrowser(src)
+		w := mountBrowser(t, b)
+		patch(t, w, func(b *PresetBrowser, u *gunim.UI) {
+			b.showGroup("Factory", "Bass", u)
+			b.Skip(c.by, u)
+		})
+		if want := []string{c.want}; !slices.Equal(src.picked, want) || b.group != "Bass" {
+			t.Errorf("a skip of %d from Kits with Bass shown picked %v and shows %s, want %v in Bass", c.by, src.picked,
+				b.group, want)
+		}
+	}
 }

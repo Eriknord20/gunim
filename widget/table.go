@@ -472,6 +472,10 @@ func (t *Table) findTyped(u *gunim.UI) {
 	}
 }
 
+// ScrollsAlong implements [gunim.WheelScroller]: true for a sideways wheel while the columns are wider than the
+// table. The rows' list answers for the wheel turned up and down.
+func (t *Table) ScrollsAlong(delta geom.Point) bool { return delta.X != 0 && t.wide > t.width }
+
 // wheel scrolls the columns sideways for a sideways wheel, or one turned with Shift held, where they are wider than
 // the table. It leaves the rest to the rows.
 func (t *Table) wheel(e input.Scroll, u *gunim.UI) bool {

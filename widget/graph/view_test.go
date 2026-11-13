@@ -425,3 +425,16 @@ func TestABoxMovedAsItIsPressedMovesFromWhereItIsNow(t *testing.T) {
 		t.Errorf("moved to %v, want %v, from where the application put it", mv.To["snk"], want)
 	}
 }
+
+// The plane takes every turn of the wheel, and says so, so a control in a box leaves it the wheel.
+func TestThePlaneSaysTheWheelWouldMoveIt(t *testing.T) {
+	var n any = NewView()
+	ws, ok := n.(gunim.WheelScroller)
+	if !ok {
+		t.Fatal("the graph view scrolls with the wheel and is no WheelScroller")
+	}
+	if !ws.ScrollsAlong(geom.Pt(0, 40)) || !ws.ScrollsAlong(geom.Pt(40, 0)) || ws.ScrollsAlong(geom.Point{}) {
+		t.Errorf("the plane says a notch would move it up %v and sideways %v, and no turn %v; want it to move both ways and not for no turn",
+			ws.ScrollsAlong(geom.Pt(0, 40)), ws.ScrollsAlong(geom.Pt(40, 0)), ws.ScrollsAlong(geom.Point{}))
+	}
+}

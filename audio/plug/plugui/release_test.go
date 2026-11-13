@@ -83,3 +83,19 @@ func TestTheActionDialActsOnTheReleaseOverIt(t *testing.T) {
 		t.Fatal("a press dragged away clicked the dial")
 	}
 }
+
+// A second button clicked while the first is held leaves the click to land on the first's release.
+func TestASecondButtonLeavesThePowerLampsClick(t *testing.T) {
+	p := NewPower("gate")
+	w := stageNode(t, p)
+	mid := geom.Pt(50, 50)
+	w.Input(input.PointerMove{Pos: mid})
+	w.Input(input.PointerDown{Pos: mid, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerDown{Pos: mid, Button: input.ButtonSecondary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: mid, Button: input.ButtonSecondary, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: mid, Button: input.ButtonPrimary, Time: time.Now()})
+	w.Frame(time.Second / 60)
+	if !p.Checked() {
+		t.Error("with a second button clicked mid-press, the release did not switch the lamp")
+	}
+}

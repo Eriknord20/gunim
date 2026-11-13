@@ -377,6 +377,10 @@ func (s *scrolling) handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
+// ScrollsAlong implements [gunim.WheelScroller]: true for a wheel turned up or down while the content is taller
+// than the view.
+func (s *scrolling) ScrollsAlong(delta geom.Point) bool { return delta.Y != 0 && s.scrollable() }
+
 // edgeScroll scrolls for a drag held at p, in the widget's space, over
 // a frame of dt, and returns how far the content moved. It scrolls as
 // [gunim.EdgeSpeed] says.

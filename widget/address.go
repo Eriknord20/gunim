@@ -367,6 +367,10 @@ func (c *crumbBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	GroupRing(p, r, radius, c.ring.Value(), th)
 }
 
+// ScrollsAlong implements [gunim.WheelScroller]: true for the wheel turned either way while the places are wider
+// than the bar.
+func (c *crumbBar) ScrollsAlong(delta geom.Point) bool { return delta != geom.Point{} && c.most > 0 }
+
 // Handle implements [gunim.Handler]: the ring follows the keyboard, a press beside the places edits the path, and
 // the arrow keys, Home and End move between the places.
 func (c *crumbBar) Handle(e input.Event, u *gunim.UI) bool {

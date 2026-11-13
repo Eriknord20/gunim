@@ -476,3 +476,23 @@ func TestTheCurveFollowsTheBarsAndGlidesBetweenThem(t *testing.T) {
 		t.Errorf("off them, the high band is lit %v and the crossover %v", d.bandLit[3].Value(), d.xLit[1].Value())
 	}
 }
+
+// Each band's style selector has a name of its own, so a screen reader and a script can tell them apart.
+func TestEachBandsStyleHasANameOfItsOwn(t *testing.T) {
+	p, h := newEnhancer(t)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	seen := map[string]bool{}
+	for b, s := range pn.styles {
+		name := s.Access().Name
+		if seen[name] {
+			t.Errorf("band %d's style is named %q, as another band's is", b, name)
+		}
+		seen[name] = true
+		if s.Title != "Style" {
+			t.Errorf("band %d's style is titled %q, want it still written as Style", b, s.Title)
+		}
+	}
+}

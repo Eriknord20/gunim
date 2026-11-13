@@ -30,7 +30,30 @@ var (
 	KnobGroove    = theme.Color("plug.knob.groove", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x16})
 	// KnobRing is the ring of the control moving a knob's value.
 	KnobRing = theme.Color("plug.knob.ring", color.NRGBA{R: 0xff, G: 0xb3, B: 0x47, A: 0xff})
+	// KnobGlide is the motion of a knob's needle to a value set elsewhere: at rest in about 150 ms, with no overshoot.
+	KnobGlide = theme.Spring("plug.knob.glide", anim.Spring{Response: 0.09, Damping: 1})
 )
+
+// The wheel: how far round a notch turns a knob, and how long after its last notch a turn by it ends, as one step
+// to undo.
+const (
+	wheelNotch = 0.025
+	wheelRun   = 500 * time.Millisecond
+)
+
+// dragPx is how far a drag moves the pointer to turn a knob all the way round, in logical pixels.
+const dragPx = 180
+
+// The touchpad: how far the fingers move for each notch it gives, in logical pixels, as the desktop counts them on
+// macOS; and how far round one run of it turns a knob at most, so the glide after the fingers lift stops short.
+const (
+	touchpadPx  = 10
+	touchpadRun = 0.5
+)
+
+// knobFollows is how soon a value set after the last one makes the needle follow at once rather than glide, as an
+// automation ramp moving it on every frame.
+const knobFollows = 60 * time.Millisecond
 
 // KnobW and KnobH are how big a knob is: its cap, its name and its
 // value under it; CompactW and CompactH how big a compact one is.
@@ -43,16 +66,24 @@ const (
 
 // Knob turns a value, as a synth's knob does: a drag up turns it up,
 // ten times finer with Shift; the arrow keys step it; a double click
-// sets it back to its default. The wheel passes it by, so a pane of
-// knobs scrolls under the pointer without turning one. Each turn is one gesture,
-// one step to undo: of a parameter of the host's, or of whatever the
+// sets it back to its default. The wheel turns the knob under the
+// pointer, 2.5% of the way round a notch, a quarter of that with Shift.
+// A touchpad turns it as a drag of the same length, at most half way
+// round a swipe. Ctrl or Super with the wheel passes it by. Inside a view with room to scroll the wheel's way, the
+// wheel is the view's, at its ends too; the knob takes it only once pressed, until the pointer leaves it, or while it
+// has the keyboard.
+// Each turn is one gesture, wheel notches in a run included,
+// one step to undo. A run ends half a second after its last notch, or
+// as the pointer leaves, a key or a press comes, or the knob goes.
+// Each step to undo is of a parameter of the host's, or of whatever the
 // knob is bound to. A right click on a host's parameter opens the
 // host's menu for it, where the host is a [plug.ParamMenuHost]; where
 // it is a [plug.ModulationHost], a ring outside the knob spans the
 // reach of the control moving the parameter, either side of its value,
 // and a dot on the arc shows its value as heard. A value that runs
 // either side of zero fills its arc from zero. It lights as the pointer comes over it, and its tooltip
-// says how to turn it. A second button pressed mid-turn ends the turn
+// says how to turn it. Tab brings the keyboard to it, and a focus ring
+// fades in round it. A second button pressed mid-turn ends the turn
 // where it got to.
 type Knob struct {
 	anim.Group
@@ -69,16 +100,32 @@ type Knob struct {
 	from  geom.Point
 	start float64
 	hover *anim.Float
-	tip   widget.PartTip
+	// ring is how far the focus ring shows, and focused says the knob has the keyboard.
+	ring    *anim.Float
+	focused bool
+	// pressed says the knob was pressed and the pointer has not left it since, so it takes the wheel.
+	pressed bool
+	tip     widget.PartTip
 	// Disabled greys the knob, as for a section switched off, though it
 	// still turns; Locked greys it and it does not turn, as a gain a cut
 	// has none of. Each glides there.
 	Disabled, Locked bool
 	// grey is how far the knob's arc has gone grey, faint how far a lock
-	// has faded it, and laid says it has been laid out, before which they
-	// jump to where they are set.
-	grey, faint *anim.Float
-	laid        bool
+	// has faded it, turned how far round its needle shows, and laid says
+	// it has been laid out, before which they jump to where they are set.
+	grey, faint, turned *anim.Float
+	laid                bool
+	// glide is the needle's motion, from the theme; setAt is when the value was last set, by the UI's clock, and
+	// quick says it came within knobFollows of the set before.
+	glide anim.Spring
+	setAt time.Time
+	quick bool
+	// wheeling says a turn by the wheel is under way, until wheelStop's timer or wheelClose, as the window closes,
+	// ends it; wheelRest is the part of a step the wheel has turned a stepped knob so far, and wheelFrom how far round
+	// the knob was as the run began.
+	wheeling              bool
+	wheelStop, wheelClose func()
+	wheelRest, wheelFrom  float64
 	// Compact makes the knob smaller, its cap and its words.
 	Compact bool
 	// Tooltip, where set, says what the knob does, before how to turn it.
@@ -141,15 +188,27 @@ func (k *Knob) modulation() (plug.Modulation, bool) {
 	return mh.Modulation(k.p.ID)
 }
 
-// Step implements [anim.Animator]: a knob whose parameter control moves
-// asks for the next frame while the value heard or the depth changes,
-// to show it move, and rests while they stand still, as with the song
-// stopped.
+// Step implements [anim.Animator]: the needle glides to a value set
+// elsewhere, and follows a drag or a value that moves on every frame at
+// once. Before the knob is laid out, everything jumps. A knob whose
+// parameter control moves asks for the next frame while the value heard
+// or the depth changes, to show it move, and rests while they stand
+// still, as with the song stopped.
 func (k *Knob) Step(dt time.Duration) bool {
-	if k.laid {
+	if !k.laid {
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	} else {
 		k.aim(func(a *anim.Float, v float32) {
-			if a.Target() != v {
+			switch {
+			case a.Target() == v:
+				return
+			case a != k.turned:
 				a.Animate(v, anim.Snappy)
+				return
+			case k.held || k.quick:
+				a.Jump(v)
+			default:
+				a.Animate(v, k.glide)
 			}
 		})
 	}
@@ -160,30 +219,84 @@ func (k *Knob) Step(dt time.Duration) bool {
 	return moving || changed
 }
 
-// aim moves its greys by to where Disabled and Locked have them.
+// Transition implements [gunim.Transitioner]: a knob coming into the tree shows where it is set at once, and one
+// leaving it ends a turn by the wheel.
+func (k *Knob) Transition(p gunim.Presence, f gunim.Frame) bool {
+	switch p {
+	case gunim.Entering:
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	case gunim.Exiting:
+		k.pressed = false
+		k.endWheel(f.UI())
+	case gunim.Present:
+	}
+	return true
+}
+
+// aim moves its greys by to where Disabled and Locked have them, and its needle to its value.
 func (k *Knob) aim(to func(a *anim.Float, v float32)) {
 	to(k.grey, anim.OnOff(k.Disabled || k.Locked))
 	to(k.faint, anim.OnOff(k.Locked))
+	to(k.turned, float32(k.turnOf(k.v)))
+}
+
+// needle returns how far round the needle shows, from 0 to 1.
+func (k *Knob) needle() float64 { return min(max(float64(k.turned.Value()), 0), 1) }
+
+// normalAt returns the Normal of the knob turned t of the way round.
+func (k *Knob) normalAt(t float64) float64 {
+	if k.Taper != nil {
+		return k.Taper.From(t)
+	}
+	return t
+}
+
+// lay reads the needle's glide from f's theme, and on the first layout puts every spring where it is set.
+func (k *Knob) lay(f gunim.Frame) {
+	k.glide = KnobGlide.Get(f.Theme)
+	if !k.laid {
+		k.laid = true
+		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
+	}
+}
+
+// jumpUnlaid puts the needle at the value at once while there is no UI or no layout yet to glide in.
+func (k *Knob) jumpUnlaid(u *gunim.UI) {
+	if u == nil || !k.laid {
+		k.turned.Jump(float32(k.turnOf(k.v)))
+	}
 }
 
 // NewKnobFunc returns a knob of what p describes, at v, turning it by
 // a gesture of begin, a set for each move, and end: a value of a
 // plugin's state, say, as a band's frequency.
 func NewKnobFunc(p plug.Param, v float64, begin func(*gunim.UI), set func(float64, *gunim.UI), end func(*gunim.UI)) *Knob {
-	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), grey: anim.NewFloat(0), faint: anim.NewFloat(0)}
-	k.Add(k.hover, k.grey, k.faint)
+	k := &Knob{p: p, v: v, begin: begin, set: set, end: end, hover: anim.NewFloat(0), ring: anim.NewFloat(0),
+		grey: anim.NewFloat(0), faint: anim.NewFloat(0), turned: anim.NewFloat(0), glide: KnobGlide.Default()}
+	k.turned.Jump(float32(k.turnOf(v)))
+	k.Add(k.hover, k.ring, k.grey, k.faint, k.turned)
 	return k
 }
 
 // SetParam makes the knob turn what p describes, at v, as a band's Q
 // becoming its slope as it turns into a cut.
 func (k *Knob) SetParam(p plug.Param, v float64, u *gunim.UI) {
+	k.endWheel(u)
 	if k.held {
 		k.held = false
 		k.end(u)
 	}
 	k.p, k.v = p, v
+	k.noteSet(u)
+	k.jumpUnlaid(u)
 	u.Invalidate()
+}
+
+// noteSet notes that the value was set now, by u's clock, and whether that came within knobFollows of the set before.
+func (k *Knob) noteSet(u *gunim.UI) {
+	now := u.Clock()
+	k.quick = !k.setAt.IsZero() && now.Sub(k.setAt) < knobFollows
+	k.setAt = now
 }
 
 // EndDrag ends a turn under way where it got to, as letting go does,
@@ -201,11 +314,17 @@ func (k *Knob) EndDrag(u *gunim.UI) {
 // Dragging reports whether a turn by the pointer is under way.
 func (k *Knob) Dragging() bool { return k.held }
 
-// Overhear implements [gunim.Overhearer]: a second button pressed
-// while a turn runs ends it, as the press goes elsewhere.
+// Overhear implements [gunim.Overhearer]: a second button pressed while a drag runs ends it, as the press goes
+// elsewhere, and a key or a press anywhere ends a turn by the wheel before the window hears it.
 func (k *Knob) Overhear(e input.Event, u *gunim.UI) {
-	if _, ok := e.(input.PointerDown); ok && k.held {
-		k.EndDrag(u)
+	switch e.(type) {
+	case input.PointerDown:
+		k.endWheel(u)
+		if k.held {
+			k.EndDrag(u)
+		}
+	case input.KeyPress:
+		k.endWheel(u)
 	}
 }
 
@@ -215,20 +334,20 @@ func (k *Knob) Value() float64 { return k.v }
 // Param returns the knob's parameter.
 func (k *Knob) Param() plug.Param { return k.p }
 
-// Follow shows v, set elsewhere, unless the knob is held.
+// Follow shows v, set elsewhere, unless the knob is held: the needle
+// glides there once the knob is laid out, and jumps with a nil UI.
 func (k *Knob) Follow(v float64, u *gunim.UI) {
 	if !k.held && v != k.v {
 		k.v = v
+		k.noteSet(u)
+		k.jumpUnlaid(u)
 		u.Invalidate()
 	}
 }
 
 // Layout implements [gunim.Node].
-func (k *Knob) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	if !k.laid {
-		k.laid = true
-		k.aim(func(a *anim.Float, v float32) { a.Jump(v) })
-	}
+func (k *Knob) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom.Size {
+	k.lay(f)
 	if k.Compact {
 		return c.Constrain(geom.Sz(CompactW, CompactH))
 	}
@@ -253,22 +372,9 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
 			paint.Shadow{Blur: 12 * hover, Color: paint.Faded(accent, 0.35*hover)})
 	}
-	// The turn runs three quarters round, clockwise from bottom left.
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	arc := func(t0, t1 float64, w float32, col color.NRGBA) {
-		if t1 < t0 {
-			t0, t1 = t1, t0
-		}
-		n := max(int((t1-t0)*32), 1)
-		for i := range n {
-			a0 := from + sweep*(t0+(t1-t0)*float64(i)/float64(n))
-			a1 := from + sweep*(t0+(t1-t0)*float64(i+1)/float64(n))
-			audioui.Segment(p, geom.Pt(c.X+r*float32(math.Cos(a0)), c.Y+r*float32(math.Sin(a0))),
-				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
-		}
-	}
+	arc := func(t0, t1 float64, w float32, col color.NRGBA) { arcRibbon(p, c, r, t0, t1, w, col) }
 	arc(0, 1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
-	t := k.turnOf(k.v)
+	t := k.needle()
 	zero := 0.0
 	if k.p.Min < 0 && k.p.Max > 0 {
 		zero = k.turnOf(0)
@@ -283,7 +389,8 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	p.ShadowRRect(geom.Rc(c.X-r+6, c.Y-r+6, 2*r-12, 2*r-12), r-6, paint.Fill{Gradient: &paint.Gradient{
 		From: geom.Pt(c.X, c.Y-r), To: geom.Pt(c.X, c.Y+r), Start: KnobCapTop.Get(th), End: KnobCapBottom.Get(th)}},
 		paint.Shadow{Offset: geom.Pt(0, 2), Blur: 4, Color: color.NRGBA{A: 0x90}})
-	a := from + sweep*t
+	capRing(p, c, r, k.ring.Value(), th)
+	a := knobFrom + knobSweep*t
 	audioui.Segment(p, geom.Pt(c.X+(r-13)*float32(math.Cos(a)), c.Y+(r-13)*float32(math.Sin(a))),
 		geom.Pt(c.X+(r-7)*float32(math.Cos(a)), c.Y+(r-7)*float32(math.Sin(a))), 2, ink)
 	name := audioui.Shaped(k.p.Name, text, false, false)
@@ -296,29 +403,71 @@ func (k *Knob) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	val.Paint(p, geom.Pt((box.W-val.Advance)/2, c.Y+r+4+name.Height()), col)
 }
 
+// The turn runs three quarters round, clockwise from bottom left: from where it starts, in radians, and how far.
+const knobFrom, knobSweep = 0.75 * math.Pi, 1.5 * math.Pi
+
+// arcRibbon draws the arc of a knob's turn from t0 to t1, of radius rad about c, w wide in col, as one ribbon with
+// round ends.
+func arcRibbon(p *paint.Painter, c geom.Point, rad float32, t0, t1 float64, w float32, col color.NRGBA) {
+	if t1 < t0 {
+		t0, t1 = t1, t0
+	}
+	length := float64(rad) * knobSweep * (t1 - t0)
+	if length < 0.01 {
+		return
+	}
+	// About one point per 3 px, and two more at each end to round it
+	const capPts = 2
+	n := max(int(math.Ceil(length/3)), 1)
+	var buf [64]paint.RibbonPoint
+	pts := buf[:0]
+	h := w / 2
+	at := func(t float64) (geom.Point, geom.Point) {
+		a := knobFrom + knobSweep*t
+		sin, cos := math.Sincos(a)
+		return geom.Pt(c.X+rad*float32(cos), c.Y+rad*float32(sin)), geom.Pt(-float32(sin), float32(cos))
+	}
+	round := func(end, dir geom.Point, out float32, from, to int, step int) {
+		for j := from; j != to; j += step {
+			th := float64(j) / capPts * math.Pi / 2
+			d := h * float32(math.Sin(th)) * out
+			pts = append(pts, paint.RibbonPoint{At: end.Add(dir.Mul(d)), Width: w * float32(math.Cos(th)), Color: col})
+		}
+	}
+	start, dir := at(t0)
+	round(start, dir, -1, capPts, 0, -1)
+	for i := range n + 1 {
+		pt, _ := at(t0 + (t1-t0)*float64(i)/float64(n))
+		pts = append(pts, paint.RibbonPoint{At: pt, Width: w, Color: col})
+	}
+	end, dir := at(t1)
+	round(end, dir, 1, 1, capPts+1, 1)
+	p.Ribbon(pts)
+}
+
+// capRing draws the focus ring of a knob of radius r about c, at strength t, between its cap and its arc.
+func capRing(p *paint.Painter, c geom.Point, r, t float32, th *theme.Live) {
+	// Halfway between the cap (r-6) and the arc (r-1.75), less the 3 px FocusRing adds
+	h := r - 6.875
+	widget.FocusRing(p, geom.Rc(c.X-h, c.Y-h, 2*h, 2*h), h, t, th)
+}
+
 // paintModulation draws how control moves the knob's value: a ring
 // outside the arc, of radius r about c, as far below and above the
 // value as the control reaches, or all round where
 // control sets the value; and a dot on the arc at the value heard, all in ring.
 func (k *Knob) paintModulation(p *paint.Painter, m plug.Modulation, c geom.Point, r float32, ring color.NRGBA) {
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	out := r + 5
 	at := func(t float64, rad float32) geom.Point {
-		a := from + sweep*t
+		a := knobFrom + knobSweep*t
 		return geom.Pt(c.X+rad*float32(math.Cos(a)), c.Y+rad*float32(math.Sin(a)))
 	}
-	n := k.p.Normal(k.v)
+	n := k.normalAt(k.needle())
 	t0, t1, a := k.round(n+m.Low), k.round(n+m.High), float32(0.85)
 	if m.Sets {
 		t0, t1, a = 0, 1, 0.35
 	}
-	if t1 < t0 {
-		t0, t1 = t1, t0
-	}
-	if n := int((t1 - t0) * 40); n > 0 {
-		for i := range n {
-			audioui.Segment(p, at(t0+(t1-t0)*float64(i)/float64(n), out), at(t0+(t1-t0)*float64(i+1)/float64(n), out), 1.5, paint.Faded(ring, a))
-		}
+	if math.Abs(t1-t0) >= 1.0/40 {
+		arcRibbon(p, c, r+5, t0, t1, 1.5, paint.Faded(ring, a))
 	}
 	dot := at(k.turnOf(m.Now), r)
 	p.ShadowRRect(geom.Rc(dot.X-3, dot.Y-3, 6, 6), 3, paint.Solid(ring), paint.Shadow{Blur: 6, Color: paint.Faded(ring, 0.6)})
@@ -331,6 +480,7 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 		return
 	}
 	k.v = v
+	k.noteSet(u)
 	k.set(v, u)
 	if k.OnTurn != nil {
 		k.OnTurn(v, u)
@@ -340,6 +490,7 @@ func (k *Knob) turn(v float64, u *gunim.UI) {
 
 // stepTo sets the knob to v as a gesture of its own.
 func (k *Knob) stepTo(v float64, u *gunim.UI) {
+	k.endWheel(u)
 	if v = k.p.Clamp(v); v == k.v {
 		return
 	}
@@ -350,7 +501,7 @@ func (k *Knob) stepTo(v float64, u *gunim.UI) {
 
 // tooltip is what the knob's tooltip says.
 func (k *Knob) tooltip() string {
-	how := "Drag up or down to turn, with Shift for fine steps; double-click to reset"
+	how := "Drag up or down, or turn the wheel, with Shift for fine steps; double-click to reset"
 	if k.Tooltip != "" {
 		return k.Tooltip + ". " + how
 	}
@@ -377,10 +528,21 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.tip.Handle(e, u, k, k.tooltip())
 	}
 	switch e.(type) {
+	case input.FocusGained:
+		k.focused = true
+	case input.FocusLost:
+		k.focused = false
+	}
+	if followRing(k.ring, e, u) {
+		return true
+	}
+	switch e.(type) {
 	case input.PointerEnter:
 		k.hover.Animate(1, widget.Quick.Get(u.Theme()))
 		return false
 	case input.PointerLeave:
+		k.pressed = false
+		k.endWheel(u)
 		if !k.held {
 			k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		}
@@ -398,10 +560,12 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		k.tip.Hide(u)
+		k.pressed = true
 		if e.Clicks == 2 {
 			k.stepTo(k.p.Default, u)
 			return true
 		}
+		k.endWheel(u)
 		k.held, k.from, k.start = true, e.Pos, k.turnOf(k.v)
 		k.begin(u)
 		u.Invalidate()
@@ -409,7 +573,7 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		if !k.held {
 			return false
 		}
-		px := float32(180)
+		px := float32(dragPx)
 		if e.Mods.Has(input.ModShift) {
 			px *= 10
 		}
@@ -422,6 +586,17 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		k.end(u)
 		k.hover.Animate(0, widget.Quick.Get(u.Theme()))
 		u.Invalidate()
+	case input.Scroll:
+		// Ctrl or Super with the wheel is the window's, as its zoom: the knob leaves it be.
+		if e.Touch || k.held || e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModSuper) ||
+			!k.focused && !k.pressed && u.ScrollsAround(k, e.Delta) {
+			return false
+		}
+		by, steps, pad := wheelTurn(e, k.p.Steps)
+		if by == 0 {
+			return false
+		}
+		k.wheel(by, steps, pad, u)
 	case input.KeyPress:
 		// Ctrl, Alt or Super with a key is the window's shortcut, such as
 		// Alt+Left to the loop's start: the knob leaves it be.
@@ -448,6 +623,90 @@ func (k *Knob) Handle(e input.Event, u *gunim.UI) bool {
 		return false
 	}
 	return true
+}
+
+// wheelTurn returns how far e turns a knob up, of the way round, and how many steps for a knob of the given steps;
+// pad says e came from a touchpad. A wheel turns 2.5% of the way a notch, a quarter of that with Shift. A touchpad
+// turns as far as a drag of the same length, ten times finer with Shift.
+func wheelTurn(e input.Scroll, steps int) (by, stepsBy float64, pad bool) {
+	n := float64(e.Notches.Y)
+	if n == 0 && e.Mods.Has(input.ModShift) {
+		// Some systems turn the wheel with Shift held into a sideways one
+		n = float64(e.Notches.X)
+	}
+	if n == 0 {
+		n = float64(e.Delta.Y) / 40
+	}
+	shift := e.Mods.Has(input.ModShift)
+	// A wheel turns in whole notches, and a touchpad in fractions of one
+	if pad = n != math.Round(n); pad {
+		px := float64(dragPx)
+		if shift {
+			px *= 10
+		}
+		by = n * touchpadPx / px
+		return by, by * float64(steps), true
+	}
+	if shift {
+		n /= 4
+	}
+	return n * wheelNotch, n, false
+}
+
+// wheel turns the knob by of the way round, or a stepped one by steps, in the gesture of the wheel's run, which ends
+// wheelRun after the last notch. A run of a touchpad, pad, turns it at most touchpadRun from where the run began.
+func (k *Knob) wheel(by, steps float64, pad bool, u *gunim.UI) {
+	if !k.wheeling {
+		k.wheelFrom = k.turnOf(k.v)
+	}
+	to := k.turnOf(k.v) + by
+	if k.p.Steps > 0 {
+		k.wheelRest += steps
+		whole := math.Trunc(k.wheelRest)
+		k.wheelRest -= whole
+		to = k.turnOf(k.v) + whole*k.stepSize()
+	}
+	if pad {
+		to = min(max(to, k.wheelFrom-touchpadRun), k.wheelFrom+touchpadRun)
+	}
+	v := k.p.Clamp(k.valueAt(to))
+	if !k.wheeling && v != k.v {
+		k.wheeling = true
+		k.begin(u)
+		k.wheelClose = u.BeforeClose(k.endWheel)
+	}
+	if k.wheeling {
+		k.turn(v, u)
+	}
+	if k.wheelStop != nil {
+		k.wheelStop()
+		k.wheelStop = nil
+	}
+	if u == nil {
+		k.endWheel(u)
+		return
+	}
+	k.wheelStop = u.After(wheelRun, func(u *gunim.UI) {
+		k.wheelStop = nil
+		k.endWheel(u)
+	})
+}
+
+// endWheel ends a turn by the wheel under way.
+func (k *Knob) endWheel(u *gunim.UI) {
+	if k.wheelStop != nil {
+		k.wheelStop()
+		k.wheelStop = nil
+	}
+	if k.wheelClose != nil {
+		k.wheelClose()
+		k.wheelClose = nil
+	}
+	k.wheelRest = 0
+	if k.wheeling {
+		k.wheeling = false
+		k.end(u)
+	}
 }
 
 // openMenu opens the host's menu for the knob's parameter, at pos in

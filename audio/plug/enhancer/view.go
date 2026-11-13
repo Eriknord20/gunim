@@ -842,6 +842,7 @@ func newPanel(h plug.Host) *panel {
 		s.Knobs[1].Tooltip = "How much of the band's harmonics are added, the band's own level kept: " +
 			"none leaves it as it was; past 100%, they stand out further"
 		sel := plugui.NewSelector("Style", styleNames, styleTips)
+		sel.Label = bandNames[b] + " style"
 		sel.Columns = 2
 		sel.SetSelected(v.style(b), nil)
 		id := StyleID + uint32(b)

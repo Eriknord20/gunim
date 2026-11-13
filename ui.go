@@ -1347,9 +1347,9 @@ func (w *Window) RefreshRate() float64 { return w.dw.RefreshRate() }
 // Close shuts the window down at once and drops any queued work. For an
 // animated goodbye, unmount the root's views first and call Close once
 // they have gone. It is safe from any goroutine. An offscreen window,
-// which has no loop of its own, closes its popups in Close, or at the end
-// of the call driving it that is in flight, as [Window.Frame] or
-// [Window.Input].
+// which has no loop of its own, runs what [UI.BeforeClose] was given and
+// closes its popups in Close, or at the end of the call driving it that is
+// in flight, as [Window.Frame] or [Window.Input].
 func (w *Window) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
@@ -1378,11 +1378,12 @@ func (w *Window) drive() (end func()) {
 	}
 }
 
-// closeOwedPopups closes the popups a Close left, unless a call that drives the window is in flight, which closes them
-// as it ends.
+// closeOwedPopups runs the closers and closes the popups a Close left, unless a call that drives the window is in
+// flight, which does both as it ends.
 func (w *Window) closeOwedPopups() {
 	for w.popupsOwed.Load() && w.framing.TryLock() {
 		if w.popupsOwed.Swap(false) {
+			w.ui.runClosers()
 			w.ui.closeAllPopups()
 		}
 		w.framing.Unlock()
@@ -1422,6 +1423,7 @@ func (w *Window) loop() {
 	defer w.ui.stopHeading()
 	// The child windows of the system's in it close before it does.
 	defer w.ui.closeNatives()
+	defer w.ui.runClosers()
 
 	for {
 		w.followClock()
@@ -2024,6 +2026,8 @@ type UI struct {
 	popups []*surface
 	// timers are waiting to run, in no order.
 	timers []*timer
+	// closers run as the window closes; see [UI.BeforeClose].
+	closers []*func(u *UI)
 	// stepped says [Window.Frame] steps the window's time, as a test
 	// does: its clock is the steps', and the wall clock's plays no part.
 	stepped bool
@@ -2152,6 +2156,28 @@ func (u *UI) After(d time.Duration, fn func(u *UI)) (stop func()) {
 	u.timers = append(u.timers, t)
 	return func() {
 		u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t })
+	}
+}
+
+// BeforeClose runs fn on the UI goroutine as the window closes, unless the function it returns is called first: for
+// a node that must end what it started, as a gesture the host waits to hear end. On a nil UI it does nothing.
+func (u *UI) BeforeClose(fn func(u *UI)) (stop func()) {
+	if u == nil {
+		return func() {}
+	}
+	c := &fn
+	u.closers = append(u.closers, c)
+	return func() {
+		u.closers = slices.DeleteFunc(u.closers, func(o *func(u *UI)) bool { return o == c })
+	}
+}
+
+// runClosers runs what BeforeClose was given, once.
+func (u *UI) runClosers() {
+	cs := u.closers
+	u.closers = nil
+	for _, c := range cs {
+		(*c)(u)
 	}
 }
 
@@ -2643,10 +2669,39 @@ func (u *UI) Remove(n Node) bool {
 // out of the tree or under a popup's window.
 func (u *UI) Bounds(n Node) (geom.Rect, bool) {
 	s, ok := u.index[n]
-	if !ok || s.drawn != u.seq || u.surfaceOf(s) != nil {
+	if !ok || s.drawn == 0 || s.drawn != u.seq || u.surfaceOf(s) != nil {
 		return geom.Rect{}, false
 	}
 	return u.rectIn(s, u.root), true
+}
+
+// Drawn reports whether n's parent painted it in the last frame, in the window or in a popup's. A node clipped away or
+// covered by another reads true. It reads false before the window's first frame, during a frame until the node is
+// painted, and on a nil UI.
+func (u *UI) Drawn(n Node) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	return ok && s.drawn != 0 && s.drawn == u.seq
+}
+
+// ScrollsAround reports whether a [WheelScroller] around n takes a wheel turned by delta, for a node that leaves the
+// wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
+func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	if !ok {
+		return false
+	}
+	for s = s.parent; s != nil; s = s.parent {
+		if w, ok := s.node.(WheelScroller); ok && w.ScrollsAlong(delta) {
+			return true
+		}
+	}
+	return false
 }
 
 // Presence reports where n is in its lifecycle.
