@@ -219,6 +219,13 @@ type Driver struct {
 	blank *blanker
 	// away says another VT has the screen: touches then reach no window.
 	away bool
+	// back says the kernel switched back to the driver's VT, which the
+	// render thread has yet to take the screen back for. watchVT sets it
+	// as the kernel asks, so Showing turns true even where the render
+	// thread hangs.
+	back bool
+	// hidden says the windows were last told they are hidden; see tell.
+	hidden bool
 	// clipboard is the process's own: there is no system to share it with.
 	clipboard string
 
@@ -630,7 +637,6 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 	}
 	w := newWindow(d, o)
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if p, ok := o.Parent.(*Window); ok {
 		w.parent = p
 	}
@@ -649,6 +655,13 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 	}
 	w.hidden = o.Hidden
 	d.windows = append(d.windows, w)
+	hidden := d.hidden
+	d.mu.Unlock()
+	// A window that opens while the screen doesn't show it hears so at once,
+	// as the others did.
+	if hidden {
+		w.in.Push(driver.WindowShown{Shown: false})
+	}
 	d.kick()
 	return w, nil
 }
@@ -709,6 +722,41 @@ func (d *Driver) Blanked() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.blank.state == screenOff
+}
+
+// Showing reports whether the screen shows the app: it is not off, and
+// the driver's VT is the one showing. While it is not, no frames are
+// drawn, so a window's timers wait for the screen to show again; a program
+// that checks it is alive from a timer, as for systemd's watchdog, asks
+// here meanwhile. It turns true as the kernel switches back to the
+// driver's VT, before the render thread takes the screen back, so a render
+// thread that hangs then reads as hung. The windows hear each change once,
+// as the window shown or hidden (input.WindowShown and input.WindowHidden),
+// as on other drivers.
+func (d *Driver) Showing() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.back || !d.away && d.blank.state != screenOff
+}
+
+// tell tells the windows they are shown or hidden, where that changed
+// since they last heard: the screen shows them while it is not off and its
+// VT is the one showing. So a hide and a show always come in pairs, and a
+// wake while another VT shows tells nothing.
+func (d *Driver) tell() {
+	d.mu.Lock()
+	shown := !d.away && d.blank.state != screenOff
+	if shown == !d.hidden {
+		d.mu.Unlock()
+		return
+	}
+	d.hidden = !shown
+	d.mu.Unlock()
+	if shown {
+		d.pushAll(driver.WindowShown{Shown: true}, driver.Redraw{})
+	} else {
+		d.pushAll(driver.WindowShown{Shown: false})
+	}
 }
 
 // DisplayOn asks the kernel whether the display controller is on: the

@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver/kms"
-	"github.com/marrasen/gunim/internal/kmsdemo"
+	"github.com/marrasen/gunim/driver/kms/kmsbench"
 )
 
 // knownMisses are goals a screen misses for a reason an issue holds: the
@@ -61,12 +61,13 @@ func TestOnTheScreen(t *testing.T) {
 // once it has made its context.
 func TestFallsBackToTheCPUOnTheScreen(t *testing.T) {
 	t.Setenv("GUNIM_KMS_FAIL_GPU", "1")
-	o := kmsdemo.BenchOptions{
-		KMS:  kms.Options{Rotate: 90, VT: "free"},
-		Warm: time.Second, Moving: 3 * time.Second, Rest: 2 * time.Second, NoBlank: true,
+	o := kmsbench.Options{
+		KMS:   kms.Options{Rotate: 90, VT: "free"},
+		Scene: benchScene(t, "demo"),
+		Warm:  time.Second, Moving: 3 * time.Second, Rest: 2 * time.Second, NoBlank: true,
 		Log: func(s string) { t.Log(s) },
 	}
-	r, err := kmsdemo.Bench(context.Background(), o)
+	r, err := kmsbench.Bench(context.Background(), o)
 	if err != nil && strings.Contains(err.Error(), "no connected screen") {
 		t.Skipf("no screen to take: %v", err)
 	}
@@ -83,15 +84,15 @@ func TestFallsBackToTheCPUOnTheScreen(t *testing.T) {
 }
 
 func bench(t *testing.T, screen string, ko kms.Options) {
-	o := kmsdemo.BenchOptions{
-		KMS: ko, Screen: screen,
+	o := kmsbench.Options{
+		KMS: ko, Scene: benchScene(t, screen),
 		// 10 s warm: the driver's pacer learns its lead in the first seconds,
 		// missing a vblank or two as it finds the edge. 30 s moving: a rate
 		// of 1 missed flip in 1 000 needs that many frames to tell.
 		Warm: 10 * time.Second, Moving: 30 * time.Second, Rest: 5 * time.Second,
 		Log: func(s string) { t.Log(s) },
 	}
-	r, err := kmsdemo.Bench(context.Background(), o)
+	r, err := kmsbench.Bench(context.Background(), o)
 	if err != nil && strings.Contains(err.Error(), "no connected screen") {
 		t.Skipf("no screen to take: %v", err)
 	}

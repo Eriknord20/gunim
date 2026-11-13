@@ -20,16 +20,17 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/driver/kms"
-	"github.com/marrasen/gunim/internal/kmsdemo"
+	"github.com/marrasen/gunim/driver/kms/kmsbench"
 )
 
 func TestOnVKMS(t *testing.T) {
-	o := kmsdemo.BenchOptions{
-		KMS:  kms.Options{Software: true, Connector: os.Getenv("GUNIM_VKMS_CONNECTOR")},
-		Warm: time.Second, Moving: 5 * time.Second, Rest: 2 * time.Second,
+	o := kmsbench.Options{
+		KMS:   kms.Options{Software: true, Connector: os.Getenv("GUNIM_VKMS_CONNECTOR")},
+		Scene: benchScene(t, "demo"),
+		Warm:  time.Second, Moving: 5 * time.Second, Rest: 2 * time.Second,
 		Log: func(s string) { t.Log(s) },
 	}
-	r, err := kmsdemo.Bench(context.Background(), o)
+	r, err := kmsbench.Bench(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}

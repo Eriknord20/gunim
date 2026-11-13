@@ -167,11 +167,22 @@ touch on a dim or dark screen wakes it, and reaches no window, so a tap on a dar
 presses what lies under it. `Window.KeepAwake(true)` holds the screen on; `Window.Wake` wakes it
 with no touch. A backlight write that fails while the screen fades reaches `Driver.Errors`.
 
+While the screen is off, and while another VT has it, the windows draw no frames, so their
+timers (`UI.After`) wait for the screen to show again. They hear `input.WindowHidden` as that
+starts and `input.WindowShown` as it ends, once each, as on other platforms; a window that opens
+meanwhile hears it is hidden. `Driver.Showing` says which it is now, from any goroutine, and turns
+true as the kernel switches back to the driver's VT, before the screen is taken back. A program
+that proves it is alive from a window's timer, as to systemd's watchdog, asks it meanwhile: a
+window whose timers stop while the screen shows is hung, and one whose timers wait while the
+screen doesn't show is waiting.
+
 ## Measuring
 
 - `tools/kmsbench` checks the goals of [docs/plans/kms-touch.md](../../docs/plans/kms-touch.md) on
   the screen it runs on, on the demo's test pattern or on the gallery of `example/widgets`
   (`-screen widgets`). It exits non-zero if a goal is missed.
+- `driver/kms/kmsbench` runs the same bench on a program's own screen: `Options.Scene` opens the
+  program's window, and `Report` prints the table `tools/kmsbench` prints.
 - `go test -tags kmspi ./driver/kms` runs the same as a test on the screen.
 - `GUNIM_DEBUG_FRAMES=1` logs a line each second: frames, missed vblanks, frame times, touch to
   flip, and what the renderer sent the GPU.

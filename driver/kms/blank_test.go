@@ -4,7 +4,9 @@ package kms
 
 import (
 	"math"
+	"os"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -384,7 +386,11 @@ func TestReturningToTheVTWakesABlankedScreen(t *testing.T) {
 	w, _ := d.NewWindow(driver.Options{})
 	win := w.(*Window)
 	defer func() { _ = win.Close() }()
-	r := &renderThread{d: d, off: true, away: true}
+	r := &renderThread{d: d, off: true}
+	r.left()
+	if ev, ok := nextInput(t, win).(driver.WindowShown); !ok || ev.Shown {
+		t.Fatalf("leaving, the window heard %v, not that it is hidden", ev)
+	}
 	now := after(10 * time.Minute)
 	r.returned(now)
 	if r.off || r.away || r.set || d.away {
@@ -396,8 +402,41 @@ func TestReturningToTheVTWakesABlankedScreen(t *testing.T) {
 	if at := d.blank.next(now.Add(wakeFade)); !at.Equal(now.Add(time.Minute)) {
 		t.Fatalf("dims again at %v, want a minute after the return", at.Sub(now))
 	}
-	if _, ok := nextInput(t, win).(input.WindowShown); !ok {
-		t.Fatal("the window did not hear it is shown")
+	if ev, ok := nextInput(t, win).(driver.WindowShown); !ok || !ev.Shown {
+		t.Fatalf("the window heard %v, not that it is shown", ev)
+	}
+	if !d.Showing() {
+		t.Fatal("the screen taken back doesn't count as showing")
+	}
+}
+
+// Showing is false while the screen is off and while another VT has it,
+// and true otherwise, dimmed too.
+func TestShowingFollowsTheScreenAndTheVT(t *testing.T) {
+	d := testDriver(0, 1)
+	d.blank = newBlanker(Blank{Dim: time.Minute, Off: 5 * time.Minute}, 1, bt0)
+	if !d.Showing() {
+		t.Fatal("a screen just opened doesn't count as showing")
+	}
+	d.blank.step(after(2 * time.Minute))
+	if !d.Showing() {
+		t.Fatal("a dimmed screen doesn't count as showing")
+	}
+	d.blank.step(after(5 * time.Minute))
+	d.blank.step(after(6 * time.Minute))
+	if d.blank.state != screenOff || d.Showing() {
+		t.Fatalf("the screen is %v and showing %v; want off, not showing", d.blank.state, d.Showing())
+	}
+	r := &renderThread{d: d, off: true}
+	r.returned(after(7 * time.Minute))
+	if !d.Showing() {
+		t.Fatal("a woken screen doesn't count as showing")
+	}
+	d.mu.Lock()
+	d.away = true
+	d.mu.Unlock()
+	if d.Showing() {
+		t.Fatal("a screen another VT has counts as showing")
 	}
 }
 
@@ -434,5 +473,140 @@ func TestAFailedBacklightStepIsAskedAgain(t *testing.T) {
 	r.light(0)
 	if n := asked(); n != -1 {
 		t.Fatalf("asked for %d once written", n)
+	}
+}
+
+// shown returns the window's next WindowShown, failing on any other input.
+func shown(t *testing.T, w *Window) bool {
+	t.Helper()
+	ev, ok := nextInput(t, w).(driver.WindowShown)
+	if !ok {
+		t.Fatalf("the window heard %v, not whether it is shown", ev)
+	}
+	return ev.Shown
+}
+
+// quiet fails if the window hears anything.
+func quiet(t *testing.T, w *Window, what string) {
+	t.Helper()
+	if ev, ok := noInput(w); !ok {
+		t.Fatalf("%s, the window heard %v", what, ev)
+	}
+}
+
+// The screen turning off tells the windows they are hidden, and waking
+// tells them they are shown, with a frame drawn whole: once each.
+func TestPowerOffAndOnTellTheWindowsOnce(t *testing.T) {
+	d := testDriver(0, 1)
+	d.scr, _ = testScreen()
+	d.blank = newBlanker(Blank{Dim: time.Minute, Off: 5 * time.Minute}, 1, bt0)
+	w, _ := d.NewWindow(driver.Options{})
+	win := w.(*Window)
+	defer func() { _ = win.Close() }()
+	r := &renderThread{d: d}
+	d.blank.step(after(5 * time.Minute))
+	d.blank.step(after(6 * time.Minute))
+	r.powerOff()
+	if shown(t, win) || d.Showing() {
+		t.Fatal("the screen off counts as shown")
+	}
+	quiet(t, win, "after the screen went off")
+	d.blank.wake(after(7 * time.Minute))
+	r.powerOn()
+	if !shown(t, win) || !d.Showing() {
+		t.Fatal("the screen woken counts as hidden")
+	}
+	if _, ok := nextInput(t, win).(driver.Redraw); !ok {
+		t.Fatal("waking draws no frame whole")
+	}
+	quiet(t, win, "after the screen woke")
+}
+
+// Leaving for another VT while the screen is off tells the windows nothing
+// more: they heard they are hidden as it went off.
+func TestLeavingWhileOffTellsNoSecondHide(t *testing.T) {
+	d := testDriver(0, 1)
+	d.scr, _ = testScreen()
+	d.blank = newBlanker(Blank{Dim: time.Minute, Off: 5 * time.Minute}, 1, bt0)
+	w, _ := d.NewWindow(driver.Options{})
+	win := w.(*Window)
+	defer func() { _ = win.Close() }()
+	r := &renderThread{d: d}
+	d.blank.step(after(5 * time.Minute))
+	d.blank.step(after(6 * time.Minute))
+	r.powerOff()
+	if shown(t, win) {
+		t.Fatal("the screen off counts as shown")
+	}
+	r.left()
+	quiet(t, win, "leaving with the screen off")
+	r.returned(after(8 * time.Minute))
+	if !shown(t, win) {
+		t.Fatal("the return counts as hidden")
+	}
+}
+
+// A wake while another VT shows, as Wake, KeepAwake or SetBlank ask,
+// tells the windows nothing, and Showing stays false: the screen is the
+// other VT's until it returns.
+func TestAWakeWhileAwayTellsNothing(t *testing.T) {
+	d := testDriver(0, 1)
+	d.blank = newBlanker(Blank{Dim: time.Minute, Off: 5 * time.Minute}, 1, bt0)
+	w, _ := d.NewWindow(driver.Options{})
+	win := w.(*Window)
+	defer func() { _ = win.Close() }()
+	r := &renderThread{d: d, off: true}
+	r.left()
+	if shown(t, win) {
+		t.Fatal("leaving counts as shown")
+	}
+	d.blank.wake(after(time.Minute))
+	r.powerOn()
+	quiet(t, win, "woken while away")
+	if d.Showing() {
+		t.Fatal("a screen another VT has counts as showing once woken")
+	}
+}
+
+// A window that opens while the screen doesn't show hears so at once.
+func TestAWindowOpenedWhileHiddenHearsItIsHidden(t *testing.T) {
+	d := testDriver(0, 1)
+	r := &renderThread{d: d}
+	r.left()
+	w, _ := d.NewWindow(driver.Options{})
+	win := w.(*Window)
+	defer func() { _ = win.Close() }()
+	if shown(t, win) {
+		t.Fatal("a window opened while away counts as shown")
+	}
+	r.returned(after(time.Minute))
+	if !shown(t, win) {
+		t.Fatal("a window opened while away doesn't hear the return")
+	}
+}
+
+// The kernel switching back to the driver's VT turns Showing true at once,
+// even where the render thread hangs and never takes the screen back: a
+// watchdog that asks Showing then sees the hang.
+func TestShowingTurnsTrueAsTheKernelSwitchesBack(t *testing.T) {
+	d := testDriver(0, 1)
+	d.done = make(chan struct{})
+	d.vt = &vt{signals: make(chan os.Signal, 1)}
+	r := &renderThread{d: d}
+	r.left()
+	if d.Showing() {
+		t.Fatal("away counts as showing")
+	}
+	go d.watchVT()
+	defer close(d.quit)
+	defer close(d.done)
+	// No render thread takes the switch: it hangs.
+	d.vt.signals <- syscall.SIGUSR2
+	deadline := time.Now().Add(time.Second)
+	for !d.Showing() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !d.Showing() {
+		t.Fatal("the switch back with the render thread hung leaves Showing false")
 	}
 }

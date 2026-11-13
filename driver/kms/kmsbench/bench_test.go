@@ -1,6 +1,6 @@
 //go:build linux && (arm64 || amd64)
 
-package kmsdemo
+package kmsbench
 
 import (
 	"testing"

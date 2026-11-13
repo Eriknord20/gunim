@@ -27,27 +27,32 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
+	"github.com/marrasen/gunim/driver/kms/kmsbench"
 	"github.com/marrasen/gunim/internal/kmsdemo"
 )
+
+// started is when the program started: the bench's start goal counts from
+// it, as the plan's section 1 does.
+var started = time.Now()
 
 func main() { os.Exit(run()) }
 
 // run runs the bench, and returns the exit code: 1 where a goal was
 // missed or the bench failed.
 func run() int {
-	var o kmsdemo.BenchOptions
+	o := kmsbench.Options{Started: started}
+	var screen string
+	var still bool
 	flag.IntVar(&o.KMS.Rotate, "rotate", 0, "turn the picture clockwise: 0, 90, 180 or 270")
 	flag.StringVar(&o.KMS.VT, "vt", "", `the VT to draw on: empty for the one it runs on, "free", or a number`)
 	flag.StringVar(&o.KMS.Connector, "connector", "", "the screen; empty finds it")
-	flag.StringVar(&o.Screen, "screen", "demo", "what to show: demo or widgets")
+	flag.StringVar(&screen, "screen", "demo", "what to show: demo or widgets")
 	flag.BoolVar(&o.NoBlank, "noblank", false, "leave out the blanking at the end")
 	flag.StringVar(&o.Shot, "shot", "", "write the screen's window to this PNG file as the warm-up ends")
 	scale := flag.Float64("scale", 0, "device pixels per logical pixel; 0 works it out")
@@ -56,11 +61,11 @@ func run() int {
 	flag.DurationVar(&o.Warm, "warm", 3*time.Second, "how long the scene moves before the figures start; 6s on the gallery")
 	flag.DurationVar(&o.Moving, "moving", 60*time.Second, "how long to measure the scene moving")
 	flag.DurationVar(&o.Rest, "rest", 60*time.Second, "how long to measure the scene still")
-	flag.BoolVar(&o.Still, "still", false, "keep the scene still while the touch script plays: only the fingers draw")
+	flag.BoolVar(&still, "still", false, "keep the scene still while the touch script plays: only the fingers draw")
 	flag.Parse()
 	warmSet := false
 	flag.Visit(func(f *flag.Flag) { warmSet = warmSet || f.Name == "warm" })
-	if o.Screen == "widgets" && !warmSet {
+	if screen == "widgets" && !warmSet {
 		// The gallery's start-up toasts leave 5 s in, fading as layers of
 		// their own, and its first scroll shows text never drawn before:
 		// both are over by 6 s, so the goals hold the scrolling. What the
@@ -78,9 +83,15 @@ func run() int {
 		o.KMS.Replay = f
 	}
 	o.Log = func(s string) { log.Print("kmsbench: ", s) }
+	scene, err := kmsdemo.BenchScene(screen, still, o.Log)
+	if err != nil {
+		log.Print(err)
+		return 1
+	}
+	o.Scene = scene
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 	defer stop()
-	r, err := kmsdemo.Bench(ctx, o)
+	r, err := kmsbench.Bench(ctx, o)
 	if err != nil {
 		log.Print(err)
 		return 1
@@ -89,36 +100,13 @@ func run() int {
 		log.Print("kmsbench: stopped before the end")
 		return 1
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintf(tw, "Goal\tTarget\tMeasured\t\n")
-	failed := 0
-	for _, g := range r.Goals() {
-		mark := "ok"
-		if !g.OK {
-			mark = "MISSED"
-			failed++
-		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", g.Name, g.Target, g.Got, mark)
-	}
-	if err := tw.Flush(); err != nil {
+	missed, err := kmsbench.Report(os.Stdout, r)
+	if err != nil {
 		log.Print(err)
 		return 1
 	}
-	fmt.Printf("\n%.2f Hz; %d frames in %.1f s while moving; draw p50 %.1f ms p99 %.1f ms; frame max %.1f ms; %d touch reports answered",
-		r.Rate, r.Moving.Frames, r.MovingFor.Seconds(), ms(r.Moving.Draw.P50), ms(r.Moving.Draw.P99), ms(r.Moving.Frame.Max), r.Moving.Touch.N)
-	if r.Software {
-		fmt.Print("; drawn by the CPU")
-	}
-	fmt.Println()
-	fmt.Println("Measured elsewhere:")
-	for _, s := range kmsdemo.NotHere {
-		fmt.Println("  " + s)
-	}
-	if failed > 0 {
-		fmt.Printf("%d goals missed\n", failed)
+	if missed > 0 {
 		return 1
 	}
 	return 0
 }
-
-func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }

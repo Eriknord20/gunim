@@ -22,7 +22,6 @@ import (
 	"github.com/marrasen/gunim/driver/internal/compose"
 	"github.com/marrasen/gunim/driver/internal/render"
 	"github.com/marrasen/gunim/geom"
-	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/internal/gl"
 )
 
@@ -193,6 +192,7 @@ func (r *renderThread) start() error {
 		d.mu.Lock()
 		d.away = true
 		d.mu.Unlock()
+		d.tell()
 		if err := d.scr.card.dropMaster(); err != nil {
 			log.Printf("gunim: kms: let go of the screen: %v", err)
 		}
@@ -328,7 +328,9 @@ func (r *renderThread) blanking() {
 		// A backlight write that failed is tried again.
 		r.light(0)
 		return
-	case !off && r.off:
+	case !off && r.off && !r.away:
+		// Woken while another VT shows, the screen stays off until the VT
+		// returns, which sets the mode again and tells the windows.
 		r.powerOn()
 	}
 	steps := 0
@@ -353,7 +355,7 @@ func (r *renderThread) powerOff() {
 	if err := d.scr.off(); err != nil {
 		d.fail(fmt.Errorf("kms: turn the screen off: %w", err))
 	}
-	d.pushAll(input.WindowHidden{Time: time.Now()})
+	d.tell()
 }
 
 // powerOn has the next frame turn the display on, with the mode set again,
@@ -362,7 +364,7 @@ func (r *renderThread) powerOn() {
 	log.Print("gunim: kms: the screen wakes")
 	r.off, r.set, r.back = false, false, time.Now()
 	r.prevFlip, r.prevSeq = time.Time{}, 0
-	r.d.pushAll(input.WindowShown{Time: time.Now()}, driver.Redraw{})
+	r.d.tell()
 }
 
 // debugBlank, set by GUNIM_DEBUG_FRAMES, logs each backlight step asked
@@ -824,6 +826,13 @@ func (d *Driver) watchVT() {
 			case syscall.SIGUSR1:
 				d.do(d.leaveVT)
 			case syscall.SIGUSR2:
+				// The VT shows again, as far as anyone at the screen can
+				// tell, before the render thread takes it back: one that
+				// hangs then leaves Showing true, and a watchdog that asks
+				// it sees the hang.
+				d.mu.Lock()
+				d.back = true
+				d.mu.Unlock()
 				d.do(d.returnVT)
 			}
 		}
@@ -835,11 +844,7 @@ func (d *Driver) watchVT() {
 func (d *Driver) leaveVT() {
 	r := d.rt
 	r.waitFlip()
-	r.away = true
-	d.mu.Lock()
-	d.away = true
-	level := d.blank.level
-	d.mu.Unlock()
+	level := r.left()
 	if err := d.scr.card.dropMaster(); err != nil {
 		log.Printf("gunim: kms: let go of the screen: %v", err)
 	}
@@ -852,7 +857,20 @@ func (d *Driver) leaveVT() {
 	if err := d.vt.released(); err != nil {
 		log.Printf("gunim: kms: switch VT: %v", err)
 	}
-	d.pushAll(input.WindowHidden{Time: time.Now()})
+}
+
+// left marks the screen as another VT's on the render thread's side, and
+// tells the windows they are hidden, unless the screen off already did. It
+// returns the brightness the app had, for the other VT to show at.
+func (r *renderThread) left() float32 {
+	d := r.d
+	r.away = true
+	d.mu.Lock()
+	d.away, d.back = true, false
+	level := d.blank.level
+	d.mu.Unlock()
+	d.tell()
+	return level
 }
 
 // returnVT takes the screen back as its VT shows again: DRM master, then
@@ -876,11 +894,11 @@ func (r *renderThread) returned(now time.Time) {
 	d := r.d
 	r.away, r.set, r.off, r.back = false, false, false, now
 	d.mu.Lock()
-	d.away = false
+	d.away, d.back = false, false
 	d.blank.wake(now)
 	d.mu.Unlock()
 	r.prevFlip, r.prevSeq = time.Time{}, 0
-	d.pushAll(input.WindowShown{Time: now}, driver.Redraw{})
+	d.tell()
 }
 
 // pushAll sends evs to every window.
