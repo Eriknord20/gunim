@@ -644,3 +644,38 @@ func TestATouchScreenThatGoesEndsRun(t *testing.T) {
 		t.Fatal("Run ended with the screen not given back")
 	}
 }
+
+// With RequireTouch, finding no touch screen fails with ErrNoTouchScreen,
+// so a program started again waits for one; without it, the driver runs
+// with none.
+func TestNoTouchScreenFailsOnlyWhereRequired(t *testing.T) {
+	none := filepath.Join(t.TempDir(), "event*")
+	if _, _, err := findInputsIn(none, "", true, true, false); !errors.Is(err, ErrNoTouchScreen) {
+		t.Fatalf("required and none found: %v, want ErrNoTouchScreen", err)
+	}
+	if touch, _, err := findInputsIn(none, "", true, false, false); err != nil || touch != nil {
+		t.Fatalf("not required and none found: %v, %v", touch, err)
+	}
+	if _, _, err := findInputsIn(none, "", false, true, false); err != nil {
+		t.Fatalf("a replay with RequireTouch: %v", err)
+	}
+}
+
+// Run keeps both errors: why it ended, and what the render thread ended on.
+func TestRunKeepsBothErrors(t *testing.T) {
+	d := idleDriver(t)
+	d.err = errors.New("the GPU lost its context")
+	// A render thread that runs until Close stops it, so the touch screen's
+	// going is what ends Run.
+	d.done = make(chan struct{})
+	go func() {
+		<-d.quit
+		close(d.done)
+	}()
+	d.lost = make(chan error, 1)
+	d.lose(ErrTouchGone)
+	err := d.Run(context.Background(), func() {})
+	if !errors.Is(err, ErrTouchGone) || !errors.Is(err, d.err) {
+		t.Fatalf("Run returned %v, want both", err)
+	}
+}

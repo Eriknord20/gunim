@@ -178,7 +178,10 @@ screen doesn't show is waiting.
 
 A touch screen that goes away, as when its cable comes loose, ends `Run` with `ErrTouchGone`, after
 the screen is given back. Nothing else wakes a screen that is off, so the program ends, and
-whatever started it, as systemd with `Restart=`, starts it again to find the screen.
+whatever started it, as systemd with `Restart=`, starts it again. Set `Options.RequireTouch` for
+that start to find the screen: `Open` then fails with `ErrNoTouchScreen` while there is no touch
+screen, and systemd keeps trying, at each `RestartSec=`, until it is back. Without it, the driver
+starts with no touch screen, and a screen that turns off never wakes.
 
 ## Measuring
 

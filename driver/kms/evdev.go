@@ -182,14 +182,24 @@ func drain(fd int) {
 	}
 }
 
+// ErrNoTouchScreen is why Open fails with Options.RequireTouch set and no
+// touch screen found.
+var ErrNoTouchScreen = errors.New("kms: no touch screen found")
+
 // findInputs opens the touch screen, where withTouch, and the keyboards,
 // where withKeys. want names the touch screen by path or name, or is empty
-// for the first one found. It takes the touch screen it finds; see take.
-func findInputs(want string, withTouch, withKeys bool) (touch *inputDev, keyboards []*inputDev, err error) {
+// for the first one found; one named, or one required where none is named,
+// that isn't found fails. It takes the touch screen it finds; see take.
+func findInputs(want string, withTouch, require, withKeys bool) (touch *inputDev, keyboards []*inputDev, err error) {
+	return findInputsIn("/dev/input/event*", want, withTouch, require, withKeys)
+}
+
+// findInputsIn is findInputs among the devices pattern matches.
+func findInputsIn(pattern, want string, withTouch, require, withKeys bool) (touch *inputDev, keyboards []*inputDev, err error) {
 	if !withTouch && !withKeys {
 		return nil, nil, nil
 	}
-	paths, _ := filepath.Glob("/dev/input/event*")
+	paths, _ := filepath.Glob(pattern)
 	// event2 before event10.
 	slices.SortFunc(paths, func(a, b string) int {
 		if len(a) != len(b) {
@@ -224,6 +234,10 @@ func findInputs(want string, withTouch, withKeys bool) (touch *inputDev, keyboar
 	if withTouch && touch == nil && want != "" {
 		closeAll()
 		return nil, nil, fmt.Errorf("no touch screen %q: %w", want, errors.Join(errs...))
+	}
+	if withTouch && touch == nil && require {
+		closeAll()
+		return nil, nil, errors.Join(append([]error{ErrNoTouchScreen}, errs...)...)
 	}
 	if touch != nil {
 		if err := touch.take(); err != nil {

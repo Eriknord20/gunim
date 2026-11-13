@@ -317,8 +317,12 @@ full on every vblank, so `FB_DAMAGE_CLIPS` gains nothing here, and the driver le
 ### 2.4 Input: evdev, multi-touch and gestures
 
 - **Finding devices.** Scan `/dev/input/event*`. A touch screen has `INPUT_PROP_DIRECT` and `ABS_MT_SLOT`. A keyboard
-  has `EV_KEY` with letter keys. A mouse has `EV_REL`. Watch `/dev/input` with inotify for devices that come and go.
-  `kms.Options.Touch` can name a device by path or name, for a screen with two.
+  has `EV_KEY` with letter keys. A mouse has `EV_REL`. `kms.Options.Touch` can name a device by path or name, for a
+  screen with two.
+- **A touch screen that goes.** Devices are found once, at `Open`. A touch screen that goes away while the driver runs
+  ends `Run` with `ErrTouchGone`, since nothing else wakes a screen that is off. The program ends, and systemd starts
+  it again. With `kms.Options.RequireTouch`, `Open` fails with `ErrNoTouchScreen` while no touch screen is found, so
+  the restarts go on until it is back. Hjortron's touch screen sets it.
 - **Reading touch.** Protocol B: `ABS_MT_SLOT` picks a finger's slot, `ABS_MT_TRACKING_ID` starts it (or ends it at
   `-1`), `ABS_MT_POSITION_X/Y` move it, and `SYN_REPORT` closes one report. After `SYN_DROPPED`, read the state again
   with `EVIOCGMTSLOTS` and lift any finger that is gone, so no node waits on a lost lift. [MT protocol]

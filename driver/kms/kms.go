@@ -94,6 +94,13 @@ type Options struct {
 	// Touch names the touch screen by its /dev/input path or its name.
 	// Empty finds it.
 	Touch string
+	// RequireTouch has Open fail with ErrNoTouchScreen where it finds no
+	// touch screen, as Touch naming one does. Without it the driver runs
+	// with none, and a screen that turns off never wakes. With it, a
+	// program that ends on ErrTouchGone and is started again, as by
+	// systemd's Restart=, keeps failing to start until the touch screen
+	// is back. A Replay needs no touch screen.
+	RequireTouch bool
 	// Backlight names the backlight under /sys/class/backlight. Empty
 	// takes the first.
 	Backlight string
@@ -364,7 +371,7 @@ func (d *Driver) open() error {
 		level = min(o.Brightness, 1)
 	}
 	d.blank = newBlanker(o.Blank, level, time.Now())
-	if d.touch, d.keys, err = findInputs(o.Touch, o.Replay == nil, o.VTSwitch); err != nil {
+	if d.touch, d.keys, err = findInputs(o.Touch, o.Replay == nil, o.RequireTouch && o.Replay == nil, o.VTSwitch); err != nil {
 		return err
 	}
 	if d.touch != nil && o.Record != "" {
@@ -457,7 +464,8 @@ func (d *Driver) inputsLine() string {
 // ErrTouchGone ends Run where the touch screen goes away, as when its
 // cable comes loose or its driver resets. Nothing else wakes a screen that
 // is off, so it would stay off for ever. The program ends instead, and
-// whatever started it, as systemd, starts it again to find the screen.
+// whatever started it, as systemd, starts it again. With
+// Options.RequireTouch, that start fails until the touch screen is back.
 var ErrTouchGone = errors.New("kms: the touch screen has gone")
 
 // Run implements [driver.Driver]. The render thread and the input readers
@@ -490,10 +498,8 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 		}
 		break
 	}
-	if err := d.Close(); lost == nil {
-		return err
-	}
-	return lost
+	// Both count: why Run ended, and anything the render thread ended on.
+	return errors.Join(lost, d.Close())
 }
 
 // lose ends Run with err.
@@ -695,7 +701,9 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 
 // newWindowGap, if set, runs as NewWindow lets go of mu: a test runs a
 // wake there, where it once came between the window's adding and its
-// hearing it is hidden.
+// hearing it is hidden (#430). It is for the package's tests only: it is
+// unexported, nothing outside them sets it, and nil costs NewWindow one
+// comparison.
 var newWindowGap func()
 
 // screenLocked returns the picture in logical pixels. It runs with mu
