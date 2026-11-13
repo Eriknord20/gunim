@@ -156,7 +156,9 @@ func TestWithKeyWiredAndNoHitsLoudSoundIsNotCompressedAndTheGateStaysShut(t *tes
 }
 
 func TestAHitActsAs20MillisecondsOfItsLevelOnTheSidechain(t *testing.T) {
-	const n, at = 24000, 5000
+	// Keyed, the gate rests shut from the start. Under a sidechain it starts open and has shut by settled, well before
+	// the hit.
+	const n, at, settled = 72000, 48000, 40000
 	for name, v := range map[string]float32{"velocity 1.0, as 0 dBFS": 1, "velocity 0.5, as -6 dBFS": 0.5} {
 		side := make([]float32, n)
 		for f := at; f < at+960; f++ {
@@ -165,7 +167,7 @@ func TestAHitActsAs20MillisecondsOfItsLevelOnTheSidechain(t *testing.T) {
 		hit, _ := driven(t, n, 512, plugtest.Ports{ControlIn: [][]float32{hitsAt(n, at, float64(v))}, Changes: gating()})
 		sound, _ := driven(t, n, 512, plugtest.Ports{AuxIn: [][][]float32{{side, side}}, Changes: gating()})
 		moved := false
-		for f := range n {
+		for f := settled; f < n; f++ {
 			for c := range 2 {
 				if hit.Out[c][f] != sound.Out[c][f] {
 					t.Fatalf("%s: frame %d of channel %d comes out %v by the hit, %v by the sidechain", name, f, c,
@@ -279,10 +281,11 @@ func block(frame int64, n int, hits []float32) *plug.Block {
 	return b
 }
 
-func TestTheTailIsEndlessDuringAHoldAndNoneAfterIt(t *testing.T) {
+func TestWithTheGateAndTheCompressorOffTheTailIsEndlessDuringAHoldAndNoneAfterIt(t *testing.T) {
 	p, _ := newDynamics(t)
 	pr := p.Processor()
 	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 512, Channels: 2})
+	off := set(float64(GateOnID), 0, float64(CompOnID), 0)
 	if pr.Tail() != 0 {
 		t.Fatalf("before any block the tail is %d, not 0", pr.Tail())
 	}
@@ -300,7 +303,9 @@ func TestTheTailIsEndlessDuringAHoldAndNoneAfterIt(t *testing.T) {
 		{nil, 0},
 		{make([]float32, 512), 0},
 	} {
-		pr.Process(block(int64(512*i), 512, c.hits))
+		b := block(int64(512*i), 512, c.hits)
+		b.Changes, off = off, nil
+		pr.Process(b)
 		if got := pr.Tail(); got != c.want {
 			t.Errorf("after block %d the tail is %d, want %d", i, got, c.want)
 		}
