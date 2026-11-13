@@ -75,3 +75,20 @@ func TestOnlyTheWindowViewKeepsTheLeastSize(t *testing.T) {
 		}
 	}
 }
+
+// The Low and High lines keep clear of the tuner's button, wherever they stand.
+func TestTheSpanLinesKeepClearOfTheTunersButton(t *testing.T) {
+	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1536, 864)} {
+		for _, high := range []float64{12000, 16000, 20000} {
+			v := showing(t).(*panel)
+			v.Follow(HighID, high, nil)
+			plugtest.Misfits(t, v, s, plugtest.Fit{})
+			for k, r := range v.disp.spans {
+				if meets(r, v.disp.button) {
+					t.Errorf("at %v×%v with High at %v Hz, line %d at %v runs through the tuner's button at %v",
+						s.W, s.H, high, k, r, v.disp.button)
+				}
+			}
+		}
+	}
+}
