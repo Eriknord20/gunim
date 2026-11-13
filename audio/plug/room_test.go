@@ -136,3 +136,165 @@ func TestAViewWithRoomDoesNotScroll(t *testing.T) {
 		t.Errorf("at its least size, the last button lies at %v", b)
 	}
 }
+
+// Under its least size, ToLaid turns a point in the view's box into the laid-out view's space, and OnScroll runs on
+// each frame the scroll moves, and on none once it rests.
+func TestARoomTellsTheViewWhereThePointerLiesAndWhenItScrolls(t *testing.T) {
+	v := newRoomy()
+	var heard []geom.Point
+	v.OnScroll = func(u *gunim.UI) {
+		if u == nil {
+			t.Error("OnScroll was given no UI")
+		}
+		heard = append(heard, v.Scrolled())
+	}
+	w := show(t, geom.Sz(200, 150), v)
+	frames(w, v, 2)
+	w.Input(input.Scroll{Pos: geom.Pt(150, 100), Delta: geom.Pt(0, -60)})
+	at := frames(w, v, 60)
+	if len(heard) < 5 {
+		t.Fatalf("a scroll that glided over %v was heard %d times", at, len(heard))
+	}
+	for i := 1; i < len(heard); i++ {
+		if heard[i] == heard[i-1] {
+			t.Errorf("OnScroll ran twice at %v", heard[i])
+		}
+	}
+	if got := heard[len(heard)-1]; got != v.Scrolled() {
+		t.Errorf("OnScroll last heard the view at %v; it rests at %v", got, v.Scrolled())
+	}
+	n := len(heard)
+	frames(w, v, 30)
+	if len(heard) != n {
+		t.Errorf("at rest, OnScroll ran %d times more", len(heard)-n)
+	}
+	if got := v.ToLaid(geom.Pt(10, 20)); got != geom.Pt(10, 80) {
+		t.Errorf("scrolled down by 60, a point at 10, 20 in the box lies at %v in the view, want 10, 80", got)
+	}
+	// A drag is heard on each move.
+	n = len(heard)
+	w.Input(input.PointerDown{Pos: geom.Pt(150, 100), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: geom.Pt(150, 90)})
+	w.Input(input.PointerMove{Pos: geom.Pt(150, 80)})
+	w.Input(input.PointerUp{Pos: geom.Pt(150, 80), Button: input.ButtonPrimary})
+	if len(heard) != n+2 {
+		t.Errorf("a drag of two moves was heard %d times", len(heard)-n)
+	}
+}
+
+// fades returns the fade of the layer that clips the view, and the scroll bars drawn: their boxes, and their
+// alpha.
+func fades(w *gunim.Window) (fade geom.Insets, bars []geom.Rect, alpha uint8) {
+	bar := widget.ScrollbarColor.Get(nil)
+	for _, op := range w.Offscreen().Ops() {
+		switch o := op.(type) {
+		case *paint.LayerOp:
+			if o.Opts.Clip && fade == (geom.Insets{}) {
+				fade = o.Opts.Fade
+			}
+		case *paint.RRectOp:
+			c := o.Fill.Solid
+			if c.R == bar.R && c.G == bar.G && c.B == bar.B && c.A > 0 && o.Rect.Size().W <= 12 ||
+				c.R == bar.R && c.G == bar.G && c.B == bar.B && c.A > 0 && o.Rect.Size().H <= 12 {
+				bars, alpha = append(bars, o.Rect), c.A
+			}
+		}
+	}
+	return fade, bars, alpha
+}
+
+// Under its least size, the view fades at each edge with more past it, and a bar on each axis shows where it stands
+// while it scrolls, fading in and out.
+func TestARoomFadesItsEdgesAndShowsItsBars(t *testing.T) {
+	v := newRoomy()
+	w := show(t, geom.Sz(200, 150), v)
+	frames(w, v, 2)
+	fade, bars, _ := fades(w)
+	if fade.Top != 0 || fade.Left != 0 || fade.Bottom <= 0 || fade.Right <= 0 {
+		t.Errorf("scrolled to its start, the view fades by %+v", fade)
+	}
+	if len(bars) != 0 {
+		t.Errorf("at rest, the view shows bars at %v", bars)
+	}
+	w.Input(input.Scroll{Pos: geom.Pt(150, 100), Delta: geom.Pt(-60, -60)})
+	var alphas []uint8
+	for range 8 {
+		w.Frame(time.Second / 60)
+		_, _, a := fades(w)
+		alphas = append(alphas, a)
+	}
+	fade, bars, _ = fades(w)
+	if fade.Top <= 0 || fade.Left <= 0 || fade.Bottom <= 0 || fade.Right <= 0 {
+		t.Errorf("scrolled part way, the view fades by %+v", fade)
+	}
+	if len(bars) != 2 {
+		t.Fatalf("scrolling both ways, the view shows bars at %v", bars)
+	}
+	if alphas[0] >= alphas[len(alphas)-1] || alphas[0] == 0 && alphas[1] == alphas[len(alphas)-1] {
+		t.Errorf("the bars came in at alphas %v", alphas)
+	}
+	for _, b := range bars {
+		if !(geom.Rect{Max: geom.Pt(200, 150)}).Contains(b.Min) || b.Max.X > 200 || b.Max.Y > 150 {
+			t.Errorf("a bar lies at %v, outside the 200×150 box", b)
+		}
+	}
+	// At rest a while, the bars fade out, frame by frame.
+	alphas = alphas[:0]
+	for range 180 {
+		w.Frame(time.Second / 60)
+		_, _, a := fades(w)
+		alphas = append(alphas, a)
+	}
+	if _, bars, _ := fades(w); len(bars) != 0 {
+		t.Errorf("three seconds at rest, the view shows bars at %v", bars)
+	}
+	steps := 0
+	for i := 1; i < len(alphas); i++ {
+		if alphas[i] != alphas[i-1] {
+			steps++
+		}
+	}
+	if steps < 4 {
+		t.Errorf("the bars went out in %d steps: %v", steps, alphas)
+	}
+	if v.Step(time.Second / 60) {
+		t.Error("with its bars gone, the view still moves")
+	}
+}
+
+// Under its least size, a drag of a bar scrolls the view along it.
+func TestADragOfARoomsBarScrollsTheView(t *testing.T) {
+	v := newRoomy()
+	w := show(t, geom.Sz(200, 150), v)
+	frames(w, v, 2)
+	w.Input(input.Scroll{Pos: geom.Pt(150, 100), Delta: geom.Pt(0, -10)})
+	frames(w, v, 30)
+	_, bars, _ := fades(w)
+	var down geom.Rect
+	for _, b := range bars {
+		if b.Size().H > b.Size().W {
+			down = b
+		}
+	}
+	if down.Empty() {
+		t.Fatalf("scrolled down, the view shows no bar down its side: %v", bars)
+	}
+	from := v.Scrolled()
+	grip := down.Min.Add(geom.Pt(down.Size().W/2, down.Size().H/2))
+	w.Input(input.PointerDown{Pos: grip, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: grip.Add(geom.Pt(0, 20))})
+	w.Input(input.PointerUp{Pos: grip.Add(geom.Pt(0, 20)), Button: input.ButtonPrimary})
+	frames(w, v, 2)
+	_, bars, _ = fades(w)
+	var now geom.Rect
+	for _, b := range bars {
+		if b.Size().H > b.Size().W {
+			now = b
+		}
+	}
+	got := v.Scrolled()
+	if got.X != from.X || got.Y <= from.Y || now.Min.Y < down.Min.Y+19 || now.Min.Y > down.Min.Y+21 {
+		t.Errorf("a drag of the bar at %v by 20 down from %v scrolled the view to %v, the bar to %v", down, from, got,
+			now)
+	}
+}
