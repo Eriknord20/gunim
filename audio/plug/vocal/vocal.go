@@ -220,7 +220,7 @@ var Descriptor = plug.Descriptor{
 			AirGainID: 0, PresenceGainID: 0.5, LowShelfID: -3, TapeID: 35}},
 	},
 	ViewSize:    geom.Sz(960, 600),
-	ViewMinSize: geom.Sz(880, 520),
+	ViewMinSize: geom.Sz(880, 600),
 	New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 }
 
