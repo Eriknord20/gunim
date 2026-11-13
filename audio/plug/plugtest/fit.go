@@ -162,16 +162,22 @@ func check(t testing.TB, view gunim.Node, size geom.Size, f Fit) *checker {
 		return c
 	}
 	c.u, c.frame = pr.u, pr.f
+	if _, ok := c.u.Bounds(view); !ok {
+		c.fail(Unpainted, "the view was never painted")
+		return c
+	}
 	c.walk(view, nil, "", false)
 	c.checkParts()
 	c.checkOps(w.Offscreen().Ops())
 	return c
 }
 
-// mount returns an offscreen window of size with n mounted in it.
+// mount returns an offscreen window of size with n mounted in it, painting every frame, as the checks read where
+// each node was drawn and the pointer hits what was painted.
 func mount(t testing.TB, size geom.Size, n gunim.Node) *gunim.Window {
 	t.Helper()
 	w := gunimtest.New(t, size, nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "plugtest", func(struct{}) gunim.Node { return n }, nil)
 	if err := w.Client().Mount(gunim.Root, "plugtest", "plugtest", nil); err != nil {
 		t.Fatal(err)
