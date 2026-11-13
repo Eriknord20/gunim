@@ -121,6 +121,40 @@ func TestTheWheelAndADragScrollAViewUnderItsLeastSize(t *testing.T) {
 	}
 }
 
+// Under its least size the wheel is the view's along each axis it scrolls, at an end too, and with room it is not.
+func TestAViewUnderItsLeastSizeSaysTheWheelIsIts(t *testing.T) {
+	var _ gunim.WheelScroller = newRoomy()
+	up, side := geom.Pt(0, 100), geom.Pt(100, 0)
+	for _, c := range []struct {
+		box      geom.Size
+		up, side bool
+	}{
+		{geom.Sz(200, 150), true, true},
+		{geom.Sz(400, 150), true, false},
+		{geom.Sz(200, 300), true, true}, // a plain wheel scrolls a view that is too narrow alone
+		{geom.Sz(400, 300), false, false},
+		{geom.Sz(800, 600), false, false},
+	} {
+		v := newRoomy()
+		w := show(t, c.box, v)
+		frames(w, v, 2)
+		if got := v.ScrollsAlong(up); got != c.up {
+			t.Errorf("in %v×%v, the wheel turned up is the view's: %v, want %v", c.box.W, c.box.H, got, c.up)
+		}
+		if got := v.ScrollsAlong(side); got != c.side {
+			t.Errorf("in %v×%v, the wheel turned sideways is the view's: %v, want %v", c.box.W, c.box.H, got, c.side)
+		}
+		if c.up {
+			// Scrolled to its end, the wheel is still the view's.
+			w.Input(input.Scroll{Pos: geom.Pt(50, 50), Delta: geom.Pt(-1000, -1000)})
+			frames(w, v, 60)
+			if !v.ScrollsAlong(geom.Pt(0, -100)) {
+				t.Errorf("in %v×%v, scrolled to its end, the wheel is no longer the view's", c.box.W, c.box.H)
+			}
+		}
+	}
+}
+
 // At its least size and over it, the view takes no wheel and no press, and paints unmoved.
 func TestAViewWithRoomDoesNotScroll(t *testing.T) {
 	v := newRoomy()

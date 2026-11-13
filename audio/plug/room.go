@@ -96,6 +96,16 @@ func (r *Room) Scrolled() geom.Point {
 // ToLaid returns p, a point in the view's box such as a pointer's position, in the space the view was laid out in.
 func (r *Room) ToLaid(p geom.Point) geom.Point { return p.Add(r.shown()) }
 
+// ScrollsAlong implements [gunim.WheelScroller]: true while the view is laid out larger than its box along the axis a
+// wheel turned by delta scrolls it.
+func (r *Room) ScrollsAlong(delta geom.Point) bool {
+	reach := r.reach()
+	if delta.X == 0 && reach.Y == 0 {
+		delta.X, delta.Y = delta.Y, 0
+	}
+	return delta.X != 0 && reach.X > 0 || delta.Y != 0 && reach.Y > 0
+}
+
 // shown returns how far the view is drawn moved, the scroll snapped to the frame's pixels.
 func (r *Room) shown() geom.Point {
 	at := r.Scrolled()
