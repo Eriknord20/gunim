@@ -6,12 +6,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/plugui"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 )
@@ -270,5 +272,27 @@ func TestFitsNamesAPartNeverPainted(t *testing.T) {
 	f.Hidden = []gunim.Node{meter, gain}
 	if got := Misfits(t, v, geom.Sz(200, 140), f); len(got) != 0 {
 		t.Errorf("a meter and a knob hidden on purpose misfit: %v", got)
+	}
+}
+
+// stuck is a squeezing view whose own Handle, Step and Reveal hide its Room's.
+type stuck struct{ squeezing }
+
+func (s *stuck) Handle(input.Event, *gunim.UI) bool { return false }
+func (s *stuck) Step(time.Duration) bool            { return false }
+func (s *stuck) Reveal(geom.Rect, *gunim.UI)        {}
+func (s *stuck) Children() []gunim.Node             { return s.squeezing.Children() }
+
+// UnderLeast names a view that lays out at its least size and does not scroll, as one that hides its Room's methods.
+func TestUnderLeastNamesAViewThatDoesNotScroll(t *testing.T) {
+	least := geom.Sz(300, 200)
+	ft := &fakeT{TB: t}
+	UnderLeast(ft, func() gunim.Node { return &stuck{squeezing{least: least, k: knob("Gain")}} }, geom.Sz(150, 100),
+		least)
+	for _, want := range []string{"the wheel scrolls the view nowhere", "a drag on empty ground scrolls the view nowhere",
+		"out of sight"} {
+		if !slices.ContainsFunc(ft.errs, func(e string) bool { return strings.Contains(e, want) }) {
+			t.Errorf("nothing says %q in %v", want, ft.errs)
+		}
 	}
 }

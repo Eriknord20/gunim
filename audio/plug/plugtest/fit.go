@@ -69,9 +69,11 @@ func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 }
 
 // UnderLeast lays out and paints a view made by view at size, under its least size least, and fails t where it lays
-// its parts out other than at least, or draws anything outside its box.
+// its parts out other than at least, draws anything outside its box, or does not scroll: where the wheel does not
+// move it, gliding, a drag on empty ground does not move it, or Tab to a control out of sight leaves it out of sight.
 func UnderLeast(t testing.TB, view func() gunim.Node, size, least geom.Size) {
 	t.Helper()
+	defer scrollsUnderLeast(t, view, size)
 	want := map[string]placed{}
 	for _, p := range check(t, view(), least, Fit{}).laid {
 		want[p.path] = p
