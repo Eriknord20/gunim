@@ -7,6 +7,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug/plugtest"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 )
 
@@ -52,4 +53,29 @@ func TestSheet(t *testing.T) {
 		sizes = append(sizes, geom.Sz(s[0], s[1]))
 	}
 	plugtest.Shots(t, func() gunim.Node { return showing(t) }, Descriptor, sizes, dir)
+}
+
+// In a window wider than the braid needs, the braid stands no wider than braidMostW, in the middle, on a quiet card
+// that shows more the more room there is round it.
+func TestTheBraidStandsInTheMiddleOfAWideWindow(t *testing.T) {
+	var was float32
+	for _, s := range []geom.Size{geom.Sz(640, 300), geom.Sz(1100, 420), geom.Sz(1536, 864)} {
+		v := showing(t).(*panel)
+		plugtest.Misfits(t, v, s, plugtest.Fit{})
+		l := v.lay
+		from, to := l.inX-edge, l.outX+audioui.MeterW+edge
+		if to-from > braidMostW+0.5 {
+			t.Errorf("at %v×%v the braid stands %v wide", s.W, s.H, to-from)
+		}
+		if math.Abs(float64(from+to-s.W)) > 1 {
+			t.Errorf("at %v×%v the braid stands from %v to %v, not in the middle", s.W, s.H, from, to)
+		}
+		if v.ground < was {
+			t.Errorf("at %v×%v the card shows at %v, less than in a smaller window", s.W, s.H, v.ground)
+		}
+		was = v.ground
+	}
+	if was < 0.99 {
+		t.Errorf("at 1536×864 the card shows at %v", was)
+	}
 }
