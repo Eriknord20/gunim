@@ -101,3 +101,17 @@ func TestTheBandListFitsTheViewsSizes(t *testing.T) {
 		}
 	}
 }
+
+// The graph's dB labels show only clear of the bar along the top.
+func TestTheDBLabelsKeepClearOfTheBar(t *testing.T) {
+	for _, s := range []geom.Size{Descriptor.ViewMinSize, Descriptor.ViewSize, geom.Sz(1536, 864)} {
+		v := showing(t).(*full)
+		plugtest.Misfits(t, v, s, backdrop(t, v))
+		for _, l := range v.g.dbDrawn {
+			if l.alpha > 0.01 && l.at.Min.Y < v.barAt.Max.Y+1 && l.at.Max.X > v.barAt.Min.X &&
+				l.at.Min.X < v.barAt.Max.X {
+				t.Errorf("at %v×%v a dB label at %v shows under the bar at %v", s.W, s.H, l.at, v.barAt)
+			}
+		}
+	}
+}

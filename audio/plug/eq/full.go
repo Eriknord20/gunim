@@ -369,6 +369,7 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	// the match button, and the stop button as far in as it is, before
 	// the knobs.
 	v.barAt = geom.Rc(barInset, barInset, max(size.W-2*barInset, 0), barH+2*barPadY)
+	v.g.under = v.barAt
 	o := v.barAt.Min.Add(geom.Pt(barPadX, barPadY))
 	right := v.barAt.Max.X - barPadX
 	sw := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(220, 32)})
