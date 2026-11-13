@@ -172,6 +172,11 @@ type Renderer struct {
 	// from the bottom, so the canvas goes to it upside down.
 	WindowFBO  uint32
 	FlipWindow bool
+	// KeepInCanvas keeps each frame in the canvas: it never draws straight
+	// to WindowFBO, and never copies the canvas there. A compositor that
+	// lays the canvas itself, as one turning the picture onto a screen
+	// mounted sideways, saves that copy; see [Renderer.CanvasTexture].
+	KeepInCanvas bool
 	// blurs holds two scratch targets for each downsampling factor.
 	blurs [len(blurFactors)][2]target
 	// stack is the layers open, innermost last. depth is the target
@@ -753,6 +758,16 @@ func compile(g gl.Context, kind uint32, src string) (uint32, error) {
 // up, for reading a frame back.
 func (r *Renderer) Canvas() uint32 { return r.layers[0].fbo }
 
+// CanvasTexture returns the canvas's texture, which holds the last frame
+// drawn, the window's size, with its first row at the bottom as the
+// window's own framebuffer would; 0 before the first frame.
+func (r *Renderer) CanvasTexture() uint32 {
+	if len(r.layers) == 0 {
+		return 0
+	}
+	return r.layers[0].tex
+}
+
 // Release frees the renderer's GL objects. The programs belong to every
 // window and stay.
 func (r *Renderer) Release() {
@@ -874,7 +889,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	// next small one to draw the whole window.
 	ws := window.Size()
 	big := redrawn > ws.W*ws.H/2
-	r.direct = !backdrop && !r.FlipWindow && big && r.big && r.Corner == 0 && r.color.lut == nil
+	r.direct = !backdrop && !r.FlipWindow && !r.KeepInCanvas && big && r.big && r.Corner == 0 && r.color.lut == nil
 	r.big = big
 	if r.fit(&r.layers[0]) || !r.canvasOK || scale != r.canvasScale {
 		if !r.direct {
@@ -943,6 +958,8 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	}
 	if !r.direct {
 		r.canvasOK, r.canvasScale = true, scale
+	}
+	if !r.direct && !r.KeepInCanvas {
 		g.BindFramebuffer(gl.FRAMEBUFFER, r.WindowFBO)
 		// The background is in the window's colours, as the canvas is
 		// once copied.

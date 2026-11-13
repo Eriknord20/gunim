@@ -61,6 +61,23 @@ func Main(ctx context.Context, fn func(*App) error) error {
 	return runApp(ctx, drv, fn)
 }
 
+// MainWith is [Main] on a driver the program opened itself, as
+// driver/kms's with options of its own:
+//
+//	d, err := kms.Open(kms.Options{Rotate: 90})
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	err = gunim.MainWith(ctx, d, fn)
+//
+// It runs fn as Main does, and the driver's Run gives back what the driver
+// took as it returns. The call uses the driver up: it cannot run again.
+// ctx ends it as it ends Main, as does the last window closing; driver/kms
+// also ends it on SIGHUP, SIGINT and SIGTERM, which it catches itself.
+func MainWith(ctx context.Context, drv driver.Driver, fn func(*App) error) error {
+	return runApp(ctx, drv, fn)
+}
+
 // runApp is Main after the display is open, split out so a test can
 // hand it a driver of its own.
 func runApp(ctx context.Context, drv driver.Driver, fn func(*App) error) error {

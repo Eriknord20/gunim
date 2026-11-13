@@ -5,7 +5,8 @@ the display's refresh rate.
 
 ## Status
 
-gunim runs on Windows 11, on Linux under X11, on Android, and in a browser. On Windows
+gunim runs on Windows 11, on Linux under X11, on Android, in a browser, and full screen on a
+Linux screen with no window system, such as a Raspberry Pi's touch screen. On Windows
 each window draws at its own monitor's rate, with 60 Hz and 120 Hz
 monitors side by side. macOS builds and is still untested. The API
 still changes as the examples ask more of it.
@@ -615,6 +616,30 @@ popups, as on the desktop.
 The examples lay themselves out for a phone where the window is narrow;
 the calculator and the chat take `-size 390x800` to try it on the
 desktop.
+
+## A screen with no window system
+
+`driver/kms` draws one full-screen UI straight to a Linux screen through the kernel's DRM/KMS,
+with touch read from `/dev/input`: a Raspberry Pi 5 with a Touch Display 2, say. It draws with
+gunim's renderer on the GPU, through OpenGL ES 3, and pages each frame on at the panel's vblank, so
+a screen that moves draws at the panel's rate and a still one draws nothing. Mesa's libraries load
+at run time, so it builds with `CGO_ENABLED=0`; the machine needs `libgbm1`, `libegl1`,
+`libegl-mesa0` and `libgles2`. Where the GPU fails, Mesa draws on the CPU, more slowly. A
+program opens the driver with the options it wants and runs as with `Main`:
+
+```go
+d, err := kms.Open(kms.Options{Rotate: 90, VT: "free"})
+if err != nil {
+	log.Fatal(err)
+}
+err = gunim.MainWith(ctx, d, fn)
+```
+
+`example/kmsdemo` is a test pattern with a dot under each finger, and `tools/kmsbench` measures
+the driver against the goals in [docs/plans/kms-touch.md](docs/plans/kms-touch.md). `kms.Options`'
+`Record` and `Replay` record a touch screen's events and play them back through the driver, for
+such measures. Built with `-tags gunimkms`, `gunim.Main` opens the driver itself with its default
+options. The driver is for 64-bit Linux, as on a Raspberry Pi 4 or 5 with a 64-bit system.
 
 ## The split
 

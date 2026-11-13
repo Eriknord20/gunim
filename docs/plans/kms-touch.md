@@ -118,8 +118,8 @@ Read: `docs/poc-plan.md` (M3), `docs/design.md` §9 and §11, `docs/install-pi.m
 - It runs at 60 Hz (`video=DSI-1:720x1280@60` in the docs). Video and touch come over the DSI ribbon. Power comes
   from the GPIO header. On the trial Pi the mode is 720 × 1280 with an 83 333 kHz clock, 937 by 1 482 in total:
   60.01 Hz.
-- **The trial Pi has one fitted**: a 7" on `card0-DSI-2`, found by `display_auto_detect=1` with no `dtoverlay` line
-  in `config.txt`. Its touch shows up as `11-005d Goodix Capacitive TouchScreen`, and its backlight as
+- **The trial Pi has one fitted**: the 5" on `card0-DSI-2`, found by `display_auto_detect=1` with no `dtoverlay`
+  line in `config.txt`. The firmware loads `raspberrypi,dsi-5inch`, and the connector reports 62 × 110 mm. Its touch shows up as `11-005d Goodix Capacitive TouchScreen`, and its backlight as
   `/sys/class/backlight/panel_backlight@1`, at 15 of 31.
 - The kernel's `rotate=` on the command line "only affects the text-mode console". It does nothing for a KMS program.
 - The device tree overlay is `vc4-kms-dsi-ili9881-7inch` (or `-5inch`), with `rotation`, `invx`, `invy`, `swapxy`,
@@ -163,7 +163,7 @@ Read: `docs/poc-plan.md` (M3), `docs/design.md` §9 and §11, `docs/install-pi.m
 
 ## 1. Goals in numbers
 
-All figures are for a Pi 5 (4 GB) with the 7" Touch Display 2 at 60 Hz, running the heaviest Hjortron screen while it
+All figures are for a Pi 5 (4 GB) with the 5" Touch Display 2 at 60 Hz, running the heaviest Hjortron screen while it
 animates, unless a line says otherwise. There are no power goals: there is no USB-C power meter (decision 11), so CPU
 use and frames at rest stand in for power.
 
@@ -237,11 +237,15 @@ gunim engine (unchanged)  ── driver.Driver / driver.Window ──  driver/km
 - `driver/kms` builds only for Linux (`//go:build linux`). It implements `driver.Driver` and `driver.Window`, and the
   optional interfaces it can honour: `Awaker` (keep the screen on), `FingerTaker`, `KeyboardCoverer` (for the
   on-screen keyboard), `SafeAreaer` (none), `Shooter` (screenshots, for bug reports).
+- **Only 64-bit Linux** (`linux && (arm64 || amd64)`): `gbm_bo_get_handle` returns an 8-byte union, which comes back
+  in a register there, and through a hidden pointer on 32-bit ARM and 386, which purego cannot read. So a Pi 4 or
+  5 needs a 64-bit system. Elsewhere the `gunimkms` tag gives the desktop driver.
 - **Choosing it.** `gunim.Main` picks a driver by build tags (`open_desktop.go`, `open_android.go`). Two ways in:
   - a build tag, `gunimkms`: `open_kms.go` makes `gunim.Main` open `driver/kms` with default options. The desktop
     driver is then not linked in, which keeps the binary smaller.
-  - `kms.Main(ctx, kms.Options{...}, fn)`, for a program that sets options. It needs one small export in gunim, a
-    `gunim.MainWith(ctx, drv, fn)` that is today's `runApp`.
+  - `kms.Open(kms.Options{...})` and then `gunim.MainWith(ctx, drv, fn)`, for a program that sets options.
+    `MainWith` is today's `runApp`, exported. A `kms.Main` would import gunim, which imports `driver/kms` under the
+    `gunimkms` tag: an import cycle, so there is none.
 - **Windows.** As on Android, the first window fills the screen and popups lie over it, through `compose`. A
   menu, a dropdown and a dialog work unchanged.
 - **Threads.** One render goroutine, locked to its OS thread, owns the EGL context and the DRM file. It draws,
@@ -263,8 +267,11 @@ gunim engine (unchanged)  ── driver.Driver / driver.Window ──  driver/km
 would cost more than the whole driver.
 
 **With no GPU.** If EGL or GBM fails on the hardware GPU, the driver tries Mesa's software renderer through the same
-path. `LIBGL_ALWAYS_SOFTWARE=1` should give Mesa's `kms_swrast` and llvmpipe on GBM; K1 checks that on the Pi. The
-program looks the same and runs slower.
+path, in the same process. `GBM_ALWAYS_SOFTWARE=1` gives Mesa's `kms_swrast` and llvmpipe on GBM, as K1 found on the
+Pi. `LIBGL_ALWAYS_SOFTWARE=1` is not used: with it, Mesa 26.2's swap on GBM jumps to a null function. Where Mesa's
+own loader cannot load the GPU's driver, it falls back to llvmpipe by itself; the driver reads GL's renderer name,
+so `Software()` says so then too. The program looks the same and runs slower: 18 fps on the trial Pi, at 350 % of
+one core.
 The driver logs why, and sets a flag the app can read (`kms.Window.Software()`), so an app can show a small notice or
 drop blurs. Hjortron's console shows a small notice that it draws without the GPU (decision 8). If that fails too, `kms.Open` returns the error and the program stops. systemd then shows it in the journal.
 The driver never shows a blank screen while claiming to run.
@@ -279,14 +286,18 @@ The driver never shows a blank screen while claiming to run.
    mode, its CRTC and its primary plane. Opening the card first makes the process master with no capability.
 3. **Make the context.** `gbm_create_device` on the card. `eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, ...)`
    [EGL GBM], an ES 3 context, and a `gbm_surface` of the mode's size in `XRGB8888`, with
-   `GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING`. If the plane lists format modifiers (`IN_FORMATS`), ask for those.
-   `drm-rp1-dsi` lists none, so its buffers are linear, in memory the display can reach.
+   `GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING`. `drm-rp1-dsi` lists no format modifiers, so its buffers are linear,
+   in memory the display can reach. Reading the plane's `IN_FORMATS`, and asking GBM for the modifiers it lists, is
+   deferred: it matters for vc4's HDMI planes, which can scan out tiled buffers, and not for the trial Pi's panel.
 4. **Each frame.** `compose` draws into the surface. Then `eglSwapBuffers`, `gbm_surface_lock_front_buffer`, and
    `DRM_IOCTL_MODE_ADDFB2` for that buffer, kept in a small cache keyed by buffer so each buffer is added once.
 5. **Commit.** One atomic commit sets `FB_ID` on the primary plane, with `DRM_MODE_PAGE_FLIP_EVENT` and
    `DRM_MODE_ATOMIC_NONBLOCK`. The first commit also sets the mode, `CRTC_ID` and `ACTIVE`, with
    `DRM_MODE_ATOMIC_ALLOW_MODESET`, after a test commit with `DRM_MODE_ATOMIC_TEST_ONLY`.
-6. **The flip event.** When it comes, release the buffer shown before, and send `driver.Frame` on `Presented`:
+6. **The flip event.** When it comes, release the buffer shown before, and send `driver.Frame` on `Presented`, a
+   lead before the next vblank, not at once, so the next frame reads touches as late as it can and still makes that
+   vblank. The driver learns the lead from the frames: it shortens while frames make their vblank and lengthens at a
+   miss. The GPU's work per frame sets how late a frame can start:
    - `Shown` is the event's timestamp, the vblank the frame went out on;
    - `Lag` is half a refresh (scan-out reaching the middle of the panel) plus an estimate of the LCD's response, kept
      as one constant that the slow-motion video checks.
@@ -363,9 +374,9 @@ vary by 100 %.
 ### 2.8 Density and scale
 
 - The connector reports the panel's size in millimetres. The driver works out pixels per inch and sets the scale to
-  the nearest quarter of `ppi / 160`, as Android does. That gives **1.25** on the 7" (1024 × 576 logical pixels in
-  landscape) and **1.75** on the 5" (about 731 × 411).
-- `kms.Options.Scale` overrides it. An app that wants bigger targets and text on the 7" can set 1.5 (853 × 480).
+  the nearest quarter of `ppi / 160`, as Android does. That gives **1.75** on the 5" Hjortron uses (about 731 × 411
+  logical pixels in landscape), and **1.25** on the 7" (1024 × 576).
+- `kms.Options.Scale` overrides it. An app that wants bigger targets and text on the 5" can set 2 (640 × 360).
 
 ### 2.9 Brightness and blanking
 
@@ -400,8 +411,13 @@ UI. The driver:
   with a USB keyboard, which Hjortron's install guide relies on (`Alt+F2`). It is a repair path only (decision 9);
 - with `kms.Options.VT` set to "free", opens the first free VT and switches to it, and switches back on exit. That is
   how a test run over SSH leaves tty1 and its login alone;
-- puts the VT back as it found it on exit, on `SIGTERM` and on a panic. The unit's `TTYReset=yes` covers a crash
-  that skips even that.
+- puts the VT back as it found it on exit, on `SIGHUP`, `SIGINT`, `SIGTERM` and `SIGQUIT`, which it catches itself,
+  and on a panic on the render thread. `SIGKILL`, `os.Exit`, a panic on another goroutine and a crash in Mesa's C
+  code skip that. For those, it keeps a state file under `/run` while it runs, locked: the VT it took, the VT before,
+  and the backlight's level. The next run finds the file unlocked and puts those back first. The unit's
+  `TTYReset=yes` also covers the unit's own VT, but not a free VT, and never the backlight. A unit that is not
+  root keeps the state file in its `RuntimeDirectory=`, which systemd removes as the unit stops, crash or not, so it
+  needs `RuntimeDirectoryPreserve=restart` for the next run to find the file (section 4.2).
 
 ---
 
@@ -439,8 +455,8 @@ What a touch screen adds is listed below, then a small design language that hold
 5. **A PIN pad, an on-screen keyboard and a hold-to-confirm button** (section 3.3).
 6. **A font.** Raspberry Pi OS Lite has few fonts, and a sandbox may hide them. The touch kit embeds Inter, under
    the SIL Open Font License, at regular and semibold, about 600 KB (decision 12). gunim's
-   shaping, hinting and glyph atlas then work as anywhere. At 1.25 scale on 210 ppi, body text of 17 logical pixels
-   is 21 device pixels: sharp with greyscale smoothing.
+   shaping, hinting and glyph atlas then work as anywhere. At 1.75 scale on the 5"'s 295 ppi, body text of 17
+   logical pixels is 30 device pixels: sharp with greyscale smoothing.
 7. **Brightness fades,** smooth across 32 backlight steps (section 2.9).
 8. **The "something extra",** kept cheap so it never costs a frame or power at rest:
    - waking fades up while the cards rise into place on `Bounce`, one after another, 30 ms apart;
@@ -469,7 +485,7 @@ springs from the theme, the first layout jumps, tests on every frame from awkwar
 
 The rules for every screen on the touch kit, so Hjortron and the next project look like one family.
 
-- **Size.** Every target is at least 48 logical pixels both ways: 7.2 mm on the 7" at 1.25. Spacing is on a grid of
+- **Size.** Every target is at least 48 logical pixels both ways: 84 device pixels, 7.2 mm, on the 5" at 1.75. Spacing is on a grid of
   8.
 - **Type.** Four sizes only: 40 for one big figure on a screen, 24 for titles, 17 for body, 14 for captions.
   Semibold for titles and figures, regular for everything else.
@@ -558,6 +574,9 @@ SupplementaryGroups=video render input
 ExecStart=/usr/local/bin/hjortron-touch
 TTYPath=/dev/tty1
 TTYReset=yes
+# driver/kms's state file, kept across a restart after a crash (section 2.10)
+RuntimeDirectory=hjortron-touch
+RuntimeDirectoryPreserve=restart
 TTYVTDisallocate=yes
 StandardInput=tty-force
 Restart=always
@@ -643,11 +662,11 @@ type Blank struct {
 	Dim, Off time.Duration
 }
 
-// Open opens the screen.
+// Open opens the screen. gunim.MainWith(ctx, d, fn) then runs fn on it, as gunim.Main does.
 func Open(o Options) (*Driver, error)
 
-// Main opens the screen and runs fn as gunim.Main does.
-func Main(ctx context.Context, o Options, fn func(*gunim.App) error) error
+// Close gives the screen, the VT and the backlight back, for a program that ends without running the driver.
+func (d *Driver) Close() error
 
 // Window adds to driver.Window.
 func (w *Window) SetBrightness(v float32) error
@@ -724,9 +743,9 @@ On the Pi it needs Mesa (`libgbm1`, `libegl1`, `libegl-mesa0`, `libgles2`) and a
 
 ### 5.3 What travels and what doesn't
 
-- **Travels:** any Pi 5 or Pi 4 (vc4 and V3D both), the 5", 7" and 10" Touch Display 2, and an HDMI touch screen
-  that speaks evdev multi-touch. Each needs a test on the hardware before the README claims it.
-- **Doesn't, in v1:** several screens at once, hot-plugging HDMI, keyboard layouts other than US, sound (gunim's
+- **Travels:** any Pi 5 or Pi 4 with a 64-bit system (vc4 and V3D both), the 5", 7" and 10" Touch Display 2, and an
+  HDMI touch screen that speaks evdev multi-touch. Each needs a test on the hardware before the README claims it.
+- **Doesn't, in v1:** a 32-bit system, several screens at once, hot-plugging HDMI, keyboard layouts other than US, sound (gunim's
   `audio/speaker` already plays through ALSA, so it may simply work), and screen readers (there is no AT-SPI bus
   without a desktop).
 
@@ -827,8 +846,8 @@ The owner answered these on 2026-11-13, on gunim PR #379. The plan above follows
 
 1. **Which way up for Hjortron?** **Landscape** (`Rotate: 90`). The storage graph and the lists read better wide,
    and the navigation fits down the left edge.
-2. **Which size of display?** **7"**. The driver works out the scale for 5" and 10" too, so another project can
-   choose.
+2. **Which size of display?** **5"**, the one fitted to the trial Pi, at scale 1.75 (the owner corrected the first
+   answer, 7", on 2026-11-13). The driver works out the scale for 7" and 10" too, so another project can choose.
 3. **Two processes, or one root process?** **Two** (section 4.1). The touch UI never runs as root.
 4. **A separate `hjortron-touch` binary?** **Yes**. It keeps `hjortron` static. `hjortron upgrade` installs it with
    `hjortron`, or installs neither.
@@ -846,7 +865,7 @@ The owner answered these on 2026-11-13, on gunim PR #379. The plan above follows
 11. **Power figures.** **None.** There is no USB-C power meter, so the two power goals are dropped. CPU use and
     frames at rest stay.
 12. **The font.** **Inter**, regular and semibold, embedded in the touch kit.
-13. **Is a Touch Display 2 on the trial Pi?** **Yes**: a 7", on `card0-DSI-2` at 720 × 1280, with a Goodix touch
+13. **Is a Touch Display 2 on the trial Pi?** **Yes**: the 5", on `card0-DSI-2` at 720 × 1280, with a Goodix touch
     controller, found by `display_auto_detect=1` with no overlay line.
 14. **The name.** **Keep `driver/kms`**.
 

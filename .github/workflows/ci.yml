@@ -98,6 +98,16 @@ jobs:
       - name: Test audio
         run: go test ./audio/...
 
+      # driver/kms, the touch screen's driver for a Raspberry Pi, on its own
+      # architecture: its structures go to the kernel as they lie.
+      - name: Test the KMS driver
+        run: |
+          go test ./driver/kms/ ./driver/internal/compose/
+          go build ./driver/kms/... ./tools/kmsbench ./example/kmsdemo
+          go vet -tags kmspi -unsafeptr=false ./driver/kms/
+        env:
+          CGO_ENABLED: 0
+
       - name: Test audio without cgo
         run: go test ./audio/internal/jack/ ./audio/internal/pipewire/ ./audio/internal/audiounit/ ./audio/speaker/
         env:

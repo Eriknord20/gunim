@@ -41,6 +41,8 @@ type fakeGL struct {
 	// settings.
 	attached map[uint32]uint32
 	params   map[uint32]map[uint32]int32
+	// turn is the last matrix the compositor turned its layers by.
+	turn [4]float32
 }
 
 // glCall is the state a clear or a laid texture went by.
@@ -114,11 +116,12 @@ func (g *fakeGL) Enable(c uint32) {
 	g.scissor = g.scissor || c == glScissorTest
 	g.blend = g.blend || c == gl.BLEND
 }
-func (g *fakeGL) ClearColor(r, c, b, a float32)       { g.clear = [4]float32{r, c, b, a} }
-func (g *fakeGL) Clear(uint32)                        { g.record("clear") }
-func (g *fakeGL) BlendFuncSeparate(a, b, c, d uint32) { g.blendFn = [4]uint32{a, b, c, d} }
-func (g *fakeGL) ActiveTexture(t uint32)              { g.active = t }
-func (g *fakeGL) Uniform4fv(_ int32, v []float32)     { g.rects = append(g.rects, [4]float32(v)) }
+func (g *fakeGL) ClearColor(r, c, b, a float32)         { g.clear = [4]float32{r, c, b, a} }
+func (g *fakeGL) Clear(uint32)                          { g.record("clear") }
+func (g *fakeGL) BlendFuncSeparate(a, b, c, d uint32)   { g.blendFn = [4]uint32{a, b, c, d} }
+func (g *fakeGL) ActiveTexture(t uint32)                { g.active = t }
+func (g *fakeGL) Uniform4fv(_ int32, v []float32)       { g.rects = append(g.rects, [4]float32(v)) }
+func (g *fakeGL) UniformMatrix2fv(_ int32, v []float32) { g.turn = [4]float32(v) }
 func (g *fakeGL) DrawElements(uint32, int32, uint32, int) {
 	g.laid = append(g.laid, g.texture)
 	g.record("lay")
@@ -146,6 +149,8 @@ type fakeDrawer struct {
 	sharpAt time.Time
 	rebinds *int
 	gone    int
+	// kept is what keep last said: the frames stay in the canvas.
+	kept bool
 	// g, if set, has the draws leave GL as a renderer does: its own framebuffer,
 	// viewport, program, vertex array, blending and texture unit, and a scissor on.
 	g *fakeGL
@@ -179,6 +184,11 @@ func (d *fakeDrawer) draw(fbo uint32, _ []paint.Op, w, h int, _ float32) time.Ti
 func (d *fakeDrawer) rebind() { *d.rebinds++ }
 
 func (d *fakeDrawer) release() { d.gone++ }
+
+func (d *fakeDrawer) keep(on bool) { d.kept = on }
+
+// canvas is the fake renderer's canvas: names well apart from the fake GL's.
+func (d *fakeDrawer) canvas() (tex, fbo uint32) { return 7000, 7001 }
 
 // bench is a compositor on a fake GL, with windows of fake renderers.
 type bench struct {
@@ -642,6 +652,38 @@ func TestForgetKeepsTheLastFrame(t *testing.T) {
 // Renderers leave their own viewport and a scissor on, and laying must not go by
 // them: one popup's viewport would cut every texture to its size, and a scissor
 // would leave part of the surface as the last frame left it.
+// A window at the bottom that shows what is under it, or leaves part of the
+// surface bare, has the surface cleared first, to opaque black.
+func TestLayingClearsUnderAWindowThatDoesNotHideIt(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		l    Layer
+	}{
+		{"transparent", Layer{Pane: &Pane{Transparent: true, Sharp: func(time.Time) {}}, W: 100, H: 80}},
+		{"smaller", Layer{Pane: newPane(), X: 10, W: 90, H: 80}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newBench(t)
+			pop := Layer{Pane: newPane(), X: 5, Y: 5, W: 20, H: 20}
+			b.frame([]Layer{c.l, pop}, 100, 80, &c.l, &pop)
+			var cleared *glCall
+			for i := range b.g.calls {
+				if b.g.calls[i].kind == "clear" && b.g.calls[i].fbo == 0 {
+					cleared = &b.g.calls[i]
+				}
+			}
+			if cleared == nil || cleared.clear != [4]float32{0, 0, 0, 1} {
+				t.Fatalf("calls %+v, want the surface cleared to black", b.g.calls)
+			}
+			for _, call := range b.g.calls {
+				if call.kind == "lay" && !call.blend {
+					t.Fatalf("a layer laid unblended over a cleared surface: %+v", call)
+				}
+			}
+		})
+	}
+}
+
 func TestLayingSetsTheGLStateItGoesBy(t *testing.T) {
 	for _, awkward := range []struct {
 		name string
@@ -660,8 +702,10 @@ func TestLayingSetsTheGLStateItGoesBy(t *testing.T) {
 			b.g.calls = nil
 			// The popup draws last, and its renderer leaves its viewport and scissor.
 			b.frame([]Layer{lb, lp}, lb.W, lb.H, &lp)
-			if len(b.g.calls) != 3 {
-				t.Fatalf("calls %+v, want a clear and two layers", b.g.calls)
+			// The window at the bottom is opaque and covers the surface, so
+			// there is no clear under it, and it is laid unblended.
+			if len(b.g.calls) != 2 {
+				t.Fatalf("calls %+v, want two layers", b.g.calls)
 			}
 			for i, c := range b.g.calls {
 				if c.fbo != 0 {
@@ -676,8 +720,8 @@ func TestLayingSetsTheGLStateItGoesBy(t *testing.T) {
 				if c.kind != "lay" {
 					continue
 				}
-				if !c.blend || c.blendFn != [4]uint32{gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA} {
-					t.Errorf("a layer blended %v with %v, want premultiplied", c.blend, c.blendFn)
+				if c.blend != (i == 1) || c.blendFn != [4]uint32{gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA} {
+					t.Errorf("layer %d blended %v with %v, want the popup alone blended, premultiplied", i, c.blend, c.blendFn)
 				}
 				if c.program != b.c.prog || c.vao != b.c.vao || c.active != gl.TEXTURE0 {
 					t.Errorf("a layer drew with program %d, vertex array %d, unit %#x", c.program, c.vao, c.active)
@@ -685,9 +729,6 @@ func TestLayingSetsTheGLStateItGoesBy(t *testing.T) {
 			}
 			if b.g.vao != 0 {
 				t.Errorf("laying left vertex array %d bound", b.g.vao)
-			}
-			if c := b.g.calls[0]; c.kind != "clear" || c.clear != [4]float32{0, 0, 0, 1} {
-				t.Errorf("the surface was cleared to %v", c.clear)
 			}
 			// A renderer clears with what it finds, for the corners of a popup.
 			if b.g.clear != [4]float32{0, 0, 0, 0} {
@@ -714,7 +755,7 @@ func TestATextureIsReadyToDrawInto(t *testing.T) {
 		t.Errorf("the texture is %v", got)
 	}
 	want := map[uint32]int32{
-		gl.TEXTURE_MIN_FILTER: glLinear, gl.TEXTURE_MAG_FILTER: glLinear,
+		gl.TEXTURE_MIN_FILTER: glNearest, gl.TEXTURE_MAG_FILTER: glNearest,
 		gl.TEXTURE_WRAP_S: gl.CLAMP_TO_EDGE, gl.TEXTURE_WRAP_T: gl.CLAMP_TO_EDGE,
 	}
 	for name, v := range want {
@@ -822,5 +863,89 @@ func TestUpright(t *testing.T) {
 	img := Upright([]byte{1, 0, 0, 255, 2, 0, 0, 255}, 1, 2)
 	if img.RGBAAt(0, 0).R != 2 || img.RGBAAt(0, 1).R != 1 {
 		t.Fatalf("got %v", img.Pix)
+	}
+}
+
+// A screen turned sideways, as a portrait panel shown in landscape, keeps a
+// window alone on it in its renderer's canvas, and lays the canvas turned,
+// with the viewport the panel's own way up: one copy onto the surface, as
+// unturned, and no blending under an opaque window.
+func TestTurnedLaysTheCanvasTurnedOnTheSurface(t *testing.T) {
+	b := newBench(t)
+	b.c.SetTurn(90)
+	p := newPane()
+	l := Layer{Pane: p, W: 1280, H: 720}
+	b.frame([]Layer{l}, 1280, 720, &l)
+	if got, want := took(p), []drawn{{fbo: 0, w: 1280, h: 720}}; !slices.Equal(got, want) {
+		t.Fatalf("drew %v, want %v", got, want)
+	}
+	if d := p.drawer.(*fakeDrawer); !d.kept || !p.InCanvas || p.tex != 0 {
+		t.Fatalf("kept in the canvas %v (%v), texture %d", d.kept, p.InCanvas, p.tex)
+	}
+	if !slices.Equal(b.g.laid, []uint32{7000}) {
+		t.Fatalf("laid %v, want the canvas, 7000", b.g.laid)
+	}
+	if want := [4]float32{0, -1, 1, 0}; b.g.turn != want {
+		t.Fatalf("turned by %v, want %v", b.g.turn, want)
+	}
+	lay := b.g.calls[len(b.g.calls)-1]
+	if lay.kind != "lay" || lay.viewW != 720 || lay.viewH != 1280 || lay.blend || lay.fbo != 0 {
+		t.Fatalf("laid with %+v, want onto the surface, 720x1280, unblended", lay)
+	}
+	for _, c := range b.g.calls {
+		if c.kind == "clear" && c.fbo == 0 {
+			t.Fatalf("cleared the surface under an opaque window: %+v", c)
+		}
+	}
+
+	// A frame with nothing new, as a popup closing, lays the canvas again.
+	b.g.laid = nil
+	b.frame([]Layer{l}, 1280, 720)
+	if got := took(p); len(got) != 0 || !slices.Equal(b.g.laid, []uint32{7000}) {
+		t.Fatalf("drew %v, laid %v; want the canvas laid again, nothing drawn", got, b.g.laid)
+	}
+
+	// A popup over it: the window goes through its texture, drawn again.
+	q := newPane()
+	q.Transparent = true
+	pop := Layer{Pane: q, X: 100, Y: 100, W: 200, H: 100}
+	b.frame([]Layer{l, pop}, 1280, 720, &pop)
+	if got := took(p); len(got) != 1 || got[0].fbo != p.fbo || !got[0].whole {
+		t.Fatalf("under a popup the window drew %v, want its last frame into its texture", got)
+	}
+	if d := p.drawer.(*fakeDrawer); d.kept || p.InCanvas {
+		t.Fatal("under a popup the window still keeps its frames in the canvas")
+	}
+
+	// Alone again: back in the canvas, its last frame drawn there.
+	b.frame([]Layer{l}, 1280, 720)
+	if got := took(p); len(got) != 1 || got[0].fbo != 0 || !p.InCanvas {
+		t.Fatalf("alone again the window drew %v, in the canvas %v", got, p.InCanvas)
+	}
+
+	b.c.SetTurn(0)
+	if want := [4]float32{1, 0, 0, 1}; b.g.turn != want {
+		t.Fatalf("turned back by %v, want %v", b.g.turn, want)
+	}
+	l.W, l.H = 720, 1280
+	b.frame([]Layer{l}, 720, 1280, &l)
+	if got := took(p); len(got) != 1 || got[0].fbo != 0 || p.InCanvas || p.drawer.(*fakeDrawer).kept {
+		t.Fatalf("drew %v, want straight onto the surface again", got)
+	}
+}
+
+// A shot of a window kept in its canvas reads the canvas.
+func TestShootReadsTheCanvasOfATurnedWindow(t *testing.T) {
+	b := newBench(t)
+	b.c.SetTurn(90)
+	p := newPane()
+	l := Layer{Pane: p, W: 40, H: 20}
+	b.c.Begin([]Layer{l}, 40, 20)
+	b.c.Draw(p, someOps, nil, 40, 20, color.NRGBA{}, 1)
+	done := make(chan struct{})
+	b.c.Shoot(p, 40, 20, func(*image.RGBA) { close(done) })
+	<-done
+	if !slices.Equal(b.g.read, []uint32{7001}) {
+		t.Fatalf("read %v, want the canvas, 7001", b.g.read)
 	}
 }
