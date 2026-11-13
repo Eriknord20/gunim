@@ -164,6 +164,9 @@ func TestTheNeedleFollowsARampClosely(t *testing.T) {
 	h := &host{values: map[uint32]float64{1: 0}}
 	k := NewKnob(h, mix)
 	w := stageNode(t, k)
+	// The knob tells a ramp from a jump by the time between values, so that time counts by the frames: on a busy
+	// machine, as under the race detector, the wall clock leaves gaps long enough to glide.
+	w.TimeByFrames(true)
 	gunim.RegisterPatch(w, "n", func(k *Knob, v float64, u *gunim.UI) { k.Follow(v, u) })
 	const frame = time.Second / 120
 	for i := 1; i <= 120; i++ {

@@ -381,13 +381,23 @@ func TestAWindowKeepsItsLeastSize(t *testing.T) {
 		return ww, wh
 	}
 	at := func(v float32) int { return int(v*w.coordsPerLogical() + 0.5) }
-	if ww, wh := size(); ww != at(300) || wh != at(120) {
+	// An X window manager sizes the window a moment after it is asked, so this waits for the size to arrive.
+	sized := func(lw, lh float32) (int, int, bool) {
+		var ww, wh int
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if ww, wh = size(); ww == at(lw) && wh == at(lh) {
+				return ww, wh, true
+			}
+		}
+		return ww, wh, false
+	}
+	if ww, wh, ok := sized(300, 120); !ok {
 		t.Fatalf("a window of 200×120 with a least size of 300×100 opened at %d×%d", ww, wh)
 	}
 	if err := w.SetMinSize(geom.Sz(320, 200)); err != nil {
 		t.Fatal(err)
 	}
-	if ww, wh := size(); ww != at(320) || wh != at(200) {
+	if ww, wh, ok := sized(320, 200); !ok {
 		t.Fatalf("given a least size of 320×200, the window is %d×%d", ww, wh)
 	}
 	if runtime.GOOS != "windows" {
@@ -405,7 +415,7 @@ func TestAWindowKeepsItsLeastSize(t *testing.T) {
 	if err := display.call(func() error { return w.gw.SetSize(at(150), at(100)) }); err != nil {
 		t.Fatal(err)
 	}
-	if ww, wh := size(); ww != at(150) || wh != at(100) {
+	if ww, wh, ok := sized(150, 100); !ok {
 		t.Errorf("with no least size, the window sized to 150×100 is %d×%d", ww, wh)
 	}
 }

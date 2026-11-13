@@ -615,8 +615,8 @@ type Window struct {
 
 	closeOnce sync.Once
 	// framing is held by each call that drives an offscreen window, as [Window.Frame] and
-	// [Window.Input], and by Close as it closes the popups. popupsOwed says a Close has yet to close
-	// them, as such a call was in flight.
+	// [Window.Input], by the loop for its whole life, and by Close as it closes the popups. popupsOwed
+	// says a Close has yet to close them, as such a call was in flight.
 	framing    sync.Mutex
 	popupsOwed atomic.Bool
 	// driveDepth counts the calls driving the window that are in flight, one inside another. Only the
@@ -1422,6 +1422,14 @@ func (w *Window) loop() {
 	// However the loop ends, done says so: as the user closed the window, or its driver window went. A held
 	// clock's Advance waits on it.
 	defer w.Close()
+	// The loop drives the window for its whole life, as Frame does for one call. A Close from another goroutine
+	// then leaves the closers and the popups to the loop's end, below, and never runs them beside a frame.
+	w.framing.Lock()
+	w.driveDepth = 1
+	defer func() {
+		w.driveDepth = 0
+		w.framing.Unlock()
+	}()
 	defer close(w.out)
 	defer w.ui.closeAllPopups()
 	defer func() {

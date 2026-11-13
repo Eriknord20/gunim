@@ -76,6 +76,44 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+  # Every package under the race detector, which runs them many times
+  # slower. It runs beside the other jobs, in two parts of about the same
+  # length: the plug-ins, and everything else. So it adds little to how
+  # long CI takes.
+  race:
+    name: Test with the race detector, ${{ matrix.part }} (ubuntu-latest)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: the plug-ins
+            packages: ./audio/plug/...
+          - part: the rest
+            packages: rest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      # The list is made in a step of its own, so a failing go list stops
+      # the job rather than leaving go test with no packages.
+      - name: List the packages
+        run: |
+          if [ '${{ matrix.packages }}' = rest ]; then
+            go list ./... | grep -v '/audio/plug\(/\|$\)' > "$RUNNER_TEMP/packages"
+          else
+            go list ${{ matrix.packages }} > "$RUNNER_TEMP/packages"
+          fi
+          test -s "$RUNNER_TEMP/packages"
+
+      - name: Test with the race detector
+        run: go test -race $(cat "$RUNNER_TEMP/packages")
+
   # Linux on 64-bit ARM. The audio packages hold assembly for arm64, the
   # JACK, PipeWire and Core Audio clients' callbacks, which their
   # tests run through fakes: with the macOS job, this is where that

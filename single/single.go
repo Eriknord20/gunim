@@ -122,6 +122,8 @@ const maxProving = 64
 
 // proveTime is how long the one running waits for a connection to show
 // the token, and readTime how long it then waits for the whole line.
+// Listen reads them once, as it starts, so a test can change them while
+// another test's connections are still being served.
 var (
 	proveTime = time.Second
 	readTime  = handTime
@@ -191,6 +193,7 @@ func Listen(ctx context.Context, dir string) (handovers <-chan Handover, stop fu
 		return nil, nil, err
 	}
 	out := make(chan Handover)
+	prove, read := proveTime, readTime
 	ctx, cancel := context.WithCancel(ctx)
 	var once sync.Once
 	stop = func() {
@@ -219,7 +222,7 @@ func Listen(ctx context.Context, dir string) (handovers <-chan Handover, stop fu
 			p.add(conn)
 			go func() {
 				defer p.done(conn)
-				serve(ctx, conn, r.Token, out, func() { p.done(conn) })
+				serve(ctx, conn, r.Token, prove, read, out, func() { p.done(conn) })
 			}()
 		}
 	}()
@@ -227,20 +230,22 @@ func Listen(ctx context.Context, dir string) (handovers <-chan Handover, stop fu
 }
 
 // serve takes one handover, carrying the token, and answers it. It
-// drops a connection that does not start with the token within
-// proveTime, and one whose line is longer than maxLine or does not
-// arrive within readTime. It calls proven once the token is shown.
-func serve(ctx context.Context, conn net.Conn, token string, out chan<- Handover, proven func()) {
+// drops a connection that does not start with the token within prove,
+// and one whose line is longer than maxLine or does not arrive within
+// read. It calls proven once the token is shown.
+func serve(
+	ctx context.Context, conn net.Conn, token string, prove, read time.Duration, out chan<- Handover, proven func(),
+) {
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(handTime))
-	_ = conn.SetReadDeadline(time.Now().Add(proveTime))
+	_ = conn.SetReadDeadline(time.Now().Add(prove))
 	want := []byte(`{"token":"` + token + `"`)
 	start := make([]byte, len(want))
 	if _, err := io.ReadFull(conn, start); err != nil || subtle.ConstantTimeCompare(start, want) != 1 {
 		return
 	}
 	proven()
-	_ = conn.SetReadDeadline(time.Now().Add(readTime))
+	_ = conn.SetReadDeadline(time.Now().Add(read))
 	rest, err := bufio.NewReader(io.LimitReader(conn, int64(maxLine-len(want)))).ReadBytes('\n')
 	if err != nil {
 		return

@@ -1007,14 +1007,21 @@ func selectionGaveUp(owner _XID) {
 // awaitSelection calls check until it reports true, and reports false once selectionWait has passed without that.
 func awaitSelection(check func() bool) bool {
 	deadline := time.Now().Add(selectionWait)
-	fds := []unix.PollFd{{Fd: int32(xConnectionNumber(_glfw.platformWindow.display)), Events: unix.POLLIN}}
+	display := _glfw.platformWindow.display
+	fds := []unix.PollFd{{Fd: int32(xConnectionNumber(display)), Events: unix.POLLIN}}
+	queued := int32(-1)
 	for !check() {
 		left := time.Until(deadline).Seconds()
 		if left <= 0 {
 			return false
 		}
-		// check has read the socket and looked through the queue, so only new bytes can bring what it wants. Other
-		// events stay in the queue for the main loop.
+		// Xlib can queue what check wants as check ends, after it last looked through the queue. The socket is empty
+		// then, and poll would wait out the whole second, so check looks again while the queue changes. Other events
+		// stay in the queue for the main loop, so otherwise only new bytes can bring what it wants.
+		if n := xEventsQueued(display, _QueuedAfterReading); n != queued {
+			queued = n
+			continue
+		}
 		waitForData(fds, &left)
 	}
 	return true
