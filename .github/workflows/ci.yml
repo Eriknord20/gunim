@@ -113,6 +113,38 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+  # driver/kms on the kernel's virtual display, vkms, with Mesa drawing
+  # on the CPU: the whole driver, from the modeset to blanking, on a
+  # machine with no screen.
+  vkms:
+    name: Test the KMS driver on vkms (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Load vkms
+        run: |
+          uname -r
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgbm1 libegl1 libegl-mesa0 libgles2
+          modinfo vkms || find /lib/modules/"$(uname -r)" -name 'vkms*'
+          sudo modprobe vkms
+          ls -l /dev/dri
+          for c in /sys/class/drm/card*-*; do echo "$c $(cat "$c/status")"; done
+
+      - name: Test on vkms
+        run: |
+          go test -c -tags kmsvkms -o vkms.test ./driver/kms
+          sudo ./vkms.test -test.v -test.run TestOnVKMS
+        env:
+          CGO_ENABLED: 0
+
   # macOS on Apple silicon. The Core Audio client's tests run its arm64
   # callbacks through a fake under Apple's calling convention, which
   # keeps x18 for itself, and load every function it calls from the

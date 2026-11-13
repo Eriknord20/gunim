@@ -476,28 +476,11 @@ func TestPercentiles(t *testing.T) {
 	}
 }
 
-// The timeline counts a missed vblank only for a frame handed over
-// straight after the flip before, as while something moves.
-func TestMissedFlipsCountOnlyWhileMoving(t *testing.T) {
-	tl := newTimeline(nil)
-	t0 := time.Now()
-	ms := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Millisecond))) }
-	tl.shown(2, ms(0), ms(1), ms(3), ms(33.3), time.Time{}, true, 1)
-	tl.shown(5, ms(33.3), ms(500), ms(502), ms(516), ms(490), false, 0)
-	s := tl.stats()
-	if s.Frames != 2 || s.Missed != 1 || s.Frame.N != 1 || s.Frame.P50 != 3*time.Millisecond || s.Touch.P50 != 26*time.Millisecond {
-		t.Fatalf("%+v", s)
-	}
-	tl.reset()
-	if s := tl.stats(); s.Frames != 0 || s.Frame.N != 0 {
-		t.Fatalf("after reset %+v", s)
-	}
-}
-
 // testDriver is a driver with a screen of the trial Pi's size and no
 // screen behind it, for the input path.
 func testDriver(tr turn, scale float32) *Driver {
-	d := &Driver{turn: tr, panelW: 720, panelH: 1280, density: scale, wake: -1, stop: -1, quit: make(chan struct{})}
+	d := &Driver{turn: tr, panelW: 720, panelH: 1280, density: scale, wake: -1, stop: -1, quit: make(chan struct{}),
+		blank: newBlanker(Blank{}, 1, time.Now())}
 	d.picW, d.picH = tr.size(720, 1280)
 	return d
 }

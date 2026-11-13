@@ -8,9 +8,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,14 +24,19 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/driver/kms"
+	"github.com/marrasen/gunim/internal/gallery"
 	"github.com/marrasen/gunim/widget"
 )
 
 // BenchOptions say how to run the bench.
 type BenchOptions struct {
 	// KMS opens the screen. Its Replay is the touch script; nil plays
-	// Script.
+	// the made-up one for the screen, with a tap at its end that wakes the
+	// screen once the bench has blanked it.
 	KMS kms.Options
+	// Screen is what the bench shows: "demo", the test pattern, or
+	// "widgets", the gallery of example/widgets.
+	Screen string
 	// Warm is how long the scene moves before the figures start, Moving
 	// how long it is measured moving with the touch script playing, and
 	// Rest how long it is measured still.
@@ -37,12 +46,19 @@ type BenchOptions struct {
 	// measures the scene moving on every frame. The frame rate is then
 	// the touches', not the panel's.
 	Still bool
+	// NoBlank leaves out the blanking at the end.
+	NoBlank bool
+	// Shot, if set, is a PNG file the screen's window is written to as
+	// the warm-up ends.
+	Shot string
 	// Log, if set, hears what the bench does.
 	Log func(string)
 }
 
 // Result is what the bench measured.
 type Result struct {
+	// Screen is what the bench showed.
+	Screen string
 	// Start is the time from the bench starting to the scene's first
 	// frame on the screen.
 	Start time.Duration
@@ -56,25 +72,88 @@ type Result struct {
 	// the frames drawn while it was still.
 	CPUMoving, CPURest float64
 	RestFrames         int
-	// RSS is the process's resident memory at the end, in bytes.
-	RSS int64
+	// AllocsPerFrame is the whole process's allocations a frame while
+	// the scene moved, the engine's and the app's with the driver's.
+	AllocsPerFrame float64
+	// RSS is the process's resident memory at the end, in bytes, and
+	// HeapStart and HeapEnd the heap in use after a collection as the
+	// scene started moving and at the end.
+	RSS                int64
+	HeapStart, HeapEnd uint64
+	// Blank is what the blanking at the end found, unless left out.
+	Blank *BlankResult
 	// Software says the CPU drew.
 	Software bool
 }
 
+// BlankResult is what the bench found as it blanked the screen and woke it
+// with a tap.
+type BlankResult struct {
+	// Off says the driver blanked the screen; DisplayOn what the kernel
+	// said of the display controller then, Backlight the backlight's step
+	// (-1 for none), and Frames the frames drawn while it was off.
+	Off       bool
+	DisplayOn bool
+	Backlight int
+	Frames    int
+	// Woke says the tap woke the screen: on, the display controller on
+	// and the backlight back to WokeBacklight. Swallowed says the tap's
+	// touch reached no frame's figures, as a touch that reaches no window.
+	Woke, Swallowed bool
+	WokeBacklight   int
+	// Tapped says the touch script has the tap; a script of one's own
+	// has not, and the wake is not checked.
+	Tapped bool
+}
+
+// The bench's blanking: it dims after blankDim and turns off after
+// blankOff, is checked as off at blankCheck, and the script's tap comes at
+// blankTap, all from the blanking's start.
+const (
+	blankDim   = time.Second
+	blankOff   = 2 * time.Second
+	blankCheck = 4 * time.Second
+	blankTap   = 5 * time.Second
+	// blankWoke is how long after the tap the screen has to wake: past
+	// the 300 ms fade up.
+	blankWoke = 700 * time.Millisecond
+	settle    = 2 * time.Second
+)
+
 // Bench opens the screen, shows the scene, and measures it: moving with a
-// touch script playing, then still.
+// touch script playing, then still, then blanked and woken.
 func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 	logf := func(f string, args ...any) {
 		if o.Log != nil {
 			o.Log(fmt.Sprintf(f, args...))
 		}
 	}
+	if o.Screen == "" {
+		o.Screen = "demo"
+	}
+	if o.Screen != "demo" && o.Screen != "widgets" {
+		return Result{}, fmt.Errorf("kmsbench: no screen %q: want demo or widgets", o.Screen)
+	}
 	began := time.Now()
-	var res Result
+	res := Result{Screen: o.Screen}
+	tapped := false
 	gate := newGate(o.KMS.Replay)
+	// The gallery's made-up script starts with the warm-up, so its first
+	// scroll, which shapes and rasterises text never shown before, is not
+	// measured.
+	warmTouch := false
 	if gate.r == nil {
-		gate.r = io.NopCloser(bytes.NewReader(Script(o.Moving)))
+		warmTouch = o.Screen == "widgets"
+		lead := time.Duration(0)
+		if warmTouch {
+			lead = o.Warm
+		}
+		tap := time.Duration(0)
+		if !o.NoBlank {
+			tap = lead + o.Moving + settle + o.Rest + blankTap
+			tapped = true
+		}
+		gate.r = io.NopCloser(bytes.NewReader(ScriptFor(o.Screen, o.KMS.Rotate, lead+o.Moving, tap)))
 	}
 	o.KMS.Replay = gate
 	d, err := kms.Open(o.KMS)
@@ -91,19 +170,31 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 		if err != nil {
 			return err
 		}
-		Register(w, Options{Scale: d.Monitors()[0].Scale, Software: d.Software(), FrameMS: func() float64 { return float64(d.Stats().Last.Microseconds()) / 1000 }})
 		c := w.Client()
-		if err := c.TakeFingers(true); err != nil {
-			return err
-		}
 		res.Software = d.Software()
-		if err := c.Mount(gunim.Root, "demo", View, State{Still: o.Still}); err != nil {
-			return err
-		}
-		go func() {
-			for range c.Intents() {
+		still := func() error { return nil }
+		switch o.Screen {
+		case "demo":
+			Register(w, Options{Scale: d.Monitors()[0].Scale, Software: d.Software(), FrameMS: func() float64 { return float64(d.Stats().Last.Microseconds()) / 1000 }})
+			if err := c.TakeFingers(true); err != nil {
+				return err
 			}
-		}()
+			if err := c.Mount(gunim.Root, "demo", View, State{Still: o.Still}); err != nil {
+				return err
+			}
+			go func() {
+				for range c.Intents() {
+				}
+			}()
+			still = func() error { return c.Update("demo", State{Still: true}) }
+		case "widgets":
+			gallery.Register(w)
+			go func() {
+				if err := gallery.Serve(ctx, c, "", 0); err != nil {
+					logf("the gallery: %v", err)
+				}
+			}()
+		}
 		// The first frame of the scene: the driver's own black one is the
 		// first flip.
 		for d.Stats().Frames < 2 {
@@ -113,24 +204,36 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 		}
 		res.Start = time.Since(began)
 		logf("first frame after %v; warming up for %v", res.Start.Round(time.Millisecond), o.Warm)
+		if warmTouch {
+			gate.open()
+		}
 		if !sleep(ctx, o.Warm) {
 			return ctx.Err()
 		}
+		if o.Shot != "" {
+			if err := writeShot(ctx, c, o.Shot); err != nil {
+				return err
+			}
+		}
 		logf("moving, with the touch script, for %v", o.Moving)
+		res.HeapStart = heap()
 		d.ResetStats()
-		cpu0, t0 := cpuTime(), time.Now()
+		cpu0, t0, m0 := cpuTime(), time.Now(), mallocs()
 		gate.open()
 		if !sleep(ctx, o.Moving) {
 			return ctx.Err()
 		}
 		res.Moving, res.MovingFor = d.Stats(), time.Since(t0)
 		res.CPUMoving = percent(cpuTime()-cpu0, res.MovingFor)
+		if res.Moving.Frames > 0 {
+			res.AllocsPerFrame = float64(mallocs()-m0) / float64(res.Moving.Frames)
+		}
 		logf("still, for %v", o.Rest)
-		if err := c.Update("demo", State{Still: true}); err != nil {
+		if err := still(); err != nil {
 			return err
 		}
-		// The ball lands and the trails fade first.
-		if !sleep(ctx, 2*time.Second) {
+		// The ball lands, the trails fade and a fling ends first.
+		if !sleep(ctx, settle) {
 			return ctx.Err()
 		}
 		d.ResetStats()
@@ -140,6 +243,14 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 		}
 		res.CPURest = percent(cpuTime()-cpu0, time.Since(t0))
 		res.RestFrames = d.Stats().Frames
+		if !o.NoBlank {
+			b, err := blankAndWake(ctx, d, tapped, logf)
+			if err != nil {
+				return err
+			}
+			res.Blank = b
+		}
+		res.HeapEnd = heap()
 		res.RSS = rss()
 		return nil
 	})
@@ -148,6 +259,111 @@ func Bench(ctx context.Context, o BenchOptions) (Result, error) {
 		benchErr = err
 	}
 	return res, benchErr
+}
+
+// blankAndWake blanks the screen, checks it is off, and where the script
+// taps at the end, checks the tap wakes it and reaches nothing. The tap
+// comes at blankTap by the script's clock, which started as the moving
+// did; the bench's own sleeps drift from it by a few milliseconds.
+func blankAndWake(ctx context.Context, d *kms.Driver, tapped bool, logf func(string, ...any)) (*BlankResult, error) {
+	b := &BlankResult{Tapped: tapped}
+	lit := backlightStep()
+	logf("blanking: dim after %v, off after %v", blankDim, blankOff)
+	start := time.Now()
+	d.SetBlank(kms.Blank{Dim: blankDim, Off: blankOff})
+	defer d.SetBlank(kms.Blank{})
+	if !sleep(ctx, blankCheck-time.Second) {
+		return nil, ctx.Err()
+	}
+	d.ResetStats()
+	if !sleep(ctx, time.Until(start.Add(blankCheck))) {
+		return nil, ctx.Err()
+	}
+	b.Off, b.Frames, b.Backlight = d.Blanked(), d.Stats().Frames, backlightStep()
+	on, err := d.DisplayOn()
+	if err != nil {
+		return nil, err
+	}
+	b.DisplayOn = on
+	if !tapped {
+		return b, nil
+	}
+	logf("blanked; waiting for the script's tap")
+	// A dark screen stays dark until touched; a dim after the tap would
+	// come long after the check.
+	d.SetBlank(kms.Blank{Dim: time.Minute, Off: 2 * time.Minute})
+	d.ResetStats()
+	if !sleep(ctx, time.Until(start.Add(blankTap))) {
+		return nil, ctx.Err()
+	}
+	// The tap comes by the script's clock, which drifts from the bench's
+	// by some milliseconds over a run: the wake is looked for until
+	// blankWoke after it was due, and a little more.
+	var s kms.Stats
+	for deadline := time.Now().Add(blankWoke + time.Second); ; {
+		s = d.Stats()
+		if on, err = d.DisplayOn(); err != nil {
+			return nil, err
+		}
+		b.WokeBacklight = backlightStep()
+		b.Woke = !d.Blanked() && on && b.WokeBacklight == lit && s.Frames > 0
+		if b.Woke || time.Now().After(deadline) {
+			break
+		}
+		if !sleep(ctx, 50*time.Millisecond) {
+			return nil, ctx.Err()
+		}
+	}
+	logf("after the tap: blanked %v, display on %v, backlight %d of %d before, %d frames", d.Blanked(), on, b.WokeBacklight, lit, s.Frames)
+	b.Swallowed = s.Touch.N == 0
+	return b, nil
+}
+
+// backlightStep returns the first backlight's step, as the driver takes
+// the first, or -1 where there is none.
+func backlightStep() int {
+	dirs, _ := filepath.Glob("/sys/class/backlight/*/brightness")
+	if len(dirs) == 0 {
+		return -1
+	}
+	slices.Sort(dirs)
+	b, err := os.ReadFile(dirs[0])
+	if err != nil {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// writeShot writes what the window shows to a PNG file.
+func writeShot(ctx context.Context, c gunim.Client, path string) error {
+	img, err := c.Shot(ctx)
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(png.Encode(f, img), f.Close())
+}
+
+// heap returns the heap in use after a collection.
+func heap() uint64 {
+	runtime.GC()
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.HeapAlloc
+}
+
+// mallocs returns the allocations the process has made.
+func mallocs() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.Mallocs
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {
@@ -232,29 +448,174 @@ type Goal struct {
 
 // Goals checks the result against the goals of docs/plans/kms-touch.md,
 // section 1, that the bench can measure. CPU use while moving has no target
-// yet: it is recorded.
+// yet: it is recorded. NotHere lists the goals measured elsewhere.
 func (r Result) Goals() []Goal {
 	ms := func(d time.Duration) string { return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000) }
-	fps := float64(r.Moving.Frames) / r.MovingFor.Seconds()
-	// The scene moves on every frame, so a frame handed over a refresh or
-	// more after the flip before is a slow one: its vblanks count as
-	// missed, and its time counts.
-	missed := r.Moving.Missed + r.Moving.LateMissed
-	missedPer1000 := 1000 * float64(missed) / math.Max(1, float64(r.Moving.Frames))
+	mb := func(n uint64) string { return fmt.Sprintf("%.1f MB", float64(n)/(1<<20)) }
+	m := r.Moving
+	// The frame rate while something moves: the panel's, less the vblanks
+	// that frames drawn one straight after another missed. A screen that
+	// rests between touches, as the gallery does, draws fewer frames, and
+	// those rests are no misses.
+	fps := 0.0
+	if m.Straight > 0 {
+		fps = r.Rate * float64(m.Straight) / float64(m.Straight+m.StraightMissed)
+	}
+	missedPer1000 := 1000 * float64(m.Missed) / math.Max(1, float64(m.Frames))
+	growth := int64(r.HeapEnd) - int64(r.HeapStart)
 	gs := []Goal{
-		{"frame rate while moving", fmt.Sprintf("≥ %.1f fps", r.Rate*0.99), fmt.Sprintf("%.1f fps", fps), fps >= r.Rate*0.99},
-		{"missed flips", "≤ 1 in 1 000 frames", fmt.Sprintf("%d in %d (%d slow frames)", missed, r.Moving.Frames, r.Moving.Late), missedPer1000 <= 1},
-		{"frame time p50", "≤ 4.0 ms", ms(r.Moving.All.P50), r.Moving.All.P50 <= 4*time.Millisecond},
-		{"frame time p99", "≤ 8.0 ms", ms(r.Moving.All.P99), r.Moving.All.P99 <= 8*time.Millisecond},
-		{"touch to flip p50", "≤ 20.0 ms", ms(r.Moving.Touch.P50), r.Moving.Touch.N > 0 && r.Moving.Touch.P50 <= 20*time.Millisecond},
-		{"touch to flip p99", "≤ 30.0 ms", ms(r.Moving.Touch.P99), r.Moving.Touch.N > 0 && r.Moving.Touch.P99 <= 30*time.Millisecond},
+		{"frame rate while moving", fmt.Sprintf("≥ %.1f fps", r.Rate*0.99), fmt.Sprintf("%.1f fps (%d frames straight)", fps, m.Straight), m.Straight > 0 && fps >= r.Rate*0.99},
+		{"missed flips", "≤ 1 in 1 000 frames", fmt.Sprintf("%d in %d (%d slow frames)", m.Missed, m.Frames, m.Late), missedPer1000 <= 1},
+		{"frame time p50", "≤ 4.0 ms", ms(m.Frame.P50), m.Frame.N > 0 && m.Frame.P50 <= 4*time.Millisecond},
+		{"frame time p99", "≤ 8.0 ms", ms(m.Frame.P99), m.Frame.N > 0 && m.Frame.P99 <= 8*time.Millisecond},
+		{"touch to flip p50", "≤ 20.0 ms", ms(m.Touch.P50), m.Touch.N > 0 && m.Touch.P50 <= 20*time.Millisecond},
+		{"touch to flip p99", "≤ 30.0 ms", ms(m.Touch.P99), m.Touch.N > 0 && m.Touch.P99 <= 30*time.Millisecond},
 		{"start to first frame", "≤ 1.0 s warm", fmt.Sprintf("%.2f s", r.Start.Seconds()), r.Start <= time.Second},
+		{"memory", "≤ 120 MB RSS", fmt.Sprintf("%.0f MB RSS", float64(r.RSS)/(1<<20)), r.RSS > 0 && r.RSS <= 120<<20},
+		{"heap growth over the run", "≤ 2 MB after GC", fmt.Sprintf("%+.1f MB (%s to %s)", float64(growth)/(1<<20), mb(r.HeapStart), mb(r.HeapEnd)), growth <= 2<<20},
 		{"CPU at rest, screen on", "≤ 0.5 % of a core", fmt.Sprintf("%.2f %%", r.CPURest), r.CPURest <= 0.5},
 		{"frames drawn at rest", "0", strconv.Itoa(r.RestFrames), r.RestFrames == 0},
-		{"CPU while moving", "recorded", fmt.Sprintf("%.1f %%", r.CPUMoving), true},
-		{"memory", "recorded", fmt.Sprintf("%.0f MB RSS", float64(r.RSS)/(1<<20)), true},
 	}
+	if b := r.Blank; b != nil {
+		light := strconv.Itoa(b.Backlight)
+		if b.Backlight < 0 {
+			light = "none"
+		}
+		gs = append(gs, Goal{"screen blanked", "backlight 0, CRTC off, 0 frames",
+			fmt.Sprintf("backlight %s, CRTC %s, %d frames", light, map[bool]string{true: "on", false: "off"}[b.DisplayOn], b.Frames),
+			b.Off && !b.DisplayOn && b.Backlight <= 0 && b.Frames == 0})
+		if b.Tapped {
+			gs = append(gs, Goal{"a tap wakes it, swallowed", "on, backlight back, no touch",
+				fmt.Sprintf("woke %v, backlight %d, swallowed %v", b.Woke, b.WokeBacklight, b.Swallowed), b.Woke && b.Swallowed})
+		}
+	}
+	gs = append(gs,
+		Goal{"CPU while moving", "recorded", fmt.Sprintf("%.1f %%", r.CPUMoving), true},
+		Goal{"allocations a frame, whole process", "recorded", fmt.Sprintf("%.0f", r.AllocsPerFrame), true},
+	)
 	return gs
+}
+
+// NotHere lists the goals of section 1 that the bench does not measure,
+// and where they are measured.
+var NotHere = []string{
+	"driver allocations a frame: 0, by driver/kms's TestCollectingAFrameAllocatesNothing and compose's TestAFrameAllocatesNothing",
+	"touch to light: by slow-motion video, by hand",
+	"start straight after boot, and boot to a touchable screen: need a reboot",
+	"the store's speed while the UI animates: Hjortron's, in K4",
+}
+
+// ScriptFor returns the touch script for a screen, turned by rotate, of
+// about d, and where tap is not zero, a tap at tap from its start, for the
+// bench's wake. For "widgets" it drags the gallery up and down, with a
+// fling each way; for the demo it is Script.
+func ScriptFor(screen string, rotate int, d, tap time.Duration) []byte {
+	var b []byte
+	if screen == "widgets" {
+		b = dragScript(rotate, d)
+	} else {
+		b = Script(d)
+	}
+	if tap > 0 {
+		b = append(b, tapAt(tap, 600, 640)...)
+	}
+	return b
+}
+
+// dragScript drags along the picture's height, in reports 17 ms apart:
+// up 500 panel pixels in 300 ms and let go, which flings the gallery on
+// down the page, then, after a wait, back down the same way. It ends with
+// one more drag up, so the page rests scrolled down, with the gallery's
+// spinner out of sight, for the bench's rest.
+func dragScript(rotate int, d time.Duration) []byte {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "gunim-evdev 1 0 719 0 1279 5\n")
+	at := time.Duration(0)
+	const step = 17 * time.Millisecond
+	id := int32(1)
+	// up is a finger's way towards the picture's top, on the panel: the
+	// picture's top lies along the panel's right edge turned 90°, and its
+	// left edge turned 270°.
+	var x0, y0, x1, y1 int32
+	switch rotate {
+	case 90:
+		x0, y0, x1, y1 = 100, 640, 600, 640
+	case 180:
+		x0, y0, x1, y1 = 360, 200, 360, 1000
+	case 270:
+		x0, y0, x1, y1 = 600, 640, 100, 640
+	default:
+		x0, y0, x1, y1 = 360, 1000, 360, 200
+	}
+	drag := func(fx, fy, tx, ty int32) {
+		const n = 18 // 300 ms
+		for k := int32(0); k <= n; k++ {
+			if k == 0 {
+				putEvent(&b, at, evAbsT, absSlot, 0)
+				putEvent(&b, at, evAbsT, absTrack, id)
+				id++
+			}
+			putEvent(&b, at, evAbsT, absX, fx+(tx-fx)*k/n)
+			putEvent(&b, at, evAbsT, absY, fy+(ty-fy)*k/n)
+			putEvent(&b, at, evSynT, 0, 0)
+			at += step
+		}
+		putEvent(&b, at, evAbsT, absTrack, -1)
+		putEvent(&b, at, evSynT, 0, 0)
+		at += step
+	}
+	const wait = 1500 * time.Millisecond
+	if rotate == 90 {
+		// On the landscape gallery at the Pi's scale, a tap on the "List"
+		// drop-down opens its menu, a popup, and a tap on the empty header
+		// closes it, before the drags.
+		b.Write(tapAt(500*time.Millisecond, 719-420, 325))
+		b.Write(tapAt(1500*time.Millisecond, 719-40, 1100))
+		at = 2500 * time.Millisecond
+	}
+	for at < d {
+		drag(x0, y0, x1, y1)
+		at += wait
+		if at >= d {
+			return b.Bytes()
+		}
+		drag(x1, y1, x0, y0)
+		at += wait
+	}
+	drag(x0, y0, x1, y1)
+	return b.Bytes()
+}
+
+// tapAt returns the events of a tap at x, y on the panel, at, as a script's
+// tail.
+func tapAt(at time.Duration, x, y int32) []byte {
+	var b bytes.Buffer
+	putEvent(&b, at, evAbsT, absSlot, 0)
+	putEvent(&b, at, evAbsT, absTrack, 9999)
+	putEvent(&b, at, evAbsT, absX, x)
+	putEvent(&b, at, evAbsT, absY, y)
+	putEvent(&b, at, evSynT, 0, 0)
+	at += 80 * time.Millisecond
+	putEvent(&b, at, evAbsT, absTrack, -1)
+	putEvent(&b, at, evSynT, 0, 0)
+	return b.Bytes()
+}
+
+// The kernel's codes a script uses.
+const (
+	evSynT, evAbsT                = 0, 3
+	absSlot, absX, absY, absTrack = 0x2f, 0x35, 0x36, 0x39
+)
+
+// putEvent writes one 24-byte input_event at at, as a recording keeps it.
+func putEvent(b *bytes.Buffer, at time.Duration, typ, code uint16, v int32) {
+	var ev [24]byte
+	binary.NativeEndian.PutUint64(ev[:], uint64(at/time.Second))
+	binary.NativeEndian.PutUint64(ev[8:], uint64(at%time.Second/time.Microsecond))
+	binary.NativeEndian.PutUint16(ev[16:], typ)
+	binary.NativeEndian.PutUint16(ev[18:], code)
+	binary.NativeEndian.PutUint32(ev[20:], uint32(v))
+	b.Write(ev[:])
 }
 
 // Script returns a touch script of about d: one finger drawing circles,

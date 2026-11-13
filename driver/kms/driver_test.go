@@ -23,7 +23,8 @@ import (
 func idleDriver(t *testing.T) *Driver {
 	t.Helper()
 	d := &Driver{quit: make(chan struct{}), done: make(chan struct{}), ended: make(chan struct{}),
-		wake: -1, stop: -1, stats: newTimeline(nil)}
+		wake: -1, stop: -1, stats: newTimeline(nil), blank: newBlanker(Blank{}, 1, time.Now()),
+		lightTo: make(chan int, 1), lightDone: make(chan struct{})}
 	close(d.done)
 	return d
 }
@@ -35,6 +36,14 @@ func TestASignalEndsRunAndGivesTheScreenBack(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM} {
 		t.Run(sig.String(), func(t *testing.T) {
 			d := idleDriver(t)
+			// A render thread that runs until Close stops it: one already
+			// ended would end Run before the signal came, and the signal,
+			// with its default handling back, would end the test.
+			d.done = make(chan struct{})
+			go func() {
+				<-d.quit
+				close(d.done)
+			}()
 			d.catchSignals()
 			ran := make(chan error, 1)
 			go func() { ran <- d.Run(context.Background(), func() {}) }()
@@ -75,23 +84,38 @@ func TestCloseIsSafeTwiceAndAfterRun(t *testing.T) {
 	<-d.Closed()
 }
 
-// A frame handed over a refresh or more after the flip before is late: its
-// missed vblanks count apart, and its time enters All, where Frame, for
-// frames handed over at once, leaves it out.
-func TestLateFramesAreCountedApart(t *testing.T) {
+// Each frame is timed from when the engine began it to its commit, slow
+// ones too, which count as late. A frame begun as the windows heard of the
+// flip before misses each vblank past the first; one begun after a rest
+// has until the vblank after next.
+func TestAFrameIsTimedFromItsStart(t *testing.T) {
+	const period = 16667 * time.Microsecond
 	tl := newTimeline(nil)
 	t0 := time.Now()
 	ms := func(n float64) time.Time { return t0.Add(time.Duration(n * float64(time.Millisecond))) }
-	tl.shown(2, ms(0), ms(1), ms(3), ms(16.7), time.Time{}, true, 0)
-	// Laid out in 25 ms: handed over after the next vblank, and shown a
-	// vblank late.
-	tl.shown(4, ms(16.7), ms(41.7), ms(43), ms(50), time.Time{}, false, 1)
+	// Straight, on time.
+	tl.shown(shownFrame{seq: 2, prev: ms(0), began: ms(0.2), handed: ms(2), commit: ms(3), flip: ms(16.7), straight: true, period: period})
+	// Straight, laid out in 25 ms: a vblank late.
+	tl.shown(shownFrame{seq: 4, prev: ms(16.7), began: ms(16.9), handed: ms(41.7), commit: ms(42), flip: ms(50), straight: true, missed: 1, period: period})
+	// After a rest, on a touch: on time.
+	tl.shown(shownFrame{seq: 30, prev: ms(50), began: ms(500), handed: ms(501), commit: ms(502), flip: ms(516.7), touch: ms(490), period: period})
+	// After a rest, but 40 ms to build: shown at the third vblank, one late.
+	tl.shown(shownFrame{seq: 40, prev: ms(516.7), began: ms(600), handed: ms(639), commit: ms(640), flip: ms(650), period: period})
+	// No start known: timed from the frame handed over.
+	tl.shown(shownFrame{seq: 41, prev: ms(650), handed: ms(660), commit: ms(661), flip: ms(666.7), period: period})
 	s := tl.stats()
-	if s.Missed != 0 || s.Late != 1 || s.LateMissed != 1 {
-		t.Fatalf("missed %d, late %d with %d missed", s.Missed, s.Late, s.LateMissed)
+	if s.Frames != 5 || s.Missed != 2 || s.Late != 2 {
+		t.Fatalf("frames %d, missed %d, late %d; want 5, 2, 2", s.Frames, s.Missed, s.Late)
 	}
-	if s.Frame.N != 1 || s.All.N != 2 || s.All.Max < 26*time.Millisecond {
-		t.Fatalf("frame %+v, all %+v", s.Frame, s.All)
+	if s.Frame.N != 5 || s.Frame.Max < 40*time.Millisecond || s.Frame.P50 != 2800*time.Microsecond {
+		t.Fatalf("frame %+v", s.Frame)
+	}
+	if s.Touch.N != 1 || s.Touch.P50 < 26*time.Millisecond {
+		t.Fatalf("touch %+v", s.Touch)
+	}
+	tl.reset()
+	if s := tl.stats(); s.Frames != 0 || s.Frame.N != 0 || s.Late != 0 || s.Missed != 0 {
+		t.Fatalf("after reset %+v", s)
 	}
 }
 
@@ -318,13 +342,13 @@ func TestThePacerLearnsHowLateAFrameCanStart(t *testing.T) {
 		t.Fatalf("a frame after a rest moved the lead to %v", got)
 	}
 	p.flipped(true, true, 1, period)
-	if got := p.now(0, period); got != paceMinLead+paceBack {
-		t.Fatalf("after a miss: %v, want %v", got, paceMinLead+paceBack)
+	if got := p.now(0, period); got != period {
+		t.Fatalf("after a miss: %v, want a whole refresh", got)
 	}
 	for range paceHold {
-		p.flipped(true, true, 0, period)
+		p.flipped(true, false, 0, period)
 	}
-	if got := p.now(0, period); got != paceMinLead+paceBack {
+	if got := p.now(0, period); got != period {
 		t.Fatalf("shortened to %v while holding after a miss", got)
 	}
 	if got := p.now(5*time.Millisecond, period); got != 5*time.Millisecond {
@@ -449,7 +473,7 @@ func TestCloseGivesUpOnAStuckRenderThread(t *testing.T) {
 	d := &Driver{quit: make(chan struct{}), done: make(chan struct{}), ended: make(chan struct{}),
 		wake: -1, stop: -1, stats: newTimeline(nil)}
 	c := newFakeConsole(1)
-	v, err := takeVT(c, 0, nil)
+	v, err := takeVT(c, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,6 +538,49 @@ func TestThePacerBacksOffWhenFramesGetHeavier(t *testing.T) {
 	}
 	if misses := run(1000, 6*time.Millisecond); misses > 1 {
 		t.Fatalf("%d vblanks missed in 1 000 frames once the lead was learnt", misses)
+	}
+}
+
+// A screen that rests between bursts of heavy frames, as a list between
+// scrolls, misses once as a burst starts after the lead was learnt short,
+// and not again for a long while.
+func TestABurstOfHeavyFramesMissesOnce(t *testing.T) {
+	const (
+		period = 16667 * time.Microsecond
+		gpu    = time.Millisecond
+	)
+	var p pacer
+	vblank := time.Now()
+	run := func(n int, cost time.Duration) (misses int) {
+		for range n {
+			lead := p.now(0, period)
+			paced := lead < period
+			release := vblank
+			if paced {
+				release = vblank.Add(period - lead)
+			}
+			handed := release.Add(cost)
+			next := vblank.Add(period)
+			missed := 0
+			for handed.Add(gpu).After(next) {
+				next = next.Add(period)
+				missed++
+			}
+			p.flipped(true, paced, missed, period)
+			misses += missed
+			vblank = next
+		}
+		return misses
+	}
+	run(int(20*time.Second/period), time.Millisecond)
+	misses := 0
+	// A minute of scrolls: 0.3 s of 13 ms frames, then 1.5 s of 1 ms ones.
+	for range 33 {
+		misses += run(18, 13*time.Millisecond)
+		misses += run(90, time.Millisecond)
+	}
+	if misses > 2 {
+		t.Fatalf("%d vblanks missed in a minute of scrolls, want at most 2", misses)
 	}
 }
 

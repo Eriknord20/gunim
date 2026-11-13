@@ -43,6 +43,10 @@ type fakeGL struct {
 	params   map[uint32]map[uint32]int32
 	// turn is the last matrix the compositor turned its layers by.
 	turn [4]float32
+	// fade is what the compositor's program multiplies by now, and
+	// fades what each lay went by.
+	fade  float32
+	fades []float32
 }
 
 // glCall is the state a clear or a laid texture went by.
@@ -122,8 +126,10 @@ func (g *fakeGL) BlendFuncSeparate(a, b, c, d uint32)   { g.blendFn = [4]uint32{
 func (g *fakeGL) ActiveTexture(t uint32)                { g.active = t }
 func (g *fakeGL) Uniform4fv(_ int32, v []float32)       { g.rects = append(g.rects, [4]float32(v)) }
 func (g *fakeGL) UniformMatrix2fv(_ int32, v []float32) { g.turn = [4]float32(v) }
+func (g *fakeGL) Uniform1fv(_ int32, v []float32)       { g.fade = v[0] }
 func (g *fakeGL) DrawElements(uint32, int32, uint32, int) {
 	g.laid = append(g.laid, g.texture)
+	g.fades = append(g.fades, g.fade)
 	g.record("lay")
 }
 func (g *fakeGL) ReadPixels([]byte, int32, int32, int32, int32, uint32, uint32) {
@@ -856,6 +862,53 @@ func TestAFrameAllocatesNothing(t *testing.T) {
 		b.c.Finish(stack, 100, 80, 1)
 	}); n != 0 {
 		t.Fatalf("%v allocations a frame", n)
+	}
+}
+
+// A shade lies over the whole surface, blended, after every window, and
+// a new shade alone makes a frame.
+func TestAShadeLiesOverTheWholeSurface(t *testing.T) {
+	for _, turn := range []int{0, 90} {
+		b := newBench(t)
+		b.c.SetTurn(turn)
+		p := newPane()
+		l := Layer{Pane: p, W: 100, H: 80}
+		stack := []Layer{l}
+		b.frame(stack, 100, 80, &l)
+		laid := len(b.g.laid)
+		b.c.SetShade(0.25)
+		if !b.c.Dirty(stack) {
+			t.Fatalf("turned %d: a new shade is not dirty", turn)
+		}
+		b.frame(stack, 100, 80)
+		if len(b.g.laid) <= laid {
+			t.Fatalf("turned %d: nothing laid for the shade", turn)
+		}
+		last := b.g.calls[len(b.g.calls)-1]
+		if b.g.laid[len(b.g.laid)-1] != b.c.black || !last.blend || last.fbo != 0 || b.g.fades[len(b.g.fades)-1] != 0.25 {
+			t.Fatalf("turned %d: the last lay is texture %d, blended %v, on %d, at %v; want the black one, blended, on the surface, at 0.25",
+				turn, b.g.laid[len(b.g.laid)-1], last.blend, last.fbo, b.g.fades[len(b.g.fades)-1])
+		}
+		if got := b.g.rects[len(b.g.rects)-1]; got != [4]float32{-1, -1, 1, 1} {
+			t.Fatalf("turned %d: the shade covers %v, want the whole surface", turn, got)
+		}
+		if b.g.fade != 1 {
+			t.Fatalf("turned %d: the program is left fading by %v", turn, b.g.fade)
+		}
+		if b.c.Dirty(stack) {
+			t.Fatalf("turned %d: dirty once the shade is laid", turn)
+		}
+		b.c.SetShade(0)
+		if !b.c.Dirty(stack) {
+			t.Fatalf("turned %d: taking the shade off is not dirty", turn)
+		}
+		laid = len(b.g.laid)
+		b.frame(stack, 100, 80)
+		for _, tex := range b.g.laid[laid:] {
+			if tex == b.c.black {
+				t.Fatalf("turned %d: the shade is laid at 0", turn)
+			}
+		}
 	}
 }
 

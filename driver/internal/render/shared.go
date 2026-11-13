@@ -29,6 +29,13 @@ import (
 // from several threads at once would need fences between them; copying
 // into textures of their own needs none.
 type Shared struct {
+	// NoDualSource has the draw programs blend with no second colour, so
+	// text is greyscale, where the GPU would blend by a second colour in
+	// the shader, at a cost on every pixel: Mesa's V3D, on a Raspberry Pi,
+	// does, at about twice a frame's GPU time. It is read as the programs
+	// are built, before the first renderer.
+	NoDualSource bool
+
 	mu    sync.Mutex
 	built bool
 	err   error
@@ -56,7 +63,7 @@ func (s *Shared) programs(g gl.Context, isES bool) (draw, clip, blur program, du
 	defer s.mu.Unlock()
 	if !s.built {
 		s.built = true
-		s.draw, s.clip, s.blur, s.dual, s.header, s.err = buildPrograms(g, isES)
+		s.draw, s.clip, s.blur, s.dual, s.header, s.err = buildPrograms(g, isES, s.NoDualSource)
 		// The other threads may use them as soon as the lock goes, so
 		// they must be complete in the share group by then.
 		g.Finish()

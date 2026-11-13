@@ -287,6 +287,15 @@ func (s *screen) flip(fb uint32, userData uint64) error {
 	return s.masterErr(s.req.commit(s.dev, atomicNonblock|atomicPageFlipEvent, userData))
 }
 
+// off turns the display off: the CRTC inactive, which is how KMS does
+// DPMS, with its mode and plane kept, so a modeset turns it on again. It
+// blocks until the kernel has done it.
+func (s *screen) off() error {
+	s.req.reset()
+	s.req.add(s.crtc, s.crtcProps["ACTIVE"].id, 0)
+	return s.masterErr(s.req.commit(s.dev, atomicAllowModeset, 0))
+}
+
 // masterErr explains a refused commit: another program has the screen.
 func (s *screen) masterErr(err error) error {
 	if err == nil {

@@ -650,18 +650,20 @@ func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 // image, a layer or a blur's source on unit 1, the subpixel glyph atlas
 // on unit 2, colour glyphs on unit 3, and the gradients' ramp on unit
 // 6. The draw programs blend by channel where the context has
-// dual-source blending, and dual says so. clip is the draw program that
+// dual-source blending, unless noDualSource, and dual says so. clip is the draw program that
 // cuts what it draws to an ellipse or a rounded rectangle; the plain one
 // leaves that work out of every other pixel.
-func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
+func buildPrograms(g gl.Context, isES, noDualSource bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
 	header, dualHeader := "#version 150\n", "#version 330\n#define DUAL\n"
 	if isES {
 		header = "#version 300 es\nprecision highp float;\n"
 		dualHeader = "#version 300 es\n#extension GL_EXT_blend_func_extended : require\nprecision highp float;\n" +
 			"#define DUAL\n"
 	}
-	draw, err = link(g, dualHeader+vertexShader, dualHeader+sdfFunc+drawOut+drawShader)
-	dual = err == nil && !noDual
+	if !noDual && !noDualSource {
+		draw, err = link(g, dualHeader+vertexShader, dualHeader+sdfFunc+drawOut+drawShader)
+		dual = err == nil
+	}
 	if !dual {
 		if draw.id != 0 {
 			g.DeleteProgram(draw.id)

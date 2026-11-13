@@ -2,18 +2,26 @@
 
 // Command kmsbench measures gunim's KMS driver on the screen it runs on,
 // such as a Raspberry Pi with a Touch Display 2, against the goals of
-// docs/plans/kms-touch.md: frames and missed flips while the test pattern
-// moves with a touch script playing, frame times, touch to flip, the time
-// to the first frame, and CPU use while moving and at rest. It prints a
-// table, and exits non-zero if any goal is missed.
+// docs/plans/kms-touch.md: frames and missed flips while the screen moves
+// with a touch script playing, frame times, touch to flip, the time to the
+// first frame, memory, CPU use while moving and at rest, and the screen
+// blanked and woken by a tap that reaches nothing. It prints a table, and
+// exits non-zero if any goal is missed.
 //
 //	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./tools/kmsbench
-//	sudo ./kmsbench -rotate 90 -vt free
+//	./kmsbench -rotate 90 -vt free
+//	./kmsbench -rotate 90 -vt free -screen widgets
+//
+// -screen picks what it shows: the demo's test pattern, or the gallery of
+// example/widgets. It needs no root: a user in the groups video, render and
+// input, with the backlight's udev rule in driver/kms's README, will do.
 //
 // The touch script plays through the driver's own input path, so it needs
-// no uinput and no finger. Without -script it is a made-up one: a finger
-// drawing circles, taps, and two fingers dragging. A script recorded on
-// the screen with kmsdemo -record plays as made.
+// no uinput and no finger. Without -script it is a made-up one: on the
+// demo a finger drawing circles, taps, and two fingers dragging; on the
+// gallery drags up and down that fling. A script recorded on the screen
+// with kmsdemo -record plays as made, and then the bench checks the
+// blanking but not the wake.
 package main
 
 import (
@@ -39,6 +47,9 @@ func run() int {
 	flag.IntVar(&o.KMS.Rotate, "rotate", 0, "turn the picture clockwise: 0, 90, 180 or 270")
 	flag.StringVar(&o.KMS.VT, "vt", "", `the VT to draw on: empty for the one it runs on, "free", or a number`)
 	flag.StringVar(&o.KMS.Connector, "connector", "", "the screen; empty finds it")
+	flag.StringVar(&o.Screen, "screen", "demo", "what to show: demo or widgets")
+	flag.BoolVar(&o.NoBlank, "noblank", false, "leave out the blanking at the end")
+	flag.StringVar(&o.Shot, "shot", "", "write the screen's window to this PNG file as the warm-up ends")
 	scale := flag.Float64("scale", 0, "device pixels per logical pixel; 0 works it out")
 	flag.BoolVar(&o.KMS.Software, "software", false, "draw on the CPU even where there is a GPU")
 	script := flag.String("script", "", "a touch recording to play; empty plays a made-up one")
@@ -84,11 +95,15 @@ func run() int {
 		return 1
 	}
 	fmt.Printf("\n%.2f Hz; %d frames in %.1f s while moving; draw p50 %.1f ms p99 %.1f ms; frame max %.1f ms; %d touch reports answered",
-		r.Rate, r.Moving.Frames, r.MovingFor.Seconds(), ms(r.Moving.Draw.P50), ms(r.Moving.Draw.P99), ms(r.Moving.All.Max), r.Moving.Touch.N)
+		r.Rate, r.Moving.Frames, r.MovingFor.Seconds(), ms(r.Moving.Draw.P50), ms(r.Moving.Draw.P99), ms(r.Moving.Frame.Max), r.Moving.Touch.N)
 	if r.Software {
 		fmt.Print("; drawn by the CPU")
 	}
 	fmt.Println()
+	fmt.Println("Measured elsewhere:")
+	for _, s := range kmsdemo.NotHere {
+		fmt.Println("  " + s)
+	}
 	if failed > 0 {
 		fmt.Printf("%d goals missed\n", failed)
 		return 1

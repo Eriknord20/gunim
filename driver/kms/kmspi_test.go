@@ -6,11 +6,12 @@
 // only with the kmspi tag, as root for the VT and the backlight:
 //
 //	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -tags kmspi -o kmspi.test ./driver/kms
-//	sudo ./kmspi.test -test.v
+//	./kmspi.test -test.v
 //
 // GUNIM_KMSPI_ROTATE turns the picture (90 by default), and GUNIM_KMSPI_VT
 // names the VT ("free" by default). It skips where there is no screen to
-// take.
+// take. It needs no root: a user in the groups video, render and input,
+// with the backlight's udev rule in the README, will do.
 package kms_test
 
 import (
@@ -25,12 +26,25 @@ import (
 	"github.com/marrasen/gunim/internal/kmsdemo"
 )
 
-// knownMisses are goals the scene, which moves on every frame, misses for
-// a reason an issue holds: the test logs them and checks every other goal.
-// The goals themselves stay as the plan has them.
-var knownMisses = map[string]string{
-	"touch to flip p50": "https://github.com/marrasen/gunim/issues/417",
-	"touch to flip p99": "https://github.com/marrasen/gunim/issues/417",
+// knownMisses are goals a screen misses for a reason an issue holds: the
+// test logs them and checks every other goal. The goals themselves stay as
+// the plan has them. The demo redraws the whole screen on every frame,
+// which #417 is about.
+var knownMisses = map[string]map[string]string{
+	"demo": {
+		"touch to flip p50": "https://github.com/marrasen/gunim/issues/417",
+		"touch to flip p99": "https://github.com/marrasen/gunim/issues/417",
+	},
+	// The gallery redraws its whole window as it scrolls, at most of a
+	// refresh's GPU time, and its spinner keeps the engine busy out of
+	// sight.
+	"widgets": {
+		"frame rate while moving": "https://github.com/marrasen/gunim/issues/420",
+		"missed flips":            "https://github.com/marrasen/gunim/issues/420",
+		"touch to flip p50":       "https://github.com/marrasen/gunim/issues/417",
+		"touch to flip p99":       "https://github.com/marrasen/gunim/issues/417",
+		"CPU at rest, screen on":  "https://github.com/marrasen/gunim/issues/420",
+	},
 }
 
 func TestOnTheScreen(t *testing.T) {
@@ -42,7 +56,8 @@ func TestOnTheScreen(t *testing.T) {
 	if v, ok := os.LookupEnv("GUNIM_KMSPI_VT"); ok {
 		vt = v
 	}
-	bench(t, kms.Options{Rotate: rotate, VT: vt})
+	t.Run("demo", func(t *testing.T) { bench(t, "demo", kms.Options{Rotate: rotate, VT: vt}) })
+	t.Run("widgets", func(t *testing.T) { bench(t, "widgets", kms.Options{Rotate: rotate, VT: vt}) })
 }
 
 // A GPU that fails as the driver starts leaves Mesa's software renderer to
@@ -52,7 +67,7 @@ func TestFallsBackToTheCPUOnTheScreen(t *testing.T) {
 	t.Setenv("GUNIM_KMS_FAIL_GPU", "1")
 	o := kmsdemo.BenchOptions{
 		KMS:  kms.Options{Rotate: 90, VT: "free"},
-		Warm: time.Second, Moving: 3 * time.Second, Rest: 2 * time.Second,
+		Warm: time.Second, Moving: 3 * time.Second, Rest: 2 * time.Second, NoBlank: true,
 		Log: func(s string) { t.Log(s) },
 	}
 	r, err := kmsdemo.Bench(context.Background(), o)
@@ -71,9 +86,9 @@ func TestFallsBackToTheCPUOnTheScreen(t *testing.T) {
 	t.Logf("on the CPU: %d frames in %v", r.Moving.Frames, r.MovingFor)
 }
 
-func bench(t *testing.T, ko kms.Options) {
+func bench(t *testing.T, screen string, ko kms.Options) {
 	o := kmsdemo.BenchOptions{
-		KMS: ko,
+		KMS: ko, Screen: screen,
 		// 10 s warm: the driver's pacer learns its lead in the first seconds,
 		// missing a vblank or two as it finds the edge. 30 s moving: a rate
 		// of 1 missed flip in 1 000 needs that many frames to tell.
@@ -96,8 +111,8 @@ func bench(t *testing.T, ko kms.Options) {
 	for _, g := range r.Goals() {
 		switch {
 		case g.OK:
-		case knownMisses[g.Name] != "":
-			t.Logf("%s: %s, want %s: a known miss, %s", g.Name, g.Got, g.Target, knownMisses[g.Name])
+		case knownMisses[screen][g.Name] != "":
+			t.Logf("%s: %s, want %s: a known miss, %s", g.Name, g.Got, g.Target, knownMisses[screen][g.Name])
 		default:
 			t.Errorf("%s: %s, want %s", g.Name, g.Got, g.Target)
 		}

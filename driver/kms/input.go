@@ -8,28 +8,27 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/marrasen/gunim/driver/internal/touch"
 	"github.com/marrasen/gunim/geom"
-	"github.com/marrasen/gunim/input"
-)
-
-// The double tap's reach, as on Android.
-const (
-	doubleTapTime  = 300 * time.Millisecond
-	doubleTapSpace = 24
 )
 
 // touchState is the touch in progress, guarded by the driver's mu.
 type touchState struct {
-	// window is the window the first finger came down in, which keeps
-	// the touch until every finger lifts. pointer is the slot of the
-	// finger that drives the pointer, or -1.
-	window  *Window
-	pointer int
-	// fingers is the window each finger of its own came down in, by slot.
-	fingers map[int]*Window
-	lastTap geom.Point
-	lastAt  time.Time
-	clicks  int
+	// gest and contacts turn the fingers into the windows' input, as on
+	// Android; see driver/internal/touch.
+	gest     touch.Gestures
+	contacts *touch.Contacts
+	// resample holds the fingers' moves while a frame is on its way, and
+	// hands the next frame one move a finger at an even step; see
+	// flushTouch. holding says a frame of the windows is on its way.
+	resample touch.Resampler
+	holding  bool
+	// swallow holds the slots of a touch that woke the screen: it reaches
+	// no window, and ends as its last finger lifts.
+	swallow map[int]bool
+	// now and later are a report's landings and lifts, and its moves,
+	// kept from report to report.
+	now, later []touch.Contact
 }
 
 // touchMap maps a touch screen's positions onto the panel.
@@ -56,74 +55,113 @@ func (d *Driver) at(m touchMap, x, y int32) geom.Point {
 	return geom.Pt(p.X/d.density, p.Y/d.density)
 }
 
-// touchReport takes one report of the touch screen's fingers, and sends
-// the windows what they did. The first finger drives the pointer: it
-// presses, moves and lets go as a mouse's primary button does, marked as
-// touch, and leaves the window as it lifts, since a finger has no hover.
-// In a window that takes fingers each finger is an [input.Finger] too,
-// with the first one's FingerDown ahead of its press.
+// touchReport takes one report of the touch screen's fingers. Landings
+// and lifts go to the windows at once, through driver/internal/touch,
+// which turns them into the pointer, fingers and pinches as on Android.
+// Moves go at once too while the windows draw nothing; while a frame is on
+// its way they wait for the frame after it, resampled to one move a
+// finger at an even step (flushTouch).
+//
+// A touch on a screen that is dim or off wakes it, and is swallowed: none
+// of its fingers reach a window, so a tap on a dark screen never presses
+// what lies under it.
 func (d *Driver) touchReport(m touchMap, cs []contact, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	t := d.touchLocked()
+	// While a finger is down the screen neither dims nor turns off.
+	defer func() { d.blank.fingers = t.contacts.Count() > 0 || len(t.swallow) > 0 }()
+	if d.away {
+		// Another VT shows: what is touched is not this UI, which no one
+		// sees. A touch going on as the VT switched lets go.
+		t.contacts.Cancel(now)
+		t.resample = touch.Resampler{}
+		clear(t.swallow)
+		return
+	}
+	if d.swallowLocked(cs, now) {
+		return
+	}
 	if d.touchAt.IsZero() {
 		d.touchAt = now
 	}
-	t := &d.input
-	if t.fingers == nil {
-		t.fingers = map[int]*Window{}
-		t.pointer = -1
-	}
+	t.now, t.later = t.now[:0], t.later[:0]
 	for _, c := range cs {
 		at := d.at(m, c.x, c.y)
 		switch c.phase {
 		case phaseDown:
-			if t.window == nil {
-				t.window = d.hitLocked(at)
-			}
-			w := t.window
-			if w == nil {
-				continue
-			}
-			pos := at.Sub(w.rectLocked().Min)
-			if w.takesFingers {
-				t.fingers[c.slot] = w
-				w.in.Push(input.Finger{ID: c.slot, Pos: pos, Phase: input.FingerDown, Time: now})
-			}
-			if t.pointer < 0 {
-				t.pointer = c.slot
-				if now.Sub(t.lastAt) < doubleTapTime && abs(at.X-t.lastTap.X) < doubleTapSpace && abs(at.Y-t.lastTap.Y) < doubleTapSpace {
-					t.clicks++
-				} else {
-					t.clicks = 1
-				}
-				t.lastTap, t.lastAt = at, now
-				w.in.Push(input.PointerMove{Pos: pos, Touch: true, Time: now})
-				w.in.Push(input.PointerDown{Pos: pos, Button: input.ButtonPrimary, Clicks: t.clicks, Touch: true, Time: now})
-			}
-		case phaseMove:
-			if w := t.fingers[c.slot]; w != nil {
-				w.in.Push(input.Finger{ID: c.slot, Pos: at.Sub(w.rectLocked().Min), Phase: input.FingerMove, Time: now})
-			}
-			if c.slot == t.pointer && t.window != nil {
-				t.window.in.Push(input.PointerMove{Pos: at.Sub(t.window.rectLocked().Min), Touch: true, Time: now})
-			}
+			t.resample.Down(c.slot, now, at)
+			t.now = append(t.now, touch.Contact{ID: c.slot, Pos: at, Phase: touch.Down})
 		case phaseUp:
-			if w := t.fingers[c.slot]; w != nil {
-				w.in.Push(input.Finger{ID: c.slot, Pos: at.Sub(w.rectLocked().Min), Phase: input.FingerUp, Time: now})
-				delete(t.fingers, c.slot)
-			}
-			if c.slot == t.pointer {
-				t.pointer = -1
-				if w := t.window; w != nil {
-					w.in.Push(input.PointerUp{Pos: at.Sub(w.rectLocked().Min), Button: input.ButtonPrimary, Touch: true, Time: now})
-					w.in.Push(input.PointerLeave{Time: now})
-				}
+			t.resample.Up(c.slot)
+			t.now = append(t.now, touch.Contact{ID: c.slot, Pos: at, Phase: touch.Up})
+		case phaseMove:
+			if t.contacts.Down(c.slot) {
+				t.resample.Move(c.slot, now, at)
 			}
 		}
 	}
-	if t.pointer < 0 && len(t.fingers) == 0 {
-		t.window = nil
+	t.contacts.Report(t.now, now)
+	if !t.holding {
+		t.later = t.resample.Newest(t.later)
+		t.contacts.Report(t.later, now)
 	}
+}
+
+// touchLocked returns the touch in progress, set up on first use. It runs
+// with mu held.
+func (d *Driver) touchLocked() *touchState {
+	t := &d.input
+	if t.contacts == nil {
+		t.gest.Hit = func(p geom.Point) touch.Window {
+			if w := d.hitLocked(p); w != nil {
+				return w
+			}
+			return nil
+		}
+		t.contacts = touch.NewContacts(&t.gest)
+		t.swallow = map[int]bool{}
+	}
+	return t
+}
+
+// swallowLocked reports whether the report belongs to a touch that woke
+// the screen. A report while the screen is dim or off starts one: the
+// screen wakes, and that touch's fingers reach no window until the last
+// lifts. It runs with mu held.
+func (d *Driver) swallowLocked(cs []contact, now time.Time) bool {
+	t := &d.input
+	if len(t.swallow) == 0 {
+		if !d.blank.touched(now) {
+			return false
+		}
+		// A touch going on as the screen went off, if one was, lets go.
+		t.contacts.Cancel(now)
+		t.resample = touch.Resampler{}
+		d.kick()
+	}
+	for _, c := range cs {
+		if c.phase == phaseUp {
+			delete(t.swallow, c.slot)
+		} else {
+			t.swallow[c.slot] = true
+		}
+	}
+	return true
+}
+
+// flushTouch hands the windows the fingers' moves held while a frame was
+// on its way, resampled to where they were a little before start, the
+// next frame's start. It runs with mu held, on the render thread, just
+// before the windows hear of the flip.
+func (d *Driver) flushTouchLocked(start time.Time) {
+	t := &d.input
+	t.holding = false
+	if t.contacts == nil {
+		return
+	}
+	t.later = t.resample.At(start, t.later[:0])
+	t.contacts.Report(t.later, start)
 }
 
 // hitLocked returns the topmost window shown at p, in logical pixels of the
@@ -139,13 +177,6 @@ func (d *Driver) hitLocked(p geom.Point) *Window {
 		}
 	}
 	return nil
-}
-
-func abs(v float32) float32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }
 
 // startInput starts a reader for the touch screen, or the recording to play,

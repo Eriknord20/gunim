@@ -66,6 +66,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -99,6 +100,10 @@ type Options struct {
 	// Brightness sets the backlight from 0 to 1 at start. Zero keeps the
 	// level it has. The driver puts back the level it found on exit.
 	Brightness float32
+	// Blank is when an untouched screen dims and turns off. The zero
+	// value keeps it on. The first touch on a dim or dark screen wakes it
+	// and reaches no window.
+	Blank Blank
 	// VT is the virtual terminal to draw on: empty for the one the program
 	// runs on, if it runs on one, "free" for a free one, or a number. The
 	// driver switches to a VT other than the one showing, and back on
@@ -162,8 +167,18 @@ type Driver struct {
 	// state is the state file, locked while the run holds the screen.
 	state *stateFile
 	// lightMu guards light: a write to the backlight goes over I²C, and
-	// holds up nothing else.
+	// holds up nothing else. lightTo carries the step the render thread
+	// wants to the goroutine that writes it, and lightDone ends that.
 	lightMu sync.Mutex
+	lightTo chan int
+	// lit is the step the backlight was last written at: a step that
+	// failed to write is asked again.
+	lit       atomic.Int32
+	lightDone chan struct{}
+	lightWG   sync.WaitGroup
+	// errs carries the errors of what the driver does on its own, as the
+	// backlight's writes while it fades; see Errors.
+	errs chan error
 
 	// panelW and panelH are the panel's own size in pixels; picW and picH
 	// the picture's, turned.
@@ -200,6 +215,10 @@ type Driver struct {
 	touchAt time.Time
 	// input is the touch in progress; see touchReport.
 	input touchState
+	// blank is the screen's brightness and blanking.
+	blank *blanker
+	// away says another VT has the screen: touches then reach no window.
+	away bool
 	// clipboard is the process's own: there is no system to share it with.
 	clipboard string
 
@@ -226,7 +245,8 @@ func Open(o Options) (*Driver, error) {
 		return nil, fmt.Errorf("kms: Rotate is %d: want 0, 90, 180 or 270", o.Rotate)
 	}
 	d := &Driver{o: o, turn: t, cmds: make(chan func(), 8), quit: make(chan struct{}), done: make(chan struct{}),
-		ended: make(chan struct{}), wake: -1, stop: -1}
+		ended: make(chan struct{}), wake: -1, stop: -1, errs: make(chan error, 8),
+		lightTo: make(chan int, 1), lightDone: make(chan struct{})}
 	if err := d.open(); err != nil {
 		// The render thread, if it started, has ended.
 		d.quitOnce.Do(func() { close(d.quit) })
@@ -249,10 +269,22 @@ func (d *Driver) open() error {
 	case err != nil:
 		log.Printf("gunim: kms: %v; a crash would leave the VT for the next run to find as it is", err)
 	case found:
-		log.Print("gunim: kms: a run before this one ended without giving the screen back; putting back what it took")
-		if err := repair(left); err != nil {
+		// The VT that run took is put back, unless this run takes the same
+		// one: then it takes it as that run left it; see openVT.
+		reuse := false
+		if num, take, _ := whichVT(o.VT, &left); take && left.VT > 0 && num == left.VT {
+			reuse = true
+			log.Printf("gunim: kms: a run before this one ended without giving the screen back; taking its VT %d again, and putting back the rest", num)
+		} else {
+			log.Print("gunim: kms: a run before this one ended without giving the screen back; putting back what it took")
+		}
+		if err := repair(left, !reuse); err != nil {
 			log.Printf("gunim: kms: %v", err)
 		}
+	}
+	var leftp *state
+	if found {
+		leftp = &left
 	}
 	d.state = sf
 	if p := os.Getenv("GUNIM_KMS_TRACE"); p != "" {
@@ -279,11 +311,12 @@ func (d *Driver) open() error {
 	if d.light, err = openBacklight(o.Backlight); err != nil {
 		return err
 	}
+	d.light = usableBacklight(d.light)
 	st := state{}
 	if d.light != nil {
 		st.Backlight, st.Level = d.light.dir, d.light.was
 	}
-	if d.vt, err = openVT(o.VT, func(v *vt) error {
+	if d.vt, err = openVT(o.VT, leftp, func(v *vt) error {
 		st.VT, st.Prev, st.Opened = v.num, v.prev, v.opened
 		return d.state.write(st)
 	}); err != nil {
@@ -307,11 +340,21 @@ func (d *Driver) open() error {
 	if d.density <= 0 {
 		d.density = density(d.panelW, d.scr.conn.mmWidth)
 	}
-	if d.light != nil && o.Brightness > 0 {
-		if err := d.light.set(o.Brightness); err != nil {
-			return err
+	level := float32(1)
+	if d.light != nil {
+		if o.Brightness > 0 {
+			if err := d.light.set(o.Brightness); err != nil {
+				return err
+			}
 		}
+		level = d.light.brightness()
+		d.lit.Store(int32(d.light.cur))
+		d.startLight()
 	}
+	if o.Brightness > 0 {
+		level = min(o.Brightness, 1)
+	}
+	d.blank = newBlanker(o.Blank, level, time.Now())
 	if d.touch, d.keys, err = findInputs(o.Touch, o.Replay == nil, o.VTSwitch); err != nil {
 		return err
 	}
@@ -433,13 +476,19 @@ func (d *Driver) Run(ctx context.Context, ready func()) error {
 
 // logSecond logs the last second's frames, for GUNIM_DEBUG_FRAMES.
 func (d *Driver) logSecond() {
-	n, missed, slow, f, t := d.stats.second()
+	s := d.stats.second()
+	n, missed, slow, f, t, sent, drawn := s.frames, s.missed, s.slow, s.frame, s.touch, s.sent, s.drawn
 	if n == 0 {
 		return
 	}
 	line := fmt.Sprintf("gunim: kms: %d frames, %d missed, %d slow, frame p50 %.1f ms p99 %.1f ms", n, missed, slow, ms(f.P50), ms(f.P99))
 	if t.N > 0 {
 		line += fmt.Sprintf(", touch to flip p50 %.1f ms p99 %.1f ms", ms(t.P50), ms(t.P99))
+	}
+	if drawn > 0 {
+		k := float64(drawn)
+		line += fmt.Sprintf("; a window's frame: %.0f quads, %.1f layers, %.1f flushes, %.0f %% redrawn in %.1f boxes, %.2f MB",
+			float64(sent.Quads)/k, float64(sent.Layers)/k, float64(sent.Flushes)/k, 100*sent.Redrawn/k, float64(sent.Boxes)/k, float64(sent.Bytes)/k/(1<<20))
 	}
 	log.Print(line)
 }
@@ -525,6 +574,7 @@ func (d *Driver) releaseDevices() {
 // and the VT, and removes the state file once both are back. Where either
 // fails, the file stays for the next run to finish the job.
 func (d *Driver) releaseHeld() {
+	d.stopLight()
 	d.lightMu.Lock()
 	errLight := d.light.restore()
 	d.lightMu.Unlock()
@@ -581,6 +631,9 @@ func (d *Driver) NewWindow(o driver.Options) (driver.Window, error) {
 	case o.Kind == driver.KindPopup && w.parent != nil:
 		w.size = o.Size
 		w.pos = compose.Place(o.Anchor.Add(w.parent.pos), w.size, w.over, w.above, d.screenLocked())
+		if debugBlank {
+			log.Printf("gunim: kms: a popup of %v opens at %v", w.size, w.pos)
+		}
 	case o.Kind == driver.KindUtility && w.parent != nil:
 		w.size = o.Size
 		w.pos = o.Anchor.Min.Add(w.parent.pos)
@@ -611,14 +664,116 @@ func (d *Driver) windowClosed(w *Window) {
 		}
 	}
 	last := len(d.windows) == 0
-	if d.input.window == w {
-		d.input.window = nil
-	}
+	d.input.gest.Forget(w)
+	d.keepAwakeLocked()
 	d.mu.Unlock()
 	d.kick()
 	if last {
 		d.quitOnce.Do(func() { close(d.quit) })
 	}
+}
+
+// keepAwakeLocked holds the screen awake while any window asks. It runs
+// with mu held.
+func (d *Driver) keepAwakeLocked() {
+	keep := false
+	for _, w := range d.windows {
+		keep = keep || w.keepAwake && !w.closed
+	}
+	d.blank.setKeep(keep, time.Now())
+}
+
+// SetBlank changes when an untouched screen dims and turns off, counting
+// from now. The zero Blank keeps it on, and wakes one that is dim or off.
+func (d *Driver) SetBlank(b Blank) {
+	d.mu.Lock()
+	now := time.Now()
+	d.blank.o, d.blank.last = b, now
+	if b == (Blank{}) {
+		d.blank.wake(now)
+	}
+	d.mu.Unlock()
+	d.kick()
+}
+
+// Blanked reports whether the screen is off: faded to black, with the
+// backlight at 0 and the display controller off, and no frames drawn.
+func (d *Driver) Blanked() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.blank.state == screenOff
+}
+
+// DisplayOn asks the kernel whether the display controller is on: the
+// screen's CRTC active. It is false while the screen is blanked.
+func (d *Driver) DisplayOn() (bool, error) {
+	ps, err := d.scr.card.props(d.scr.crtc, objCrtc)
+	if err != nil {
+		return false, fmt.Errorf("kms: %w", err)
+	}
+	return ps["ACTIVE"].value != 0, nil
+}
+
+// Errors carries the errors of what the driver does on its own, such as a
+// write to the backlight that failed while the screen faded. The driver
+// keeps the last few that nobody has read.
+func (d *Driver) Errors() <-chan error { return d.errs }
+
+// fail hands err to Errors, or drops it where the channel is full.
+func (d *Driver) fail(err error) {
+	select {
+	case d.errs <- err:
+	default:
+	}
+}
+
+// startLight starts the goroutine that writes the backlight's steps the
+// render thread asks for, so a slow write never holds a frame.
+func (d *Driver) startLight() {
+	d.lightWG.Add(1)
+	go func() {
+		defer d.lightWG.Done()
+		for {
+			select {
+			case n := <-d.lightTo:
+				d.lightMu.Lock()
+				err := d.light.setLevel(n)
+				d.lightMu.Unlock()
+				if err != nil {
+					d.fail(err)
+				} else {
+					d.lit.Store(int32(n))
+				}
+			case <-d.lightDone:
+				return
+			}
+		}
+	}()
+}
+
+// wantLight asks for the backlight at step n, in place of a step asked
+// for and not yet written. Only the render thread asks.
+func (d *Driver) wantLight(n int) {
+	select {
+	case <-d.lightTo:
+	default:
+	}
+	d.lightTo <- n
+}
+
+// stopLight ends the backlight's goroutine, once it has written what it
+// was asked. It is safe to call twice.
+func (d *Driver) stopLight() {
+	if d.lightDone == nil {
+		return
+	}
+	select {
+	case <-d.lightDone:
+		return
+	default:
+	}
+	close(d.lightDone)
+	d.lightWG.Wait()
 }
 
 // kick wakes the render thread.

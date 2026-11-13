@@ -1685,6 +1685,9 @@ func (w *Window) draw() {
 	w.dues = append(w.dues, due)
 	start := time.Now()
 	present := w.presentAt(due, start)
+	if fb, ok := w.dw.(driver.FrameBeginner); ok {
+		fb.BeginFrame(t0)
+	}
 	w.ui.frame(due, present, delta)
 	w.sent = time.Now()
 	if took := w.sent.Sub(start); took > slowFrame {

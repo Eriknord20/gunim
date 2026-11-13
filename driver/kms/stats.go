@@ -8,31 +8,38 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/marrasen/gunim/driver/internal/render"
 )
 
 // Stats are the driver's figures since it opened, or since the last
 // ResetStats: what tools/kmsbench checks against the goals.
 type Stats struct {
-	// Frames is the frames shown, and Missed the vblanks a frame missed
-	// while the program drew one frame straight after another.
+	// Frames is the frames shown, and Missed the vblanks they missed. A
+	// frame the engine began as the windows heard of the flip before it,
+	// as while something moves, misses each vblank between that flip and
+	// its own past the first. A frame begun after a rest, as on a touch,
+	// had the time from its start to the vblank after next: it misses
+	// each vblank past those.
 	Frames, Missed int
-	// Frame is the time from the flip before to the commit, for frames
-	// drawn straight after the one before; where the driver held the flip's
-	// report back to start the frame later, from when it let it go. It is
-	// the whole frame, from the
-	// engine's step and layout through paint to the GPU's draw. Draw is
-	// the driver's part alone: from the frame handed over to its commit.
-	// Touch is from a touch to the flip of the first frame after it.
+	// Straight is the frames begun as the windows heard of the flip
+	// before, and StraightMissed the vblanks they missed: while something
+	// moves on every frame, the frame rate is the panel's times Straight
+	// over Straight plus StraightMissed.
+	Straight, StraightMissed int
+	// Frame is each frame's time from when the engine began it to its
+	// commit: the whole frame, from the engine's step and layout through
+	// paint to the GPU's draw. Where the engine did not say when it began,
+	// as for a popup's own frames, it counts from the frame handed over.
+	// Draw is the driver's part alone: from the frame handed over to its
+	// commit. Touch is from a touch to the flip of the first frame after
+	// it.
 	Frame, Draw, Touch Percentiles
 	// Last is the newest frame's time, as Frame measures it.
 	Last time.Duration
-	// Late is the frames handed over a refresh or more after the flip
-	// before, and LateMissed the vblanks they missed. While something moves
-	// on every frame, as in tools/kmsbench, each one is a slow frame on the
-	// CPU's side; otherwise the first frame after a rest is one too. All
-	// is Frame for every frame with a flip before it, late ones too.
-	Late, LateMissed int
-	All              Percentiles
+	// Late is the frames that took a refresh or more, as Frame measures
+	// them.
+	Late int
 	// Since is when the figures started.
 	Since time.Time
 }
@@ -87,13 +94,13 @@ const statsKept = 8192
 
 // timeline keeps a record of each frame, for the figures and the trace.
 type timeline struct {
-	mu     sync.Mutex
-	frames int
-	missed int
+	mu                sync.Mutex
+	frames            int
+	missed            int
+	late              int
+	straight, sMissed int
 	// frame, draw and touch keep the last statsKept frames' times.
 	frame, draw, touch ring
-	all                ring
-	late, lateMissed   int
 	last               time.Duration
 	since              time.Time
 
@@ -101,6 +108,10 @@ type timeline struct {
 	// them.
 	secFrames, secMissed, secSlow int
 	secFrame, secTouch            ring
+	// sent is what the renderers sent the GPU in the second, and drawn
+	// the frames they drew, for GUNIM_DEBUG_FRAMES.
+	sent  render.Stats
+	drawn int
 
 	trace *json.Encoder
 }
@@ -109,6 +120,7 @@ type timeline struct {
 // microseconds from the flip before it.
 type traceFrame struct {
 	Seq        uint32 `json:"seq"`
+	Began      int64  `json:"began_us"`
 	Handed     int64  `json:"handed_us"`
 	Commit     int64  `json:"commit_us"`
 	Flip       int64  `json:"flip_us"`
@@ -119,7 +131,7 @@ type traceFrame struct {
 
 func newTimeline(trace io.Writer) *timeline {
 	t := &timeline{since: time.Now(),
-		frame: newRing(statsKept), draw: newRing(statsKept), touch: newRing(statsKept), all: newRing(statsKept),
+		frame: newRing(statsKept), draw: newRing(statsKept), touch: newRing(statsKept),
 		secFrame: newRing(240), secTouch: newRing(240)}
 	if trace != nil {
 		t.trace = json.NewEncoder(trace)
@@ -127,54 +139,89 @@ func newTimeline(trace io.Writer) *timeline {
 	return t
 }
 
-// shown records one frame: the flip before it at prev, the frame handed
-// over at handed, committed at commit, and flipped at flip. straight says
-// it was handed over within a refresh of the flip before, as while
-// something moves. missed is the vblanks between the two flips past the
-// first. touch is the oldest touch it answers, or zero.
-func (t *timeline) shown(seq uint32, prev, handed, commit, flip, touch time.Time, straight bool, missed int) {
+// shownFrame is one frame's times, from the flip before it, or the zero
+// time where there was none, to its own flip.
+type shownFrame struct {
+	seq uint32
+	// prev is the flip before. began is when the engine began the frame,
+	// or the zero time where it did not say, handed when the frame was
+	// handed over, commit when it was committed, flip when it flipped,
+	// and touch the oldest touch it answers, or zero.
+	prev, began, handed, commit, flip, touch time.Time
+	// straight says the engine began it as the windows heard of the flip
+	// before, as while something moves, and missed is then the vblanks
+	// between the two flips past the first.
+	straight bool
+	missed   int
+	period   time.Duration
+}
+
+// shown records one frame.
+func (t *timeline) shown(f shownFrame) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	began := f.began
+	if began.IsZero() {
+		began = f.handed
+	}
+	d := f.commit.Sub(began)
+	missed := f.missed
+	if !f.straight {
+		// Begun after a rest: it had until the vblank after next.
+		missed = 0
+		if f.period > 0 {
+			missed = max(0, int(f.flip.Sub(began)/f.period)-1)
+		}
+	}
 	t.frames++
 	t.secFrames++
-	if !prev.IsZero() {
-		t.all.add(commit.Sub(prev))
-		t.secFrame.add(commit.Sub(prev))
+	if f.straight {
+		t.straight++
+		t.sMissed += missed
 	}
-	switch {
-	case straight:
-		t.missed += missed
-		t.secMissed += missed
-		if !prev.IsZero() {
-			d := commit.Sub(prev)
-			t.frame.add(d)
-			t.last = d
-		}
-	case !prev.IsZero():
+	t.missed += missed
+	t.secMissed += missed
+	t.frame.add(d)
+	t.secFrame.add(d)
+	t.last = d
+	if f.period > 0 && d >= f.period {
 		t.late++
-		t.lateMissed += missed
 		t.secSlow++
-		t.secMissed += missed
 	}
-	t.draw.add(commit.Sub(handed))
-	if !touch.IsZero() {
-		d := flip.Sub(touch)
+	t.draw.add(f.commit.Sub(f.handed))
+	if !f.touch.IsZero() {
+		d := f.flip.Sub(f.touch)
 		t.touch.add(d)
 		t.secTouch.add(d)
 	}
 	if t.trace != nil {
 		us := func(at time.Time) int64 {
-			if at.IsZero() || prev.IsZero() {
+			if at.IsZero() || f.prev.IsZero() {
 				return 0
 			}
-			return at.Sub(prev).Microseconds()
+			return at.Sub(f.prev).Microseconds()
 		}
-		f := traceFrame{Seq: seq, Handed: us(handed), Commit: us(commit), Flip: us(flip), Straight: straight, MissedHere: missed}
-		if !touch.IsZero() {
-			f.Touch = flip.Sub(touch).Microseconds()
+		tf := traceFrame{Seq: f.seq, Began: us(began), Handed: us(f.handed), Commit: us(f.commit), Flip: us(f.flip),
+			Straight: f.straight, MissedHere: missed}
+		if !f.touch.IsZero() {
+			tf.Touch = f.flip.Sub(f.touch).Microseconds()
 		}
-		_ = t.trace.Encode(f) // a trace that fails to write loses lines, no more
+		_ = t.trace.Encode(tf) // a trace that fails to write loses lines, no more
 	}
+}
+
+// drew adds what a renderer sent the GPU for one frame, for
+// GUNIM_DEBUG_FRAMES.
+func (t *timeline) drew(st *render.Stats) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sent.Flushes += st.Flushes
+	t.sent.Quads += st.Quads
+	t.sent.Bytes += st.Bytes
+	t.sent.Layers += st.Layers
+	t.sent.Boxes += st.Boxes
+	t.sent.Redrawn += st.Redrawn
+	t.drawn++
 }
 
 // stats returns the figures so far.
@@ -182,10 +229,9 @@ func (t *timeline) stats() Stats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return Stats{
-		Frames: t.frames, Missed: t.missed,
+		Frames: t.frames, Missed: t.missed, Late: t.late, Straight: t.straight, StraightMissed: t.sMissed,
 		Frame: percentiles(t.frame.times()), Draw: percentiles(t.draw.times()), Touch: percentiles(t.touch.times()),
 		Last: t.last, Since: t.since,
-		Late: t.late, LateMissed: t.lateMissed, All: percentiles(t.all.times()),
 	}
 }
 
@@ -193,24 +239,33 @@ func (t *timeline) stats() Stats {
 func (t *timeline) reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.frames, t.missed = 0, 0
+	t.frames, t.missed, t.late, t.straight, t.sMissed = 0, 0, 0, 0, 0
 	t.frame.reset()
 	t.draw.reset()
 	t.touch.reset()
-	t.all.reset()
-	t.late, t.lateMissed = 0, 0
 	t.since = time.Now()
 }
 
-// second returns the last second's figures, slow frames among them, and
-// starts the next.
-func (t *timeline) second() (frames, missed, slow int, frame, touch Percentiles) {
+// secondFigures are one second's figures, for GUNIM_DEBUG_FRAMES: frames,
+// missed vblanks and slow frames, their times, and what the renderers sent
+// the GPU over drawn frames.
+type secondFigures struct {
+	frames, missed, slow int
+	frame, touch         Percentiles
+	sent                 render.Stats
+	drawn                int
+}
+
+// second returns the last second's figures, and starts the next.
+func (t *timeline) second() secondFigures {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	frames, missed, slow = t.secFrames, t.secMissed, t.secSlow
-	frame, touch = percentiles(t.secFrame.times()), percentiles(t.secTouch.times())
+	sent, drawn := t.sent, t.drawn
+	t.sent, t.drawn = render.Stats{}, 0
+	f := secondFigures{frames: t.secFrames, missed: t.secMissed, slow: t.secSlow,
+		frame: percentiles(t.secFrame.times()), touch: percentiles(t.secTouch.times()), sent: sent, drawn: drawn}
 	t.secFrames, t.secMissed, t.secSlow = 0, 0, 0
 	t.secFrame.reset()
 	t.secTouch.reset()
-	return frames, missed, slow, frame, touch
+	return f
 }

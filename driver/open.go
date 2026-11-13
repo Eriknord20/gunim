@@ -171,6 +171,16 @@ type CaretPlacer interface {
 // or the display server asking for the contents back.
 type Redraw struct{}
 
+// A FrameBeginner is a [Window] that hears when the engine starts
+// building each frame it presents, so its figures can time the whole
+// frame, from the engine's step to the screen, and tell a frame that took
+// long from one that started after a rest. at is when the engine started;
+// the frame it starts reaches [Window.Present] next. It is called on the
+// window's own goroutine, and must not block.
+type FrameBeginner interface {
+	BeginFrame(at time.Time)
+}
+
 // A Placer is a popup [Window] that can move and resize: to fit new
 // content, or to follow its anchor. anchor is in the parent's logical
 // space, as in [Options], and size is in logical pixels.

@@ -212,9 +212,10 @@ use and frames at rest stand in for power.
   - the atomic request builder, against a fake ioctl layer that checks properties and flags;
   - the blank and wake state machine, with a fake clock;
   - allocations per frame in the driver loop: 0.
-- **A virtual display, maybe.** The kernel's `vkms` module is a virtual KMS device with atomic commits and vblank
-  events. With Mesa's software renderer on GBM, it could run the whole driver on a Linux CI machine. Whether
-  GitHub's runners can load `vkms` is unknown, so it is worth an hour's try in milestone K2. [vkms]
+- **A virtual display.** The kernel's `vkms` module is a virtual KMS device with atomic commits and vblank
+  events. With Mesa's software renderer on GBM, it runs the whole driver on a Linux CI machine. GitHub's
+  `ubuntu-latest` runners load it (K2 tried it): CI's vkms job runs the bench there, from the modeset to blanking
+  and the swallowed wake. [vkms]
 - **Input-to-photon** needs a camera. Film the demo's touch dot and a finger at 240 fps with a phone, and count
   frames. It is done by hand, once per milestone, and the figures go in the milestone's PR.
 
@@ -343,7 +344,8 @@ each other. So some frames get two touch reports and some get none. A dragged li
 judder that people see at once.
 
 **The fix,** as phones do it. Before each frame the driver works out where the finger was at one fixed time:
-the frame's time less about 5 ms. It interpolates between the two reports either side of that time. If the newest
+the frame's time less about 5 ms, or less the report gap less 8 ms on a screen that reports slower, so a move
+is never carried on further than 8 ms: 9 ms on the Touch Display 2. It interpolates between the two reports either side of that time. If the newest
 report is older than that, it extrapolates from the last two by at most 8 ms. Each frame then gets exactly one move,
 at an even step. Down and up events pass through at once, untouched, so a tap is never delayed.
 
@@ -387,12 +389,15 @@ vary by 100 %.
   The fade is smooth even though the hardware is not.
 - **Blanking**, set by `kms.Options.Blank` (a dim time and an off time). Hjortron dims after 1 minute and turns off
   after 5 (decision 6):
-  1. after the dim time, fade to 30 % over 1 s;
+  1. after the dim time, fade to 30 % of the brightness over 1 s;
   2. after the off time, fade to black over 600 ms, set the backlight to 0, then commit `ACTIVE = 0`. The panel and
      the CRTC are off. No frames run and no GPU work happens.
 - **Waking.** The first touch on a blank or dim screen wakes it and is swallowed. It never reaches a node. This
   matters for Hjortron: a tap on a dark screen must never press "Revoke". The driver commits `ACTIVE = 1`, draws the
   latest state, and fades up.
+- **The shade** is worked out in light, through the panel's gamma, not in pixel values.
+- **Another VT** shares the backlight: on a switch away the driver puts it back at the app's brightness, and
+  touches reach no window until the VT shows again.
 - **The app's say.** `Awaker.KeepAwake(true)` holds the screen on, as while a long command runs. The app hears
   `input.WindowHidden` and `input.WindowShown` as the screen goes off and on, as on other platforms.
 - **Errors.** A failed write to the backlight's file is an I/O error. `SetBrightness` returns it, and a failed write
@@ -411,6 +416,8 @@ UI. The driver:
   with a USB keyboard, which Hjortron's install guide relies on (`Alt+F2`). It is a repair path only (decision 9);
 - with `kms.Options.VT` set to "free", opens the first free VT and switches to it, and switches back on exit. That is
   how a test run over SSH leaves tty1 and its login alone;
+- after a crash, takes the crashed run's VT again as it is, where that is the VT asked for: it switches to it no
+  more than that run had, and where another VT shows, starts away and waits for a switch to its own (#418);
 - puts the VT back as it found it on exit, on `SIGHUP`, `SIGINT`, `SIGTERM` and `SIGQUIT`, which it catches itself,
   and on a panic on the render thread. `SIGKILL`, `os.Exit`, a panic on another goroutine and a crash in Mesa's C
   code skip that. For those, it keeps a state file under `/run` while it runs, locked: the VT it took, the VT before,
@@ -794,6 +801,11 @@ the text console comes back on exit.
 
 **Done when** `kmsbench` passes every goal on the demo and on `example/widgets`, and a `kill -9` mid-animation
 brings the screen back within 2 s under systemd.
+
+**Where it stands** (#419). The demo passes every goal but the touch ones (#417), as an ordinary user under
+systemd, and a `kill -9` brings the screen back in 1.3 s. `example/widgets` misses its frame goals while it
+scrolls, and spends CPU at rest on a spinner out of sight (#420). K2 found two things the GPU path needs on
+V3D: no dual-source blending, which Mesa blends in the shader, and frames that change nothing left undrawn.
 
 ### K3: the touch kit
 

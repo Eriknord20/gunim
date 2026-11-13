@@ -127,6 +127,15 @@ type Compositor struct {
 	// turnM the matrix for it; see SetTurn.
 	turn  int
 	turnM [4]float32
+	// shade is how much black lies over the whole surface, 0 to 1, and
+	// laidShade the shade the surface was last laid with; see SetShade.
+	// black is a texture of one black pixel, which lays it, and fadeLoc
+	// the uniform it is laid at, with fadeV its value, kept here so
+	// handing it through gl.Context allocates nothing.
+	shade, laidShade float32
+	black            uint32
+	fadeLoc          int32
+	fadeV            [1]float32
 }
 
 const compositeVertex = `#version 300 es
@@ -143,10 +152,11 @@ void main() {
 const compositeFragment = `#version 300 es
 precision mediump float;
 uniform sampler2D tex;
+uniform float fade;
 in vec2 uv;
 out vec4 color;
 void main() {
-	color = texture(tex, uv);
+	color = texture(tex, uv) * fade;
 }
 `
 
@@ -171,10 +181,12 @@ func New(g gl.Context, name string) (*Compositor, error) {
 	if g.GetProgrami(p, gl.LINK_STATUS) == gl.FALSE {
 		return nil, fmt.Errorf("%s: link compositor: %s", name, g.GetProgramInfoLog(p))
 	}
-	c := &Compositor{g: g, name: name, prog: p, rect: g.GetUniformLocation(p, "rect"), turnLoc: g.GetUniformLocation(p, "turn")}
+	c := &Compositor{g: g, name: name, prog: p, rect: g.GetUniformLocation(p, "rect"), turnLoc: g.GetUniformLocation(p, "turn"),
+		fadeLoc: g.GetUniformLocation(p, "fade")}
 	c.open = c.openRenderer
 	g.UseProgram(p)
 	g.Uniform1i(g.GetUniformLocation(p, "tex"), 0)
+	c.setFade(1)
 	c.SetTurn(0)
 
 	c.vao = g.CreateVertexArray()
@@ -209,6 +221,12 @@ func compileShader(g gl.Context, name string, kind uint32, src string) (uint32, 
 	return s, nil
 }
 
+// NoDualSource has every window's renderer blend with no second colour,
+// so text is greyscale: for a GPU that would blend by a second colour in
+// the shader, as Mesa's V3D does. It is called before the first window
+// draws.
+func (c *Compositor) NoDualSource() { c.shared.NoDualSource = true }
+
 // SetTurn turns the windows on the surface by deg clockwise: 0, 90, 180 or
 // 270, for a screen mounted another way up than its own, as a panel in
 // portrait shown in landscape. The sizes and places the compositor is
@@ -235,6 +253,39 @@ func (c *Compositor) SetTurn(deg int) {
 	c.last = c.last[:0]
 }
 
+// SetShade lays black over the whole surface, from 0 for none to 1 for
+// black, as the last thing each frame: a driver dims the screen with it
+// between its backlight's steps. A new shade makes the stack dirty, so the
+// next frame lays it.
+func (c *Compositor) SetShade(v float32) { c.shade = min(max(v, 0), 1) }
+
+// setFade sets what the compositor's program multiplies each texel by.
+func (c *Compositor) setFade(v float32) {
+	c.fadeV[0] = v
+	c.g.Uniform1fv(c.fadeLoc, c.fadeV[:])
+}
+
+// layShade lays the shade over the surface, w×h, where there is one.
+func (c *Compositor) layShade(w, h int) {
+	c.laidShade = c.shade
+	if c.shade <= 0 {
+		return
+	}
+	g := c.g
+	if c.black == 0 {
+		c.black = g.CreateTexture()
+		g.BindTexture(gl.TEXTURE_2D, c.black)
+		g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, glNearest)
+		g.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, glNearest)
+		g.TexImage2D(gl.TEXTURE_2D, 0, glRGBA8, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, []byte{0, 0, 0, 0xff})
+	}
+	c.startLaying(w, h)
+	c.setFade(c.shade)
+	c.layOne(c.black, 0, 0, w, h, w, h, false)
+	c.setFade(1)
+	g.BindVertexArray(0)
+}
+
 // view returns the surface's own size for windows laid on w×h.
 func (c *Compositor) view(w, h int) (vw, vh int32) {
 	if c.turn == 90 || c.turn == 270 {
@@ -243,9 +294,10 @@ func (c *Compositor) view(w, h int) (vw, vh int32) {
 	return int32(w), int32(h)
 }
 
-// Dirty reports whether stack differs from the stack laid last.
+// Dirty reports whether stack differs from the stack laid last, or the
+// shade from the shade laid last.
 func (c *Compositor) Dirty(stack []Layer) bool {
-	if len(stack) != len(c.last) {
+	if len(stack) != len(c.last) || c.shade != c.laidShade {
 		return true
 	}
 	for i := range stack {
@@ -361,6 +413,7 @@ func (c *Compositor) Finish(stack []Layer, w, h int, scale float32) {
 		}
 		c.lay(stack, w, h)
 	}
+	c.layShade(w, h)
 	// The renderers share the context's blending, which the compositor
 	// changed.
 	for _, l := range stack {

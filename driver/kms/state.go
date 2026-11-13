@@ -155,9 +155,13 @@ func (sf *stateFile) keep() {
 	_ = sf.f.Close()
 }
 
-// repair puts back what a run before left, as its state file says.
-func repair(s state) error {
-	errs := []error{repairVT(consoles, s)}
+// repair puts back what a run before left, as its state file says: the
+// backlight, and the VT where vt says, as where this run takes another.
+func repair(s state, vt bool) error {
+	var errs []error
+	if vt {
+		errs = append(errs, repairVT(consoles, s))
+	}
 	if s.Backlight != "" && s.Level > 0 {
 		b := &backlight{dir: s.Backlight}
 		errs = append(errs, b.setLevel(s.Level))

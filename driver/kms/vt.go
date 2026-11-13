@@ -88,6 +88,10 @@ type vt struct {
 	// gives back.
 	prev   int
 	opened bool
+	// reused says it is the VT a run before took and left, as it crashed,
+	// and away that it is not the one showing: the driver then starts
+	// without the screen, and takes it as someone switches to the VT.
+	reused, away bool
 	// kbMode is the VT's keyboard mode to put back, once kbSaved.
 	kbMode  int32
 	kbSaved bool
@@ -101,24 +105,45 @@ type vt struct {
 // It returns nil with no error where there is no VT to take, as for a
 // program started over SSH with which empty.
 //
+// left is what a run before left in its state file, as it crashed, or nil.
+// Where that run's VT is the one to take, as for a service restarted on
+// its own VT, or "free" after a run on a free VT, the driver takes it again
+// as it is: it switches to it no more than the run before had, so a restart
+// never pulls the screen from someone at a login on another VT, and on
+// exit it goes back to the VT that showed before that run.
+//
 // before runs once the VT to take and the VT showing are known, before the
 // switch, so the state file holds them should the run die on the way.
-func openVT(which string, before func(*vt) error) (*vt, error) {
-	num := 0
+func openVT(which string, left *state, before func(*vt) error) (*vt, error) {
+	num, take, err := whichVT(which, left)
+	if err != nil || !take {
+		return nil, err
+	}
+	if left != nil && left.VT != num {
+		left = nil
+	}
+	return takeVT(consoles, num, left, before)
+}
+
+// whichVT returns the VT which names, 0 for a free one, and whether there
+// is one to take: see openVT. A free VT a run before opened and left is
+// taken again.
+func whichVT(which string, left *state) (num int, take bool, err error) {
 	switch which {
 	case "":
-		if num = ownVT(); num == 0 {
-			return nil, nil
-		}
+		num = ownVT()
+		return num, num != 0, nil
 	case "free":
-	default:
-		n, err := strconv.Atoi(strings.TrimPrefix(which, "/dev/tty"))
-		if err != nil || n < 1 || n > 63 {
-			return nil, fmt.Errorf("VT %q: want free, a number from 1 to 63, or /dev/ttyN", which)
+		if left != nil && left.Opened && left.VT > 0 && leftAsItWas(consoles, left.VT) {
+			return left.VT, true, nil
 		}
-		num = n
+		return 0, true, nil
 	}
-	return takeVT(consoles, num, before)
+	n, err := strconv.Atoi(strings.TrimPrefix(which, "/dev/tty"))
+	if err != nil || n < 1 || n > 63 {
+		return 0, false, fmt.Errorf("VT %q: want free, a number from 1 to 63, or /dev/ttyN", which)
+	}
+	return n, true, nil
 }
 
 // ownVT returns the VT the program's standard input is, or 0.
@@ -138,25 +163,24 @@ func ownVT() int {
 // A VT found in graphics mode, or with its keyboard off, was left so by a
 // run that ended without putting it back: takeVT puts it back to text mode
 // and a working keyboard first, and takes that as how it found it.
-func takeVT(c console, num int, before func(*vt) error) (*vt, error) {
+//
+// left, where it is not nil, is the state of a run before that took VT num
+// and crashed: takeVT takes the VT again without switching to it, keeps
+// that run's VT before as its own, and marks the VT away where it is not
+// the one showing.
+func takeVT(c console, num int, left *state, before func(*vt) error) (*vt, error) {
 	t := &vt{c: c, fd: -1}
-	tty0, err := c.open(0)
-	if err != nil {
-		return nil, fmt.Errorf("VT: %w", err)
-	}
-	defer func() { _ = c.close(tty0) }()
-	var st vtStat
-	if err := c.ioctl(tty0, vtGetState, unsafe.Pointer(&st)); err != nil {
-		return nil, fmt.Errorf("VT: state: %w", err)
-	}
 	if num == 0 {
-		var n int32
-		if err := c.ioctl(tty0, vtOpenQry, unsafe.Pointer(&n)); err != nil || n < 1 {
-			return nil, fmt.Errorf("VT: no free VT: %w", err)
+		// Only root and the group tty open /dev/tty0, which finds a free VT.
+		// A service runs on its own VT, which systemd gives it.
+		n, err := freeVT(c)
+		if err != nil {
+			return nil, err
 		}
-		num, t.opened = int(n), true
+		num, t.opened = n, true
 	}
 	t.num = num
+	var err error
 	t.fd, err = c.open(num)
 	if err != nil {
 		return nil, fmt.Errorf("VT %d: %w", num, err)
@@ -167,10 +191,20 @@ func takeVT(c console, num int, before func(*vt) error) (*vt, error) {
 			_ = t.close() // the error that brought it here says more
 		}
 	}()
+	// Any VT's file says which VT shows: the driver's own does, for a user
+	// who may not open /dev/tty0.
+	var st vtStat
+	if err := c.ioctl(t.fd, vtGetState, unsafe.Pointer(&st)); err != nil {
+		return nil, fmt.Errorf("VT: state: %w", err)
+	}
 	if err := saneVT(c, t.fd, num); err != nil {
 		return nil, err
 	}
-	if int(st.active) != num {
+	switch {
+	case left != nil:
+		t.reused, t.prev, t.opened = true, left.Prev, left.Opened
+		t.away = int(st.active) != num
+	case int(st.active) != num:
 		t.prev = int(st.active)
 	}
 	if before != nil {
@@ -178,11 +212,11 @@ func takeVT(c console, num int, before func(*vt) error) (*vt, error) {
 			return nil, err
 		}
 	}
-	if t.prev > 0 {
+	if t.prev > 0 && !t.reused {
 		if err := c.ioctlInt(t.fd, vtActivate, uintptr(num)); err != nil {
 			return nil, fmt.Errorf("VT %d: switch to it: %w", num, err)
 		}
-		if err := waitActive(c, num); err != nil {
+		if err := waitActive(c, t.fd, num); err != nil {
 			return nil, err
 		}
 	}
@@ -255,12 +289,17 @@ func (t *vt) close() error {
 	if t.kbSaved {
 		errs = append(errs, c.ioctlInt(t.fd, kdSKBMode, uintptr(t.kbMode)))
 	}
-	if t.prev > 0 {
-		errs = append(errs, c.ioctlInt(t.fd, vtActivate, uintptr(t.prev)), waitActive(c, t.prev))
+	// Back to the VT before only from this one: where someone switched to
+	// another meanwhile, the screen stays theirs.
+	var st vtStat
+	errs = append(errs, c.ioctl(t.fd, vtGetState, unsafe.Pointer(&st)))
+	back := t.prev > 0 && int(st.active) == t.num
+	if back {
+		errs = append(errs, c.ioctlInt(t.fd, vtActivate, uintptr(t.prev)), waitActive(c, t.fd, t.prev))
 	}
 	errs = append(errs, c.close(t.fd))
 	t.fd = -1
-	if t.opened && t.prev > 0 {
+	if t.opened && back {
 		errs = append(errs, disallocate(c, t.num))
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -273,19 +312,29 @@ func (t *vt) close() error {
 // it.
 const vtWait = 2 * time.Second
 
-// waitActive waits until VT n shows, for vtWait at most. It asks the VT's
-// state in a loop, where VT_WAITACTIVE would block in the kernel with no
-// limit, and retry for ever as signals broke it off.
-func waitActive(c console, n int) error {
+// freeVT returns the first free VT, from /dev/tty0.
+func freeVT(c console) (int, error) {
 	tty0, err := c.open(0)
 	if err != nil {
-		return fmt.Errorf("VT: %w", err)
+		return 0, fmt.Errorf("VT: a free VT is found through /dev/tty0, which only root and the group tty may open: %w", err)
 	}
 	defer func() { _ = c.close(tty0) }()
+	var n int32
+	if err := c.ioctl(tty0, vtOpenQry, unsafe.Pointer(&n)); err != nil || n < 1 {
+		return 0, fmt.Errorf("VT: no free VT: %w", err)
+	}
+	return int(n), nil
+}
+
+// waitActive waits until VT n shows, for vtWait at most, asking through
+// fd, any VT's file. It asks the VT's state in a loop, where VT_WAITACTIVE
+// would block in the kernel with no limit, and retry for ever as signals
+// broke it off.
+func waitActive(c console, fd, n int) error {
 	deadline := time.Now().Add(vtWait)
 	for {
 		var st vtStat
-		if err := c.ioctl(tty0, vtGetState, unsafe.Pointer(&st)); err != nil {
+		if err := c.ioctl(fd, vtGetState, unsafe.Pointer(&st)); err != nil {
 			return fmt.Errorf("VT: state: %w", err)
 		}
 		if int(st.active) == n {
@@ -312,11 +361,29 @@ func disallocate(c console, n int) error {
 	return nil
 }
 
+// leftAsItWas reports whether VT n is still in graphics mode, as a run that
+// crashed on it left it. A free VT in text mode again was taken since, as
+// by a login, and is someone else's.
+func leftAsItWas(c console, n int) bool {
+	fd, err := c.open(n)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = c.close(fd) }()
+	var mode int32
+	return c.ioctl(fd, kdGetMode, unsafe.Pointer(&mode)) == nil && mode == kdGraphics
+}
+
 // repairVT puts back a VT a run before took and did not give back, as its
 // state file says: text mode and a working keyboard on it, the VT that
 // showed before it showing again, and the VT given back if it opened it.
 func repairVT(c console, s state) error {
 	if s.VT <= 0 {
+		return nil
+	}
+	if s.Opened && !leftAsItWas(c, s.VT) {
+		// The free VT it took is someone else's now: it stays as it is.
+		log.Printf("gunim: kms: VT %d, which a run before took, is in use again; leaving it alone", s.VT)
 		return nil
 	}
 	fd, err := c.open(s.VT)
@@ -330,12 +397,10 @@ func repairVT(c console, s state) error {
 		c.ioctlInt(fd, kdSKBMode, kUnicode),
 	}
 	var st vtStat
-	if tty0, err := c.open(0); err == nil {
-		errs = append(errs, c.ioctl(tty0, vtGetState, unsafe.Pointer(&st)), c.close(tty0))
-	}
+	errs = append(errs, c.ioctl(fd, vtGetState, unsafe.Pointer(&st)))
 	back := int(st.active) == s.VT && s.Prev > 0
 	if back {
-		errs = append(errs, c.ioctlInt(fd, vtActivate, uintptr(s.Prev)), waitActive(c, s.Prev))
+		errs = append(errs, c.ioctlInt(fd, vtActivate, uintptr(s.Prev)), waitActive(c, fd, s.Prev))
 	}
 	errs = append(errs, c.close(fd))
 	if s.Opened && back {
