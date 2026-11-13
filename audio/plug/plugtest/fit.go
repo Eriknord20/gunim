@@ -44,7 +44,8 @@ type Fit struct {
 //   - a text is cut short: clipped, faded where it is cut, or ended with an ellipsis;
 //   - a shape, a ribbon, a picture or another drawing lies more than 3 px outside the view;
 //   - a part is smaller than its least size, or squeezed to nothing: a [plugui.Knob] under its natural size, a
-//     [widget.Shrinker] under its least width, or a part in f.Least under the size given there.
+//     [widget.Shrinker] under its least width, or a part in f.Least under the size given there;
+//   - a control or a part in f.Least is in the tree and never painted, outside a view that scrolls.
 //
 // A control is a node that can take the keyboard ([gunim.Focusable]), or a part in f.Least. One that holds another
 // control under it in the tree is a container, and only its parts are checked. A part inside a view that scrolls
@@ -57,7 +58,9 @@ type Fit struct {
 //   - a part that takes no keys and is not in f.Least lying outside the view or over another part;
 //   - a curve or a meter squeezed out of shape, or a part drawn over another without text;
 //   - text drawn in a picture;
-//   - any state but the one the test sets up, so set the longest values and labels by hand to check they fit.
+//   - any state but the one the test sets up, so set the longest values and labels by hand to check they fit;
+//   - much of a view that embeds a [plug.Room] and is shown under its least size, as its parts count only where they
+//     show, so check such a size with [UnderLeast].
 func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 	t.Helper()
 	for _, m := range Misfits(t, view, size, f) {
@@ -69,21 +72,23 @@ func Fits(t testing.TB, view gunim.Node, size geom.Size, f Fit) {
 // its parts out other than at least, or draws anything outside its box.
 func UnderLeast(t testing.TB, view func() gunim.Node, size, least geom.Size) {
 	t.Helper()
-	want := check(t, view(), least, Fit{}).laid
+	want := map[string]placed{}
+	for _, p := range check(t, view(), least, Fit{}).laid {
+		want[p.path] = p
+	}
 	c := check(t, view(), size, Fit{})
 	for _, m := range c.out {
 		if m.Kind == Spills {
 			t.Errorf("at %v×%v: %s", size.W, size.H, m)
 		}
 	}
-	if len(c.laid) != len(want) {
-		t.Errorf("at %v×%v the view lays out %d parts, and at its least size %v×%v %d", size.W, size.H, len(c.laid),
-			least.W, least.H, len(want))
-		return
-	}
-	wrong := 0
-	for i, p := range c.laid {
-		w := want[i]
+	wrong, both := 0, 0
+	for _, p := range c.laid {
+		w, ok := want[p.path]
+		if !ok {
+			continue
+		}
+		both++
 		if p.name == w.name && within(p.at, w.at, 0.5) && within(w.at, p.at, 0.5) {
 			continue
 		}
@@ -95,6 +100,10 @@ func UnderLeast(t testing.TB, view func() gunim.Node, size, least geom.Size) {
 	}
 	if wrong > 5 {
 		t.Errorf("at %v×%v, %d parts in all lie other than at the least size", size.W, size.H, wrong)
+	}
+	if both == 0 && len(want) > 0 {
+		t.Errorf("at %v×%v the view draws none of the parts it draws at its least size %v×%v", size.W, size.H,
+			least.W, least.H)
 	}
 }
 
@@ -123,6 +132,8 @@ const (
 	CutShort
 	// Squeezed is a part under its least size.
 	Squeezed
+	// Unpainted is a control or a part in [Fit.Least] that is in the tree and never painted.
+	Unpainted
 )
 
 // Misfits returns what [Fits] fails t for, without failing it.
@@ -149,7 +160,7 @@ func check(t testing.TB, view gunim.Node, size geom.Size, f Fit) *checker {
 		return c
 	}
 	c.u, c.frame = pr.u, pr.f
-	c.walk(view, nil, false)
+	c.walk(view, nil, "", false)
 	c.checkParts()
 	c.checkOps(w.Offscreen().Ops())
 	return c
@@ -201,8 +212,9 @@ type part struct {
 	up      []gunim.Node
 }
 
-// placed is a node as it is laid out, whether it shows or not: its name and its box.
+// placed is a node as it was drawn: its place in the tree, its name and its box.
 type placed struct {
+	path string
 	name string
 	at   geom.Rect
 }
@@ -214,7 +226,7 @@ type checker struct {
 	fit   Fit
 	box   geom.Rect
 	parts []part
-	// laid is every node under the view laid out at a size, in the tree's order, whether it shows or not.
+	// laid is every node under the view that was drawn, in the tree's order.
 	laid []placed
 	out  []Misfit
 	// scrolls are where views that scroll show, which cut what they hold at their edges.
@@ -241,13 +253,14 @@ func scrolls(a gunim.Node, bounds geom.Rect) bool {
 	return laid.W > bounds.Size().W+0.5 || laid.H > bounds.Size().H+0.5
 }
 
-// walk notes n and the nodes under it that were drawn, each with the nodes above it.
-func (c *checker) walk(n gunim.Node, up []gunim.Node, over bool) {
-	at, ok := c.u.Bounds(n)
-	if !ok {
+// walk notes n and the nodes under it, each with the nodes above it; path is n's place in the tree.
+func (c *checker) walk(n gunim.Node, up []gunim.Node, path string, over bool) {
+	if slices.Contains(c.fit.Hidden, n) {
 		return
 	}
-	if slices.Contains(c.fit.Hidden, n) {
+	at, ok := c.u.Bounds(n)
+	if !ok {
+		c.checkUnpainted(n, up)
 		return
 	}
 	if at.Empty() {
@@ -258,7 +271,7 @@ func (c *checker) walk(n gunim.Node, up []gunim.Node, over bool) {
 		return
 	}
 	if len(up) > 0 {
-		c.laid = append(c.laid, placed{name: nameOf(n), at: at})
+		c.laid = append(c.laid, placed{path: path, name: nameOf(n), at: at})
 	}
 	over = over || slices.Contains(c.fit.Over, n)
 	whole := at
@@ -273,19 +286,66 @@ func (c *checker) walk(n gunim.Node, up []gunim.Node, over bool) {
 		}
 	}
 	if !at.Empty() {
-		_, least := c.fit.Least[n]
-		fo, focusable := n.(gunim.Focusable)
-		backdrop := slices.Contains(c.fit.Backdrops, n)
-		control := len(up) > 0 && !backdrop && (least || focusable && fo != nil)
+		control := len(up) > 0 && !slices.Contains(c.fit.Backdrops, n) && c.isControl(n)
 		c.parts = append(c.parts, part{n: n, at: at, whole: whole, name: nameOf(n), control: control, over: over,
 			up: up})
 	}
 	if co, ok := n.(gunim.Composite); ok {
 		up = append(slices.Clip(up), n)
-		for _, k := range co.Children() {
-			c.walk(k, up, over)
+		for i, k := range co.Children() {
+			c.walk(k, up, fmt.Sprintf("%s/%d", path, i), over)
 		}
 	}
+}
+
+// isControl reports whether n takes the keyboard or is a part in f.Least.
+func (c *checker) isControl(n gunim.Node) bool {
+	_, least := c.fit.Least[n]
+	_, focusable := n.(gunim.Focusable)
+	return least || focusable
+}
+
+// checkUnpainted names n, a node that was not drawn, where it is a control or holds one, unless a view above it
+// scrolls and may have scrolled it out of sight.
+func (c *checker) checkUnpainted(n gunim.Node, up []gunim.Node) {
+	if len(up) == 0 {
+		return
+	}
+	for _, a := range up {
+		if _, ok := a.(gunim.Revealer); !ok {
+			continue
+		}
+		if sa, ok := c.u.Bounds(a); ok && scrolls(a, sa) {
+			return
+		}
+	}
+	held := c.controlsIn(n)
+	switch {
+	case held == 0 && !c.isControl(n):
+	case held == 0:
+		c.fail(Unpainted, "%s is never painted", nameOf(n))
+	default:
+		c.fail(Unpainted, "%s, which holds %d controls, is never painted", nameOf(n), held)
+	}
+}
+
+// controlsIn counts the controls under n, leaving out the parts hidden on purpose.
+func (c *checker) controlsIn(n gunim.Node) int {
+	co, ok := n.(gunim.Composite)
+	if !ok {
+		return 0
+	}
+	count := 0
+	for _, k := range co.Children() {
+		if slices.Contains(c.fit.Hidden, k) {
+			continue
+		}
+		if c.isControl(k) {
+			count++
+		}
+		count += c.controlsIn(k)
+	}
+	return count
 }
 
 // nameOf names n for a message: its accessible name, and its type.

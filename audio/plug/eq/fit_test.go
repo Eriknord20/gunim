@@ -32,14 +32,26 @@ func showing(t *testing.T) gunim.Node {
 }
 
 // backdrop names the graph and the panel it stands in, which fill the view and take keys, as lying under the rest on
-// purpose.
+// purpose, and the parts the view's state keeps out of sight as hidden.
 func backdrop(t *testing.T, v gunim.Node) plugtest.Fit {
 	t.Helper()
 	f, ok := v.(*full)
 	if !ok {
 		t.Fatal("the window's view is of another type")
 	}
-	return plugtest.Fit{Backdrops: []gunim.Node{f.panel, f.g}}
+	var hidden []gunim.Node
+	if !f.to().Kneed {
+		hidden = append(hidden, f.knobs[0])
+	}
+	if f.stopIn.Target() == 0 {
+		hidden = append(hidden, f.stop)
+	}
+	if f.listed.Target() == 0 {
+		hidden = append(hidden, f.scroll, f.tuner.Button)
+	} else {
+		hidden = append(hidden, f.row)
+	}
+	return plugtest.Fit{Backdrops: []gunim.Node{f.panel, f.g}, Hidden: hidden}
 }
 
 // The view fits at its least size, at the size it opens at, and on a large screen.

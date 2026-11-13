@@ -199,3 +199,76 @@ func (f *fakeT) Errorf(format string, args ...any) {
 }
 
 func (f *fakeT) Helper() {}
+
+// skipping lays out a knob at its top left and one at its bottom right, at its least size, and paints only the knobs
+// that show.
+type skipping struct {
+	plug.Room
+	least geom.Size
+	ks    [2]*plugui.Knob
+	at    [2]geom.Point
+}
+
+func (s *skipping) Children() []gunim.Node { return []gunim.Node{s.ks[0], s.ks[1]} }
+
+func (s *skipping) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	laid := s.Lay(c.Max, s.least)
+	s.at = [2]geom.Point{geom.Pt(8, 8), geom.Pt(laid.W-plugui.KnobW-8, laid.H-plugui.KnobH-8)}
+	for i := range s.ks {
+		kids.At(i).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
+		kids.At(i).Place(s.at[i])
+	}
+	return c.Max
+}
+
+func (s *skipping) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer s.Room.Paint(p, f)()
+	vis, clipped := p.Visible()
+	for i := range s.ks {
+		if !clipped || !intersect(vis, geom.Rect{Min: s.at[i], Max: s.at[i].Add(geom.Pt(plugui.KnobW,
+			plugui.KnobH))}).Empty() {
+			kids.At(i).Paint(p)
+		}
+	}
+}
+
+// UnderLeast passes a view that leaves out the parts it scrolled out of sight, as a view that draws only what shows.
+func TestUnderLeastPassesAViewThatDrawsOnlyWhatShows(t *testing.T) {
+	least := geom.Sz(300, 200)
+	ft := &fakeT{TB: t}
+	UnderLeast(ft, func() gunim.Node { return &skipping{least: least, ks: [2]*plugui.Knob{knob("A"), knob("B")}} },
+		geom.Sz(150, 100), least)
+	if len(ft.errs) != 0 {
+		t.Errorf("a view that draws only the knob that shows is named: %v", ft.errs)
+	}
+}
+
+// unpainting lays out its children and paints none of them.
+type unpainting struct{ kids []gunim.Node }
+
+func (u *unpainting) Children() []gunim.Node { return u.kids }
+
+func (u *unpainting) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	for i := range u.kids {
+		kids.At(i).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
+		kids.At(i).Place(geom.Pt(10+float32(i)*80, 10))
+	}
+	return c.Max
+}
+
+func (u *unpainting) Paint(*paint.Painter, gunim.Frame, geom.Size, gunim.Children) {}
+
+// A control or a part in f.Least that is never painted is named, unless it is hidden on purpose.
+func TestFitsNamesAPartNeverPainted(t *testing.T) {
+	meter, gain := &spots{}, knob("Gain")
+	v := &unpainting{kids: []gunim.Node{meter, gain}}
+	f := Fit{Least: map[gunim.Node]geom.Size{meter: geom.Sz(30, 40)}}
+	got := Misfits(t, v, geom.Sz(200, 140), f)
+	if !has(got, Unpainted, "*plugtest.spots") || !has(got, Unpainted, `"Gain" (*plugui.Knob)`) {
+		t.Errorf("a meter and a knob never painted are not both named: %v", got)
+	}
+	f.Hidden = []gunim.Node{meter, gain}
+	if got := Misfits(t, v, geom.Sz(200, 140), f); len(got) != 0 {
+		t.Errorf("a meter and a knob hidden on purpose misfit: %v", got)
+	}
+}
