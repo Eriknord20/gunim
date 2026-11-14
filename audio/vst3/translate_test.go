@@ -688,3 +688,29 @@ func TestANoteStartsUnbent(t *testing.T) {
 		t.Fatal("group 3 keeps its channel with its notes let go and its pedal up")
 	}
 }
+
+// TestAVST3PluginOfOneChannelKeepsMono describes a plugin whose main
+// buses stay at one channel each as keeping mono, and one that takes
+// two, as the host asks, as not.
+func TestAVST3PluginOfOneChannelKeepsMono(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		channels int
+		fixed    bool
+		want     bool
+	}{
+		{"mono alone", 1, true, true},
+		{"mono or stereo", 1, false, false},
+		{"stereo", 2, false, false},
+	} {
+		f := &fakePlugin{ins: []fakeBus{{name: "In", channels: tc.channels, fixed: tc.fixed}},
+			outs: []fakeBus{{name: "Out", channels: tc.channels, fixed: tc.fixed}}}
+		d, err := describe(f.class(), func(cfg Config) (*Plugin, error) { return f.open(t, cfg) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.KeepsMono != tc.want {
+			t.Errorf("%s: KeepsMono is %v, want %v", tc.name, d.KeepsMono, tc.want)
+		}
+	}
+}

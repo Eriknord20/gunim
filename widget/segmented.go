@@ -16,7 +16,7 @@ import (
 // Segmented tokens.
 var (
 	// SegmentedHeight is a segmented control's height.
-	SegmentedHeight = theme.Length("segmented.height", 28)
+	SegmentedHeight = theme.TextRow("segmented.height", 28)
 	// SegmentedPadding is the room either side of an option's icon and label.
 	SegmentedPadding = theme.Length("segmented.padding", 12)
 	// SegmentedTrack fills the track the options sit in, a shade apart from a card or the window behind it.
@@ -311,6 +311,7 @@ func (s *Segmented) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		fill = s.Track.Get(th)
 	}
 	p.RRect(track, h/2, paint.Solid(fill))
+	s.paintGlow(p, track, h/2, th)
 	// The options share the box Paint is given, which a parent may have
 	// squeezed since layout.
 	n := s.Len()

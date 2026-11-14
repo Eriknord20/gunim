@@ -70,7 +70,8 @@ func TestSubpixelTextFallsBackToGreyscale(t *testing.T) {
 		{"scaled", under(paint.Scale(1.2, geom.Pt(20, 20))), false, false},
 		{"rotated", under(paint.Rotate(0.1, geom.Pt(20, 20))), false, false},
 		{"fading", layer(paint.LayerOpts{Opacity: 0.5}), false, false},
-		{"in a rounded clip", layer(paint.LayerOpts{Opacity: 1, Clip: true, Radius: 6}), false, false},
+		// A rounded clip draws in place, cut as it draws, onto what is beneath.
+		{"in a rounded clip", layer(paint.LayerOpts{Opacity: 1, Clip: true, Radius: 6}), false, true},
 		{"blurred", layer(paint.LayerOpts{Opacity: 1, Blur: 2}), false, false},
 		{"on a transparent window", plain, true, false},
 	} {

@@ -87,6 +87,9 @@ func (r *Renderer) bigMask(shape paint.Shape, w, h int) (tex uint32, stretched b
 	g.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	g.TexImage2D(gl.TEXTURE_2D, 0, glR8, int32(w), int32(h), glRed, gl.UNSIGNED_BYTE, pix)
 	g.ActiveTexture(gl.TEXTURE0)
+	if framesDebug {
+		r.Stats.BigMasks++
+	}
 	// The batch may hold a quad reading whatever was on unit 1; flush binds it again.
 	b.sizes[shape] = append(sizes, m)
 	b.made[shape] = r.now
@@ -162,4 +165,20 @@ func (r *Renderer) releaseBigMasks() {
 		}
 	}
 	r.bigs = bigMasks{}
+}
+
+// rebase moves the times the renderer keeps on by d, as its clock changes from the wall's to a held one or back:
+// when each big mask was made and drawn, and when what was drawn stretched turns sharp.
+func (r *Renderer) rebase(d time.Duration) {
+	for _, sizes := range r.bigs.sizes {
+		for _, m := range sizes {
+			m.used = m.used.Add(d)
+		}
+	}
+	for shape, t := range r.bigs.made {
+		r.bigs.made[shape] = t.Add(d)
+	}
+	if !r.SharpAt.IsZero() {
+		r.SharpAt = r.SharpAt.Add(d)
+	}
 }

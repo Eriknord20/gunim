@@ -1,6 +1,7 @@
 package widget
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -122,5 +123,132 @@ func TestTheWheelTakesOverAFlingFromWhereItIs(t *testing.T) {
 	run(120)
 	if got := l.Offset(); got < at+39 || got > at+41 {
 		t.Fatalf("the wheel took over at %v and ended at %v, want 40 further", at, got)
+	}
+}
+
+// wheelView is a view staged to say whether the wheel is its own: axis is the way it scrolls, across what it answers
+// for the other way while it has room, and to puts it a share of the way from its start to its end.
+type wheelView struct {
+	ws     gunim.WheelScroller
+	axis   geom.Point
+	across bool
+	to     func(share float32)
+	run    func(int)
+}
+
+// scrollingView stages s, a view that scrolls up and down, in the window run steps.
+func scrollingView(ws gunim.WheelScroller, s *scrolling, run func(int)) wheelView {
+	return wheelView{ws: ws, axis: geom.Pt(0, 1), to: func(share float32) { s.JumpTo(share * s.end()) }, run: run}
+}
+
+// menuView stages a menu of n rows.
+func menuView(t *testing.T, n int) wheelView {
+	items := make([]MenuItem, 0, n)
+	for i := range n {
+		items = append(items, MenuItem{Label: strconv.Itoa(i)})
+	}
+	m := NewMenu(items)
+	_, run := stage(t, m)
+	return scrollingView(m, &m.scroll, run)
+}
+
+// tableView stages a table of 300 rows, with columns wider than it where wide is set.
+func tableView(t *testing.T, wide bool) wheelView {
+	_, tbl, _, run := newTableStage(t, 300)
+	if wide {
+		tbl.Columns = []TableColumn{{Title: "Name"}, {Title: "A", Width: 250}, {Title: "B", Width: 250},
+			{Title: "C", Width: 250}}
+	}
+	return wheelView{ws: tbl, axis: geom.Pt(1, 0), run: run,
+		to: func(share float32) { tbl.left = share * max(0, tbl.wide-tbl.width) }}
+}
+
+// crumbView stages an address bar width wide, showing cs.
+func crumbView(t *testing.T, width float32, cs []Crumb) wheelView {
+	a, _, run, _ := addressStage(t, width, cs)
+	c := a.crumbs
+	return wheelView{ws: c, axis: geom.Pt(1, 0), across: true, run: run,
+		to: func(share float32) { c.shift.Jump(share * c.most) }}
+}
+
+// Each view that scrolls with the wheel says the wheel is its own while its content is larger than it along the
+// wheel's axis, at its start, in the middle and at its end, either way; and says so of neither way while it fits.
+func TestEachViewSaysWhetherTheWheelIsItsOwn(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		room bool
+		mk   func(t *testing.T) wheelView
+	}{
+		{"Scroll with room", true, func(t *testing.T) wheelView {
+			s := NewScroll(&block{h: 1000})
+			_, run := stage(t, &frame{child: s, size: geom.Sz(300, 300)})
+			return scrollingView(s, &s.scrolling, run)
+		}},
+		{"Scroll that fits", false, func(t *testing.T) wheelView {
+			s := NewScroll(&block{h: 100})
+			_, run := stage(t, &frame{child: s, size: geom.Sz(300, 300)})
+			return scrollingView(s, &s.scrolling, run)
+		}},
+		{"VirtualList with room", true, func(t *testing.T) wheelView {
+			_, l, run := newVirtual(t, keys(200), 40)
+			return scrollingView(l, &l.scrolling, run)
+		}},
+		{"VirtualList that fits", false, func(t *testing.T) wheelView {
+			_, l, run := newVirtual(t, keys(3), 40)
+			return scrollingView(l, &l.scrolling, run)
+		}},
+		{"TileGrid with room", true, func(t *testing.T) wheelView {
+			g, _, run := tileStage(t, 100)
+			return scrollingView(g, &g.scrolling, run)
+		}},
+		{"TileGrid that fits", false, func(t *testing.T) wheelView {
+			g, _, run := tileStage(t, 4)
+			return scrollingView(g, &g.scrolling, run)
+		}},
+		{"Menu with room", true, func(t *testing.T) wheelView { return menuView(t, 80) }},
+		{"Menu that fits", false, func(t *testing.T) wheelView { return menuView(t, 2) }},
+		{"Table wider than it", true, func(t *testing.T) wheelView { return tableView(t, true) }},
+		{"Table that fits", false, func(t *testing.T) wheelView { return tableView(t, false) }},
+		{"places that overflow", true, func(t *testing.T) wheelView { return crumbView(t, 200, longCrumbs()) }},
+		{"places that fit", false, func(t *testing.T) wheelView { return crumbView(t, 400, []Crumb{{"x", "/x"}}) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := c.mk(t)
+			v.run(2)
+			across := geom.Pt(v.axis.Y, v.axis.X)
+			for _, share := range []float32{0, 0.5, 1} {
+				v.to(share)
+				v.run(2)
+				for _, sign := range []float32{1, -1} {
+					if got := v.ws.ScrollsAlong(v.axis.Mul(40 * sign)); got != c.room {
+						t.Errorf("%v of the way along, the wheel turned by %v is the view's %v, want %v",
+							share, v.axis.Mul(40*sign), got, c.room)
+					}
+					if got, want := v.ws.ScrollsAlong(across.Mul(40*sign)), v.across && c.room; got != want {
+						t.Errorf("%v of the way along, the wheel turned by %v is the view's %v, want %v",
+							share, across.Mul(40*sign), got, want)
+					}
+				}
+			}
+			if v.ws.ScrollsAlong(geom.Point{}) {
+				t.Error("a wheel turned by nothing is the view's")
+			}
+		})
+	}
+}
+
+// Every view in the package that scrolls its content with the wheel says when it would, so a control inside it leaves
+// it the wheel.
+func TestEveryViewThatScrollsWithTheWheelSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		n    any
+	}{
+		{"Scroll", (*Scroll)(nil)}, {"VirtualList", (*VirtualList)(nil)}, {"TileGrid", (*TileGrid)(nil)},
+		{"Menu", (*Menu)(nil)}, {"Table", (*Table)(nil)}, {"the address bar's places", (*crumbBar)(nil)},
+	} {
+		if _, ok := c.n.(gunim.WheelScroller); !ok {
+			t.Errorf("%s scrolls with the wheel and is no WheelScroller", c.name)
+		}
 	}
 }

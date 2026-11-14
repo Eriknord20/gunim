@@ -416,6 +416,24 @@ func sideButton(b input.Button) bool { return b == input.ButtonBack || b == inpu
 // isAlt reports whether k is either Alt key.
 func isAlt(k input.Key) bool { return k == input.KeyLeftAlt || k == input.KeyRightAlt }
 
+// Type hands e to the focused node as if it came from the keyboard, for a keyboard drawn in the window, such as the
+// touch kit's: a key ([input.KeyPress], [input.KeyRelease]), typed text ([input.TextInput]) or an edit of the
+// focused node's text ([input.TextEdit]), which an on-screen keyboard makes from the node's [TextEditor.TextState],
+// as a phone's keyboard does. It goes where a key from the keyboard goes, and bubbles from there; the focus stays
+// where it is. It takes the way a key from the driver takes, through the same checks: a window going away, or
+// fading out, takes none, and a key during a drag speaks to the drag. Other events, and a nil UI, do nothing.
+func (u *UI) Type(e input.Event) {
+	if u == nil {
+		return
+	}
+	switch e.(type) {
+	case input.KeyPress, input.KeyRelease, input.TextInput, input.TextEdit:
+	default:
+		return
+	}
+	u.handleOn(u.root, e)
+}
+
 // keyEvent delivers a keyboard or focus event. It goes to the focused
 // node and bubbles from there, which is how a shortcut a text field
 // ignores ends up at the window. With nothing focused it goes to the
@@ -847,9 +865,9 @@ func (u *UI) revealDrawn() {
 				u.revealing = append(u.revealing, s)
 			}
 		default:
+			// A scroll it starts is stepped later in the same frame,
+			// which keeps the window drawing.
 			u.revealState(s)
-			// The scroll it started runs from the next frame.
-			u.animating = true
 		}
 	}
 }
@@ -863,14 +881,37 @@ func (u *UI) revealState(s *state) {
 	}
 }
 
+// RevealRect scrolls r, a part of n in n's own space such as one of its rows, into view through every [Revealer]
+// around n, as the last frame drew n. It does nothing for a node not drawn yet.
+func (u *UI) RevealRect(n Node, r geom.Rect) {
+	if u == nil {
+		return
+	}
+	s, ok := u.index[n]
+	if !ok || s.drawn == 0 || s.leaving() {
+		return
+	}
+	for a := s.parent; a != nil; a = a.parent {
+		if rv, ok := a.node.(Revealer); ok {
+			rv.Reveal(u.partIn(s, a, r), u)
+		}
+	}
+	u.invalid = true
+}
+
 // rectIn returns s's box, as the last frame drew it, in a's space.
 func (u *UI) rectIn(s, a *state) geom.Rect {
+	return u.partIn(s, a, geom.Rect{Max: s.size.Point()})
+}
+
+// partIn returns r, in s's space, as the last frame drew s, in a's space.
+func (u *UI) partIn(s, a *state, r geom.Rect) geom.Rect {
 	inv, ok := a.toWindow.Invert()
 	if !ok {
 		return geom.Rect{}
 	}
 	out := geom.Rect{Min: geom.Pt(float32(math.Inf(1)), float32(math.Inf(1))), Max: geom.Pt(float32(math.Inf(-1)), float32(math.Inf(-1)))}
-	for _, c := range []geom.Point{{}, {X: s.size.W}, {Y: s.size.H}, s.size.Point()} {
+	for _, c := range []geom.Point{r.Min, {X: r.Max.X, Y: r.Min.Y}, {X: r.Min.X, Y: r.Max.Y}, r.Max} {
 		flat, ok := a.proj.Unapply(s.screenAt(c))
 		if !ok {
 			continue

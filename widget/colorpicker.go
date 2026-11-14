@@ -40,7 +40,7 @@ var (
 	ColorChipWidth  = theme.Length("colorbutton.chip.width", 28)
 	ColorChipHeight = theme.Length("colorbutton.chip.height", 20)
 	ColorChipRadius = theme.Length("colorbutton.chip.radius", 5)
-	ColorHexSize    = theme.Length("colorbutton.hex.size", 12)
+	ColorHexSize    = theme.FontSize("colorbutton.hex.size", 12)
 )
 
 // ColorPicker picks a colour: a square of saturation across and

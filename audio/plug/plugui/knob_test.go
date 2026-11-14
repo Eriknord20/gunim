@@ -13,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
 )
 
 // host is a host for tests, which notes the gestures it is sent.
@@ -70,9 +71,10 @@ func TestKeysAndDoubleClickStepTheKnob(t *testing.T) {
 	if h.values[3] != 1000 {
 		t.Errorf("End took the knob to %v, want 1000", h.values[3])
 	}
-	// The wheel passes the knob by, to scroll the pane it is in.
-	if k.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || h.values[3] != 1000 {
-		t.Errorf("the wheel turned the knob to %v, want it left at 1000", h.values[3])
+	// At its top, the wheel turned up leaves it there.
+	k.Handle(input.Scroll{Delta: geom.Pt(0, 40), Notches: geom.Pt(0, 1)}, nil)
+	if h.values[3] != 1000 {
+		t.Errorf("the wheel turned the knob at its top to %v, want it left at 1000", h.values[3])
 	}
 	k.Handle(input.KeyPress{Key: input.KeyDown}, nil)
 	if v := h.values[3]; v >= 1000 || v < 900 {
@@ -135,11 +137,11 @@ func TestAPowerLampSwitchesAndGlides(t *testing.T) {
 		told = append(told, on)
 		return nil
 	}
-	if p.Checked() || p.tooltip() != "Switch the gate on" {
+	if p.Checked() || p.tooltip() != "Gate: off. Click to turn on." {
 		t.Errorf("new, it is on %v and says %q", p.Checked(), p.tooltip())
 	}
 	p.SetChecked(true, nil)
-	if !p.Checked() || p.on.Value() != 1 || p.tooltip() != "Switch the gate off" {
+	if !p.Checked() || p.on.Value() != 1 || p.tooltip() != "Gate: on. Click to turn off." {
 		t.Errorf("set on, it is on %v, lit %v, and says %q", p.Checked(), p.on.Value(), p.tooltip())
 	}
 	if s := p.Layout(gunim.Constraints{Max: geom.Sz(100, 100)}, gunim.Frame{}, gunim.Children{}); s != geom.Sz(PowerSize, PowerSize) {
@@ -154,7 +156,7 @@ func TestASectionsPowerLampStandsBeforeItsName(t *testing.T) {
 	d := &plug.Descriptor{Params: []plug.Param{{ID: 1, Name: "On", Max: 1, Steps: 1}, {ID: 2, Name: "A", Max: 1}}}
 	h := &host{values: map[uint32]float64{1: 1}}
 	s := NewSection(h, d, "COMPRESSOR", 1, 2)
-	if s.Switch == nil || !s.Switch.Checked() || s.Switch.Name != "compressor" {
+	if s.Switch == nil || !s.Switch.Checked() || s.Switch.Name != "COMPRESSOR" {
 		t.Fatalf("a section switched by a parameter on has %+v", s.Switch)
 	}
 	s.Switch.OnChange(false, nil)
@@ -298,5 +300,68 @@ func TestAKnobGlidesToGreyAndStartsThereWithoutAGlide(t *testing.T) {
 	}
 	if k.Step(time.Second / 120) {
 		t.Error("settled, the knob still asks for frames")
+	}
+}
+
+// The default tooltip reads right for any name, and a caller's own takes its place.
+func TestAPowerLampsTooltipReadsRight(t *testing.T) {
+	p := NewPower("Follow song")
+	if got := p.tooltip(); got != "Follow song: off. Click to turn on." {
+		t.Errorf("off, it says %q", got)
+	}
+	p.SetChecked(true, nil)
+	if got := p.tooltip(); got != "Follow song: on. Click to turn off." {
+		t.Errorf("on, it says %q", got)
+	}
+	p.Tooltip = "Keep the view on the playhead"
+	if got := p.tooltip(); got != p.Tooltip {
+		t.Errorf("given its own, it says %q", got)
+	}
+	if got := NewPower("").tooltip(); got != "Off. Click to turn on." {
+		t.Errorf("with no name, it says %q", got)
+	}
+}
+
+// A section's switch says its title as written, so a plural reads right and an acronym stays one.
+func TestASectionsSwitchSaysItsTitleAsWritten(t *testing.T) {
+	d := &plug.Descriptor{Params: []plug.Param{{ID: 1, Name: "On", Max: 1}, release}}
+	h := &host{values: map[uint32]float64{1: 1, 3: 100}}
+	for title, want := range map[string]string{
+		"FILTERS":  "FILTERS: on. Click to turn off.",
+		"EQ":       "EQ: on. Click to turn off.",
+		"CLEAN EQ": "CLEAN EQ: on. Click to turn off.",
+		"De-esser": "De-esser: on. Click to turn off.",
+	} {
+		s := NewSection(h, d, title, 1, 3)
+		if got := s.Switch.tooltip(); got != want {
+			t.Errorf("the switch of %q says %q, want %q", title, got, want)
+		}
+		if got := s.Switch.Access().Name; got != title {
+			t.Errorf("the switch of %q is named %q, want the title as written", title, got)
+		}
+	}
+}
+
+// A knob draws each arc, its groove, its fill and a control's reach, as one ribbon: no chain of short rotated bars.
+func TestAKnobDrawsItsArcsAsRibbons(t *testing.T) {
+	mix := plug.Param{ID: 1, Name: "Mix", Max: 1}
+	h := &menuHost{host: host{values: map[uint32]float64{1: 0.5}},
+		mod: map[uint32]plug.Modulation{1: {Low: -0.2, High: 0.2, Now: 0.6}}}
+	k := NewKnob(h, mix)
+	k.Layout(gunim.Tight(geom.Sz(KnobW, KnobH)), gunim.Frame{}, gunim.Children{})
+	var p paint.Painter
+	k.Paint(&p, gunim.Frame{Scale: 1}, geom.Sz(KnobW, KnobH), gunim.Children{})
+	ribbons, rrects := 0, 0
+	for _, op := range p.Ops() {
+		switch op.(type) {
+		case *paint.RibbonOp:
+			ribbons++
+		case *paint.RRectOp:
+			rrects++
+		}
+	}
+	// The groove, the fill and the reach; the needle, the cap and the dot heard are the rounded rects.
+	if ribbons != 3 || rrects > 3 {
+		t.Errorf("the knob draws %d ribbons and %d rounded rects, want 3 ribbons and 3 rects at most", ribbons, rrects)
 	}
 }

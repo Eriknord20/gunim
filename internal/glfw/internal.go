@@ -48,6 +48,7 @@ type wndconfig struct {
 
 	popup       bool // gunim change
 	contextOnly bool // gunim change
+	flyout      bool // gunim change
 }
 
 type ctxconfig struct {

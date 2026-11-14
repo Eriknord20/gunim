@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -21,12 +22,16 @@ import (
 // main thread for the event loop and runs the tests beside it.
 var display *Driver
 
+// pump is the driver running for the tests, which a machine with no OpenGL has too.
+var pump *Driver
+
 func TestMain(m *testing.M) {
 	d, err := Open()
 	if err != nil {
 		os.Exit(m.Run())
 	}
 	display = d
+	pump = d
 	d.stayOpen = true
 	ctx, cancel := context.WithCancel(context.Background())
 	code := make(chan int, 1)
@@ -346,4 +351,71 @@ func TestAFixedWindowStillReshapes(t *testing.T) {
 		}
 	}
 	t.Fatalf("a fixed window of 200×120 reshaped by 40×30 is %d×%d", ww, wh)
+}
+
+// A window opens at its least size where it would open smaller, grows to a larger one set while open, and on
+// Windows the system holds it there against a smaller size, as it does against the user's drag.
+func TestAWindowKeepsItsLeastSize(t *testing.T) {
+	if display == nil {
+		t.Skip("no display")
+	}
+	dw, err := display.NewWindow(driver.Options{Title: "gunim least", Size: geom.Sz(200, 120), MinSize: geom.Sz(300, 100)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := dw.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	w := dw.(*Window)
+	size := func() (int, int) {
+		var ww, wh int
+		if err := display.call(func() error {
+			var err error
+			ww, wh, err = w.gw.GetSize()
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ww, wh
+	}
+	at := func(v float32) int { return int(v*w.coordsPerLogical() + 0.5) }
+	// An X window manager sizes the window a moment after it is asked, so this waits for the size to arrive.
+	sized := func(lw, lh float32) (int, int, bool) {
+		var ww, wh int
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if ww, wh = size(); ww == at(lw) && wh == at(lh) {
+				return ww, wh, true
+			}
+		}
+		return ww, wh, false
+	}
+	if ww, wh, ok := sized(300, 120); !ok {
+		t.Fatalf("a window of 200×120 with a least size of 300×100 opened at %d×%d", ww, wh)
+	}
+	if err := w.SetMinSize(geom.Sz(320, 200)); err != nil {
+		t.Fatal(err)
+	}
+	if ww, wh, ok := sized(320, 200); !ok {
+		t.Fatalf("given a least size of 320×200, the window is %d×%d", ww, wh)
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if err := display.call(func() error { return w.gw.SetSize(50, 50) }); err != nil {
+		t.Fatal(err)
+	}
+	if ww, wh := size(); ww < at(320) || wh < at(200) {
+		t.Errorf("sized to 50×50 under a least size of 320×200, the window is %d×%d", ww, wh)
+	}
+	if err := w.SetMinSize(geom.Size{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := display.call(func() error { return w.gw.SetSize(at(150), at(100)) }); err != nil {
+		t.Fatal(err)
+	}
+	if ww, wh, ok := sized(150, 100); !ok {
+		t.Errorf("with no least size, the window sized to 150×100 is %d×%d", ww, wh)
+	}
 }

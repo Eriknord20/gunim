@@ -21,6 +21,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/xover"
+	"github.com/marrasen/gunim/geom"
 )
 
 // bands is how many bands the plugin splits the sound into.
@@ -66,14 +67,17 @@ func db(v float64) string { return fmt.Sprintf("%+.1f dB", v) }
 // Descriptor is the plugin, as it is registered.
 var Descriptor = func() plug.Descriptor {
 	d := plug.Descriptor{
-		ID:       "marrasen.impact",
-		Name:     "Impact",
-		Vendor:   "Marras",
-		Version:  "0.1.0",
-		Kind:     "Fx|Dynamics|Mastering",
-		Tagline:  "Transient shaper",
-		Keywords: []string{"transient", "punch", "attack", "sustain", "micro-dynamics", "smooth", "multiband", "drums"},
-		New:      func(h plug.Host) plug.Plugin { return &plugin{} },
+		ID:          "marrasen.impact",
+		Name:        "Impact",
+		Vendor:      "Marras",
+		Version:     "0.1.0",
+		Kind:        "Fx|Dynamics|Mastering",
+		Tagline:     "Transient shaper",
+		KeepsMono:   true,
+		Keywords:    []string{"transient", "punch", "attack", "sustain", "micro-dynamics", "smooth", "multiband", "drums"},
+		ViewSize:    geom.Sz(880, 520),
+		ViewMinSize: geom.Sz(720, 440),
+		New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 	}
 	homes := [bands - 1][3]float64{{30, 1000, 120}, {200, 5000, 1200}, {1000, 16000, 6000}}
 	for i, x := range homes {

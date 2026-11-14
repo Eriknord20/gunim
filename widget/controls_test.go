@@ -2,6 +2,7 @@ package widget
 
 import (
 	"fmt"
+	"image/color"
 	"testing"
 	"time"
 
@@ -232,6 +233,7 @@ func TestTabsTakePagesMountedUnderThemAndSkipDisabledOnes(t *testing.T) {
 	tabs := NewTabs([]string{"One", "Two", "Three"})
 	tabs.Disabled = []bool{false, true}
 	w := gunimtest.New(t, geom.Sz(600, 400), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "tabs", func(struct{}) *Tabs { return tabs }, nil)
 	pages := []*spot{newSpot(10, 10), newSpot(10, 10), newSpot(10, 10)}
 	for i, p := range pages {
@@ -271,6 +273,7 @@ func TestTabsTakePagesMountedUnderThemAndSkipDisabledOnes(t *testing.T) {
 func TestTabsCanBeSelectedBeforeTheirPagesArrive(t *testing.T) {
 	tabs := NewTabs([]string{"One", "Two", "Three"})
 	w := gunimtest.New(t, geom.Sz(600, 400), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "tabs", func(struct{}) *Tabs { return tabs }, func(tb *Tabs, _ struct{}, u *gunim.UI) { tb.SetSelected(2, u) })
 	page := newSpot(10, 10)
 	gunim.RegisterView(w, "page", func(struct{}) *spot { return page }, nil)
@@ -480,5 +483,26 @@ func TestArrowsWithCtrlAltOrSuperPassTheSliderAndTabsBy(t *testing.T) {
 	run(1)
 	if tabs.Selected() != 1 {
 		t.Fatal("plain Right on the focused titles did not go to the next tab")
+	}
+}
+
+func TestASlidersFillTakesItsOwnColour(t *testing.T) {
+	grey := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff}
+	s := NewSlider(0, 1)
+	s.SetValue(0.5, nil)
+	s.Fill = grey
+	w, run := stage(t, &frame{child: s, size: geom.Sz(200, 28)})
+	run(1)
+	found := false
+	for _, op := range w.Offscreen().Ops() {
+		if o, ok := op.(*paint.RRectOp); ok {
+			if o.Fill.Solid == Accent.Default() {
+				t.Fatal("a slider given its own fill drew the accent")
+			}
+			found = found || o.Fill.Solid == grey
+		}
+	}
+	if !found {
+		t.Fatal("a slider given its own fill did not draw it")
 	}
 }

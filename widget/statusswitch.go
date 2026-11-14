@@ -19,7 +19,7 @@ var (
 	// StatusSwitchHeight is its height, StatusSwitchPadding the room at
 	// its ends, and StatusSwitchGap the room between its words, its
 	// Extra and its switch.
-	StatusSwitchHeight  = theme.Length("statusswitch.height", 28)
+	StatusSwitchHeight  = theme.TextRow("statusswitch.height", 28)
 	StatusSwitchPadding = theme.Length("statusswitch.padding", 10)
 	StatusSwitchGap     = theme.Length("statusswitch.gap", 8)
 	// StatusSwitchTrackWidth and StatusSwitchTrackHeight size its
@@ -191,6 +191,7 @@ func (s *StatusSwitch) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kid
 	}
 	fill = anim.Mix(anim.ColorCodec, fill, ChipHover.Get(th), min(max(s.hover.Value(), 0), 1))
 	p.RRect(r, radius, paint.Solid(fill))
+	s.paintGlow(p, r, radius, th)
 	s.paintRing(p, r, radius, th)
 	pad, gap := StatusSwitchPadding.Get(th), StatusSwitchGap.Get(th)
 	tw, tht := StatusSwitchTrackWidth.Get(th), StatusSwitchTrackHeight.Get(th)
@@ -259,7 +260,7 @@ func (s *StatusSwitch) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		s.held = true
 		s.click.Press(e, 0)
-		s.squash.Animate(1, Quick.Get(th))
+		s.squashIn(th)
 	case input.PointerUp:
 		if !s.held {
 			return false

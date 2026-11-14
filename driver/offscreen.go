@@ -39,8 +39,12 @@ type OffscreenWindow struct {
 	pinned, cloaked bool
 	// zoom multiplies scale, and divides the size the content is laid out in.
 	zoom float32
-	rate float64
-	ops  []paint.Op
+	// least is the least size the content is laid out in; see SetMinSize.
+	least geom.Size
+	rate  float64
+	// ops are the last frame's commands, and raw says they are still the engine's own; see keptOps.
+	ops []paint.Op
+	raw bool
 	// drawnSize, drawnScale and drawnZoom are the size, scale and zoom the last frame was presented at.
 	drawnSize             geom.Size
 	drawnScale, drawnZoom float32
@@ -50,6 +54,8 @@ type OffscreenWindow struct {
 	// cursor is the pointer's shape last set.
 	cursor input.Cursor
 	clip   string
+	// clipSensitive says the clipboard's text was put there marked sensitive.
+	clipSensitive bool
 	// clipImage is the clipboard's picture, as PNG.
 	clipImage []byte
 	// clipErr is what reading the clipboard fails with, for a test.
@@ -69,6 +75,8 @@ type OffscreenWindow struct {
 	awake   func(bool) error
 	// fingers is what TakeFingers last said.
 	fingers bool
+	// announced is what Announce said, in order.
+	announced []string
 	// edgeSwipes is what KeepEdgeSwipes last kept, and edgeSwipeCalls how many times it was called.
 	edgeSwipes     []geom.Rect
 	edgeSwipeCalls int
@@ -259,12 +267,19 @@ func (w *OffscreenWindow) Post(ev any) { w.input <- ev }
 func (w *OffscreenWindow) Present(ops []paint.Op, damage []geom.Rect) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// The engine reuses its buffers, the ops themselves among them, two
-	// frames on, so keep a copy for Ops to return.
-	w.ops = keepOps(ops)
+	w.ops, w.raw = ops, true
 	w.drawnSize, w.drawnScale, w.drawnZoom = w.size, w.scale, w.zoom
 	w.damage = append(w.damage[:0], damage...)
 	return nil
+}
+
+// keptOps returns the last frame's ops, copied the first time they are read, as the engine reuses its buffers two
+// frames on. It must be called with w.mu held.
+func (w *OffscreenWindow) keptOps() []paint.Op {
+	if w.raw {
+		w.ops, w.raw = keepOps(w.ops), false
+	}
+	return w.ops
 }
 
 // keepOps copies ops deep enough that later frames leave the copy as
@@ -354,7 +369,7 @@ func (w *OffscreenWindow) Ops() []paint.Op {
 	w.looked()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.ops
+	return w.keptOps()
 }
 
 // SetSafeArea has the window play one a phone's bars lie over, in from
@@ -389,11 +404,35 @@ func (w *OffscreenWindow) KeyboardCover() float32 {
 	return w.keyboard
 }
 
-// Resize changes the window's size for the next frame.
+// Resize changes the window's size for the next frame, as the user sizes it: no smaller than its least size.
 func (w *OffscreenWindow) Resize(size geom.Size) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.size = size
+	w.growLocked()
+}
+
+var _ MinSizer = (*OffscreenWindow)(nil)
+
+// SetMinSize implements [MinSizer]: the window grows to s where it is smaller, and Resize takes it no smaller.
+func (w *OffscreenWindow) SetMinSize(s geom.Size) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.least = geom.Sz(max(s.W, 0), max(s.H, 0))
+	w.growLocked()
+	return nil
+}
+
+// MinSize returns the least size last set with SetMinSize.
+func (w *OffscreenWindow) MinSize() geom.Size {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.least
+}
+
+// growLocked grows the window to its least size at its zoom. It runs with mu held.
+func (w *OffscreenWindow) growLocked() {
+	w.size = geom.Sz(max(w.size.W, w.least.W*w.zoom), max(w.size.H, w.least.H*w.zoom))
 }
 
 // OffscreenHandle is the handle an offscreen window hands out as its
@@ -475,6 +514,21 @@ func (w *OffscreenWindow) PublishAccess(t *access.Tree) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.tree = t
+}
+
+// Announce implements [Announcer] by keeping text, and reports it passed on.
+func (w *OffscreenWindow) Announce(text string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.announced = append(w.announced, text)
+	return true
+}
+
+// Announced returns what Announce said, in order.
+func (w *OffscreenWindow) Announced() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.announced)
 }
 
 // AccessTree returns the last accessibility tree published.
@@ -596,6 +650,7 @@ func (w *OffscreenWindow) SetZoom(z float32) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.zoom = z
+	w.growLocked()
 }
 
 // Zoom returns the factor the window's content is zoomed by.
@@ -634,8 +689,40 @@ func (w *OffscreenWindow) SetClipboard(s string) error {
 	if w.clipErr != nil {
 		return w.clipErr
 	}
-	w.clip = s
+	w.clip, w.clipSensitive = s, false
 	return nil
+}
+
+// SetClipboardSensitive implements [SensitiveClipboard] by keeping s, marked sensitive.
+func (w *OffscreenWindow) SetClipboardSensitive(s string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clipErr != nil {
+		return w.clipErr
+	}
+	w.clip, w.clipSensitive = s, s != ""
+	return nil
+}
+
+// ClearClipboardIf implements [SensitiveClipboard].
+func (w *OffscreenWindow) ClearClipboardIf(s string) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clipErr != nil {
+		return false, w.clipErr
+	}
+	if w.clip != s {
+		return false, nil
+	}
+	w.clip, w.clipSensitive = "", false
+	return true, nil
+}
+
+// ClipboardSensitive reports whether the clipboard's text was put there marked sensitive.
+func (w *OffscreenWindow) ClipboardSensitive() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.clipSensitive
 }
 
 // ClipboardImage implements [ImageClipboard].

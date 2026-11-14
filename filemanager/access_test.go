@@ -13,12 +13,12 @@ func interactive(n *access.Node) bool {
 	switch n.Role {
 	case access.RoleButton, access.RoleCheckbox, access.RoleSwitch, access.RoleSlider, access.RoleTextField,
 		access.RoleTab, access.RoleMenuItem, access.RoleComboBox, access.RoleLink, access.RoleRow,
-		access.RoleColumnHeader, access.RoleScrollBar:
+		access.RoleColumnHeader, access.RoleScrollBar, access.RoleRadioButton:
 		return true
 	case access.RoleGroup, access.RoleWindow, access.RoleLabel, access.RoleHeading, access.RoleImage,
 		access.RoleList, access.RoleListItem, access.RoleTabList, access.RoleMenu, access.RoleDialog,
 		access.RoleTooltip, access.RoleScrollArea, access.RoleTable, access.RoleCell, access.RoleMenuBar,
-		access.RoleProgressBar:
+		access.RoleProgressBar, access.RoleStatus, access.RoleAlert:
 	}
 	return len(n.Actions) > 0
 }

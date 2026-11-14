@@ -42,6 +42,7 @@ import (
 
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/driver/internal/compose"
+	"github.com/marrasen/gunim/driver/internal/touch"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -95,20 +96,10 @@ type Driver struct {
 	// opened holds the files handed over before a window opened to take
 	// them, one batch to an entry.
 	opened [][]string
-	// touched is the window the touch in progress started in, which
-	// keeps the touch until it lifts. lastTap and lastAt are the last
-	// press, for a double tap.
-	touched *Window
-	// fingers is the window each finger of its own came down in, by its
-	// id.
-	fingers map[int]*Window
+	// gest is the touch in progress; see gestures.
+	gest touch.Gestures
 	// fingersOn is what the view last heard from takeFingers.
 	fingersOn bool
-	// gesture is what the touch in progress has become.
-	gesture gesture
-	lastTap geom.Point
-	lastAt  time.Time
-	clicks  int
 	// typing is the window the keyboard types into: the one that turned
 	// text input on last.
 	typing *Window
@@ -603,13 +594,6 @@ const (
 	touchCancel
 )
 
-// doubleTap is how close in time and space two taps must be to count
-// as a double tap, in logical pixels.
-const (
-	doubleTapTime  = 300 * time.Millisecond
-	doubleTapSpace = 24
-)
-
 // hitLocked returns the topmost window under p that takes the pointer.
 // It runs with mu held.
 func (d *Driver) hitLocked(p geom.Point) *Window {
@@ -711,14 +695,7 @@ func (d *Driver) closed(w *Window) {
 			break
 		}
 	}
-	if d.touched == w {
-		d.touched = nil
-	}
-	for id, x := range d.fingers {
-		if x == w {
-			delete(d.fingers, id)
-		}
-	}
+	d.gest.Forget(w)
 	if d.typing == w {
 		d.typing = nil
 	}
@@ -742,11 +719,4 @@ func (d *Driver) closed(w *Window) {
 			close(d.quit)
 		}
 	}
-}
-
-func abs(v float32) float32 {
-	if v < 0 {
-		return -v
-	}
-	return v
 }

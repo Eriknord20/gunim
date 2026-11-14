@@ -23,8 +23,9 @@ const flacMaxFrames = int64(1) << 36
 // A FLACWriter writes sound to a FLAC file of 16 or 24 bit samples,
 // compressed without loss: it rounds and dithers the sound as a
 // [WAVWriter] of the same bits does, so the two files hold the same
-// samples. [NewFLACWriter] writes stereo to a file it can seek in, and
-// [NewFLACStream] writes 1 to 8 channels to any writer.
+// samples. [NewFLACWriter] writes stereo to a file it can seek in,
+// [NewFLACWriterChannels] 1 to 8 channels to one, and [NewFLACStream]
+// 1 to 8 channels to any writer.
 type FLACWriter struct {
 	// enc writes to w, wrapped so the encoder can neither close it nor
 	// seek in it unless seek is set.
@@ -61,7 +62,17 @@ type FLACTag struct {
 // of bits: 16 or 24. Close finishes it, and seeks back to write the
 // file's length and the checksum of its samples into its header.
 func NewFLACWriter(w io.WriteSeeker, rate, bits int, dither bool) (*FLACWriter, error) {
-	f, err := startFLAC(writeSeeker{w}, rate, bits, 2, -1, dither)
+	return NewFLACWriterChannels(w, rate, bits, 2, dither)
+}
+
+// NewFLACWriterChannels starts a FLAC file as [NewFLACWriter] does, of 1
+// to 8 channels. It needs no count of frames up front: Close seeks back
+// to write the length into the header, as it does for stereo.
+func NewFLACWriterChannels(w io.WriteSeeker, rate, bits, channels int, dither bool) (*FLACWriter, error) {
+	if channels < 1 || channels > 8 {
+		return nil, errors.New("audio: flac: 1 to 8 channels")
+	}
+	f, err := startFLAC(writeSeeker{w}, rate, bits, channels, -1, dither)
 	if err != nil {
 		return nil, err
 	}

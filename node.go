@@ -73,6 +73,23 @@ type Animator interface {
 	Step(dt time.Duration) (animating bool)
 }
 
+// An Ornament is an [Animator] whose motion changes nothing but how it
+// looks: not its size, nor where anything lies, nor anything it sends or
+// asks, as a spinner's turning. The engine steps an ornament only while
+// some of it showed in the last frame painted: painted in that frame,
+// within the clips round it and the window. One out of sight, as on a row
+// scrolled away, lets the window rest. What it steps waits meanwhile, and
+// goes on once it shows again; what it works out from the frame's time,
+// as widget.Icon's spin does, shows where that time has it.
+//
+// Every other Animator is stepped on every frame, seen or not: a row
+// growing out of sight moves the rows in sight.
+type Ornament interface {
+	Animator
+	// Ornament marks the node; it is never called.
+	Ornament()
+}
+
 // Waker is an [Animator] that rests now but has something to do a while
 // later, as a scrollbar that fades once the content has been still for
 // a moment. WakeIn, asked after each Step, is how long until it wants a
@@ -288,6 +305,15 @@ type CursorShaper interface {
 type Revealer interface {
 	Node
 	Reveal(r geom.Rect, u *UI)
+}
+
+// A WheelScroller is a view that scrolls with the wheel, so the controls inside it leave it the wheel. ScrollsAlong
+// reports whether a wheel turned by delta, as [input.Scroll] carries it, is the view's: true while its content is
+// larger than the view along the axis that turn scrolls it, at either end as well as between, and false while it
+// fits. A view that takes every turn of the wheel, as a plane that zooms, reports true for any delta but zero.
+type WheelScroller interface {
+	Node
+	ScrollsAlong(delta geom.Point) bool
 }
 
 // A Shaped node draws on part of its box: a popup's card inside a

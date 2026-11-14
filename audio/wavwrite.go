@@ -3,12 +3,13 @@ package audio
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"math/rand/v2"
 )
 
-// A WAVWriter writes stereo sound to a WAV file: 16 or 24 bit integer
+// A WAVWriter writes stereo or mono sound to a WAV file: 16 or 24 bit integer
 // samples, or 32 bit float. Its header is [WAVHeader]'s: the file is
 // RIFF, with a JUNK chunk keeping room for a ds64 chunk, and turns RF64
 // as it closes where it passed 4 GB. Dither, for integer samples, adds noise of
@@ -16,13 +17,15 @@ import (
 // rounded, so a quiet fade's last bits fade into a soft hiss rather
 // than break into distortion, as rounding alone does.
 type WAVWriter struct {
-	w      io.WriteSeeker
-	rate   int
-	bits   int
-	dither bool
-	frames int64
-	buf    []byte
-	rng    *rand.Rand
+	w    io.WriteSeeker
+	rate int
+	bits int
+	// channels is 1 or 2.
+	channels int
+	dither   bool
+	frames   int64
+	buf      []byte
+	rng      *rand.Rand
 	// Clipped counts the samples written past full scale, which were
 	// held to it.
 	Clipped int64
@@ -40,13 +43,22 @@ type WAVTag struct {
 	ID, Value string
 }
 
-// NewWAVWriter starts a WAV file of sound at rate, in samples of bits:
-// 16, 24, or 32 for float. Close finishes it.
+// NewWAVWriter starts a stereo WAV file of sound at rate, in samples of
+// bits: 16, 24, or 32 for float. Close finishes it.
 func NewWAVWriter(w io.WriteSeeker, rate, bits int, dither bool) (*WAVWriter, error) {
+	return NewWAVWriterChannels(w, rate, bits, 2, dither)
+}
+
+// NewWAVWriterChannels starts a WAV file as [NewWAVWriter] does, of 1
+// channel or 2. Write then takes frames of that many samples.
+func NewWAVWriterChannels(w io.WriteSeeker, rate, bits, channels int, dither bool) (*WAVWriter, error) {
 	if bits != 16 && bits != 24 && bits != 32 {
 		return nil, errors.New("audio: wav: 16, 24 or 32 bits")
 	}
-	ww := &WAVWriter{w: w, rate: rate, bits: bits, dither: dither && bits != 32,
+	if channels != 1 && channels != 2 {
+		return nil, fmt.Errorf("audio: wav: %d channels, not 1 or 2", channels)
+	}
+	ww := &WAVWriter{w: w, rate: rate, bits: bits, channels: channels, dither: dither && bits != 32,
 		rng: rand.New(rand.NewPCG(0x6775, 0x6e69))}
 	if err := ww.header(); err != nil {
 		return nil, err
@@ -59,16 +71,17 @@ func (w *WAVWriter) header() error {
 	if _, err := w.w.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	s := WAVSpec{Rate: w.rate, Channels: 2, Bits: w.bits, Float: w.bits == 32}
+	s := WAVSpec{Rate: w.rate, Channels: w.channels, Bits: w.bits, Float: w.bits == 32}
 	w.buf = appendWAVHeader(w.buf[:0], s, w.frames, w.extra)
 	_, err := w.w.Write(w.buf)
 	return err
 }
 
-// Write writes frames, interleaved stereo, at the file's rate.
+// Write writes frames at the file's rate: one sample each for mono,
+// two interleaved for stereo.
 func (w *WAVWriter) Write(frames []float32) error {
 	bytes := w.bits / 8
-	n := len(frames) / 2 * 2
+	n := len(frames) / w.channels * w.channels
 	w.buf = w.buf[:0]
 	// Full scale is 2^(bits-1), as readers divide by.
 	scale := float64(int64(1) << (w.bits - 1))
@@ -91,7 +104,7 @@ func (w *WAVWriter) Write(frames []float32) error {
 	if _, err := w.w.Write(w.buf); err != nil {
 		return err
 	}
-	w.frames += int64(n / 2)
+	w.frames += int64(n / w.channels)
 	return nil
 }
 

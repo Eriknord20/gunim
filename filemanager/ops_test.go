@@ -3,6 +3,7 @@ package filemanager
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -665,5 +666,40 @@ func TestTheReplaceDialogAsksAsFileManagersDo(t *testing.T) {
 	}
 	if want := []string{"Skip", "Keep Both", "Stop", "Replace"}; !slices.Equal(buttons, want) {
 		t.Fatalf("the buttons are %q, want %q", buttons, want)
+	}
+}
+
+// A file the app has open to read, as for its preview or its thumbnail,
+// can still be trashed, moved and deleted. On Windows a file opened with
+// os.Open cannot.
+func TestAFileBeingReadCanBeTrashedMovedAndDeleted(t *testing.T) {
+	root := t.TempDir()
+	tree(t, root, "trashed.png", "moved.png", "deleted.png", "sub/")
+	e := testEnv(root, answer{}, nil)
+	for name, j := range map[string]job{
+		"trashed.png": {kind: OpTrash, srcs: []string{at(root, "trashed.png")}},
+		"moved.png":   {kind: OpMove, srcs: []string{at(root, "moved.png")}, dest: at(root, "sub")},
+		"deleted.png": {kind: OpDelete, srcs: []string{at(root, "deleted.png")}},
+	} {
+		f, err := LocalFS().Open(at(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runJob(context.Background(), j, e); err != nil {
+			t.Errorf("with %s open to read: %v", name, err)
+		}
+		if _, err := os.Lstat(at(root, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is still there with it open to read: %v", name, err)
+		}
+		b, err := io.ReadAll(f)
+		if err != nil || string(b) != name {
+			t.Errorf("after the job the open %s reads %q, %v", name, b, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+	}
+	if contents(t, at(root, "Trash/files/trashed.png")) != "trashed.png" || contents(t, at(root, "sub/moved.png")) != "moved.png" {
+		t.Fatal("the files did not arrive in the trash and in sub")
 	}
 }

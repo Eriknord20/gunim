@@ -13,13 +13,13 @@ import (
 // dialog that stands apart. The tokens its theme sets hold inside it;
 // the rest come from the theme around it and move with it.
 type Themed struct {
-	child gunim.Node
-	live  *theme.Live
+	kids []gunim.Node
+	live *theme.Live
 }
 
 // NewThemed returns child wearing th.
 func NewThemed(child gunim.Node, th theme.Theme) *Themed {
-	return &Themed{child: child, live: theme.NewLive(th)}
+	return &Themed{kids: []gunim.Node{child}, live: theme.NewLive(th)}
 }
 
 // Use switches the subtree to th, animating every value it changes,
@@ -31,7 +31,7 @@ func (t *Themed) Use(th theme.Theme) { t.live.Use(th) }
 func (t *Themed) ThemeScope() *theme.Live { return t.live }
 
 // Children implements [gunim.Composite].
-func (t *Themed) Children() []gunim.Node { return []gunim.Node{t.child} }
+func (t *Themed) Children() []gunim.Node { return t.kids }
 
 // Step implements [gunim.Animator].
 func (t *Themed) Step(dt time.Duration) bool { return t.live.Step(dt) }

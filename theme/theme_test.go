@@ -238,3 +238,13 @@ func TestUsingTheSameThemeAgainLeavesTheTextAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestAScopeReadsThroughToItsParentWithoutAllocating(t *testing.T) {
+	window := NewLive(Make("dark", Set(benchFill, color.NRGBA{R: 0x30, G: 0x40, B: 0x50, A: 0xff})))
+	scope := NewLive(Make("scope"))
+	scope.Under(window)
+	benchFill.Get(scope)
+	if n := testing.AllocsPerRun(10, func() { sinkColor = benchFill.Get(scope) }); n != 0 {
+		t.Fatalf("a read through a scope allocates %v times, want 0", n)
+	}
+}

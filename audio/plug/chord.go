@@ -14,12 +14,13 @@ const MaxChordTones = 8
 // room for.
 const MaxChordAhead = 16 * time.Second
 
-// ChordNews is news of the chords a plugin's notes play over, for a
-// plugin with a [Descriptor.ChordAhead].
+// ChordNews is news of the chords the music plays over, for a plugin
+// with a [Descriptor.ChordAhead].
 //
-// The host follows each lane that plays the plugin, and the chords the
-// lane reads, voiced as the lane's own notes are voiced from them. It
-// tells of each chord once, with Coming, as the chord comes within
+// For an instrument, the host follows each lane that plays it, and the
+// chords the lane reads, voiced as the lane's own notes are voiced from
+// them. For an effect, the host picks the chords it follows. It tells
+// of each chord once, with Coming, as the chord comes within
 // ChordAhead, and with Moved or Removed as an edit changes it. A chord
 // has no event of its own as it starts: it starts at its Coming's
 // Frame, or its last Moved's, and sounds for Length frames, or until
@@ -55,7 +56,9 @@ type ChordNews struct {
 	// Frame is where the chord starts, counted from the block's start:
 	// in this block, as a note's news never is, or a later one. A Now's
 	// is where in this block the chord it tells of holds from, and a
-	// Removed's is 0.
+	// Removed's is 0. A host may skip blocks while a plugin sleeps, so a
+	// plugin that waits for a later block adds [Position.Frame] as the
+	// news comes, and compares with it from then on.
 	Frame int
 	// ID is the chord's, from its Coming on: a Moved or a Removed names
 	// the chord by it. The same chord, played again, as a loop repeats,
@@ -63,7 +66,8 @@ type ChordNews struct {
 	ID int32
 	// Group is the lane whose chord it is, as an [Event]'s: the notes of
 	// that group play over it. Lanes that read different chords may
-	// play one plugin, each in a group of its own.
+	// play one plugin, each in a group of its own. An effect's chords
+	// come in the groups the host picks.
 	Group int32
 	// Length is how many frames the chord sounds from Frame, as the
 	// music has it, cut where a loop ends. Like a note's, it is news,

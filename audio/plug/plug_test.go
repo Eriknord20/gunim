@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marrasen/gunim/geom"
 )
 
 func TestClampTurnsNaNToTheDefaultAndInfinityToTheEnds(t *testing.T) {
@@ -81,7 +83,12 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"past notes without notes": {ID: "test.past", Name: "X", New: newer, Past: true},
 		"look-ahead below zero": {ID: "test.behind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			LookAhead: -time.Millisecond},
-		"chords ahead without notes": {ID: "test.chords", Name: "X", New: newer, ChordAhead: time.Second},
+		"effect's notes ahead beside chords": {ID: "test.fxahead", Name: "X", New: newer, Kind: "Fx",
+			LookAhead: time.Second, ChordAhead: time.Second},
+		"effect's chords ahead below zero": {ID: "test.fxchordsbehind", Name: "X", New: newer, Kind: "Fx",
+			ChordAhead: -time.Millisecond},
+		"effect's chords too far ahead": {ID: "test.fxchordsfar", Name: "X", New: newer, Kind: "Fx",
+			ChordAhead: MaxChordAhead + time.Millisecond},
 		"chords ahead below zero": {ID: "test.chordsbehind", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
 			ChordAhead: -time.Millisecond},
 		"chords too far ahead": {ID: "test.chordsfar", Name: "X", New: newer, Kind: "Instrument|Synth", Notes: true,
@@ -111,6 +118,12 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Trigger: true, Measures: MeasureGate}}},
 		"unknown measure": {ID: "test.measwhat", Name: "X", New: newer,
 			ControlOut: []ControlPort{{Name: "GR", Unit: "dB", Min: -60, Measures: Measure(99)}}},
+		"view of a negative size":   {ID: "test.viewneg", Name: "X", New: newer, ViewSize: geom.Sz(-800, 500)},
+		"view at least of no width": {ID: "test.viewflat", Name: "X", New: newer, ViewMinSize: geom.Sz(0, 300)},
+		"view opening under its least size": {ID: "test.viewunder", Name: "X", New: newer, ViewSize: geom.Sz(600, 400),
+			ViewMinSize: geom.Sz(640, 300)},
+		"view of an endless size": {ID: "test.viewinf", Name: "X", New: newer,
+			ViewSize: geom.Sz(float32(math.Inf(1)), 400)},
 	} {
 		func() {
 			defer func() {
@@ -152,6 +165,21 @@ func TestPortsAreFoundByKey(t *testing.T) {
 	}
 }
 
+// A view's sizes may be left out, or given one without the other, or both with the least fitting the size it opens at.
+func TestRegisterTakesViewSizes(t *testing.T) {
+	newer := func(Host) Plugin { return nil }
+	for _, d := range []Descriptor{
+		{ID: "test.views", Name: "X", New: newer},
+		{ID: "test.views", Name: "X", New: newer, ViewSize: geom.Sz(800, 500)},
+		{ID: "test.views", Name: "X", New: newer, ViewMinSize: geom.Sz(600, 400)},
+		{ID: "test.views", Name: "X", New: newer, ViewSize: geom.Sz(800, 500), ViewMinSize: geom.Sz(800, 400)},
+	} {
+		if err := check(&d); err != nil {
+			t.Errorf("a view opening at %v, at least %v, was refused: %v", d.ViewSize, d.ViewMinSize, err)
+		}
+	}
+}
+
 func TestRegisterTakesTriggersFromZeroToOne(t *testing.T) {
 	d := Descriptor{ID: "test.triggers", Name: "X", New: func(Host) Plugin { return nil },
 		ControlIn:  []ControlPort{{Name: "Kick", Max: 1, Trigger: true}},
@@ -167,6 +195,20 @@ func TestRegisterTakesMeasuresInDecibels(t *testing.T) {
 			{Name: "Comp", Unit: "dB", Min: -60, Measures: MeasureCompression}}}
 	if err := check(&d); err != nil {
 		t.Fatalf("measuring outputs in dB up to 0 were refused: %v", err)
+	}
+}
+
+// An effect that takes no notes may still look ahead to chords.
+func TestAnEffectHearsChords(t *testing.T) {
+	listedRuns++
+	prefix := fmt.Sprintf("listed%d.", listedRuns)
+	newer := func(Host) Plugin { return nil }
+	for _, ahead := range []time.Duration{time.Second, MaxChordAhead} {
+		id := fmt.Sprintf("%svocoder%v", prefix, ahead)
+		Register(Descriptor{ID: id, Name: "Vocoder", Kind: "Fx|Modulation", New: newer, ChordAhead: ahead})
+		if d, ok := Lookup(id); !ok || d.Notes || d.ChordAhead != ahead {
+			t.Errorf("the vocoder looking %v ahead registered as %+v, %v", ahead, d, ok)
+		}
 	}
 }
 
@@ -315,6 +357,18 @@ func TestAControlSignalDrivesAParameterByChanges(t *testing.T) {
 // finds nothing of stays unknown.
 func TestAFinderMakesAPluginKnownAsItIsAskedFor(t *testing.T) {
 	asked := map[string]int{}
+	// Take the finder and its plugin away after, for a run again.
+	findersMu.Lock()
+	before := len(finders)
+	findersMu.Unlock()
+	t.Cleanup(func() {
+		findersMu.Lock()
+		finders = finders[:before]
+		findersMu.Unlock()
+		registryMu.Lock()
+		delete(registry, "test.found")
+		registryMu.Unlock()
+	})
 	AddFinder(func(id string) bool {
 		asked[id]++
 		if id != "test.found" {

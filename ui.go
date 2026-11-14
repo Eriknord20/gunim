@@ -61,6 +61,23 @@ func Main(ctx context.Context, fn func(*App) error) error {
 	return runApp(ctx, drv, fn)
 }
 
+// MainWith is [Main] on a driver the program opened itself, as
+// driver/kms's with options of its own:
+//
+//	d, err := kms.Open(kms.Options{Rotate: 90})
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	err = gunim.MainWith(ctx, d, fn)
+//
+// It runs fn as Main does, and the driver's Run gives back what the driver
+// took as it returns. The call uses the driver up: it cannot run again.
+// ctx ends it as it ends Main, as does the last window closing; driver/kms
+// also ends it on SIGHUP, SIGINT and SIGTERM, which it catches itself.
+func MainWith(ctx context.Context, drv driver.Driver, fn func(*App) error) error {
+	return runApp(ctx, drv, fn)
+}
+
 // runApp is Main after the display is open, split out so a test can
 // hand it a driver of its own.
 func runApp(ctx context.Context, drv driver.Driver, fn func(*App) error) error {
@@ -120,6 +137,8 @@ type App struct {
 	windows windows
 	// loops counts the windows' goroutines still running.
 	loops sync.WaitGroup
+	// held is the clock the windows keep time by, or nil for the wall clock; see [App.Hold].
+	held atomic.Pointer[HeldClock]
 }
 
 // NowPlaying is what a media application plays; see [App.SetNowPlaying].
@@ -264,6 +283,47 @@ func (a *App) TrayNotify(title, body string) error {
 	return tn.TrayNotify(title, body)
 }
 
+// TrayRect returns the tray icon's rectangle in screen coordinates, for a [driver.KindFlyout] window to open beside
+// as [WindowOptions.Beside]. It fails where no icon is up, or the system does not say: only Windows does.
+func (a *App) TrayRect() (geom.Rect, error) {
+	tl, ok := a.drv.(driver.TrayLocator)
+	if !ok {
+		return geom.Rect{}, ErrNoTray
+	}
+	return tl.TrayRect()
+}
+
+// SystemLook is what the user chose in the system's settings for how applications look and move; see
+// [driver.SystemLook].
+type SystemLook = driver.SystemLook
+
+// ContrastColors are the colours of a contrast theme; see [driver.ContrastColors].
+type ContrastColors = driver.ContrastColors
+
+// ErrNoSystemLook says the platform has no look settings to read. Only Windows' are read so far.
+var ErrNoSystemLook = driver.ErrNoSystemLook
+
+// SystemLook reads the user's settings for light or dark, fewer animations, text size and a contrast theme.
+// [github.com/marrasen/gunim/widget.ForLook] turns them into a theme.
+func (a *App) SystemLook() (SystemLook, error) {
+	lr, ok := a.drv.(driver.LookReader)
+	if !ok {
+		return SystemLook{}, ErrNoSystemLook
+	}
+	return lr.SystemLook()
+}
+
+// WatchSystemLook calls fn, on a goroutine of gunim's, each time the user changes one of the settings
+// [App.SystemLook] reads, until stop is called. fn gets an error when the settings could not be read again. stop
+// returns once a call to fn in progress has returned, and no call comes after, so call it from outside fn.
+func (a *App) WatchSystemLook(fn func(SystemLook, error)) (stop func(), err error) {
+	lr, ok := a.drv.(driver.LookReader)
+	if !ok {
+		return func() {}, ErrNoSystemLook
+	}
+	return lr.WatchSystemLook(fn)
+}
+
 // HotKey is a key that reaches the application from any program; see
 // [driver.HotKey].
 type HotKey = driver.HotKey
@@ -311,6 +371,11 @@ type WindowOptions struct {
 	// existing one.
 	Parent *Window
 	Anchor geom.Point
+	// Beside, for a [driver.KindFlyout], is the rectangle in screen coordinates the flyout opens beside: the tray
+	// icon's, from [App.TrayRect]. Margin is the room round the card the application draws in it, left for the card's
+	// shadow. Empty, the flyout opens in the bottom right corner of the primary monitor's work area.
+	Beside geom.Rect
+	Margin float32
 	// Owned makes an ordinary window belong to Parent, as a palette or a plugin's window does: it stays in front of
 	// Parent, and Windows keeps it off the taskbar. It is an ordinary window in every other way: it moves to any
 	// monitor, has its title bar, and opens at Place where that is set, or else at Anchor in Parent's space. Windows
@@ -382,6 +447,11 @@ type WindowOptions struct {
 	// screen's edge or with the Windows key and an arrow. A maximized Place opens at its bounds instead. Where a
 	// window manager tiles every window, it may still size the window as it will.
 	Fixed bool
+	// MinSize is the least size of an ordinary or a tool window, in logical pixels, as Size is: the user cannot size
+	// it smaller, and a window that would open smaller, at Size or at a saved place, opens at MinSize. Zero sets none,
+	// and a negative side counts as zero. [UI.SetMinSize] changes it while the window is open, where it says which
+	// platforms keep it.
+	MinSize geom.Size
 	// Hidden opens the window without showing it, as for an application
 	// that starts in the tray and may close it unseen.
 	Hidden bool
@@ -420,9 +490,13 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 		Kind: o.Kind, Anchor: geom.Rect{Min: o.Anchor, Max: o.Anchor}, Icons: o.Icons, Class: o.Class, Owned: o.Owned && o.Parent != nil,
 		Chromeless: !o.SystemFrame && (newTitleBar != nil || o.TitleBar != nil), Border: o.Border, Corner: o.Corner, Text: o.Text, Place: o.Place,
 		Hidden: o.Hidden, DragFromBehind: o.DragFromBehind, Fixed: o.Fixed, NoColorManagement: o.NoColorManagement,
+		MinSize: noNegative(o.MinSize),
 	}
 	if o.Parent != nil {
 		do.Parent = o.Parent.dw
+	}
+	if o.Kind == driver.KindFlyout {
+		do.Anchor, do.Margin, do.Chromeless = o.Beside, o.Margin, false
 	}
 	dw, err := a.drv.NewWindow(do)
 	if err != nil {
@@ -434,6 +508,7 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.placeFile = o.PlaceFile
 	w.ui.underBar = o.UnderTitleBar
 	w.ui.fixed = o.Fixed
+	w.ui.minSize = noNegative(o.MinSize)
 	w.ui.startChrome(o.TitleBar)
 	if o.Pinned {
 		if err := w.ui.SetPinned(true); err != nil {
@@ -444,7 +519,9 @@ func (a *App) NewWindow(o WindowOptions) (*Window, error) {
 	w.ui.arriving, w.ui.animated = animated, animated
 	w.open = a.drv.NewWindow
 	w.app = a
-	a.windows.add(w)
+	// Opened while the clock is held, the window keeps its time from its first frame. Hold and Release change
+	// the clock under the same lock.
+	a.windows.addHeld(w, &a.held)
 	a.loops.Add(1)
 	go w.loop()
 	return w, nil
@@ -517,8 +594,13 @@ type Window struct {
 	// the last one was, and due is when the frame most recently drawn is
 	// predicted to be. All belong to the UI goroutine.
 	unshown, unreleased int
-	shown               time.Time
-	due                 time.Time
+	// building says a held frame that paints is being built: its
+	// commands, its timers and its painting. A frame owed painted
+	// meanwhile is a second frame painted before the driver is asked
+	// again whether it has let one go.
+	building bool
+	shown    time.Time
+	due      time.Time
 	// dues holds the due time of each frame handed and not yet shown,
 	// oldest first. late is how long after its due time a frame lights
 	// the screen, smoothed over the frames shown, and lateKnown says a
@@ -532,9 +614,28 @@ type Window struct {
 	uiTimes uiTimes
 
 	closeOnce sync.Once
+	// framing is held by each call that drives an offscreen window, as [Window.Frame] and
+	// [Window.Input], by the loop for its whole life, and by Close as it closes the popups. popupsOwed
+	// says a Close has yet to close them, as such a call was in flight.
+	framing    sync.Mutex
+	popupsOwed atomic.Bool
+	// driveDepth counts the calls driving the window that are in flight, one inside another. Only the
+	// goroutine that drives the window reads or writes it.
+	driveDepth int
 	// clock is the synthetic frame time used by [Window.Frame], so an
 	// offscreen window steps at whatever rate the caller chooses.
 	clock time.Time
+	// held is the clock the window keeps time by, or nil for the wall
+	// clock; see [HeldClock]. steps carries Advance's frames to the loop,
+	// and step is the one waiting for the loop to be free to draw it.
+	held  atomic.Pointer[HeldClock]
+	steps chan heldStep
+	step  *heldStep
+	// heldBy is the clock the loop keeps time by, as it last took it up from held; see followClock.
+	heldBy *HeldClock
+	// popupWait is when a held frame began to wait for a popup to show
+	// the frame before, or zero; see heldFrame.
+	popupWait time.Time
 
 	// inMu guards the inbound queue, which application goroutines fill
 	// and the UI goroutine drains once a frame.
@@ -587,6 +688,7 @@ func newWindow(dw driver.Window, root Node) *Window {
 		injected: make(chan input.Event),
 		accesses: make(chan chan *access.Tree),
 		dragIn:   make(chan dragMsg, 64),
+		steps:    make(chan heldStep),
 		blends:   true,
 	}
 	rootState := &state{node: root, presence: Present, id: Root}
@@ -1003,8 +1105,8 @@ func NewOffscreen(size geom.Size, root Node) *Window {
 
 // NewOffscreenWith returns an offscreen window, as [NewOffscreen]
 // does, set up by o as [App.NewWindow] sets up a window on a display:
-// its Size, Root, Title, Theme, AskToClose, ZoomKeys and Zoom. The rest
-// of o needs a display. A zero Size is 800 by 600.
+// its Size, MinSize, Root, Title, Theme, AskToClose, ZoomKeys and Zoom.
+// The rest of o needs a display. A zero Size is 800 by 600.
 //
 // It is how a test steps an application's own window: a click on the
 // close button, as [driver.CloseAsked], sends AskToClose to the
@@ -1015,6 +1117,10 @@ func NewOffscreenWith(o WindowOptions) *Window {
 	}
 	w := NewOffscreen(o.Size, o.Root)
 	w.setUp(o)
+	if o.MinSize != (geom.Size{}) {
+		// The offscreen window keeps its least size, and says no error.
+		_ = w.ui.SetMinSize(o.MinSize)
+	}
 	if o.Title != "" {
 		w.Offscreen().SetTitle(o.Title)
 	}
@@ -1064,6 +1170,12 @@ func (w *Window) Offscreen() *driver.OffscreenWindow {
 // holding an offscreen window can step time. Commands queued through
 // [Client] are applied first, the same way the loop applies them.
 func (w *Window) Frame(delta time.Duration) {
+	w.frameAt(w.clock.Add(delta), delta)
+}
+
+// frameAt is [Window.Frame] at the time now, delta after the frame before.
+func (w *Window) frameAt(now time.Time, delta time.Duration) {
+	defer w.drive()()
 	// What comes before the frame lays out may go by where the last
 	// frame drew things, as a timer asking where a node is: each kind of
 	// work paints a frame owed as it is taken, before it runs.
@@ -1086,9 +1198,9 @@ func (w *Window) Frame(delta time.Duration) {
 		}
 	}
 	w.applyPending()
-	w.clock = w.clock.Add(delta)
+	w.clock = now
 	w.ui.stepped = true
-	w.ui.frame(w.clock, w.clock, delta)
+	w.ui.frame(now, now, delta)
 }
 
 // PaintWhenLooked has a window from [NewOffscreen] paint a frame only
@@ -1123,13 +1235,20 @@ func (w *Window) PaintWhenLooked(on bool) {
 	if o == nil {
 		return
 	}
+	defer w.drive()()
 	w.ui.lazy = on
 	if !on {
 		w.ui.paintOwed()
 		o.OnLook(nil)
 		return
 	}
-	o.OnLook(w.ui.paintOwed)
+	o.OnLook(w.paintOnLook)
+}
+
+// paintOnLook paints the frame owed before a read of what the offscreen window drew.
+func (w *Window) paintOnLook() {
+	defer w.drive()()
+	w.ui.paintOwed()
 }
 
 // TimeByFrames has a window from [NewOffscreen] keep time by its frames
@@ -1148,6 +1267,7 @@ func (w *Window) TimeByFrames(on bool) {
 	if w.Offscreen() == nil {
 		return
 	}
+	defer w.drive()()
 	w.ui.byFrames = on
 	if w.ui.now.IsZero() {
 		// Before its first frame, the window's time is where its
@@ -1160,7 +1280,19 @@ func (w *Window) TimeByFrames(on bool) {
 // looked at left it unpainted; see [Window.PaintWhenLooked]. It is for a
 // test that reads what the window drew another way, as a chromeless
 // window's title bar. It must be called from the goroutine calling Frame.
-func (w *Window) Paint() { w.ui.paintOwed() }
+func (w *Window) Paint() {
+	defer w.drive()()
+	w.ui.paintOwed()
+}
+
+// Still reports whether nothing in the window moves: no animation runs and nothing waits to be applied. A redraw
+// owed for a change already applied and timers set for later do not count. It must be called from the goroutine
+// calling Frame.
+func (w *Window) Still() bool {
+	defer w.drive()()
+	return !w.ui.animating && !w.queued() && len(w.popupIn) == 0 && len(w.dragIn) == 0 && len(w.leave) == 0 &&
+		len(w.fade) == 0
+}
 
 // Input hands the window a platform event, as a driver would: a pointer
 // move, a click, a key, the close button as [driver.CloseAsked]. It is
@@ -1171,7 +1303,10 @@ func (w *Window) Paint() { w.ui.paintOwed() }
 // this window alone, as a platform's does: a click where a popup shows
 // lands in the window under it. [Window.Inject] hands an event to an
 // open popup where it lands, as a person's click does.
-func (w *Window) Input(ev any) { w.platform(ev) }
+func (w *Window) Input(ev any) {
+	defer w.drive()()
+	w.platform(ev)
+}
 
 // platform handles one of the platform's events. A window out of sight
 // draws no frames, and a frame is where the application's state reaches
@@ -1189,7 +1324,7 @@ func (w *Window) platform(ev any) {
 	if !w.draws() {
 		w.applyPending()
 	}
-	w.ui.handlePlatform(ev)
+	w.ui.handlePlatform(w.ui.heldTime(ev))
 }
 
 // Err returns the error that ended the window. Read it once
@@ -1228,16 +1363,48 @@ func (w *Window) RefreshRate() float64 { return w.dw.RefreshRate() }
 
 // Close shuts the window down at once and drops any queued work. For an
 // animated goodbye, unmount the root's views first and call Close once
-// they have gone. An offscreen window, which has no loop of its own,
-// closes its popups in Close, so call it where the window is driven.
+// they have gone. It is safe from any goroutine. An offscreen window,
+// which has no loop of its own, runs what [UI.BeforeClose] was given and
+// closes its popups in Close, or at the end of the call driving it that is
+// in flight, as [Window.Frame] or [Window.Input].
 func (w *Window) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
 		if w.app == nil {
 			// An offscreen window has no loop to close its popups.
-			w.ui.closeAllPopups()
+			w.popupsOwed.Store(true)
+			w.closeOwedPopups()
 		}
 	})
+}
+
+// drive locks framing for a call that drives an offscreen window, as [Window.Frame] and [Window.Input] are, and
+// returns what ends the call: it unlocks, then closes the popups a Close left meanwhile.
+// A call made inside another, as a view's Input inside a frame, only counts.
+func (w *Window) drive() (end func()) {
+	if w.driveDepth > 0 {
+		w.driveDepth++
+		return func() { w.driveDepth-- }
+	}
+	w.framing.Lock()
+	w.driveDepth = 1
+	return func() {
+		w.driveDepth = 0
+		w.framing.Unlock()
+		w.closeOwedPopups()
+	}
+}
+
+// closeOwedPopups runs the closers and closes the popups a Close left, unless a call that drives the window is in
+// flight, which does both as it ends.
+func (w *Window) closeOwedPopups() {
+	for w.popupsOwed.Load() && w.framing.TryLock() {
+		if w.popupsOwed.Swap(false) {
+			w.ui.runClosers()
+			w.ui.closeAllPopups()
+		}
+		w.framing.Unlock()
+	}
 }
 
 // loop is the window's whole life.
@@ -1252,6 +1419,17 @@ func (w *Window) loop() {
 	if w.app != nil {
 		defer w.app.loops.Done()
 	}
+	// However the loop ends, done says so: as the user closed the window, or its driver window went. A held
+	// clock's Advance waits on it.
+	defer w.Close()
+	// The loop drives the window for its whole life, as Frame does for one call. A Close from another goroutine
+	// then leaves the closers and the popups to the loop's end, below, and never runs them beside a frame.
+	w.framing.Lock()
+	w.driveDepth = 1
+	defer func() {
+		w.driveDepth = 0
+		w.framing.Unlock()
+	}()
 	defer close(w.out)
 	defer w.ui.closeAllPopups()
 	defer func() {
@@ -1270,9 +1448,15 @@ func (w *Window) loop() {
 	defer w.ui.stopHeading()
 	// The child windows of the system's in it close before it does.
 	defer w.ui.closeNatives()
+	defer w.ui.runClosers()
 
 	for {
-		if w.free() && w.wants() && w.draws() {
+		w.followClock()
+		if w.ui.onHeld {
+			if w.heldFrame() {
+				continue
+			}
+		} else if w.free() && w.wants() && w.draws() {
 			w.draw()
 			continue
 		}
@@ -1380,6 +1564,12 @@ func (w *Window) wait() bool {
 	var alarm <-chan time.Time
 	var at time.Time
 	switch timer, ok := w.ui.nextTimer(); {
+	case w.ui.onHeld:
+		// Held, a timer runs in the frame Advance draws at its time. A
+		// frame waiting on a popup's waits so long at most.
+		if !w.popupWait.IsZero() {
+			at = w.popupWait.Add(popupWaitMost)
+		}
 	case w.draws():
 		if ok && w.free() {
 			at = wakeFor(timer, w.shown, refreshInterval(w.dw.RefreshRate()))
@@ -1403,6 +1593,8 @@ func (w *Window) wait() bool {
 	case <-w.done:
 		return false
 	case <-w.wake:
+	case st := <-w.steps:
+		w.heldAsked(st)
 	case ev, ok := <-w.dw.Input():
 		if !ok {
 			return false
@@ -1439,7 +1631,8 @@ func (w *Window) wait() bool {
 		}
 		w.shown = f.Shown
 		w.learnLate(f)
-		if w.ui.arriving && w.ui.arrivedAt.IsZero() {
+		if w.ui.arriving && w.ui.arrivedAt.IsZero() && !w.ui.onHeld {
+			// Held, the next frame takes its arrival from the held clock.
 			w.ui.arrivedAt = w.shown
 			if w.shown.IsZero() {
 				w.ui.arrivedAt = time.Now()
@@ -1466,8 +1659,24 @@ func (w *Window) wait() bool {
 // of the way through its animation before its first frame.
 func (w *Window) draw() {
 	t0 := time.Now()
+	wanted, stirred := w.ui.needsFrame(), w.ui.stirred
+	w.ui.stirredBy = false
 	w.applyPending()
 	applied := time.Since(t0)
+	if !w.ui.stirredBy {
+		// Only patches that changed nothing laid out came: the frame
+		// carries what it would have without them.
+		w.ui.stirred = stirred
+		if !wanted && !w.ui.needsFrame() {
+			// Nor did they start a spring: no frame at all. Looking
+			// mustn't leave a wake asked for by a node now at rest.
+			wake := w.ui.wakeIn
+			if !w.ui.springsMoving() {
+				w.ui.wakeIn = wake
+				return
+			}
+		}
+	}
 	interval := refreshInterval(w.dw.RefreshRate())
 	due := nextVsync(w.shown, interval, time.Now())
 	if w.unshown > 0 {
@@ -1484,6 +1693,9 @@ func (w *Window) draw() {
 	w.dues = append(w.dues, due)
 	start := time.Now()
 	present := w.presentAt(due, start)
+	if fb, ok := w.dw.(driver.FrameBeginner); ok {
+		fb.BeginFrame(t0)
+	}
 	w.ui.frame(due, present, delta)
 	w.sent = time.Now()
 	if took := w.sent.Sub(start); took > slowFrame {
@@ -1598,7 +1810,9 @@ func (w *Window) queueLocked(cmd Command) {
 		}
 	} else {
 		// Mount, Unmount and Focus change what exists, so state queued
-		// ahead of one of them keeps its place and gets applied.
+		// ahead of one of them keeps its place and gets applied. A Patch
+		// keeps its place too, as it may stand on the state before it:
+		// publishes either side of one don't merge.
 		w.barrier = len(w.pending) + 1
 	}
 	w.pending = append(w.pending, cmd)
@@ -1703,6 +1917,8 @@ type UI struct {
 	underBar bool
 	// fixed says the user cannot size or maximize the window; see [WindowOptions.Fixed].
 	fixed bool
+	// minSize is the window's least size; see [UI.SetMinSize].
+	minSize geom.Size
 	// modals are the modals in the tree, in the order they came; see Modal.
 	modals []modalHold
 	// pinned says the window is kept above other windows; see SetPinned.
@@ -1809,6 +2025,11 @@ type UI struct {
 	painter   paint.Painter
 	animating bool
 	invalid   bool
+	// unchanged says the patch handler running called Unchanged.
+	unchanged bool
+	// stirredBy says a command applied since the window last looked
+	// needs a frame: any but a patch that changed nothing laid out.
+	stirredBy bool
 	// due runs a deadline's frame. runTimers invalidates ordinary timers;
 	// only Waker deadlines leave unrelated Steady subtrees calm.
 	due bool
@@ -1833,12 +2054,21 @@ type UI struct {
 	popups []*surface
 	// timers are waiting to run, in no order.
 	timers []*timer
+	// closers run as the window closes; see [UI.BeforeClose].
+	closers []*func(u *UI)
 	// stepped says [Window.Frame] steps the window's time, as a test
 	// does: its clock is the steps', and the wall clock's plays no part.
 	stepped bool
 	// byFrames says everything the window times goes by the time its
 	// frames have stepped; see [Window.TimeByFrames].
 	byFrames bool
+	// onHeld says the window keeps a held clock's time ([HeldClock]), and
+	// wasStepped and wasByFrames are how it kept time before.
+	onHeld, wasStepped, wasByFrames bool
+	// heldSkip says the frame being built under a held clock is laid out and left unpainted; see HoldOptions.PaintEvery.
+	heldSkip bool
+	// everHeld says the window has kept a held clock's time, so its drivers' windows are told when it no longer does.
+	everHeld bool
 	// lazy says the window paints a frame only when something looks at
 	// it; see [Window.PaintWhenLooked]. owed says the last frame was laid
 	// out and left unpainted, and owedFrame is what painting it takes.
@@ -1932,6 +2162,8 @@ type timer struct {
 	redraw bool
 	// wake marks only a Waker deadline; ordinary After timers still invalidate.
 	wake bool
+	// held marks a timer set while the window kept a held clock's time, which Advance cuts a frame at.
+	held bool
 }
 
 // redrawAt sets a timer that draws a frame at t, unless one due by then is already set.
@@ -1941,17 +2173,39 @@ func (u *UI) redrawAt(t time.Time) {
 			return
 		}
 	}
-	u.timers = append(u.timers, &timer{at: t, redraw: true, fn: func(u *UI) { u.Invalidate() }})
+	u.timers = append(u.timers, &timer{at: t, redraw: true, held: u.onHeld, fn: func(u *UI) { u.Invalidate() }})
 }
 
 // After runs fn on the UI goroutine at the first frame d or more after
 // this one, and returns a function that cancels it. The window sleeps
 // while it waits, so a tooltip's delay costs no frames.
 func (u *UI) After(d time.Duration, fn func(u *UI)) (stop func()) {
-	t := &timer{at: u.timerClock().Add(d), fn: fn}
+	t := &timer{at: u.timerClock().Add(d), fn: fn, held: u.onHeld}
 	u.timers = append(u.timers, t)
 	return func() {
 		u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t })
+	}
+}
+
+// BeforeClose runs fn on the UI goroutine as the window closes, unless the function it returns is called first: for
+// a node that must end what it started, as a gesture the host waits to hear end. On a nil UI it does nothing.
+func (u *UI) BeforeClose(fn func(u *UI)) (stop func()) {
+	if u == nil {
+		return func() {}
+	}
+	c := &fn
+	u.closers = append(u.closers, c)
+	return func() {
+		u.closers = slices.DeleteFunc(u.closers, func(o *func(u *UI)) bool { return o == c })
+	}
+}
+
+// runClosers runs what BeforeClose was given, once.
+func (u *UI) runClosers() {
+	cs := u.closers
+	u.closers = nil
+	for _, c := range cs {
+		(*c)(u)
 	}
 }
 
@@ -1968,7 +2222,7 @@ func (u *UI) wakeAfter(d time.Duration) {
 	u.wakeAt = at
 	// The timer's own frame is the one the node asked for, and the node
 	// draws anew in it as it moves; the rest may stay carried.
-	t := &timer{at: at, wake: true, fn: func(u *UI) { u.wakeStop = nil }}
+	t := &timer{at: at, wake: true, held: u.onHeld, fn: func(u *UI) { u.wakeStop = nil }}
 	u.timers = append(u.timers, t)
 	u.wakeStop = func() { u.timers = slices.DeleteFunc(u.timers, func(o *timer) bool { return o == t }) }
 }
@@ -2129,6 +2383,56 @@ func (u *UI) SetClipboard(s string) {
 	}
 }
 
+// MarksClipboardSensitive reports whether [UI.SetClipboardSensitive] marks text sensitive on this platform, so the
+// system keeps it out of its history: true on Windows. Where it is false, an app may warn the user, or clear the text
+// sooner.
+func (u *UI) MarksClipboardSensitive() bool {
+	if u == nil || u.w == nil {
+		return false
+	}
+	_, ok := u.w.dw.(driver.SensitiveClipboard)
+	return ok
+}
+
+// SetClipboardSensitive puts s, such as a password, on the system clipboard marked as sensitive, and returns an error
+// where it could not.
+//
+// On Windows the system then keeps s out of the clipboard history (Win+V) and the cloud clipboard, and asks
+// clipboard monitors to skip it; where those marks cannot be set, nothing is left on the clipboard. Elsewhere it puts
+// s there as [UI.SetClipboard] does, and a clipboard manager may keep it. Pair it with [UI.ClearClipboardIf] to take
+// s off again after a while.
+func (u *UI) SetClipboardSensitive(s string) error {
+	if c, ok := u.w.dw.(driver.SensitiveClipboard); ok {
+		return c.SetClipboardSensitive(s)
+	}
+	return u.w.dw.SetClipboard(s)
+}
+
+// ClearClipboardIf empties the system clipboard if it still holds the text s, and reports whether it did: for taking
+// a password off once the user has had time to paste it, without clearing what they copied since. An error says the
+// clipboard could not be read or emptied.
+//
+// On Windows it clears only text this program put there. For the text [UI.SetClipboardSensitive] put there last, it
+// goes by ownership and reads nothing: the text is still ours while this program owns the clipboard and the
+// sensitive mark is there, so a paste or a format another program adds leaves it ours, and the user's own later copy
+// of the same text, made elsewhere, survives. Other text is read and compared, but only while this program owns the
+// clipboard, so another program's text is never read and the call never waits on it. Nothing can reach the clipboard
+// between the check and the emptying. Elsewhere the clipboard is read and then set to "", so text another program
+// puts there in that moment can be lost.
+func (u *UI) ClearClipboardIf(s string) (bool, error) {
+	if c, ok := u.w.dw.(driver.SensitiveClipboard); ok {
+		return c.ClearClipboardIf(s)
+	}
+	now, err := u.w.dw.Clipboard()
+	if err != nil || now != s {
+		return false, err
+	}
+	if err := u.w.dw.SetClipboard(""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ClipboardFailed travels to the application when [UI.SetClipboard]
 // could not put text on the clipboard, with the error in Reason.
 type ClipboardFailed struct{ Reason string }
@@ -2212,6 +2516,17 @@ func (u *UI) Blends() bool { return u.w.blends }
 func (u *UI) Invalidate() {
 	if u != nil {
 		u.invalid = true
+	}
+}
+
+// Unchanged says, from a patch's handler (see [RegisterPatch]), that
+// the patch changed nothing the window lays out or paints but springs,
+// which step and draw what moves themselves: the window builds no frame
+// for it. A value that is shown, set without a spring, needs the frame.
+// Anywhere else it does nothing.
+func (u *UI) Unchanged() {
+	if u != nil {
+		u.unchanged = true
 	}
 }
 
@@ -2432,10 +2747,39 @@ func (u *UI) Remove(n Node) bool {
 // out of the tree or under a popup's window.
 func (u *UI) Bounds(n Node) (geom.Rect, bool) {
 	s, ok := u.index[n]
-	if !ok || s.drawn != u.seq || u.surfaceOf(s) != nil {
+	if !ok || s.drawn == 0 || s.drawn != u.seq || u.surfaceOf(s) != nil {
 		return geom.Rect{}, false
 	}
 	return u.rectIn(s, u.root), true
+}
+
+// Drawn reports whether n's parent painted it in the last frame, in the window or in a popup's. A node clipped away or
+// covered by another reads true. It reads false before the window's first frame, during a frame until the node is
+// painted, and on a nil UI.
+func (u *UI) Drawn(n Node) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	return ok && s.drawn != 0 && s.drawn == u.seq
+}
+
+// ScrollsAround reports whether a [WheelScroller] around n takes a wheel turned by delta, for a node that leaves the
+// wheel to the view it scrolls in. It is false on a nil UI and for a node out of the tree.
+func (u *UI) ScrollsAround(n Node, delta geom.Point) bool {
+	if u == nil {
+		return false
+	}
+	s, ok := u.index[n]
+	if !ok {
+		return false
+	}
+	for s = s.parent; s != nil; s = s.parent {
+		if w, ok := s.node.(WheelScroller); ok && w.ScrollsAlong(delta) {
+			return true
+		}
+	}
+	return false
 }
 
 // Presence reports where n is in its lifecycle.
@@ -2684,6 +3028,21 @@ func (u *UI) placeCaret() {
 	}
 }
 
+// springsMoving reports whether any spring moves, looking without moving
+// time on, as a frame looks again at its end: a patch's handler may have
+// started one.
+func (u *UI) springsMoving() bool {
+	if u.theme.Step(0) {
+		return true
+	}
+	for _, r := range u.roots() {
+		if u.step(r, 0, r) {
+			return true
+		}
+	}
+	return false
+}
+
 // needsFrame reports whether there is anything to draw.
 func (u *UI) needsFrame() bool { return u.animating || u.invalid || u.due }
 
@@ -2727,7 +3086,7 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	animating := u.theme.Step(delta) || scrolled
 	u.calm = u.calm && !animating
 	for _, r := range u.roots() {
-		if u.step(r, delta) {
+		if u.step(r, delta, r) {
 			animating = true
 		}
 	}
@@ -2763,6 +3122,9 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 	} else {
 		u.owed, u.owedFrame = true, fp
 		u.fadedAway()
+		if u.heldSkip {
+			u.layoutPopups(f)
+		}
 	}
 
 	// 5. Layout and paint may have started animations: a caret aimed at
@@ -2774,7 +3136,7 @@ func (u *UI) frame(now, present time.Time, delta time.Duration) {
 		u.animating = true
 	}
 	for _, r := range u.roots() {
-		if !u.animating && u.step(r, 0) {
+		if !u.animating && u.step(r, 0, r) {
 			u.animating = true
 		}
 	}
@@ -2872,6 +3234,9 @@ func (u *UI) fading(now time.Time, f Frame, size geom.Size) (fp framePaint, left
 // where it drew things: a node to bring into view, a popup or a native
 // child to place, and the pointer held, carrying a drag, or flinging.
 func (u *UI) mustPaint() bool {
+	if u.heldSkip {
+		return false
+	}
 	return !u.lazy || u.shotsOwed.Load() > 0 || len(u.revealing) > 0 || len(u.popups) > 0 || len(u.nativeNodes) > 0 ||
 		u.capture != nil || u.drag != nil || u.dragOver || u.fling != nil
 }
@@ -2903,6 +3268,7 @@ func (u *UI) paintFrame(fp framePaint) {
 		u.root.node.Paint(&u.painter, f, u.root.size, Children{ns: u.root.kids, f: f, s: u.root})
 		u.painter.PaintFloats()
 	}()
+	u.stampClock(u.w.dw)
 	if err := u.w.dw.Present(u.painter.Ops(), u.painter.DamageRects()); err != nil {
 		u.w.err = fmt.Errorf("gunim: present frame: %w", err)
 		u.w.Close()
@@ -2931,6 +3297,23 @@ func (u *UI) paintFrame(fp framePaint) {
 // the frame as the frame itself would have: nothing has changed since.
 func (u *UI) paintOwed() {
 	if !u.owed || u.painting {
+		return
+	}
+	if u.onHeld && u.w.app != nil {
+		// Held, a frame owed paints only into buffers the driver is done with, else the next painted frame shows
+		// it, and one painted is in flight as a frame drawn is.
+		if !u.w.free() {
+			return
+		}
+		// Asked for as a frame is built, the frame owed and the one built are two frames painted on one check
+		// for room. The painter keeps two frames' buffers, so both have room only once the driver has let every
+		// frame go; else the second would record into ops the driver still reads.
+		if u.w.building && u.w.unreleased > 0 {
+			return
+		}
+		u.paintFrame(u.owedFrame)
+		u.w.unshown++
+		u.w.unreleased++
 		return
 	}
 	u.paintFrame(u.owedFrame)
@@ -3025,10 +3408,12 @@ func (u *UI) roots() []*state {
 }
 
 // step advances animated values depth-first and reports whether
-// anything is still moving.
-func (u *UI) step(s *state, dt time.Duration) bool {
+// anything is still moving. root is the top of s's tree: the window's, or
+// a popup's. An [Ornament] that showed nowhere in the last frame painted
+// is not stepped.
+func (u *UI) step(s *state, dt time.Duration, root *state) bool {
 	animating := false
-	if a, ok := s.node.(Animator); ok && a.Step(dt) {
+	if a, ok := s.node.(Animator); ok && (!isOrnament(s.node) || showed(s, root)) && a.Step(dt) {
 		animating = true
 		s.moved = u.seq
 	}
@@ -3044,11 +3429,56 @@ func (u *UI) step(s *state, dt time.Duration) bool {
 		}
 	}
 	for _, k := range s.kids {
-		if u.step(k, dt) {
+		if u.step(k, dt, root) {
 			animating = true
 		}
 	}
 	return animating
+}
+
+func isOrnament(n Node) bool {
+	_, ok := n.(Ornament)
+	return ok
+}
+
+// showed reports whether some of s showed in the last frame painted in its
+// tree, the frame root was painted in: s was painted in it, and its box,
+// in window space, meets the clips round it and root's own box. One never
+// painted yet counts as shown, for its first frame to tell; so does one
+// under a perspective, whose box the clips can't be held against.
+func showed(s, root *state) bool {
+	switch {
+	case s.drawn == 0 || s == root || s.proj != nil:
+		return true
+	case s.drawn != root.drawn:
+		return false
+	}
+	box := windowBox(s.toWindow, s.size)
+	if b, clipped := s.clip.Bounds(); clipped && !meets(box, b) {
+		return false
+	}
+	return meets(box, geom.Rect{Max: root.size.Point()})
+}
+
+// windowBox returns the rectangle round a box of size at the origin, under
+// t.
+func windowBox(t paint.Transform, size geom.Size) geom.Rect {
+	var out geom.Rect
+	for i, q := range []geom.Point{{}, {X: size.W}, {X: size.W, Y: size.H}, {Y: size.H}} {
+		p := t.Apply(q)
+		if i == 0 {
+			out = geom.Rect{Min: p, Max: p}
+			continue
+		}
+		out.Min.X, out.Min.Y = min(out.Min.X, p.X), min(out.Min.Y, p.Y)
+		out.Max.X, out.Max.Y = max(out.Max.X, p.X), max(out.Max.Y, p.Y)
+	}
+	return out
+}
+
+// meets reports whether a and b share some area.
+func meets(a, b geom.Rect) bool {
+	return a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y
 }
 
 // settle runs each node's transition and records whether it has

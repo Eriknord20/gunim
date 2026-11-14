@@ -34,6 +34,7 @@ func newCellStage(t testing.TB) (*gunim.Window, *CellGrid, func(int)) {
 		g.SetRow(y, cellsOf(fmt.Sprintf("row %d: the quick brown fox", y)))
 	}
 	w := gunimtest.New(t, geom.Sz(400, 300), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "cells", func(struct{}) gunim.Node { return g }, nil)
 	if err := w.Client().Mount(gunim.Root, "cells", "cells", nil); err != nil {
 		t.Fatal(err)
@@ -200,6 +201,7 @@ func BenchmarkAGridScrollingAFullScreen(b *testing.B) {
 	g.Size = 14
 	g.Resize(200, 60)
 	w := gunimtest.New(b, geom.Sz(1700, 1100), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "cells", func(struct{}) gunim.Node { return g }, nil)
 	if err := w.Client().Mount(gunim.Root, "cells", "cells", nil); err != nil {
 		b.Fatal(err)

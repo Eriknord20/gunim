@@ -171,6 +171,16 @@ type CaretPlacer interface {
 // or the display server asking for the contents back.
 type Redraw struct{}
 
+// A FrameBeginner is a [Window] that hears when the engine starts
+// building each frame it presents, so its figures can time the whole
+// frame, from the engine's step to the screen, and tell a frame that took
+// long from one that started after a rest. at is when the engine started;
+// the frame it starts reaches [Window.Present] next. It is called on the
+// window's own goroutine, and must not block.
+type FrameBeginner interface {
+	BeginFrame(at time.Time)
+}
+
 // A Placer is a popup [Window] that can move and resize: to fit new
 // content, or to follow its anchor. anchor is in the parent's logical
 // space, as in [Options], and size is in logical pixels.
@@ -213,6 +223,16 @@ type Recycler interface {
 // a time.
 type Releaser interface {
 	Released() <-chan struct{}
+}
+
+// A ClockHolder is a [Window] that draws by the engine's held clock where told to (gunim's HeldClock). What the
+// window draws differently as time passes, as a mask drawn stretched while its size changes and sharp once it
+// settles, then goes by the frames' held time, and the window draws no frame of its own on the wall clock, so the
+// frames drawn are the same however long they took.
+type ClockHolder interface {
+	// HoldClock stamps the frames presented from now on with the held time now. A zero now gives the window back
+	// to the wall clock. It is called on the goroutine that calls Present.
+	HoldClock(now time.Time)
 }
 
 // WindowFocus is sent on [Window.Input] when the window gains or loses
@@ -346,6 +366,13 @@ type AccessPublisher interface {
 	PublishAccess(t *access.Tree)
 }
 
+// An Announcer is a [Window] that has a screen reader say something that shows nowhere as a node, such as a change
+// the user did not make: "You're up to date". Announce reports whether it passed the words on to a screen reader. It
+// is safe to call from any goroutine.
+type Announcer interface {
+	Announce(text string) bool
+}
+
 // A Titler is a [Window] whose title the application can change, as
 // the platform shows it on the title bar and in the task switcher.
 type Titler interface {
@@ -428,6 +455,14 @@ type Reshaper interface {
 	// Reshape moves each of the window's edges out by by, in logical pixels, or in where a side is negative: Left
 	// grows it leftwards. Where that takes it off its monitor's work area, the window moves whole to keep on it.
 	Reshape(by geom.Insets) error
+}
+
+// A MinSizer is a [Window] that keeps a least size, which the user cannot size it under.
+type MinSizer interface {
+	// SetMinSize sets the least size in the logical pixels the window's content is laid out in, and grows the window
+	// to it where it is smaller. The limit follows the monitor's scale and the window's zoom, and is capped at the
+	// monitor's work area. Zero sets none, and a negative side counts as zero.
+	SetMinSize(s geom.Size) error
 }
 
 // MoveStarted is sent on [Window.Input] when the user starts moving or sizing the window by its frame or its title

@@ -66,6 +66,21 @@ Menus use `[]MenuItem{Label, Hint, Icon, Swatch, Checked, Disabled, Caption, Bre
 ones. Use one struct per item for anything that gives each item several facts; parallel slices of different lengths
 were a source of bugs.
 
+**Keys keep state on its item.** Where items can move, give the item struct a `Key`, as `NavItem.Key`. Then, as in
+`NavList`:
+
+- `SetItems` keeps the chosen item and the focus ring on the items with those keys. An item with no `Key` keeps its
+  place.
+- When the ring's item or the chosen item goes, each keeps its place, kept inside the list, and no intent is sent.
+- A repeated key follows the first item with it. Keys are meant to be unique.
+- The screen reader's part for an item takes its key from the item's `Key`, so a hold on it follows the item.
+- The ring glides with its item, and stays where the user left it when focus comes back.
+
+A widget with a ring over its items gives `Cursor`, and `SetCursor` where the app moves the ring, which scrolls the
+item into view. A view of many rows names the item by its `Key`: `List`, `Table` and `Tree` give `Cursor() (Key,
+bool)`, and `Table` and `Tree` give `SetCursor(key, u)`. `NavList`, a short column of rows its app builds whole, names
+the row by its place: `Cursor() int` and `SetCursor(i, u)`.
+
 **Shared names.**
 
 - `Items` holds the choices of a dropdown, a segmented control or a menu. `Titles` holds the titles of tabs.
@@ -86,11 +101,18 @@ hover, press, the focus ring and the disabled fade. A control in `widget` embeds
 |---|---|---|
 | constructor | `newControl()`, then add the widget's own springs to its group | one `Step` for all the springs |
 | `Layout` | `c.follow(th)` | the disabled fade, jumping on the first layout |
-| `Handle`, first | `c.showTip(e, u, node)` | the tooltip, on a disabled control too |
+| `Handle`, first | `c.showTip(e, u, node)` | the tooltip, on a disabled control too, and a finger's press lit and glowing |
 | `Handle`, when `Disabled` | `return c.handleDisabled(e, u, shut)` | focus let go, right clicks passed on, anything open shut |
 | `Handle` | `c.ringFollows(e, th)` | the focus ring fading in and out |
+| `Handle`, on a press | `c.squashIn(th)` in place of animating `squash` | the squash, which waits as the light does inside something that scrolls |
 | `Paint` | `defer c.faint(p, box)()`, then `c.paintRing(p, r, radius, th)` | the disabled fade, and the one focus ring |
+| `Paint`, over the fill | `c.paintGlow(p, r, radius, th)` | the glow that spreads from a finger as it presses |
 | `Access` | `c.accessState()`, `c.accessName(label)` | disabled state and a name for screen readers |
+
+A finger's press shows on the frame it lands. `showTip` lights the control through its hover spring, `squashIn`
+squashes it, and `paintGlow` draws a soft glow out from where the finger landed. Inside something that scrolls, all
+three wait up to 80 ms for the finger to show whether it taps or scrolls, so a scroll lights none of the controls it
+starts on. A finger has no hover otherwise: the engine sends no enter or leave as it moves.
 
 An app's widget outside the package draws the same way with the exported helpers `widget.Faint`, `widget.FocusRing`
 (round a control) and `widget.GroupRing` (round a view with a cursor of its own, such as a calendar).
@@ -125,6 +147,8 @@ knows.
 ChipFill   = theme.Color("chip.fill", color.NRGBA{...})        // a colour
 ChipInk    = theme.Foreground("chip.ink", color.NRGBA{...})    // a colour drawn on top: text, icons
 ChipRadius = theme.Length("chip.radius", 12)                   // a size in logical pixels
+ChipSize   = theme.FontSize("chip.size", 12)                   // a size of text, which the user's text size scales
+ChipHeight = theme.TextRow("chip.height", 24)                  // room for a line of text, which grows with it
 ```
 
 - **Keys** read `<widget>.<part>[.<state>]`: `button.primary.hover`, `scroll.bar.width`, `menu.row.height`.
@@ -140,17 +164,23 @@ ChipRadius = theme.Length("chip.radius", 12)                   // a size in logi
   `widget.Light().With(calendar.Light...)`. `calendar` and `audioui` do this.
 
 **States look alike.** Hover lightens the fill through the hover spring. Press squashes through its spring. Disabled
-fades the whole control through `Faint`. Focus draws `FocusRing`. Selection uses `Accent`.
+fades the whole control through `Faint`. Focus draws `FocusRing`. Selection uses `Accent`. In a column of rows, the
+chosen row sits on a pill that glides to it, with an accent mark at its left, as in `Tree` and `NavList`.
 
 ## Motion
 
 Everything moves; nothing jumps once the user can see it.
 
 - **Springs from the theme.** `Quick` is for direct feedback: hover, press, focus, highlight. `Settle` is for things
-  coming to rest or going away. `Bounce` is for things arriving, with an overshoot.
+  coming to rest or going away. `Bounce` is for things arriving, with an overshoot, as a `RadioGroup`'s dot
+  springs in.
 - **The first layout jumps.** Keep a `laid` flag. Before the first layout, put every spring at its target, so a value
   set early shows at once instead of gliding up from zero. For an entrance the app asks for, give the widget a method
   that says so, as `Split.SlideFrom(v)` opens a split at share v and glides it to its share.
+- **A live graph's history jumps in.** `LiveGraph.Fill(samples)` swaps in a whole span at once, the head on the
+  newest sample. This is the one jump on purpose: replaying the span through `Add` slides through it at its own
+  pace, so old values show as current. Call `Fill` once for the span, when a page opens or a filter changes, and
+  `Add` for each sample after it. A `Fill` on every tick steps the curve and never slides it.
 - **Arriving and leaving.** Implement `gunim.Transitioner` to animate in on `Entering` and out on `Exiting`; the
   engine keeps the node until it reports settled.
 - **Frames only while moving.** `Step` reports true only while something moves. A widget out of sight (on a hidden
@@ -196,6 +226,9 @@ and on open. 100 000 items must cost the same per frame as 100.
 Every interactive widget implements `gunim.Accessible` (`Access()`) and, when a screen reader can act on it,
 `gunim.AccessActor` (`AccessAct`). It reports a role, a name (its `Label`, or `Tooltip` when it shows none), its value,
 and `StateDisabled` while disabled (`Control.accessState` gives it). A view of rows publishes the rows in view.
+A widget that draws no name of its own takes a `Label` for screen readers, as `NavList` does, and passes it to
+`accessName`. A name such as "Pages" then doesn't also pop up as a tooltip. `Tooltip` stays the name where `Label` is
+empty.
 
 ## Tests
 
@@ -210,6 +243,49 @@ and `StateDisabled` while disabled (`Control.accessState` gives it). A view of r
   renderer, in a hidden window, and returns the picture; `gunimtest.WritePNG` saves it to look at. Where no display or
   OpenGL is at hand, and on macOS and Android, the test skips. Assert on state first: a GPU rounds edges and blurs its
   own way, so a pixel check allows a little either side.
+
+## Touch: the design language
+
+The touch kit is for a screen worked by a finger, such as a Raspberry Pi with the Touch Display 2. These rules hold
+for every screen built on it, so the apps that use it look like one family. `widget.Touch` sets the tokens that carry
+them: lay it over a theme as `widget.Dark().With(widget.Touch()...)`. `example/kmshello` follows every rule here.
+
+- **Size.** Every target is at least 48 logical pixels both ways: 84 device pixels, 7.2 mm, on the 5" display at
+  scale 1.75. Spacing is on a grid of 8.
+- **Type.** Inter, built into the program, in four sizes only: `FigureSize` (40) for one big figure on a screen,
+  `HeadingSize` (24) for titles, `TextSize` (17) for body text and `CaptionSize` (14) for captions. Titles and
+  figures are semibold (`BoldFont`), everything else regular.
+- **Contrast.** Text reads at 4.5:1 or more on what it sits on, a caption too (`CaptionInk`), and an edge that shows
+  where a control is, a field's border or a key's, at 3:1 or more. `TestTheTouchKitMeetsItsContrast` checks the
+  kit's own, in both themes.
+- **Colour.** Dark by default: a screen on a shelf is often in a dim room, and a dark one glares less. One accent
+  colour. Three status colours: green for fine, amber for needs a look, and red for act now (`ToastSuccessInk`,
+  `ToastWarningInk` and `ToastErrorInk`). Colour is never the only sign: each status also has an icon and a word.
+- **Shape.** Cards are rounded by 16, buttons by 12, and chips are pills. Shadows go only under dialogs. Blurred
+  layers are left out, since one makes the damage the whole screen (`CLAUDE.md`).
+- **Motion.** The three theme springs only, and no tweens in widgets. A touch shows on the frame it lands. Things
+  arrive with `Bounce`, leave with `Settle` and answer with `Quick`. Nothing moves at rest. A clock is the one tween:
+  a `HoldButton`'s fill and a `PinPad`'s wait fill and drain at an even pace, as time passes.
+- **Layout.** One task per screen. Navigation runs down the left edge in landscape, with at most five places. Back
+  is a swipe from the left edge (`Stack`) or a back button at the top left.
+- **Touch only.** No hover, no tooltips (`Tooltips` is off), no right click. A long press is never the only way to
+  reach something.
+- **Words.** Plain English. A button says what it does: "Revoke laptop", not "OK". An error says what happened and
+  what to do.
+
+The kit's own widgets:
+
+- `Stack` pushes and pops screens. A swipe from the left edge drags the top one off, and lets go on a spring with
+  the finger's speed.
+- `PinPad` takes a PIN on large keys. Its digits show as dots, never reach a screen reader, and are cleared as they
+  are handed over. `SetWaiting` holds it after a wrong PIN.
+- `Keyboard` is a keyboard on the screen, under the content, for a screen with none of its own. It slides up while a
+  field has the focus, and types into it through the same edits a phone's keyboard makes, through `UI.Type`.
+- `HoldButton` acts only once held down for a second, for the gravest changes, on top of a PIN. It fills from start
+  to end as it is held, and shows a tick once it has acted. A screen reader's press acts at once; the PIN is the
+  guard there.
+- `Keyboard` cannot tell a keyboard plugged in. An app that sees one sets `Keyboard.Disabled`, and the keyboard on
+  the screen stays down.
 
 ## Checklist for a new widget
 

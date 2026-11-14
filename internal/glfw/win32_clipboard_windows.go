@@ -9,6 +9,7 @@ package glfw
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"image/png"
@@ -36,17 +37,17 @@ var (
 	procGlobalUnlock = kernel32.NewProc("GlobalUnlock")
 )
 
-// openClipboard opens the clipboard for the helper window. Another
-// process may hold it for a moment, so it tries a few times.
+// openClipboard opens the clipboard for the helper window. Another process, such as the clipboard history right after
+// a change, may hold it for a moment, so it tries for about 100 ms.
 func openClipboard() error {
 	var err error
-	for range 3 {
+	for range 50 {
 		r, _, e := procOpenClipboard.Call(uintptr(_glfw.platformWindow.helperWindowHandle))
 		if r != 0 {
 			return nil
 		}
 		err = e
-		time.Sleep(time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 	return fmt.Errorf("glfw: failed to open clipboard: %w", err)
 }
@@ -55,45 +56,241 @@ func closeClipboard() {
 	_, _, _ = procCloseClipboard.Call()
 }
 
-func platformSetClipboardString(str string) error {
-	text, err := windows.UTF16FromString(str)
-	if err != nil {
-		return errors.New("glfw: the text holds a NUL character, which the clipboard cannot hold")
-	}
-	size := uintptr(len(text)) * unsafe.Sizeof(text[0])
+func platformSetClipboardString(str string) error { return setClipboardText(str, false) }
 
-	object, _, e := procGlobalAlloc.Call(_GMEM_MOVEABLE, size)
+// SetClipboardStringSensitive puts str on the clipboard marked as sensitive, so Windows keeps it out of the clipboard
+// history and the cloud clipboard, and clipboard monitors are asked to skip it. An empty str empties the clipboard.
+// It must be called on the main thread.
+func SetClipboardStringSensitive(str string) error {
+	if !_glfw.initialized {
+		return NotInitialized
+	}
+	return setClipboardText(str, true)
+}
+
+// ClearClipboardStringIf empties the clipboard if it still holds the text str that this program put there, and reports
+// whether it did. It must be called on the main thread.
+//
+// For the text SetClipboardStringSensitive put there last, it goes by ownership and reads nothing. Other text is read
+// and compared, but only while this program owns the clipboard, so another program's text is never read. Either way
+// the clipboard is held open from the check to the emptying, so no other program can put something there in between.
+func ClearClipboardStringIf(str string) (bool, error) {
+	if !_glfw.initialized {
+		return false, NotInitialized
+	}
+	if err := openClipboard(); err != nil {
+		return false, err
+	}
+	defer closeClipboard()
+	if owned.set && owned.sum == sha256.Sum256([]byte(str)) {
+		ours, err := stillOurs()
+		if err != nil || !ours {
+			return false, err
+		}
+	} else {
+		owner, _, _ := procGetClipboardOwner.Call()
+		if owner != uintptr(_glfw.platformWindow.helperWindowHandle) {
+			return false, nil
+		}
+		if r, _, _ := procIsClipboardFormatAvailable.Call(_CF_UNICODETEXT); r == 0 {
+			return false, nil
+		}
+		now, err := clipboardText()
+		if err != nil || now != str {
+			return false, err
+		}
+	}
+	if r, _, e := procEmptyClipboard.Call(); r == 0 {
+		return false, fmt.Errorf("glfw: failed to empty the clipboard: %w", e)
+	}
+	owned = ownership{}
+	return true, nil
+}
+
+// ownership is what the clipboard held when SetClipboardStringSensitive last put text there: its sequence number,
+// and the text's SHA-256, so the text itself is not kept.
+type ownership struct {
+	set bool
+	seq uint32
+	sum [32]byte
+}
+
+var (
+	owned                          ownership
+	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
+	procGetClipboardOwner          = user32.NewProc("GetClipboardOwner")
+)
+
+// stillOurs reports whether the clipboard still holds the sensitive text put there last: its first mark is there, and
+// the helper window owns the clipboard. A program that replaces what the clipboard holds empties it, which makes it the
+// owner; one that only adds a format, or renders CF_TEXT from our text, does not. Where the clipboard has no owner, the
+// sequence number noted at the copy decides. It must be called with the clipboard open.
+func stillOurs() (bool, error) {
+	id, err := registerFormat(sensitiveFormats[0].name)
+	if err != nil {
+		return false, err
+	}
+	if r, _, _ := procIsClipboardFormatAvailable.Call(id); r == 0 {
+		return false, nil
+	}
+	switch owner, _, _ := procGetClipboardOwner.Call(); owner {
+	case uintptr(_glfw.platformWindow.helperWindowHandle):
+		return true, nil
+	case 0:
+		return clipboardSequence() == owned.seq, nil
+	default:
+		return false, nil
+	}
+}
+
+// clipboardSequence returns the clipboard's sequence number, a DWORD.
+func clipboardSequence() uint32 {
+	seq, _, _ := procGetClipboardSequenceNumber.Call()
+	return uint32(seq)
+}
+
+// registerFormat returns the number of the clipboard format called name.
+func registerFormat(name string) (uintptr, error) {
+	p, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, err
+	}
+	id, _, e := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(p)))
+	if id == 0 {
+		return 0, fmt.Errorf("glfw: failed to register the clipboard format %s: %w", name, e)
+	}
+	return id, nil
+}
+
+// Clipboard formats that mark what is on the clipboard as sensitive. Windows reads the first by its presence, and the
+// next two as a DWORD, where 0 says no. Older clipboard managers look for the last by its presence.
+const (
+	excludeFromMonitors = "ExcludeClipboardContentFromMonitorProcessing"
+	includeInHistory    = "CanIncludeInClipboardHistory"
+	uploadToCloud       = "CanUploadToCloudClipboard"
+	viewerIgnore        = "Clipboard Viewer Ignore"
+)
+
+// sensitiveFormats are the formats a sensitive text is put with, and the DWORD each holds.
+var sensitiveFormats = []struct {
+	name  string
+	value uint32
+}{{excludeFromMonitors, 0}, {includeInHistory, 0}, {uploadToCloud, 0}, {viewerIgnore, 0}}
+
+// markFails, set by a test, makes setting the mark called name fail.
+var markFails func(name string) bool
+
+// globalBytes copies b into new movable global memory, for the clipboard to own.
+func globalBytes(b []byte) (uintptr, error) {
+	object, _, e := procGlobalAlloc.Call(_GMEM_MOVEABLE, uintptr(max(len(b), 1)))
 	if object == 0 {
-		return fmt.Errorf("glfw: failed to allocate global handle for clipboard: %w", e)
+		return 0, fmt.Errorf("glfw: failed to allocate global handle for clipboard: %w", e)
 	}
 	buffer, _, e := procGlobalLock.Call(object)
 	if buffer == 0 {
 		_, _, _ = procGlobalFree.Call(object)
-		return fmt.Errorf("glfw: failed to lock global handle: %w", e)
+		return 0, fmt.Errorf("glfw: failed to lock global handle: %w", e)
 	}
-	copy(unsafe.Slice((*uint16)(unsafe.Pointer(buffer)), len(text)), text)
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(buffer)), len(b)), b)
 	_, _, _ = procGlobalUnlock.Call(object)
+	return object, nil
+}
 
-	if err := openClipboard(); err != nil {
-		_, _, _ = procGlobalFree.Call(object)
-		return err
-	}
-	defer closeClipboard()
-	_, _, _ = procEmptyClipboard.Call()
-	// The clipboard owns the memory once this succeeds.
-	if r, _, e := procSetClipboardData.Call(_CF_UNICODETEXT, object); r == 0 {
+// setClipboardData hands object to the clipboard in format, which owns it once this succeeds. It must be called with
+// the clipboard open.
+func setClipboardData(format, object uintptr) error {
+	if r, _, e := procSetClipboardData.Call(format, object); r == 0 {
 		_, _, _ = procGlobalFree.Call(object)
 		return fmt.Errorf("glfw: failed to set clipboard data: %w", e)
 	}
 	return nil
 }
 
+// setClipboardText replaces the clipboard with str, and with sensitive marks it so and notes the clipboard's sequence
+// number for ClearClipboardStringIf. A sensitive text whose marks cannot all be set is taken off again, and the error
+// returned.
+func setClipboardText(str string, sensitive bool) error {
+	owned = ownership{}
+	if err := putClipboardText(str, sensitive); err != nil {
+		return err
+	}
+	if sensitive && str != "" {
+		owned = ownership{set: true, seq: clipboardSequence(), sum: sha256.Sum256([]byte(str))}
+	}
+	return nil
+}
+
+// putClipboardText does setClipboardText's work, with the clipboard open, and closes it before it returns.
+func putClipboardText(str string, sensitive bool) error {
+	text, err := windows.UTF16FromString(str)
+	if err != nil {
+		return errors.New("glfw: the text holds a NUL character, which the clipboard cannot hold")
+	}
+	formats := make([]uintptr, len(sensitiveFormats))
+	if sensitive {
+		for i, f := range sensitiveFormats {
+			id, err := registerFormat(f.name)
+			if err != nil {
+				return err
+			}
+			formats[i] = id
+		}
+	}
+	object, err := globalBytes(unsafe.Slice((*byte)(unsafe.Pointer(&text[0])), len(text)*2))
+	if err != nil {
+		return err
+	}
+	if err := openClipboard(); err != nil {
+		_, _, _ = procGlobalFree.Call(object)
+		return err
+	}
+	defer closeClipboard()
+	if r, _, e := procEmptyClipboard.Call(); r == 0 {
+		_, _, _ = procGlobalFree.Call(object)
+		return fmt.Errorf("glfw: failed to empty the clipboard: %w", e)
+	}
+	if sensitive && str == "" {
+		_, _, _ = procGlobalFree.Call(object)
+		return nil
+	}
+	if !sensitive {
+		return setClipboardData(_CF_UNICODETEXT, object)
+	}
+	// Other programs see the clipboard only once it closes, with the marks and the text together.
+	for i, f := range sensitiveFormats {
+		mark, err := globalBytes(binaryDWORD(f.value))
+		if err == nil && markFails != nil && markFails(f.name) {
+			_, _, _ = procGlobalFree.Call(mark)
+			err = fmt.Errorf("glfw: failed to set clipboard data: the mark %s, for a test", f.name)
+		} else if err == nil {
+			err = setClipboardData(formats[i], mark)
+		}
+		if err != nil {
+			_, _, _ = procGlobalFree.Call(object)
+			_, _, _ = procEmptyClipboard.Call()
+			return err
+		}
+	}
+	if err := setClipboardData(_CF_UNICODETEXT, object); err != nil {
+		_, _, _ = procEmptyClipboard.Call()
+		return err
+	}
+	return nil
+}
+
+// binaryDWORD is v as a little-endian DWORD.
+func binaryDWORD(v uint32) []byte { return []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)} }
+
 func platformGetClipboardString() (string, error) {
 	if err := openClipboard(); err != nil {
 		return "", err
 	}
 	defer closeClipboard()
+	return clipboardText()
+}
 
+// clipboardText reads the clipboard's text. It must be called with the clipboard open.
+func clipboardText() (string, error) {
 	object, _, _ := procGetClipboardData.Call(_CF_UNICODETEXT)
 	if object == 0 {
 		return "", fmt.Errorf("glfw: failed to convert clipboard to string: %w", FormatUnavailable)

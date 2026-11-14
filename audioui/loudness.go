@@ -189,7 +189,7 @@ func LUFSText(v float32) string {
 	if v <= -69 {
 		return "—"
 	}
-	return fmt.Sprintf("%.1f", v)
+	return Readout("%.1f", float64(v))
 }
 
 // LoudnessColor colours a reading by how far off its target it is:

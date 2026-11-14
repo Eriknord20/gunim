@@ -16,7 +16,7 @@ import (
 
 // Chip tokens.
 var (
-	ChipHeight = theme.Length("chip.height", 24)
+	ChipHeight = theme.TextRow("chip.height", 24)
 	ChipFill   = theme.Color("chip.fill", color.NRGBA{R: 0x2b, G: 0x2f, B: 0x3a, A: 0xff})
 	ChipHover  = theme.Color("chip.hover", color.NRGBA{R: 0x3d, G: 0x45, B: 0x58, A: 0xff})
 	// ChipLead colours a chip's lead, the part before its label, such as
@@ -144,6 +144,7 @@ func (c *Chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	end := box.W - box.H/2 - shown*box.H/2
 	fill := anim.Mix(anim.ColorCodec, ChipFill.Get(th), ChipHover.Get(th), c.hover.Value())
 	p.RRect(geom.Rect{Max: box.Point()}, box.H/2, paint.Solid(fill))
+	c.paintGlow(p, geom.Rect{Max: box.Point()}, box.H/2, th)
 	x := box.H / 2
 	if c.Icon != nil {
 		if s := IconSize.Get(th); x+s <= end {
@@ -291,6 +292,9 @@ type Wrap struct {
 	Cross Cross
 
 	kids []gunim.Node
+	// lines is how many rows the last layout made, wide the width of its widest and tall their height together.
+	lines      int
+	wide, tall float32
 }
 
 // NewWrap returns a wrap of kids.
@@ -312,7 +316,11 @@ func (w *Wrap) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	start := 0
 	var at []geom.Point
 	var sizes []geom.Size
+	w.lines, w.wide = 0, 0
 	endLine := func() {
+		if start < len(at) {
+			w.lines, w.wide = w.lines+1, max(w.wide, x-gap)
+		}
 		var spare float32
 		if w.Justify == JustifyEnd && start < len(at) {
 			spare = max(0, width-(x-gap))
@@ -345,7 +353,8 @@ func (w *Wrap) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		kid.Place(at[i])
 		i++
 	}
-	return c.Constrain(geom.Sz(width, y+line))
+	w.tall = y + line
+	return c.Constrain(geom.Sz(width, w.tall))
 }
 
 // Paint implements [gunim.Node].

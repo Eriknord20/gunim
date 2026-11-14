@@ -164,9 +164,10 @@ type wasOutput struct {
 	pos     int64
 	movedAt int64
 	// moved says the clock has moved since the device started or
-	// resumed; stalls counts the devices in a row whose clock stood
-	// still.
+	// resumed, and resumed which of the two it was; stalls counts the
+	// devices in a row whose clock stood still.
 	moved   bool
+	resumed bool
 	stalls  int
 	fails   int
 	next    int64
@@ -280,7 +281,7 @@ func (a *wasOutput) drop() {
 // startDevice fills the device's buffer and starts it.
 func (a *wasOutput) startDevice() {
 	now := a.clock()
-	a.settle, a.movedAt, a.moved = now, now, false
+	a.settle, a.movedAt, a.moved, a.resumed = now, now, false, false
 	if err := a.write(now); err != nil {
 		a.lose(err)
 		return
@@ -420,7 +421,7 @@ func (a *wasOutput) pause(p bool) {
 	a.org.Store(none)
 	// A device started again may stamp another frame of its packets.
 	a.forgetStamps()
-	a.settle, a.movedAt, a.moved = now, now, false
+	a.settle, a.movedAt, a.moved, a.resumed = now, now, false, true
 	if err := a.dev.Start(); err != nil {
 		a.lose(err)
 	}
@@ -441,7 +442,7 @@ func (a *wasOutput) cycle() error {
 		if !a.moved {
 			// The device plays from now: it settles from here.
 			if a.notes != nil {
-				a.notes.firstMove(now-a.settle, pos, a.written, a.sil.total, a.padding())
+				a.notes.firstMove(now-a.settle, pos, a.written, a.sil.total, a.padding(), a.resumed)
 			}
 			a.settle = now
 		}
@@ -462,9 +463,7 @@ func (a *wasOutput) cycle() error {
 	if pos > 0 {
 		a.place(pos, at, now)
 		if n := a.notes; n != nil {
-			if lag := a.clock() - at; lag < n.outLag.Load() {
-				n.output(lag, a.written-pos, a.padding(), a.sil.total)
-			}
+			n.output(a.clock()-at, a.written-pos, a.padding(), a.sil.total)
 		}
 	}
 	if err := a.drain(now); err != nil {
@@ -677,64 +676,82 @@ func (a *wasOutput) start(ahead time.Duration) {
 }
 
 // wasNotes is what the render goroutine tells the debug log of the
-// stamps, through atomics, so it allocates nothing: of the packet the
-// input read soonest after its stamp, and the clock reading soonest
-// after its own, since the log last told, and of the clock's first
-// move.
+// stamps: of the packet the input read soonest after its stamp, and the
+// clock reading soonest after its own, since the log last told, and of
+// the clock's first move. A lock keeps each note's numbers together, so
+// a line of the log tells of one packet or one reading. It exists only
+// while the log is on, and allocates nothing.
 type wasNotes struct {
+	mu sync.Mutex
+	wasNoted
+}
+
+// wasNoted is what the notes hold.
+type wasNoted struct {
 	// inLag is how long after its stamp that packet was read, in
 	// nanoseconds, math.MaxInt64 for none; inFrames its frames, and inPos
 	// its device position. inBack is how far the stamps were moved back
 	// to their packets' first frames.
-	inLag, inFrames, inPos, inBack atomic.Int64
-	// outLag is how long after its stamp the clock was read; outPast how
-	// many frames were written past the position it told, outPad how
-	// many of them the device's buffer still held, and outSil the
-	// frames of silence written since the device opened.
-	outLag, outPast, outPad, outSil atomic.Int64
+	inLag, inFrames, inPos, inBack int64
+	// outLag is how long after its stamp the clock was read,
+	// math.MaxInt64 for none; outPast how many frames were written past
+	// the position it told, outPad how many of them the device's buffer
+	// still held, and outSil the frames of silence written since the
+	// device opened.
+	outLag, outPast, outPad, outSil int64
 	// moved is how long the device's clock took to first move after it
-	// started or resumed, 0 where the log told it already. movedPos is
-	// the frame it moved to, movedWritten the frames written by then,
-	// movedSil those of silence, and movedPad those its buffer held.
-	moved, movedPos, movedWritten, movedSil, movedPad atomic.Int64
+	// started or resumed, 0 where the log told it already, and resumed
+	// which of the two it was. movedPos is the frame it moved to,
+	// movedWritten the frames written by then, movedSil those of
+	// silence, and movedPad those its buffer held.
+	moved, movedPos, movedWritten, movedSil, movedPad int64
+	resumed                                           bool
 }
 
 func newWasNotes() *wasNotes {
-	n := &wasNotes{}
-	n.inLag.Store(math.MaxInt64)
-	n.outLag.Store(math.MaxInt64)
-	return n
+	return &wasNotes{wasNoted: wasNoted{inLag: math.MaxInt64, outLag: math.MaxInt64}}
 }
 
 // input notes a packet of frames at device position pos, read lag
-// after its stamp, the stamps moved back by back.
+// after its stamp, the stamps moved back by back, where it was read
+// sooner after its stamp than the one noted.
 func (n *wasNotes) input(frames int, pos, lag, back int64) {
-	if lag < n.inLag.Load() {
-		n.inLag.Store(lag)
-		n.inFrames.Store(int64(frames))
-		n.inPos.Store(pos)
-		n.inBack.Store(back)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if lag < n.inLag {
+		n.inLag, n.inFrames, n.inPos, n.inBack = lag, int64(frames), pos, back
 	}
 }
 
 // output notes a clock reading made lag after its stamp, past frames
 // written past the position it told, pad of them in the device's
-// buffer, sil frames of silence written in all.
+// buffer, sil frames of silence written in all, where it was read
+// sooner after its stamp than the one noted.
 func (n *wasNotes) output(lag, past, pad, sil int64) {
-	n.outLag.Store(lag)
-	n.outPast.Store(past)
-	n.outPad.Store(pad)
-	n.outSil.Store(sil)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if lag < n.outLag {
+		n.outLag, n.outPast, n.outPad, n.outSil = lag, past, pad, sil
+	}
 }
 
-// firstMove notes the clock's first move, after d, to frame pos, with
-// written frames written, sil of them silence, pad in the buffer.
-func (n *wasNotes) firstMove(d, pos, written, sil, pad int64) {
-	n.movedPos.Store(pos)
-	n.movedWritten.Store(written)
-	n.movedSil.Store(sil)
-	n.movedPad.Store(pad)
-	n.moved.Store(max(d, 1))
+// firstMove notes the clock's first move, seen d after the device
+// started, or resumed, to frame pos, with written frames written, sil
+// of them silence, pad in the buffer.
+func (n *wasNotes) firstMove(d, pos, written, sil, pad int64, resumed bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.moved, n.movedPos, n.movedWritten, n.movedSil, n.movedPad = max(d, 1), pos, written, sil, pad
+	n.resumed = resumed
+}
+
+// take returns the notes and clears them for the next report.
+func (n *wasNotes) take() wasNoted {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	got := n.wasNoted
+	n.inLag, n.outLag, n.moved = math.MaxInt64, math.MaxInt64, 0
+	return got
 }
 
 // report logs the notes every wasNoteEvery, until the output closes:
@@ -747,32 +764,37 @@ func (n *wasNotes) firstMove(d, pos, written, sil, pad int64) {
 func (a *wasOutput) report() {
 	t := time.NewTicker(wasNoteEvery)
 	defer t.Stop()
-	n := a.notes
 	for {
 		select {
 		case <-a.quit:
 			return
 		case <-t.C:
 		}
-		if d := n.moved.Swap(0); d > 0 {
-			w, pad, pos := n.movedWritten.Load(), n.movedPad.Load(), n.movedPos.Load()
-			a.s.logf("WASAPI: the device's clock first moved %v after it started, to frame %d; by then %d frames were "+
-				"written, %d of them silence, and its buffer held %d, so the engine had taken %d, %d past the frame the "+
-				"clock told", time.Duration(d), pos, w, n.movedSil.Load(), pad, w-pad, w-pad-pos)
+		n := a.notes.take()
+		if n.moved > 0 {
+			began := "started"
+			if n.resumed {
+				began = "resumed"
+			}
+			// The cycle that sees the move reads the time as it begins,
+			// so the time told runs up to a period late.
+			a.s.logf("WASAPI: the device's clock was seen to move first %v after it %s (to within a period), to "+
+				"frame %d; by then %d frames were written, %d of them silence, and its buffer held %d, so the engine "+
+				"had taken %d, %d past the frame the clock told", time.Duration(n.moved), began, n.movedPos,
+				n.movedWritten, n.movedSil, n.movedPad, n.movedWritten-n.movedPad, n.movedWritten-n.movedPad-n.movedPos)
 		}
 		info := a.info.Load()
-		if lag := n.inLag.Swap(math.MaxInt64); lag != math.MaxInt64 {
+		if n.inLag != math.MaxInt64 {
 			a.s.logf("WASAPI input: a packet of %d frames at device position %d, read %v after its stamp, the soonest "+
 				"in %v; the input's period is %d frames (%v); stamps moved back %v to their packets' first frames",
-				n.inFrames.Load(), n.inPos.Load(), time.Duration(lag), wasNoteEvery, info.InputPeriod,
-				audio.DurationAt(int64(info.InputPeriod), a.hz), time.Duration(n.inBack.Load()))
+				n.inFrames, n.inPos, time.Duration(n.inLag), wasNoteEvery, info.InputPeriod,
+				audio.DurationAt(int64(info.InputPeriod), a.hz), time.Duration(n.inBack))
 		}
-		if lag := n.outLag.Swap(math.MaxInt64); lag != math.MaxInt64 {
-			past, pad := n.outPast.Load(), n.outPad.Load()
+		if n.outLag != math.MaxInt64 {
 			a.s.logf("WASAPI output: the clock read %v after its stamp, the soonest in %v, with %d frames written past "+
 				"the position it told: %d in its buffer, %d taken by the engine; %d frames of silence written since it "+
-				"opened; device delay %v", time.Duration(lag), wasNoteEvery, past, pad, past-pad, n.outSil.Load(),
-				audio.DurationAt(a.delay.Load(), a.hz))
+				"opened; device delay %v", time.Duration(n.outLag), wasNoteEvery, n.outPast, n.outPad,
+				n.outPast-n.outPad, n.outSil, audio.DurationAt(a.delay.Load(), a.hz))
 		}
 	}
 }

@@ -258,7 +258,7 @@ func TestTileGridJustifiedLaysOutManyTilesQuicklyAndOnce(t *testing.T) {
 		starts: []int{0, 1000, 50000, 120000}}
 	start := time.Now()
 	l := newJustifiedLayout(key, func(i int) float32 { calls++; return shapes[i%len(shapes)] })
-	if d := time.Since(start); d > 250*time.Millisecond {
+	if d := time.Since(start); !raceOn && d > 250*time.Millisecond {
 		t.Fatalf("200,000 tiles took %v to lay out", d)
 	}
 	if calls != 200000 || l.rows() < 20000 {

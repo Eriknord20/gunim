@@ -112,6 +112,9 @@ func (r *Renderer) scratch(pix []byte, w, h int) glyphSlot {
 	g.BindTexture(gl.TEXTURE_2D, r.glyphs.tex)
 	g.TexSubImage2D(gl.TEXTURE_2D, 0, int32(slot.x), int32(slot.y), int32(w), int32(h), glRed, gl.UNSIGNED_BYTE, pix)
 	r.scratches++
+	if framesDebug {
+		r.Stats.Scratches++
+	}
 	return slot
 }
 

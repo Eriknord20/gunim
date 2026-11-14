@@ -222,7 +222,7 @@ func (r *Renderer) ribbonVert(p geom.Point, c *ribbonCorner, side float32, add b
 		kind += kindAdd
 	}
 	clip := [4]float32{0, 0, 0, 1}
-	if e := r.ellipse; e.on {
+	if e := r.cut; e.on {
 		clip = [4]float32{(p.X - e.centre.X) / e.rad.X, (p.Y - e.centre.Y) / e.rad.Y, 1, 1}
 	}
 	col := c.color

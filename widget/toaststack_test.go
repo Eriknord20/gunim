@@ -97,8 +97,8 @@ func TestALongToastBodyShowsThreeLinesAndAllOfThemUnderThePointer(t *testing.T) 
 	on(func(u *gunim.UI) { ts.Show(Toast{Title: "Long", Body: body}, u) })
 	frames(30, func() {})
 	c := ts.cards[0]
-	if lines := len(c.body.laid.p.Lines); lines != toastBodyLines || !c.body.laid.p.Truncated {
-		t.Fatalf("the body shows %d lines, cut %v; want %d, cut", lines, c.body.laid.p.Truncated, toastBodyLines)
+	if lines := len(c.face.body.laid.p.Lines); lines != toastBodyLines || !c.face.body.laid.p.Truncated {
+		t.Fatalf("the body shows %d lines, cut %v; want %d, cut", lines, c.face.body.laid.p.Truncated, toastBodyLines)
 	}
 	short := c.size.H
 	w.Input(input.PointerMove{Pos: geom.Pt(150, c.y.Value()+10), Time: time.Now()})
@@ -107,7 +107,7 @@ func TestALongToastBodyShowsThreeLinesAndAllOfThemUnderThePointer(t *testing.T) 
 			t.Fatalf("under the pointer the toast is %v tall, past the 400 px given", c.size.H)
 		}
 	})
-	if lines := len(c.body.laid.p.Lines); lines <= toastBodyLines || c.size.H <= short {
+	if lines := len(c.face.body.laid.p.Lines); lines <= toastBodyLines || c.size.H <= short {
 		t.Fatalf("under the pointer the body shows %d lines and the toast is %v tall, was %v", lines, c.size.H, short)
 	}
 }

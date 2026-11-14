@@ -98,7 +98,7 @@ func (t *toggle) handle(n gunim.Node, e input.Event, u *gunim.UI) bool {
 		}
 		t.held = true
 		t.click.Press(e, 0)
-		t.squash.Animate(1, Quick.Get(th))
+		t.squashIn(th)
 	case input.PointerUp:
 		if !t.held {
 			return false
@@ -172,6 +172,7 @@ func (c *Checkbox) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children)
 func (c *Checkbox) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	defer c.faint(p, box)()
 	th := f.Theme
+	c.paintGlow(p, geom.Rect{Max: box.Point()}, ButtonRadius.Get(th), th)
 	s := CheckSize.Get(th)
 	r := geom.Rc(0, (box.H-s)/2, s, s)
 	radius := CheckRadius.Get(th)
@@ -232,6 +233,7 @@ func (s *Switch) Layout(cs gunim.Constraints, f gunim.Frame, _ gunim.Children) g
 func (s *Switch) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	defer s.faint(p, box)()
 	th := f.Theme
+	s.paintGlow(p, geom.Rect{Max: box.Point()}, ButtonRadius.Get(th), th)
 	w, h := SwitchWidth.Get(th), SwitchHeight.Get(th)
 	track := geom.Rc(0, (box.H-h)/2, w, h)
 	on := s.lit.Value()
@@ -291,6 +293,8 @@ type Slider struct {
 	// colour temperature runs from blue to amber; it takes the fill's
 	// place. Two colours or more.
 	Gradient []color.NRGBA
+	// Fill, where set, colours the fill in place of [Accent].
+	Fill color.NRGBA
 
 	value float32
 	// drag is the value a drag has carried the knob to, unclamped, and
@@ -577,6 +581,10 @@ func (s *Slider) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 	k := KnobSize.Get(th)
 	track := SliderTrack.Get(th)
 	at := s.at.Value()
+	accent := Accent.Get(th)
+	if s.Fill != (color.NRGBA{}) {
+		accent = s.Fill
+	}
 
 	var whole, filled geom.Rect
 	var centre geom.Point
@@ -614,20 +622,20 @@ func (s *Slider) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.C
 		r := s.fracOf(s.Rest)
 		if s.Axis == Vertical {
 			y := whole.Max.Y + (whole.Min.Y-whole.Max.Y)*r
-			p.RRect(geom.Rect{Min: geom.Pt(whole.Min.X, min(y, centre.Y)), Max: geom.Pt(whole.Max.X, max(y, centre.Y))}, track/2, paint.Solid(Accent.Get(th)))
+			p.RRect(geom.Rect{Min: geom.Pt(whole.Min.X, min(y, centre.Y)), Max: geom.Pt(whole.Max.X, max(y, centre.Y))}, track/2, paint.Solid(accent))
 			if r > 0 && r < 1 {
 				p.RRect(geom.Rc(whole.Min.X-2, y-0.75, track+4, 1.5), 0.75, paint.Solid(SliderRestMark.Get(th)))
 			}
 		} else {
 			x := whole.Min.X + (whole.Max.X-whole.Min.X)*r
-			p.RRect(geom.Rect{Min: geom.Pt(min(x, centre.X), whole.Min.Y), Max: geom.Pt(max(x, centre.X), whole.Max.Y)}, track/2, paint.Solid(Accent.Get(th)))
+			p.RRect(geom.Rect{Min: geom.Pt(min(x, centre.X), whole.Min.Y), Max: geom.Pt(max(x, centre.X), whole.Max.Y)}, track/2, paint.Solid(accent))
 			if r > 0 && r < 1 {
 				p.RRect(geom.Rc(x-0.75, whole.Min.Y-2, 1.5, track+4), 0.75, paint.Solid(SliderRestMark.Get(th)))
 			}
 		}
 	default:
 		p.RRect(whole, track/2, paint.Solid(SwitchOff.Get(th)))
-		p.RRect(filled, track/2, paint.Solid(Accent.Get(th)))
+		p.RRect(filled, track/2, paint.Solid(accent))
 	}
 
 	grow := 1 + 0.2*max(s.hover.Value(), 0)

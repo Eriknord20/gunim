@@ -69,8 +69,13 @@ func RegisterView[S any, N Node](w *Window, name string, build func(S) N, update
 // wherever it is now. The type of the value handed to [Client.Patch]
 // picks the handler.
 //
+// The window lays out and paints again after a patch, unless every
+// handler of it calls [UI.Unchanged]: one that only retargeted springs,
+// which step and draw what moves themselves, or changed nothing shown.
+//
 //	gunim.RegisterPatch(w, "jobs", func(l *widget.List, p Progress, u *gunim.UI) {
 //	    l.Row(p.ID).Progress.Animate(p.Done, anim.Snappy)
+//	    u.Unchanged()
 //	})
 func RegisterPatch[P any, N Node](w *Window, viewName string, apply func(N, P, *UI)) {
 	v := w.view(viewName)
@@ -151,6 +156,9 @@ func init() { RegisterType[CommandFailed]("gunim.command-failed") }
 // apply carries out one command on the UI goroutine.
 func (u *UI) apply(c Command) {
 	var err error
+	if _, ok := c.(Patch); !ok {
+		u.stirredBy = true
+	}
 	switch c := c.(type) {
 	case Mount:
 		err = u.mount(c)
@@ -375,6 +383,7 @@ func (u *UI) patch(c Patch) error {
 	t := reflect.TypeOf(c.Data)
 	var firstErr error
 	applied := 0
+	changed := false
 	for _, s := range subs {
 		apply, ok := s.view.patches[t]
 		if !ok {
@@ -382,15 +391,21 @@ func (u *UI) patch(c Patch) error {
 		}
 		applied++
 		var err error
+		u.unchanged = false
 		u.on(s, func() { err = apply(s.node, c.Data, u) })
+		changed = changed || !u.unchanged
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
+	u.unchanged = false
 	if applied == 0 && firstErr == nil {
 		return fmt.Errorf("no view watching %q handles patch %s", c.Key, t)
 	}
-	u.invalid = true
+	if changed || firstErr != nil {
+		u.invalid = true
+		u.stirredBy = true
+	}
 	return firstErr
 }
 

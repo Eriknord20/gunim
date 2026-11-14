@@ -55,6 +55,7 @@ func edStageSized(t *testing.T, size geom.Size, o Options) (*Editor, *gunim.Wind
 	o.OnCommit = func(over theme.Theme, _ *gunim.UI) gunim.Intent { h.commits = append(h.commits, over); return nil }
 	e := New(o)
 	w := gunimtest.New(t, size, nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "ed", func(struct{}) gunim.Node { return e }, nil)
 	if err := w.Client().Mount(gunim.Root, "ed", "ed", nil); err != nil {
 		t.Fatal(err)

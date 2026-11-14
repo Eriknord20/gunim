@@ -250,6 +250,12 @@ type panel struct {
 	lay  layout
 	pts  []paint.RibbonPoint
 	size geom.Size
+	// card is where the braid stands, and ground how strongly its card shows, from 0 in a window that fits the braid
+	// to 1 in one with much room round it.
+	card   geom.Rect
+	ground float32
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
 }
 
 // The panel's channels' names, and their IDs by channel.
@@ -347,18 +353,32 @@ const (
 	ribbonW  = 16
 	laneMin  = 64
 	laneMost = 120
+	// braidH is how tall the braid stands with its lanes as far apart as they go, and braidMostW how wide it stands
+	// at most.
+	braidH     = rowTop + plugui.KnobH + 24 + laneMost + foot
+	braidMostW = 960
+	// groundRoom is how much room round the braid shows its card in full.
+	groundRoom = 120
 )
 
 // Layout implements [gunim.Node]: the meters at either end, the stages
-// spread between them, the lanes under the row of controls.
+// spread between them, the lanes under the row of controls, in the
+// middle of a larger panel, laid out at least at its least size.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	p.size = c.Max
+	p.size = p.Lay(c.Max, Descriptor.ViewMinSize)
 	l := &p.lay
-	l.inX, l.outX = edge, p.size.W-edge-audioui.MeterW
+	// The braid stands in the middle of a panel larger than it needs, on a card that shows as the room round it grows.
+	top := max((p.size.H-braidH)/2, 0) + rowTop
+	w := min(p.size.W, braidMostW)
+	left := (p.size.W - w) / 2
+	p.card = geom.Rc(left, top-rowTop-edge, w, braidH+2*edge)
+	room := min(p.size.W-p.card.Size().W, 2*(p.size.H-p.card.Size().H))
+	p.ground = min(max(room/groundRoom, 0), 1)
+	l.inX, l.outX = left+edge, left+w-edge-audioui.MeterW
 	l.x0, l.x1 = l.inX+audioui.MeterW+8, l.outX-8
 	along := func(t float32) float32 { return l.x0 + (l.x1-l.x0)*t }
 	l.invert, l.pan, l.mono, l.gain = along(0.12), along(0.32), along(0.6), along(0.85)
-	l.lane[0] = rowTop + plugui.KnobH + 24
+	l.lane[0] = top + plugui.KnobH + 24
 	gap := min(max(p.size.H-l.lane[0]-foot, laneMin), laneMost)
 	l.lane[1] = l.lane[0] + gap
 	l.mid = (l.lane[0] + l.lane[1]) / 2
@@ -375,17 +395,22 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 		place(2+ch, geom.Sz(plugui.CompactW, plugui.CompactH), geom.Pt(l.pan-plugui.CompactW/2, l.lane[ch]-18))
 	}
 	ms := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(80, plugui.SelectorH)})
-	kids.At(4).Place(geom.Pt(l.mono-ms.W/2, rowTop))
-	place(5, geom.Sz(plugui.KnobW, plugui.KnobH), geom.Pt(l.gain-plugui.KnobW/2, rowTop))
-	return p.size
+	kids.At(4).Place(geom.Pt(l.mono-ms.W/2, top))
+	place(5, geom.Sz(plugui.KnobW, plugui.KnobH), geom.Pt(l.gain-plugui.KnobW/2, top))
+	return c.Max
 }
 
 // Paint implements [gunim.Node]: the meters, In and Out, under their
-// names; the ribbons; the controls over them.
-func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+// names; the ribbons; the controls over them; clipped to the panel's box
+// and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	th := f.Theme
 	ink := widget.Ink.Get(th)
 	l := p.lay
+	if p.ground > 0.01 {
+		pt.RRect(p.card, widget.CardRadius.Get(th), paint.Solid(paint.Faded(ink, 0.035*p.ground)))
+	}
 	for i, m := range []*meter{p.in, p.out} {
 		x := []float32{l.inX, l.outX}[i]
 		name := audioui.Shaped([]string{"IN", "OUT"}[i], 9, true, false)
@@ -405,14 +430,15 @@ func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 }
 
 // Step implements [gunim.Animator]: the ribbons glide, the meters
-// move, and the light flows while sound comes in.
+// move, the light flows while sound comes in, and the panel scrolls.
 func (p *panel) Step(dt time.Duration) bool {
 	moving := p.Group.Step(dt)
+	scrolling := p.Room.Step(dt)
 	in, out := p.in.step(dt), p.out.step(dt)
 	if p.in.heard {
 		p.flow += dt.Seconds()
 	}
-	return moving || in || out
+	return moving || scrolling || in || out
 }
 
 // Follow implements [plug.Follower]: the controls glide to a value set

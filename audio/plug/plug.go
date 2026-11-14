@@ -56,6 +56,15 @@ type Descriptor struct {
 	// past its name and kind: "mono" and "phase" find a gain and stereo
 	// tool. A browser searches them, and shows none.
 	Keywords []string
+	// KeepsMono says a mono sound in comes out mono, at every setting:
+	// the same sound on both sides in gives the same sound on both
+	// out, as an EQ, a compressor or a gate with its sides linked
+	// gives. A reverb, a stereo delay, a chorus, a pan or a widener
+	// spreads the sound, and leaves it false. For an instrument, it
+	// says the instrument's sound is mono. A host may write a chain of
+	// such plugins to one channel, as a stem of a mono track. False is
+	// the safe guess, and the zero value.
+	KeepsMono bool
 	// Notes says the plugin takes notes, in [Block.Events]. An
 	// instrument does.
 	Notes bool
@@ -75,13 +84,13 @@ type Descriptor struct {
 	// for any other plugin. It needs Notes.
 	Past bool
 	// ChordAhead is how long before a chord starts the plugin asks to
-	// hear of it, for an instrument that plays to the chords under its
-	// notes: a sub on the chord's bass, unison on its tones, a riser
-	// that lands on the next change. The host tells it of the chords of
-	// each lane that plays it, in [Block.Chords]. It may be longer than
-	// LookAhead: a riser of four bars at 120 beats a minute needs 8
-	// seconds. It is at most [MaxChordAhead]. Zero asks for none. It
-	// needs Notes.
+	// hear of it, in [Block.Chords]. An instrument hears the chords of
+	// each lane that plays it: a sub on the chord's bass, unison on its
+	// tones, a riser that lands on the next change. An effect hears the
+	// chords the host picks for it, as a vocoder plays its carrier in
+	// them. It may be longer than LookAhead: a riser of four bars at 120
+	// beats a minute needs 8 seconds. It is at most [MaxChordAhead]. Zero
+	// asks for none.
 	ChordAhead time.Duration
 	// AuxIn and AuxOut are the plugin's audio ports beyond its main
 	// input and output, as VST3's aux (auxiliary) buses: a sidechain
@@ -118,6 +127,15 @@ type Descriptor struct {
 	// reads. A host offers them where it shows the plugin, and runs
 	// them through its [Actor].
 	Actions []Action
+	// ViewSize is the size, in logical pixels, that the plugin's window view opens at in a window of its own, leaving
+	// out what the host draws round it, as a title bar. The window view is what [Viewer.View] gives for [Full], or for
+	// [Panel] where it gives nil for Full. Zero leaves the size to the host.
+	ViewSize geom.Size
+	// ViewMinSize is the window view's least size, the smallest at which it looks right. A host keeps the view's
+	// window no smaller. The window view lays itself out at least at this size wherever it shows, and scrolls in a
+	// smaller box; the plugin's other views do not. Zero leaves the size to the host. A view whose least size changes
+	// with its state is a [ViewMinSizer] too.
+	ViewMinSize geom.Size
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
 }
@@ -135,7 +153,9 @@ func (d *Descriptor) Instrument() bool {
 // Generator category, as "Generator|LFO", one plug adds beside VST3's.
 // A generator makes control alone, on its [Descriptor.ControlOut]
 // ports: the host gives it blocks whose In and Out are nil, and places
-// it in no chain of sound.
+// it in no chain of sound. It may declare aux and control ports of
+// every kind beside, as an envelope follower reads the sound at an aux
+// input.
 func (d *Descriptor) Generator() bool {
 	category, _, _ := strings.Cut(d.Kind, "|")
 	return category == "Generator"
@@ -160,7 +180,9 @@ type Ports struct {
 
 // PortsIn returns the ports a plugin of d has in state: what d.Ports
 // says, within the ports d declares, or every port d declares where
-// d.Ports is nil.
+// d.Ports is nil. Each call makes four new slices, and may decode
+// state, so a host that asks often, as once a frame, keeps the answer
+// until the state changes.
 func (d *Descriptor) PortsIn(state []byte) Ports {
 	all := func(n int) []bool {
 		out := make([]bool, n)
@@ -590,8 +612,8 @@ func check(d *Descriptor) error {
 	if d.LookAhead < 0 || d.LookAhead > 0 && !d.Notes {
 		return fmt.Errorf("%s looks ahead %v, which takes Notes and a duration of zero or more", d.ID, d.LookAhead)
 	}
-	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead || d.ChordAhead > 0 && !d.Notes {
-		return fmt.Errorf("%s looks ahead to chords %v, which takes Notes and a duration from zero to %v", d.ID,
+	if d.ChordAhead < 0 || d.ChordAhead > MaxChordAhead {
+		return fmt.Errorf("%s looks ahead to chords %v, which takes a duration from zero to %v", d.ID,
 			d.ChordAhead, MaxChordAhead)
 	}
 	if d.Past && !d.Notes {
@@ -601,6 +623,9 @@ func check(d *Descriptor) error {
 		return fmt.Errorf("%s is a generator, of kind %q, so it makes control: give it a ControlOut port", d.ID, d.Kind)
 	}
 	if err := checkPorts(d); err != nil {
+		return err
+	}
+	if err := checkViewSizes(d); err != nil {
 		return err
 	}
 	seen := map[uint32]bool{}
@@ -634,6 +659,26 @@ func check(d *Descriptor) error {
 				return fmt.Errorf("%s: patch %q sets %d, which is no parameter it may set", d.ID, pt.Name, id)
 			}
 		}
+	}
+	return nil
+}
+
+// checkViewSizes returns what is wrong with d's view sizes, if anything: each is zero, or a size of two finite
+// widths above zero, and the least size fits in the size the view opens at.
+func checkViewSizes(d *Descriptor) error {
+	sane := func(s geom.Size) bool {
+		if s == (geom.Size{}) {
+			return true
+		}
+		finite := !math.IsInf(float64(s.W), 0) && !math.IsInf(float64(s.H), 0)
+		return finite && s.W > 0 && s.H > 0
+	}
+	if !sane(d.ViewSize) || !sane(d.ViewMinSize) {
+		return fmt.Errorf("%s opens its view at %v, and at least %v: each is zero or above zero both ways", d.ID,
+			d.ViewSize, d.ViewMinSize)
+	}
+	if d.ViewSize != (geom.Size{}) && (d.ViewMinSize.W > d.ViewSize.W || d.ViewMinSize.H > d.ViewSize.H) {
+		return fmt.Errorf("%s opens its view at %v, under its least size %v", d.ID, d.ViewSize, d.ViewMinSize)
 	}
 	return nil
 }

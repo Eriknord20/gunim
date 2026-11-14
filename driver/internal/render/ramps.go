@@ -95,6 +95,9 @@ func (r *Renderer) rampRow(gr *paint.Gradient) int {
 	g.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
 	g.TexSubImage2D(gl.TEXTURE_2D, 0, 0, int32(row), rampWidth, 1, gl.RGBA, gl.UNSIGNED_BYTE, rs.pix)
 	g.ActiveTexture(gl.TEXTURE0)
+	if framesDebug {
+		r.Stats.Ramps++
+	}
 	return row
 }
 

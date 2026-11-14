@@ -20,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/internal/least"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs.
@@ -52,13 +53,14 @@ func dbText(v float64) string { return fmt.Sprintf("%.1f dB", v) }
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:       "marrasen.maximizer",
-	Name:     "Maximizer",
-	Vendor:   "Marras",
-	Version:  "0.1.0",
-	Kind:     "Fx|Dynamics|Mastering",
-	Tagline:  "Loudness & ceiling for the master",
-	Keywords: []string{"limiter", "loudness", "lufs", "ceiling", "true peak", "master", "mastering", "clipper"},
+	ID:        "marrasen.maximizer",
+	Name:      "Maximizer",
+	Vendor:    "Marras",
+	Version:   "0.1.0",
+	Kind:      "Fx|Dynamics|Mastering",
+	Tagline:   "Loudness & ceiling for the master",
+	KeepsMono: true,
+	Keywords:  []string{"limiter", "loudness", "lufs", "ceiling", "true peak", "master", "mastering", "clipper"},
 	Params: []plug.Param{
 		{ID: GainID, Name: "Gain", Unit: "dB", Max: 24, Flags: plug.Automatable,
 			Format: func(v float64) string { return fmt.Sprintf("%+.1f dB", v) }},
@@ -85,7 +87,9 @@ var Descriptor = plug.Descriptor{
 		{Name: "Loud and punchy", Params: map[uint32]float64{GainID: 8, ModeID: Punchy, CharacterID: 2, CeilingID: -0.3}},
 		{Name: "Club", Params: map[uint32]float64{GainID: 10, ModeID: Loud, CharacterID: 3, CeilingID: -0.3, TargetID: -8}},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{h: h} },
+	ViewSize:    geom.Sz(800, 480),
+	ViewMinSize: geom.Sz(640, 400),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{h: h} },
 }
 
 func init() { plug.Register(Descriptor) }

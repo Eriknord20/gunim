@@ -3,6 +3,7 @@ package widget
 import (
 	"image/color"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
@@ -35,6 +36,8 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"Image.SetSource":         func() { NewImage(nil).SetSource(nil, u) },
 		"NumberField.SetValue":    func() { NewNumberField(0, 10).SetValue(5, u) },
 		"ProgressBar.SetValue":    func() { NewProgressBar().SetValue(0.5, u) },
+		"RadioGroup.SetSelected":  func() { NewRadioGroup(RadioItem{Label: "a"}, RadioItem{Label: "b"}).SetSelected(1, u) },
+		"RadioGroup.SetItems":     func() { NewRadioGroup().SetItems([]RadioItem{{Label: "a"}}, u) },
 		"Palette.SetItems":        func() { NewPalette().SetItems([]PaletteItem{{Title: "a"}}, u) },
 		"Palette.SetStatus":       func() { NewPalette().SetStatus("s", u) },
 		"Palette.SetQuery":        func() { NewPalette().SetQuery("q", u) },
@@ -42,6 +45,9 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"Table.SetKeys":           func() { NewTable(TableColumn{Title: "a"}).SetKeys([]Key{"a"}, u) },
 		"Table.SetCursor":         func() { tb := NewTable(TableColumn{Title: "a"}); tb.SetKeys([]Key{"a"}, u); tb.SetCursor("a", u) },
 		"Segmented.SetSelected":   func() { NewSegmented("a", "b").SetSelected(1, u) },
+		"NavList.SetSelected":     func() { NewNavList(NavItem{Label: "a"}, NavItem{Label: "b"}).SetSelected(1, u) },
+		"NavList.SetItems":        func() { NewNavList().SetItems([]NavItem{{Label: "a", Count: 2}}, u) },
+		"NavList.SetCursor":       func() { NewNavList(NavItem{Label: "a"}, NavItem{Label: "b"}).SetCursor(1, u) },
 		"Tree.SetKeys":            func() { NewTree().SetKeys([]Key{"a"}, u) },
 		"Tree.SetCursor":          func() { tr := NewTree(); tr.SetKeys([]Key{"a"}, u); tr.SetCursor("a", u) },
 		"Split.SetPane":           func() { NewSplit(newSpot(1, 1), newSpot(1, 1)).SetPane(0, newSpot(2, 2), u) },
@@ -62,6 +68,10 @@ func TestEverySetterTakesANilUI(t *testing.T) {
 		"ColorPicker.SetValue":    func() { NewColorPicker(color.NRGBA{}).SetValue(color.NRGBA{R: 1}, u) },
 		"ColorPicker.SetOriginal": func() { NewColorPicker(color.NRGBA{}).SetOriginal(color.NRGBA{R: 1}, u) },
 		"ColorButton.SetValue":    func() { NewColorButton(color.NRGBA{}).SetValue(color.NRGBA{R: 1}, u) },
+		"Stack.Push":              func() { NewStack(newSpot(1, 1)).Push(newSpot(2, 2), u) },
+		"Stack.Pop":               func() { s := NewStack(newSpot(1, 1)); s.Push(newSpot(2, 2), u); s.Pop(u) },
+		"PinPad.SetWaiting":       func() { NewPinPad(4, "OK").SetWaiting(time.Second, u) },
+		"PinPad.Clear":            func() { NewPinPad(4, "OK").Clear(u) },
 	}
 	for name, set := range sets {
 		t.Run(name, func(t *testing.T) {

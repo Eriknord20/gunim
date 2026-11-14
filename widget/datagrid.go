@@ -20,9 +20,9 @@ import (
 
 // DataGrid tokens.
 var (
-	GridRowHeight    = theme.Length("grid.row", 22)
+	GridRowHeight    = theme.TextRow("grid.row", 22)
 	GridHeaderHeight = theme.Length("grid.header", 26)
-	GridTextSize     = theme.Length("grid.text.size", 12.5)
+	GridTextSize     = theme.FontSize("grid.text.size", 12.5)
 	// GridCellPadding is the room at either side of a cell's text.
 	GridCellPadding = theme.Length("grid.cell.padding", 6)
 	// GridCursor lights the selected row, and GridRule marks a row that

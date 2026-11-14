@@ -78,9 +78,11 @@ type Renderer struct {
 	vao, vbo, ibo uint32
 	drawProg      program
 	blurProg      program
-	// clipProg is drawProg cutting each quad to the ellipse it carries,
-	// for what draws inside a layer clipped to one in place.
+	// clipProg is drawProg cutting each quad to the ellipse or rounded
+	// rectangle it carries, for what draws inside a layer clipped to one
+	// in place; cutAt is where its u_cut is.
 	clipProg program
+	cutAt    int32
 	// convertProg is drawProg converting to the display's colours, for
 	// the copy to the window, and color the conversion; see color.go.
 	convertProg program
@@ -103,6 +105,16 @@ type Renderer struct {
 	clock func() time.Time
 	// scratchX is where the next mask goes in the scratch strip, and scratches counts the masks put there, for tests.
 	scratchX, scratches int
+	// transparent says the window shows what is behind it where it draws
+	// nothing, and backdrop holds what lies under the bands of a layer that
+	// fades in place; see fadeInPlace.
+	transparent bool
+	backdrop    target
+	// opaque is where the frame's first op, an opaque fill, covers the
+	// canvas, in device pixels, and fading says a layer fades in place
+	// now; see fadeInPlace.
+	opaque geom.Rect
+	fading bool
 	// dual says the draw program blends each channel by a colour of its
 	// own, which glyphs on subpixels need.
 	dual bool
@@ -146,6 +158,11 @@ type Renderer struct {
 	// one again.
 	Stretched geom.Rect
 	SharpAt   time.Time
+	// Held is the held clock's time of the frame drawn next, which the renderer goes by in place of the wall
+	// clock's, or zero; see driver.ClockHolder. wasHeld says the frame before was held, and lastNow is its time.
+	Held    time.Time
+	wasHeld bool
+	lastNow time.Time
 	// Under is the window's background, where a frame's first op leaves
 	// it uncovered; see driver.Backgrounder.
 	Under color.NRGBA
@@ -165,6 +182,11 @@ type Renderer struct {
 	// from the bottom, so the canvas goes to it upside down.
 	WindowFBO  uint32
 	FlipWindow bool
+	// KeepInCanvas keeps each frame in the canvas: it never draws straight
+	// to WindowFBO, and never copies the canvas there. A compositor that
+	// lays the canvas itself, as one turning the picture onto a screen
+	// mounted sideways, saves that copy; see [Renderer.CanvasTexture].
+	KeepInCanvas bool
 	// blurs holds two scratch targets for each downsampling factor.
 	blurs [len(blurFactors)][2]target
 	// stack is the layers open, innermost last. depth is the target
@@ -175,9 +197,9 @@ type Renderer struct {
 	stack []openLayer
 	depth int
 	clip  geom.Rect
-	// ellipse is the ellipse a layer clips to in place, which every quad
-	// drawn meanwhile carries; see clipEllipse.
-	ellipse clipEllipse
+	// cut is the ellipse or rounded rectangle a layer clips to in place,
+	// which every quad drawn meanwhile carries; see clipCut.
+	cut clipCut
 	// ramps holds the colours of gradients with stops; see ramps.go.
 	ramps ramps
 	// scenes draws 3D scenes; see scenes.go.
@@ -206,15 +228,18 @@ type openLayer struct {
 	op      *paint.LayerOp
 	inPlace bool
 	clip    geom.Rect
-	ellipse clipEllipse
+	cut     clipCut
 }
 
-// clipEllipse is an ellipse that quads are cut to as they draw, with
-// its centre and its radii across and down in device pixels from the
-// target's top left. A zero one cuts nothing.
-type clipEllipse struct {
-	on          bool
+// clipCut is the ellipse, or the rounded rectangle, that quads are cut
+// to as they draw: its centre and its half sizes across and down, its
+// radii for an ellipse, in device pixels from the target's top left,
+// and for a rounded rectangle, which box says, the radius of its
+// corners. A zero one cuts nothing.
+type clipCut struct {
+	on, box     bool
 	centre, rad geom.Point
+	radius      float32
 }
 
 // Each vertex is vertFloats floats, in nine attributes of two or four:
@@ -232,9 +257,9 @@ type clipEllipse struct {
 //	a_extra  the shadow's offset, blur and spread; or texture
 //	         coordinates, then the point on a gradient
 //	a_stroke the stroke's colour
-//	a_clip   the vertex on the ellipse it is cut to, where the ellipse
-//	         is the unit circle, times the depth; 1 where there is one;
-//	         and the depth, 1 for a flat quad
+//	a_clip   the vertex in the space of the shape it is cut to, where
+//	         the shape's half sizes are 1, times the depth; 1 where
+//	         there is one; and the depth, 1 for a flat quad
 //
 // A ribbon's quads use a_local and a_extra otherwise, as their pixels
 // do not share them; see ribbons.go.
@@ -387,6 +412,9 @@ flat in vec4 v_stroke;
 in vec4 v_clip;
 in vec2 v_uv;
 uniform sampler2D u_atlas;
+#ifdef CUT
+uniform vec4 u_cut;
+#endif
 uniform sampler2D u_ramp;
 
 // gradient returns a gradient's colour at g, which runs from 0 to 1
@@ -494,11 +522,15 @@ vec4 shade(out vec4 cover) {
 		// A faded layer fades out toward its bounds' edges, over the
 		// widths in v_extra: left, top, right and bottom.
 		vec4 f = v_extra;
-		if (f.x > 0.0) cov *= clamp((v_local.x - v_rect.x) / f.x, 0.0, 1.0);
-		if (f.y > 0.0) cov *= clamp((v_local.y - v_rect.y) / f.y, 0.0, 1.0);
-		if (f.z > 0.0) cov *= clamp((v_rect.z - v_local.x) / f.z, 0.0, 1.0);
-		if (f.w > 0.0) cov *= clamp((v_rect.w - v_local.y) / f.w, 0.0, 1.0);
-		col = texture(u_tex, v_uv) * v_color0.a * cov;
+		float fade = 1.0;
+		if (f.x > 0.0) fade *= clamp((v_local.x - v_rect.x) / f.x, 0.0, 1.0);
+		if (f.y > 0.0) fade *= clamp((v_local.y - v_rect.y) / f.y, 0.0, 1.0);
+		if (f.z > 0.0) fade *= clamp((v_rect.z - v_local.x) / f.z, 0.0, 1.0);
+		if (f.w > 0.0) fade *= clamp((v_rect.w - v_local.y) / f.w, 0.0, 1.0);
+		// A negative opacity lays what lay beneath a layer that faded in
+		// place back over it, at one less the fade.
+		if (v_color0.a < 0.0) fade = 1.0 - fade;
+		col = texture(u_tex, v_uv) * abs(v_color0.a) * cov * fade;
 	} else if (kind == 6) {
 		// A piece of a ribbon: v_local.x is how far across it the pixel
 		// lies and v_local.y its half width there, both in device
@@ -538,9 +570,17 @@ vec4 shade(out vec4 cover) {
 void main() {
 	vec4 cover;
 	vec4 col = shade(cover);
-#ifdef ELLIPSE
-	// Cut to the ellipse a layer clips to in place.
-	float c = ellipseCover(v_clip.xy / v_clip.w);
+#ifdef CUT
+	// Cut to the ellipse, or the rounded rectangle, a layer clips to in
+	// place: u_cut holds a rounded rectangle's half sizes and corner
+	// radius in device pixels, and w is 1 for one.
+	float c;
+	if (u_cut.w > 0.5) {
+		vec2 p = v_clip.xy / v_clip.w * u_cut.xy;
+		c = rrectCover(p, vec4(-u_cut.xy, u_cut.xy), u_cut.z);
+	} else {
+		c = ellipseCover(v_clip.xy / v_clip.w);
+	}
 	col *= c;
 	cover *= c;
 #endif
@@ -570,6 +610,7 @@ func New(g gl.Context, isES bool, sh *Shared) (*Renderer, error) {
 	if r.drawProg, r.clipProg, r.blurProg, r.dual, err = sh.programs(g, isES); err != nil {
 		return nil, err
 	}
+	r.cutAt = g.GetUniformLocation(r.clipProg.id, "u_cut")
 
 	r.vao = g.CreateVertexArray()
 	g.BindVertexArray(r.vao)
@@ -614,6 +655,7 @@ func (r *Renderer) Rebind() {
 // blends with what is behind it when transparent.
 func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 	r.textRendering = tr
+	r.transparent = transparent
 	r.subpixels = tr.Smoothing.Subpixel() && r.dual && !transparent
 	r.gamma = ratiosFor(tr.Gamma)
 }
@@ -623,18 +665,20 @@ func (r *Renderer) SetText(tr text.Rendering, transparent bool) {
 // image, a layer or a blur's source on unit 1, the subpixel glyph atlas
 // on unit 2, colour glyphs on unit 3, and the gradients' ramp on unit
 // 6. The draw programs blend by channel where the context has
-// dual-source blending, and dual says so. clip is the draw program that
-// cuts what it draws to an ellipse; the plain one leaves that work out
-// of every other pixel.
-func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
+// dual-source blending, unless noDualSource, and dual says so. clip is the draw program that
+// cuts what it draws to an ellipse or a rounded rectangle; the plain one
+// leaves that work out of every other pixel.
+func buildPrograms(g gl.Context, isES, noDualSource bool) (draw, clip, blur program, dual bool, drawHeader string, err error) { //nolint:gocritic // the three programs are built together and share one header
 	header, dualHeader := "#version 150\n", "#version 330\n#define DUAL\n"
 	if isES {
 		header = "#version 300 es\nprecision highp float;\n"
 		dualHeader = "#version 300 es\n#extension GL_EXT_blend_func_extended : require\nprecision highp float;\n" +
 			"#define DUAL\n"
 	}
-	draw, err = link(g, dualHeader+vertexShader, dualHeader+sdfFunc+drawOut+drawShader)
-	dual = err == nil && !noDual
+	if !noDual && !noDualSource {
+		draw, err = link(g, dualHeader+vertexShader, dualHeader+sdfFunc+drawOut+drawShader)
+		dual = err == nil
+	}
 	if !dual {
 		if draw.id != 0 {
 			g.DeleteProgram(draw.id)
@@ -644,8 +688,8 @@ func buildPrograms(g gl.Context, isES bool) (draw, clip, blur program, dual bool
 			return program{}, program{}, program{}, false, "", err
 		}
 	}
-	ellipse := dualHeader + "#define ELLIPSE\n"
-	if clip, err = link(g, ellipse+vertexShader, ellipse+sdfFunc+drawOut+drawShader); err != nil {
+	cut := dualHeader + "#define CUT\n"
+	if clip, err = link(g, cut+vertexShader, cut+sdfFunc+drawOut+drawShader); err != nil {
 		return program{}, program{}, program{}, false, "", err
 	}
 	for _, p := range []program{draw, clip} {
@@ -731,6 +775,16 @@ func compile(g gl.Context, kind uint32, src string) (uint32, error) {
 // up, for reading a frame back.
 func (r *Renderer) Canvas() uint32 { return r.layers[0].fbo }
 
+// CanvasTexture returns the canvas's texture, which holds the last frame
+// drawn, the window's size, with its first row at the bottom as the
+// window's own framebuffer would; 0 before the first frame.
+func (r *Renderer) CanvasTexture() uint32 {
+	if len(r.layers) == 0 {
+		return 0
+	}
+	return r.layers[0].tex
+}
+
 // Release frees the renderer's GL objects. The programs belong to every
 // window and stay.
 func (r *Renderer) Release() {
@@ -744,6 +798,10 @@ func (r *Renderer) Release() {
 			g.DeleteFramebuffer(t.fbo)
 			g.DeleteTexture(t.tex)
 		}
+	}
+	if r.backdrop.tex != 0 {
+		g.DeleteFramebuffer(r.backdrop.fbo)
+		g.DeleteTexture(r.backdrop.tex)
 	}
 	for m := range r.images {
 		r.dropImage(m)
@@ -800,6 +858,17 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	if r.clock != nil {
 		r.now = r.clock()
 	}
+	if !r.Held.IsZero() {
+		r.now = r.Held
+	}
+	if held := !r.Held.IsZero(); held != r.wasHeld {
+		// From the wall clock to a held one, or back: the times kept move with it, so time runs on unbroken.
+		if !r.lastNow.IsZero() {
+			r.rebase(r.now.Sub(r.lastNow))
+		}
+		r.wasHeld = held
+	}
+	r.lastNow = r.now
 	// What the last frame drew stretched is drawn again, to be sharp.
 	r.damage = append(r.damage[:0], damage...)
 	if !r.Stretched.Empty() {
@@ -808,7 +877,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	}
 	r.bigs.newFrame()
 	r.stack, r.depth = r.stack[:0], 0
-	r.ellipse = clipEllipse{}
+	r.cut = clipCut{}
 	// bindDraw, below, makes the plain draw program current.
 	r.scratchX = 0
 	if len(r.layers) == 0 {
@@ -841,7 +910,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	// next small one to draw the whole window.
 	ws := window.Size()
 	big := redrawn > ws.W*ws.H/2
-	r.direct = !backdrop && !r.FlipWindow && big && r.big && r.Corner == 0 && r.color.lut == nil
+	r.direct = !backdrop && !r.FlipWindow && !r.KeepInCanvas && big && r.big && r.Corner == 0 && r.color.lut == nil
 	r.big = big
 	if r.fit(&r.layers[0]) || !r.canvasOK || scale != r.canvasScale {
 		if !r.direct {
@@ -875,6 +944,15 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	g.Viewport(0, 0, int32(fbW), int32(fbH))
 	r.bindDraw()
 	bg, alpha := background(ops)
+	r.opaque = geom.Rect{}
+	if alpha == 1 {
+		// The frame starts with an opaque fill: under it, the canvas is
+		// opaque wherever the fill reaches. The window's own colour goes
+		// under the canvas only as it is laid on the window.
+		if op, ok := ops[0].(*paint.RRectOp); ok {
+			r.opaque = geom.Rect{Min: op.Rect.Min.Mul(scale), Max: op.Rect.Max.Mul(scale)}
+		}
+	}
 	if alpha == 0 && r.Under.A > 0 {
 		bg, alpha = rgba(r.Under), float32(r.Under.A)/0xff
 	}
@@ -888,7 +966,7 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 		for i, b := range boxes {
 			if i > 0 {
 				r.stack, r.depth = r.stack[:0], 0
-				r.ellipse = clipEllipse{}
+				r.cut = clipCut{}
 				r.scratchX = 0
 				r.bindDraw()
 			}
@@ -910,6 +988,8 @@ func (r *Renderer) DrawRects(ops []paint.Op, damage []geom.Rect, fbW, fbH int, s
 	}
 	if !r.direct {
 		r.canvasOK, r.canvasScale = true, scale
+	}
+	if !r.direct && !r.KeepInCanvas {
 		g.BindFramebuffer(gl.FRAMEBUFFER, r.WindowFBO)
 		// The background is in the window's colours, as the canvas is
 		// once copied.
@@ -1054,11 +1134,25 @@ func (r *Renderer) deviceBox(d geom.Rect) geom.Rect {
 
 // replay queues ops into the canvas.
 func (r *Renderer) replay(ops []paint.Op) {
+	r.replayOps(ops)
+	// A layer left open by a node that forgot to close it still shows.
+	for len(r.stack) > 0 {
+		r.closeLayer()
+	}
+}
+
+// replayOps draws ops, as replay does, and leaves open a layer they leave
+// open.
+func (r *Renderer) replayOps(ops []paint.Op) {
 	for i := 0; i < len(ops); i++ {
 		op := ops[i]
 		if l, ok := op.(*paint.LayerOp); ok && r.culled(l) {
 			// A layer that clips to a box wholly outside what the frame
 			// redraws draws nothing there, nor does anything in it.
+			i = layerEnd(ops, i)
+			continue
+		}
+		if l, ok := op.(*paint.LayerOp); ok && r.fadeInPlace(ops, i, l) {
 			i = layerEnd(ops, i)
 			continue
 		}
@@ -1088,10 +1182,116 @@ func (r *Renderer) replay(ops []paint.Op) {
 			r.ribbon(op)
 		}
 	}
-	// A layer left open by a node that forgot to close it still shows.
-	for len(r.stack) > 0 {
-		r.closeLayer()
+}
+
+// noFadeInPlace turns fadeInPlace off, for a test to draw a fading layer
+// whole.
+var noFadeInPlace bool
+
+// fadeInPlace draws a layer that clips to its bounds, opaque, and fades
+// only toward its top and bottom edges, as a scrolling list does, with no
+// target of its own, and reports whether it did. Drawn whole, such a layer
+// goes through a window-sized target, cleared, drawn and laid back: on a
+// Raspberry Pi 5's GPU, a third of a scrolling list's frame.
+//
+// It copies what lies under the two bands that fade, draws the layer's
+// contents straight onto the target, as an opaque clip does, and lays the
+// copy back over the bands, at one less the fade. Where the fade is f, a
+// pixel ends as the contents times f plus what lay beneath times one less
+// f: what the layer drawn whole gives over an opaque target. So it runs
+// only on the canvas of an opaque window; and only where text is drawn in
+// greyscale, as the layer's own target would draw it; and only where the
+// layer's bounds lie on whole device pixels, which the clip cuts exactly
+// as the layer whole would. ops[i] is the layer, and its contents follow.
+//
+// It also draws the layer whole where the copy would be laid back wrong:
+// where the frame has no opaque fill under the layer, as the canvas is
+// clear until the window's colour goes under it; inside another layer
+// fading in place, whose copy it would take; where the two bands meet, so
+// the copy would be laid twice; and inside a rounded clip, which cuts the
+// contents as they draw but not the copy.
+func (r *Renderer) fadeInPlace(ops []paint.Op, i int, op *paint.LayerOp) bool {
+	o, t := op.Opts, op.Transform
+	f := o.Fade
+	if noFadeInPlace || r.subpixels || r.transparent || r.depth != 0 || r.direct || r.fading || r.cut.on ||
+		f == (geom.Insets{}) ||
+		f.Left != 0 || f.Right != 0 || f.Top < 0 || f.Bottom < 0 || !o.Clip || o.Opacity < 1 || o.Blur > 0 ||
+		o.Backdrop > 0 || o.Ellipse || o.Radius > 0 || o.Blend == paint.BlendAdd || tilted(op) || t.B != 0 || t.D != 0 ||
+		!(t.A > 0) || !(t.E > 0) {
+		return false
 	}
+	end := layerEnd(ops, i)
+	if _, ok := ops[end].(*paint.LayerEndOp); !ok || end <= i {
+		return false
+	}
+	reg := r.region(op, true)
+	whole := func(v float32) bool { return math.Abs(float64(v)-math.Round(float64(v))) < 1e-3 }
+	if !whole(reg.Min.X) || !whole(reg.Max.X) || !whole(reg.Min.Y) || !whole(reg.Max.Y) {
+		return false
+	}
+	if !contains(r.opaque, intersect(reg, geom.Rect{Max: geom.Pt(float32(r.fbW), float32(r.fbH))})) {
+		return false
+	}
+	b := o.Bounds
+	// The bands, in the layer's own space and on the target, reaching out
+	// to whole device pixels.
+	var bands [2]geom.Rect
+	n := 0
+	if f.Top > 0 {
+		h := float32(math.Ceil(float64(f.Top * t.E * r.scale)))
+		bands[n] = geom.Rect{Min: reg.Min, Max: geom.Pt(reg.Max.X, min(reg.Min.Y+h, reg.Max.Y))}
+		n++
+	}
+	if f.Bottom > 0 {
+		h := float32(math.Ceil(float64(f.Bottom * t.E * r.scale)))
+		bands[n] = geom.Rect{Min: geom.Pt(reg.Min.X, max(reg.Max.Y-h, reg.Min.Y)), Max: reg.Max}
+		n++
+	}
+	if n == 2 && bands[0].Max.Y > bands[1].Min.Y {
+		return false
+	}
+	g := r.GL
+	// What is queued draws first: the copy takes the target as it is.
+	r.flush()
+	r.fit(&r.backdrop)
+	g.Disable(gl.SCISSOR_TEST)
+	g.BindFramebuffer(glReadFramebuffer, r.fbo(0))
+	g.BindFramebuffer(glDrawFramebuffer, r.backdrop.fbo)
+	for _, band := range bands[:n] {
+		x, y, w, h := scissor(intersect(band, r.clip), r.fbW, r.fbH)
+		if w > 0 && h > 0 {
+			g.BlitFramebuffer(x, y, x+w, y+h, x, y, x+w, y+h, glColorBufferBit, glNearest)
+		}
+	}
+	g.BindFramebuffer(gl.FRAMEBUFFER, r.fbo(0))
+	r.applyClip()
+
+	l := paint.LayerOp{Opts: paint.LayerOpts{Bounds: b, Opacity: 1, Clip: true}, Transform: t}
+	r.openLayer(&l)
+	r.fading = true
+	r.replayOps(ops[i+1 : end])
+	r.fading = false
+	r.closeLayer()
+
+	// The copy back over the bands, at one less the fade, which a
+	// negative opacity asks of the layer's look.
+	r.uses(r.backdrop.tex)
+	lk := look{kind: kindLayer, color0: [4]float32{0, 0, 0, -1}, rect: b, extra: [4]float32{0, f.Top, 0, f.Bottom}}
+	toLocal := func(y float32) float32 { return (y/r.scale - t.F) / t.E }
+	for _, band := range bands[:n] {
+		q := geom.Rect{Min: geom.Pt(b.Min.X, toLocal(band.Min.Y)), Max: geom.Pt(b.Max.X, toLocal(band.Max.Y))}
+		r.quad(corners(q, geom.Rect{}), t, r.scale, &lk)
+	}
+	r.flush()
+	if framesDebug {
+		r.Stats.FadesInPlace++
+	}
+	return true
+}
+
+// contains reports whether a holds all of b; an empty b it holds.
+func contains(a, b geom.Rect) bool {
+	return b.Empty() || b.Min.X >= a.Min.X && b.Min.Y >= a.Min.Y && b.Max.X <= a.Max.X && b.Max.Y <= a.Max.Y
 }
 
 // culled reports whether layer op, and all inside it, lies outside what
@@ -1132,6 +1332,12 @@ type Stats struct {
 	Redrawn                       float64
 	// FlushTime is spent handing vertices and draws to the driver.
 	FlushTime time.Duration
+	// Uploads counts the frame's writes into textures: new glyphs, masks
+	// in the scratch strip, gradient ramps, and big masks.
+	Glyphs, Scratches, Ramps, BigMasks int
+	// FadesInPlace counts the fading layers drawn with no target of their
+	// own; see fadeInPlace.
+	FadesInPlace int
 }
 
 // framesDebug is set by GUNIM_DEBUG_FRAMES, which has the renderer
@@ -1155,11 +1361,16 @@ func (r *Renderer) bindDraw() {
 }
 
 // useDraw makes current the draw program for the clip in force: the one
-// that cuts to an ellipse while a layer clips to one in place. The batch
-// queued must be drawn first.
+// that cuts to an ellipse or a rounded rectangle while a layer clips to
+// one in place. The batch queued must be drawn first.
 func (r *Renderer) useDraw() {
-	if r.ellipse.on {
+	if c := r.cut; c.on {
 		r.GL.UseProgram(r.clipProg.id)
+		box := float32(0)
+		if c.box {
+			box = 1
+		}
+		r.GL.Uniform4fv(r.cutAt, []float32{c.rad.X, c.rad.Y, c.radius, box})
 		return
 	}
 	r.GL.UseProgram(r.drawProg.id)
@@ -1317,7 +1528,7 @@ func (r *Renderer) emit(corners [4]quadVert, at [4]geom.Point, w [4]float32, sca
 		// the shader divides out, so it spreads evenly over the target
 		// whatever the depth.
 		clip := [4]float32{0, 0, 0, w[i]}
-		if e := r.ellipse; e.on {
+		if e := r.cut; e.on {
 			clip = [4]float32{(p.X*scale - e.centre.X) / e.rad.X * w[i], (p.Y*scale - e.centre.Y) / e.rad.Y * w[i], 1, w[i]}
 		}
 		r.verts = append(r.verts,
@@ -1443,20 +1654,24 @@ func abs32(v float32) float32 { return max(v, -v) }
 // in place.
 func (r *Renderer) openLayer(op *paint.LayerOp) {
 	r.flush()
-	r.stack = append(r.stack, openLayer{op: op, clip: r.clip, ellipse: r.ellipse})
+	r.stack = append(r.stack, openLayer{op: op, clip: r.clip, cut: r.cut})
 	if box, ok := r.inPlace(op); ok {
 		r.stack[len(r.stack)-1].inPlace = true
 		r.setClip(intersect(r.clip, box))
-		if op.Opts.Clip && op.Opts.Ellipse {
+		if o := op.Opts; o.Clip && (o.Ellipse || o.Radius > 0) {
 			b := r.region(op, true)
 			rad := geom.Pt((b.Max.X-b.Min.X)/2, (b.Max.Y-b.Min.Y)/2)
-			r.ellipse = clipEllipse{on: rad.X > 0 && rad.Y > 0, centre: b.Min.Add(rad), rad: rad}
+			r.cut = clipCut{on: rad.X > 0 && rad.Y > 0, centre: b.Min.Add(rad), rad: rad}
+			if !o.Ellipse {
+				// Its corners scale as the layer does, the same across and down.
+				r.cut.box, r.cut.radius = true, min(o.Radius*r.scale*abs32(op.Transform.A), rad.X, rad.Y)
+			}
 			r.useDraw()
 		}
 		return
 	}
 	// The layer is cut as it is composited, once.
-	r.ellipse = clipEllipse{}
+	r.cut = clipCut{}
 	r.useDraw()
 	if tilted(op) {
 		// A tilted layer draws flat, all of it, and the clip round it
@@ -1479,9 +1694,12 @@ func (r *Renderer) openLayer(op *paint.LayerOp) {
 // target around it as composited from a target of its own, and the
 // device-pixel box it clips to: it is opaque, blurs nothing, adds
 // nothing, and clips
-// to an upright rectangle, to an upright ellipse inside no other, or
-// not at all. The quads drawn inside an ellipse carry it, and are cut
-// to it as they draw; a grid of cells keeps to its box.
+// to an upright rectangle, to an upright ellipse or rounded rectangle
+// inside no other, or not at all. The quads drawn inside an ellipse or
+// a rounded rectangle carry it, and are cut to it as they draw, each on
+// its own: on the pixel-wide antialiased rim, a quad under another shows
+// through faintly, where offscreen the layer is cut once, whole. A grid
+// of cells keeps to its box, uncut at rounded corners.
 func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 	o, t := op.Opts, op.Transform
 	switch {
@@ -1492,8 +1710,11 @@ func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 		return r.region(op, false), true
 	case t.B != 0 || t.D != 0:
 		return geom.Rect{}, false
-	case o.Ellipse:
-		if r.ellipse.on {
+	case o.Ellipse || o.Radius > 0:
+		// Cut as it draws, to the ellipse or to the rounded rectangle, in
+		// no other: one cut at a time. Rounded corners stay round only
+		// where the layer scales the same across and down.
+		if r.cut.on || !o.Ellipse && abs32(t.A) != abs32(t.E) {
 			return geom.Rect{}, false
 		}
 		b := r.region(op, true)
@@ -1501,8 +1722,6 @@ func (r *Renderer) inPlace(op *paint.LayerOp) (geom.Rect, bool) {
 			Min: geom.Pt(float32(math.Floor(float64(b.Min.X))), float32(math.Floor(float64(b.Min.Y)))),
 			Max: geom.Pt(float32(math.Ceil(float64(b.Max.X))), float32(math.Ceil(float64(b.Max.Y)))),
 		}, true
-	case o.Radius > 0:
-		return geom.Rect{}, false
 	}
 	b := r.region(op, true)
 	round := func(v float32) float32 { return float32(math.Round(float64(v))) }
@@ -1520,8 +1739,8 @@ func (r *Renderer) closeLayer() {
 	top := r.stack[len(r.stack)-1]
 	r.stack = r.stack[:len(r.stack)-1]
 	r.setClip(top.clip)
-	if r.ellipse != top.ellipse {
-		r.ellipse = top.ellipse
+	if r.cut != top.cut {
+		r.cut = top.cut
 		r.useDraw()
 	}
 	if top.inPlace {

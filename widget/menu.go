@@ -159,7 +159,12 @@ type MenuItem struct {
 	// Break draws a line above the item, grouping the menu. A line above the first item draws nothing.
 	Break bool
 	// Sub makes the item open a submenu of its items, beside the menu, in place of being picked. The item shows a
-	// chevron at the right in place of a hint. A [Menu] and a [ContextMenu] open it; a pick in it runs their OnPickSub.
+	// chevron at the right in place of a hint. A [Menu], a [ContextMenu] and a [Menubar] open it; a pick in it runs
+	// their OnPickSub.
+	//
+	// A Sub with no items opens nothing: the item is a plain one, with no chevron, and a pick on it runs OnPick. So an
+	// "Open recent" with no files yet is picked like any other line. To show such a line but have nothing happen, set
+	// Disabled as well.
 	Sub *Submenu
 }
 
@@ -421,10 +426,11 @@ func (m *Menu) Highlighted() int { return m.hot }
 // It is for the node that opened the menu, which keeps the keyboard, to
 // pass keys on. It reports whether it used the key.
 //
-// With a submenu open, Right on an item with a submenu opens it and
-// moves the keys there, Left closes it and brings them back, and Escape
-// closes the submenu the keys are in, or one open beside it. The menu
-// passes the other keys on to the submenu that has the keys.
+// Right on an item with a submenu opens it and moves the keys there.
+// Left and Escape close one submenu at a time: one open beside the menu
+// that has the keys, as the pointer opens one, or else the submenu the
+// keys are in, bringing them back. The menu passes the other keys on to
+// the submenu that has the keys.
 func (m *Menu) Key(k input.KeyPress, u *gunim.UI) bool {
 	if m.subKey(k) {
 		return true
@@ -531,12 +537,15 @@ func (m *Menu) Transition(p gunim.Presence, f gunim.Frame) bool {
 		m.in.Animate(1, Quick.Get(f.Theme))
 	case gunim.Exiting:
 		m.in.Animate(0, Quick.Get(f.Theme))
-		m.leaving = true
-		m.stopWait()
+		m.leave()
 	case gunim.Present:
 	}
 	return !m.in.Active()
 }
+
+// ScrollsAlong implements [gunim.WheelScroller]: true for a wheel turned up or down while the rows are taller than
+// the card.
+func (m *Menu) ScrollsAlong(delta geom.Point) bool { return m.scroll.ScrollsAlong(delta) }
 
 // Handle implements [gunim.Handler].
 func (m *Menu) Handle(e input.Event, u *gunim.UI) bool {
@@ -716,8 +725,10 @@ func (m *Menu) content() float32 {
 // menuBreak is the room a line between groups takes.
 const menuBreak = 9
 
-// menuTick is the room a tick takes before the items, when any has one.
-const menuTick = 18
+// menuTick is the room a tick takes before the items, when any has one. The tick stands in the middle of it, so
+// with an icon 16 px across it has 4 px each side: 4 px more than the row's padding from the menu's edge, and 4 px
+// before the item's icon or text.
+const menuTick = 24
 
 // menuHintGap is the room between an item's text and its hint.
 const menuHintGap = 32
@@ -817,6 +828,10 @@ func (m *Menu) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geom
 	}
 	m.row, m.pad = MenuRowHeight.Get(th), MenuPadding.Get(th)
 	m.gut, m.iconSpace = m.gutter(), m.iconRoom(th)
+	if m.parent != nil && m.list.ticks {
+		// A submenu with ticks keeps its parent's room between tick and text
+		m.iconSpace = max(m.iconSpace, m.parent.iconSpace)
+	}
 	w := max(m.MinWidth, m.gut+m.iconSpace+m.measure(faceIn(Font, th), TextSize.Get(th))+2*MenuRowPadding.Get(th))
 	y := m.content()
 	h := y + 2*m.pad
@@ -934,19 +949,18 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		defer m.scroll.layer(p, card, th)()
 		bar = ScrollbarGrabWidth.Get(th)
 	}
-	if on := m.hotOn.Value(); on > 0.01 {
+	hotY, hotOn := m.hotY.Value()-m.scroll.Offset(), min(max(m.hotOn.Value(), 0), 1)
+	if hotOn > 0.01 {
 		c := MenuHot.Get(th)
-		c.A = uint8(float32(c.A) * min(on, 1))
+		c.A = uint8(float32(c.A) * hotOn)
 		inset := m.pad
-		y := m.hotY.Value() - m.scroll.Offset()
-		p.RRect(geom.Rc(card.Min.X+inset, y, card.Size().W-2*inset, m.row), max(0, radius-inset), paint.Solid(c))
+		p.RRect(geom.Rc(card.Min.X+inset, hotY, card.Size().W-2*inset, m.row), max(0, radius-inset), paint.Solid(c))
 	}
+	hotInk := inkOr(MenuHotInk, th)
+	// onHot is how far the hot row's fill covers row i, from 0 to 1, for its ink to follow the fill as it glides
+	onHot := func(i int) float32 { return hotOn * covered(m.rowY(i), m.row, hotY, m.row) }
 	ink := Ink.Get(th)
-	dim := ink
-	dim.A /= 3
 	hint := MenuHint.Get(th)
-	dimHint := hint
-	dimHint.A /= 3
 	pad := MenuRowPadding.Get(th)
 	face, size := faceIn(Font, th), TextSize.Get(th)
 	from, to := m.inView()
@@ -962,9 +976,15 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 	room := card.Size().W - 2*pad - m.gut - m.iconSpace - bar
 	for i := from; i < to; i++ {
 		r := m.rowText(i)
-		col := ink
+		lit := onHot(i)
+		col := anim.Mix(anim.ColorCodec, ink, hotInk, lit)
+		rowHint := hint
+		if th.Sets(MenuHotInk.Key()) {
+			rowHint = anim.Mix(anim.ColorCodec, hint, hotInk, lit)
+		}
 		if !m.enabled(i) {
-			col = dim
+			col.A /= 3
+			rowHint.A /= 3
 		}
 		if m.isCaption(i) {
 			small := size * 0.85
@@ -978,7 +998,7 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		it := &m.list.items[i]
 		if it.Checked {
 			s := IconSize.Get(th)
-			drawIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+m.gut/2-1-s/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
+			drawIcon(p, th, icon.Check, geom.Rc(card.Min.X+pad+(m.gut-s)/2, m.rowY(i)+(m.row-s)/2, s, s), col, 1)
 		}
 		x := card.Min.X + pad + m.gut
 		if it.Icon != nil {
@@ -989,19 +1009,13 @@ func (m *Menu) Paint(p *paint.Painter, f gunim.Frame, _ geom.Size, _ gunim.Child
 		}
 		fits := room
 		if len(it.subItems()) > 0 {
-			c := hint
-			if !m.enabled(i) {
-				c = dimHint
-			}
+			c := rowHint
 			s := IconSize.Get(th)
 			drawIcon(p, th, icon.ChevronRight, geom.Rc(card.Max.X-pad-bar-s+4, m.rowY(i)+(m.row-s)/2, s, s), c, 1)
 			fits -= menuSubRoom
 		} else if it.Hint != "" {
 			h := r.hint.shape(face, it.Hint, size*0.9)
-			c := hint
-			if !m.enabled(i) {
-				c = dimHint
-			}
+			c := rowHint
 			h.Paint(p, geom.Pt(card.Max.X-pad-bar-h.Advance, m.rowY(i)+(m.row-h.Height())/2), c)
 			fits -= menuHintGap + h.Advance
 		}
@@ -1295,6 +1309,7 @@ func (d *Dropdown) close(u *gunim.UI) { d.shut(u.Theme()) }
 // shut closes the list.
 func (d *Dropdown) shut(th *theme.Live) {
 	if d.popup != nil {
+		d.menu.leave()
 		d.popup.Close()
 		d.popup = nil
 	}
@@ -1574,6 +1589,7 @@ func (c *ContextMenu) close(u *gunim.UI) {
 	if c.popup == nil {
 		return
 	}
+	c.menu.leave()
 	c.popup.Close()
 	c.popup = nil
 	if u.Focused() == c {
@@ -1694,6 +1710,11 @@ func (t *tipper) retext(words string) {
 // handle shows the tooltip words for owner once the pointer rests on it for delay, and hides it when the pointer
 // leaves, presses or scrolls. After a press or a scroll it stays down until the pointer leaves and comes back.
 func (t *tipper) handle(e input.Event, u *gunim.UI, owner gunim.Node, words string, delay time.Duration) {
+	if !Tooltips.Get(u.Theme()) {
+		// A theme for a finger shows none: nothing rests on a touch screen to ask for one.
+		t.hide(u)
+		return
+	}
 	t.owner, t.delay = owner, delay
 	t.retext(words)
 	switch e := e.(type) {

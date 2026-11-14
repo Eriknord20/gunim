@@ -152,6 +152,10 @@ type display struct {
 	// them out.
 	line float32
 	size geom.Size
+	// button is where the tuner's button stands over the display, and spans where the Low and High lines were drawn
+	// last.
+	button geom.Rect
+	spans  [2]geom.Rect
 }
 
 func newDisplay(h plug.Host, v values) *display {
@@ -366,7 +370,9 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		lit := d.lit[k].Value()
 		a := 0.45 + 0.5*lit
 		w, r := 1.5+lit, 5+2*lit
-		p.RRect(geom.Rc(x-w/2, 0, w, d.line), 0, paint.Solid(paint.Faded(ink, a)))
+		top := d.spanTop(x)
+		d.spans[k] = geom.Rc(x-w/2, top, w, max(d.line-top, 0))
+		p.RRect(d.spans[k], 0, paint.Solid(paint.Faded(ink, a)))
 		if lit > 0.01 {
 			p.ShadowRRect(geom.Rc(x-r, zero-r, 2*r, 2*r), r, paint.Solid(paint.Faded(ink, 0)),
 				paint.Shadow{Blur: 10 * lit, Color: paint.Faded(ink, 0.4*lit)})
@@ -377,9 +383,31 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		if id == HighID {
 			lx = x - 8 - label.Advance
 		}
+		// Clear of the tuner's button at the top right.
+		lx = min(lx, d.size.W-tunerRoom-label.Advance)
 		label.Paint(p, geom.Pt(lx, 24), paint.Faded(ink, 0.5+0.4*lit))
 	}
 }
+
+// spanTop returns where a Low or High line at x starts: at the top, and lower, below the tuner's button, as the line
+// comes within spanDuck of it.
+func (d *display) spanTop(x float32) float32 {
+	const spanDuck = 16
+	far := max(d.button.Min.X-x, x-d.button.Max.X, 0)
+	near := min(max(1-(far-spanGap)/spanDuck, 0), 1)
+	return (d.button.Max.Y + spanGap) * near
+}
+
+// spanGap is the room the Low and High lines leave round the tuner's button.
+const spanGap = 4
+
+// meets reports whether a and b cover some of the same room.
+func meets(a, b geom.Rect) bool {
+	return a.Min.X < b.Max.X && b.Min.X < a.Max.X && a.Min.Y < b.Max.Y && b.Min.Y < a.Max.Y
+}
+
+// tunerRoom is how far in from the display's right edge the tuner's button reaches, and a gap.
+const tunerRoom = 32 + panelInset/2 + 6
 
 // paintTarget draws the target, in the spectrum's terms, as the
 // spectrum measures each bin: pink's fall of 3 dB an octave and the
@@ -550,12 +578,20 @@ type panel struct {
 	sections []*plugui.Section
 	knobs    map[uint32]*plugui.Knob
 	tuner    *plugui.Tuner
+	// Room lays the panel out at least at its least size, and scrolls it in a smaller box.
+	plug.Room
+	// least is the size the panel lays out at least at: the window view's least size in full, and none otherwise.
+	least geom.Size
 }
 
-func newPanel(h plug.Host) *panel {
+// newPanel returns the panel, in full for the plugin's window view.
+func newPanel(h plug.Host, full bool) *panel {
 	v := valuesOf(h)
 	p := &panel{v: v, disp: newDisplay(h, v), knobs: map[uint32]*plugui.Knob{},
 		tuner: plugui.NewTuner("Tune how the sound shows behind the controls")}
+	if full {
+		p.least = Descriptor.ViewMinSize
+	}
 	pick := func(id uint32) func(i int, u *gunim.UI) {
 		return func(i int, u *gunim.UI) {
 			h.Begin(id, u)
@@ -619,10 +655,11 @@ func (p *panel) Children() []gunim.Node {
 // panelInset is how far in from the panel's edges the glass stands.
 const panelInset = 16
 
-// Layout implements [gunim.Node]: the display fills the panel, the
-// sections along its foot, and the tuner at its top right.
+// Layout implements [gunim.Node]: the display fills the panel, laid
+// out at least at its least size in full, the sections along its foot,
+// and the tuner at its top right.
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
+	size := p.Lay(c.Max, p.least)
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
 	top := plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
@@ -633,13 +670,15 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	n := 1 + len(p.sections)
 	kids.At(n).Layout(gunim.Tight(geom.Sz(32, 32)))
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
+	p.disp.button = geom.Rc(size.W-32-panelInset/2, panelInset/2, 32, 32)
 	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
 	kids.At(n + 1).Place(geom.Pt(size.W-panelInset/2-max(cs.W, plugui.TunerW), panelInset/2+36))
-	return size
+	return c.Max
 }
 
-// Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// Paint implements [gunim.Node], clipped to the panel's box and scrolled where it was laid out larger.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	defer p.Room.Paint(pt, f)()
 	for k := range kids.All {
 		k.Paint(pt)
 	}

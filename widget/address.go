@@ -17,7 +17,7 @@ import (
 // Theme tokens for an [AddressBar].
 var (
 	// AddressHeight is the bar's height.
-	AddressHeight = theme.Length("address.height", 34)
+	AddressHeight = theme.TextRow("address.height", 34)
 	// AddressCrumbInk colours the places before the last, and AddressChevron the chevrons between them.
 	AddressCrumbInk = theme.Foreground("address.crumb", color.NRGBA{R: 0x8a, G: 0x93, B: 0xa6, A: 0xff})
 	AddressChevron  = theme.Foreground("address.chevron", color.NRGBA{R: 0x6b, G: 0x72, B: 0x80, A: 0xff})
@@ -366,6 +366,10 @@ func (c *crumbBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	}()
 	GroupRing(p, r, radius, c.ring.Value(), th)
 }
+
+// ScrollsAlong implements [gunim.WheelScroller]: true for the wheel turned either way while the places are wider
+// than the bar.
+func (c *crumbBar) ScrollsAlong(delta geom.Point) bool { return delta != geom.Point{} && c.most > 0 }
 
 // Handle implements [gunim.Handler]: the ring follows the keyboard, a press beside the places edits the path, and
 // the arrow keys, Home and End move between the places.

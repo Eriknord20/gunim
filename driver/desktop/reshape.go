@@ -27,28 +27,30 @@ func (w *Window) Reshape(by geom.Insets) error {
 		}
 		left, top := int(by.Left*f+0.5*sign(by.Left)), int(by.Top*f+0.5*sign(by.Top))
 		right, bottom := int(by.Right*f+0.5*sign(by.Right)), int(by.Bottom*f+0.5*sign(by.Bottom))
-		x, y = x-left, y-top
-		ww, wh = max(ww+left+right, 1), max(wh+top+bottom, 1)
-		// The frame the system draws round a window that keeps it counts
-		// as the window keeps on its monitor.
-		fl, ft, fr, fb := 0, 0, 0, 0
-		if !w.Chromeless() {
-			if fl, ft, fr, fb, err = w.gw.GetFrameSize(); err != nil {
-				fl, ft, fr, fb = 0, 0, 0, 0
-			}
-		}
-		area := workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2)))
-		if !area.Empty() {
-			x = keepOn(x, ww, fl, fr, int(area.Min.X), int(area.Max.X))
-			y = keepOn(y, wh, ft, fb, int(area.Min.Y), int(area.Max.Y))
-		}
-		// The engine waits on this call, and draws the frame at the new
-		// size after it.
-		w.placing = true
-		err = w.gw.SetBounds(x, y, ww, wh)
-		w.placing = false
-		return err
+		return w.setBoundsOnScreen(x-left, y-top, max(ww+left+right, 1), max(wh+top+bottom, 1))
 	})
+}
+
+// setBoundsOnScreen sets the window's bounds in screen coordinates, moved whole to keep on its monitor's work area.
+// It runs on the main thread.
+func (w *Window) setBoundsOnScreen(x, y, ww, wh int) error {
+	return w.setBoundsOn(workArea(geom.Pt(float32(x+ww/2), float32(y+wh/2))), x, y, ww, wh)
+}
+
+// setBoundsOn sets the window's bounds in screen coordinates, moved whole to keep on area, or where they are for an
+// empty area. It runs on the main thread.
+func (w *Window) setBoundsOn(area geom.Rect, x, y, ww, wh int) error {
+	// The frame the system draws round a window that keeps it counts as the window keeps on its monitor.
+	fl, ft, fr, fb := w.frameSize()
+	if !area.Empty() {
+		x = keepOn(x, ww, fl, fr, int(area.Min.X), int(area.Max.X))
+		y = keepOn(y, wh, ft, fb, int(area.Min.Y), int(area.Max.Y))
+	}
+	// The engine waits on this call, and draws the frame at the new size after it.
+	w.placing = true
+	err := w.gw.SetBounds(x, y, ww, wh)
+	w.placing = false
+	return err
 }
 
 // keepOn moves a span at at, n long with a frame lo and hi round it,

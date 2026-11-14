@@ -20,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/tonal"
+	"github.com/marrasen/gunim/geom"
 )
 
 // BypassID is the ID of the bypass parameter: over 0.5 passes the
@@ -53,13 +54,14 @@ const (
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:       "marrasen.eq",
-	Name:     "EQ",
-	Vendor:   "Marras",
-	Version:  "0.1.0",
-	Kind:     "Fx|EQ",
-	Tagline:  "Parametric EQ",
-	Keywords: []string{"equalizer", "equaliser", "filter", "bell", "shelf", "cut", "notch", "high-pass", "low-pass", "tone", "dynamic eq"},
+	ID:        "marrasen.eq",
+	Name:      "EQ",
+	Vendor:    "Marras",
+	Version:   "0.1.0",
+	Kind:      "Fx|EQ",
+	Tagline:   "Parametric EQ",
+	KeepsMono: true,
+	Keywords:  []string{"equalizer", "equaliser", "filter", "bell", "shelf", "cut", "notch", "high-pass", "low-pass", "tone", "dynamic eq"},
 	Params: []plug.Param{{
 		ID: BypassID, Name: "Bypass",
 		Min: 0, Max: 1, Default: 0, Steps: 1,
@@ -95,8 +97,10 @@ var Descriptor = plug.Descriptor{
 		Flags:  plug.Hidden,
 		Format: func(v float64) string { return fmt.Sprintf("%.0f Hz", v) },
 	}},
-	Patches: patches,
-	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },
+	Patches:     patches,
+	ViewSize:    geom.Sz(880, 520),
+	ViewMinSize: geom.Sz(640, 400),
+	New:         func(h plug.Host) plug.Plugin { return newPlugin(h) },
 }
 
 func init() { plug.Register(Descriptor) }

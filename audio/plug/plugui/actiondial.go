@@ -2,7 +2,6 @@ package plugui
 
 import (
 	"image/color"
-	"math"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -21,7 +20,8 @@ import (
 // its title and a word on how it stands. While the task runs, the
 // knob's arc fills as far as it has got, and the icon is a square, to
 // stop it; as it ends, the arc glows a moment. Stale greys its word, as
-// what it last did no longer holds.
+// what it last did no longer holds. Tab brings the keyboard to it, a
+// focus ring fades in round it, and Space or Enter clicks it.
 type ActionDial struct {
 	anim.Group
 	// Title is written under the cap, and Value under it, as a knob's
@@ -40,7 +40,9 @@ type ActionDial struct {
 	// progress is how far the task has got, gliding; hover how far the
 	// pointer is on it, and glow how far it glows, as the task ends.
 	progress, hover, glow *anim.Float
-	tip                   widget.PartTip
+	// ring is how far the focus ring shows.
+	ring *anim.Float
+	tip  widget.PartTip
 	// squash is how far it is pressed in; held says a press is on it, and size is how big it was laid out.
 	squash  *anim.Float
 	held    bool
@@ -51,8 +53,8 @@ type ActionDial struct {
 // NewActionDial returns a dial titled title, with ic on its cap.
 func NewActionDial(title string, ic *icon.Icon) *ActionDial {
 	d := &ActionDial{Title: title, Icon: ic, progress: anim.NewFloat(0), hover: anim.NewFloat(0), glow: anim.NewFloat(0),
-		squash: anim.NewFloat(0), clicker: widget.Clicker{Repeats: true}}
-	d.Add(d.progress, d.hover, d.glow, d.squash)
+		ring: anim.NewFloat(0), squash: anim.NewFloat(0), clicker: widget.Clicker{Repeats: true}}
+	d.Add(d.progress, d.hover, d.glow, d.ring, d.squash)
 	return d
 }
 
@@ -118,18 +120,8 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		p.ShadowRRect(geom.Rc(c.X-r+2, c.Y-r+2, 2*r-4, 2*r-4), r-2, paint.Solid(paint.Faded(accent, 0)),
 			paint.Shadow{Blur: 12 + 8*glow, Color: paint.Faded(accent, 0.35*hover+0.6*glow)})
 	}
-	// The arc, as a knob's, three quarters round from bottom left: its
-	// groove, and how far the task has got.
-	const from, sweep = 0.75 * math.Pi, 1.5 * math.Pi
-	arc := func(t1 float64, w float32, col color.NRGBA) {
-		n := max(int(t1*32), 1)
-		for i := range n {
-			a0 := from + sweep*t1*float64(i)/float64(n)
-			a1 := from + sweep*t1*float64(i+1)/float64(n)
-			audioui.Segment(p, geom.Pt(c.X+r*float32(math.Cos(a0)), c.Y+r*float32(math.Sin(a0))),
-				geom.Pt(c.X+r*float32(math.Cos(a1)), c.Y+r*float32(math.Sin(a1))), w, col)
-		}
-	}
+	// The arc, as a knob's: its groove, and how far the task has got.
+	arc := func(t1 float64, w float32, col color.NRGBA) { arcRibbon(p, c, r, 0, t1, w, col) }
 	arc(1, 3.5, anim.MixColor(KnobGroove.Get(th), paint.Faded(ink, 0.25), 0.5*hover))
 	if t := float64(min(max(d.progress.Value(), 0), 1)); t > 0.005 {
 		arc(t, 3.5, accent)
@@ -148,6 +140,7 @@ func (d *ActionDial) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		widget.PaintIcon(p, th, d.Icon, geom.Rc(c.X-7, c.Y-7, 14, 14), mark)
 	}
 	popCap()
+	capRing(p, c, r, d.ring.Value(), th)
 	name := audioui.Shaped(d.Title, text, false, false)
 	name.Paint(p, geom.Pt((box.W-name.Advance)/2, c.Y+r+4), paint.Faded(ink, 0.6+0.3*hover))
 	val := audioui.Shaped(d.Value, text, false, true)
@@ -172,6 +165,9 @@ func (d *ActionDial) Focusable() bool { return !d.Disabled }
 // it.
 func (d *ActionDial) Handle(e input.Event, u *gunim.UI) bool {
 	d.tip.Handle(e, u, d, d.Tooltip)
+	if followRing(d.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
 	case input.PointerEnter:
 		d.hover.Animate(1, widget.Quick.Get(u.Theme()))

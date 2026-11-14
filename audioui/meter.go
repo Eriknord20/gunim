@@ -3,6 +3,7 @@ package audioui
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -161,7 +162,7 @@ func PaintMeter(p *paint.Painter, th *theme.Live, r geom.Rect, l *Levels) {
 	}
 	loud := "—"
 	if s, ok := l.ShortTerm(); ok {
-		loud = fmt.Sprintf("%.1f", s)
+		loud = Readout("%.1f", s)
 	}
 	run := Shaped(loud, 11, true, true)
 	run.Paint(p, geom.Pt(meterLabelX(r.Min.X, MeterW/2, run.Advance), top-20), ink)
@@ -178,11 +179,21 @@ func topRuns(top [2]float32, format string) [2]text.Run {
 	for ch := range 2 {
 		words := "—"
 		if top[ch] > -89 {
-			words = fmt.Sprintf(format, top[ch])
+			words = Readout(format, float64(top[ch]))
 		}
 		out[ch] = Shaped(words, 8, true, true)
 	}
 	return out
+}
+
+// Readout writes v in format, as "%.1f". A value that rounds to zero
+// reads "0", whichever side of zero it lies: -0.04 reads "0.0".
+func Readout(format string, v float64) string {
+	s := fmt.Sprintf(format, v)
+	if len(s) > 1 && s[0] == '-' && strings.Trim(s[1:], "0.") == "" {
+		return s[1:]
+	}
+	return s
 }
 
 // meterLabelX is where a label w wide starts, centred mid along a meter

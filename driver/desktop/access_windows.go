@@ -56,6 +56,12 @@ func (w *Window) AccessWanted() bool {
 	return uw != nil && uw.asked.Load()
 }
 
+// Announce implements [driver.Announcer].
+func (w *Window) Announce(text string) bool {
+	uw := w.acc.uw.Load()
+	return uw != nil && uw.announce(text)
+}
+
 // PublishAccess implements [driver.AccessPublisher].
 func (w *Window) PublishAccess(t *access.Tree) {
 	if uw := w.acc.uw.Load(); uw != nil {

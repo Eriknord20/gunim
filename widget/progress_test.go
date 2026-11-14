@@ -12,6 +12,7 @@ import (
 func progressStage(t *testing.T) (b *ProgressBar, set func(float32), run func(int)) {
 	t.Helper()
 	w := gunimtest.New(t, geom.Sz(300, 40), nil)
+	w.PaintWhenLooked(false)
 	gunim.RegisterView(w, "bar", func(float32) *ProgressBar {
 		b = NewProgressBar()
 		return b

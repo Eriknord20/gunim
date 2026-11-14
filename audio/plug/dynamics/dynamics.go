@@ -10,6 +10,11 @@
 // a bass ducks under the kick drum. The limiter always listens to the
 // sound itself, to keep it under its ceiling.
 //
+// Its control input Key takes hits: while the host wires it, the gate
+// and the compressor listen to the hits alone, each held at its velocity
+// for KeyHoldMS, in place of the sidechain and of the sound they shape.
+// A later hit takes over at its own velocity.
+//
 // Its panel draws the sound in and out as it plays, with how far each
 // part turns it down, over knobs for every control, beside two classic
 // VU meters.
@@ -19,11 +24,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/decibel"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/internal/least"
+	"github.com/marrasen/gunim/geom"
 )
 
 // The parameters' IDs, by part.
@@ -65,7 +72,15 @@ const (
 	GateGRID  uint32 = 50
 	CompGRID  uint32 = 51
 	LimitGRID uint32 = 52
+
+	// KeyWiredID is 1 while Key is wired, and KeyHitsID counts the hits on it, starting again at keyHitsWrap, as the
+	// plugin reports them for its panel.
+	KeyWiredID uint32 = 60
+	KeyHitsID  uint32 = 61
 )
+
+// keyHitsWrap is where the count of Key's hits starts again at 0.
+const keyHitsWrap = 1 << 20
 
 // db writes decibels, to a tenth under 10 and whole over.
 func db(v float64) string {
@@ -93,6 +108,13 @@ func hz(v float64) string {
 
 // SidechainPort is the sidechain's place in the plugin's aux inputs.
 const SidechainPort = 0
+
+// KeyIn is the place in the plugin's control inputs of Key: hits the gate and the compressor hear, while it is wired,
+// in place of the sidechain and the plugin's own sound.
+const KeyIn = 0
+
+// KeyHoldMS is how long a hit on Key holds the detector at the hit's velocity, in ms.
+const KeyHoldMS = 20
 
 // GateOut, CompOut and LimitOut are the places in the plugin's control outputs of each part's reduction, in dB.
 const (
@@ -133,14 +155,18 @@ func onOff(v float64) string {
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
-	ID:       "marrasen.dynamics",
-	Name:     "Dynamics",
-	Vendor:   "Marras",
-	Version:  "0.1.0",
-	Kind:     "Fx|Dynamics",
-	Tagline:  "Gate, compressor & limiter",
-	Keywords: []string{"compressor", "compression", "limiter", "gate", "noise gate", "sidechain", "ducking", "threshold", "ratio", "loudness"},
-	AuxIn:    []plug.AudioPort{{Name: "Sidechain"}},
+	ID:        "marrasen.dynamics",
+	Name:      "Dynamics",
+	Vendor:    "Marras",
+	Version:   "0.1.0",
+	Kind:      "Fx|Dynamics",
+	Tagline:   "Gate, compressor & limiter",
+	KeepsMono: true,
+	Keywords:  []string{"compressor", "compression", "limiter", "gate", "noise gate", "sidechain", "ducking", "threshold", "ratio", "loudness"},
+	AuxIn:     []plug.AudioPort{{Name: "Sidechain"}},
+	ControlIn: []plug.ControlPort{
+		KeyIn: {Name: "Key", Max: 1, Trigger: true},
+	},
 	ControlOut: []plug.ControlPort{
 		GateOut:  {Name: "Gate reduction", Key: "gate", Unit: "dB", Min: -90, Measures: plug.MeasureGate},
 		CompOut:  {Name: "Compression", Key: "compression", Unit: "dB", Min: -60, Measures: plug.MeasureCompression},
@@ -180,6 +206,10 @@ var Descriptor = plug.Descriptor{
 		{ID: GateGRID, Name: "Gate reduction", Unit: "dB", Min: -90, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: CompGRID, Name: "Compression", Unit: "dB", Min: -60, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: LimitGRID, Name: "Limiting", Unit: "dB", Min: -24, Max: 0, Flags: plug.ReadOnly, Format: db},
+
+		{ID: KeyWiredID, Name: "Key wired", Max: 1, Steps: 1, Flags: plug.ReadOnly | plug.Hidden, Format: onOff},
+		{ID: KeyHitsID, Name: "Key hits", Max: keyHitsWrap - 1, Flags: plug.ReadOnly | plug.Hidden,
+			Format: func(v float64) string { return fmt.Sprintf("%.0f", v) }},
 	},
 	Patches: []plug.Patch{
 		{Name: "Default"},
@@ -191,7 +221,9 @@ var Descriptor = plug.Descriptor{
 		{Name: "Noise gate", Params: map[uint32]float64{GateOnID: 1, GateThresholdID: -50, GateRangeID: 30,
 			GateAttackID: 0.5, GateReleaseID: 200, CompOnID: 0, LimitOnID: 0}},
 	},
-	New: func(h plug.Host) plug.Plugin { return &plugin{} },
+	ViewSize:    geom.Sz(880, 560),
+	ViewMinSize: geom.Sz(760, 500),
+	New:         func(h plug.Host) plug.Plugin { return &plugin{} },
 }
 
 func init() { plug.Register(Descriptor) }
@@ -289,7 +321,50 @@ type processor struct {
 	// least gains are each part's so far this block.
 	run                            runs
 	gateLeast, compLeast, limLeast float64
+
+	// hits is Key's hits as held, and unsettled says a hold runs or the gate or the compressor is not yet at its
+	// keyed rest, kept by Process for Tail.
+	hits      hitKey
+	unsettled atomic.Bool
+	// keyWired and keyHits are what the plugin reports of Key for its panel.
+	keyWired, keyHits plug.Meter
+	// next is the host's frame after the last block run, where clocked says one ran.
+	next    int64
+	clocked bool
 }
+
+// hitKey turns Key's hits into the level the detector hears: each hit's velocity for KeyHoldMS from the hit's frame,
+// then silence. A later hit takes over.
+type hitKey struct {
+	hold, left int
+	level      float32
+	// count is the hits taken.
+	count int
+}
+
+// prepare readies k for hits at rate, and lets go of any hit held.
+func (k *hitKey) prepare(rate float64) {
+	*k = hitKey{hold: int(math.Round(KeyHoldMS * rate / 1000))}
+}
+
+// step takes a frame of the trigger, hit, and returns the level the detector hears on it.
+func (k *hitKey) step(hit float32) float32 {
+	if hit > 0 {
+		k.level, k.left = hit, k.hold
+		k.count++
+	}
+	if k.left == 0 {
+		return 0
+	}
+	k.left--
+	return k.level
+}
+
+// running reports whether a hit's hold still runs.
+func (k *hitKey) running() bool { return k.left > 0 }
+
+// clear lets go of the hit held.
+func (k *hitKey) clear() { k.left = 0 }
 
 // gate turns the sound down by Range where it falls under Threshold,
 // opening over Attack and closing over Release.
@@ -399,6 +474,7 @@ func (p *processor) Prepare(s plug.Setup) {
 	p.pending = make([]float32, 2*l.ahead)
 	p.run.make(s.MaxBlock)
 	p.gate.fall = coef(10, s.Rate)
+	p.hits.prepare(s.Rate)
 	for _, prm := range Descriptor.Params {
 		if prm.Flags&plug.ReadOnly == 0 {
 			p.take(plug.Change{ID: prm.ID, Value: prm.Default})
@@ -494,7 +570,23 @@ func (p *processor) Process(b *plug.Block) {
 		keyL, keyR = key[0], key[min(1, len(key)-1)]
 	}
 	ctl := [3][]float32{b.ControlOutput(GateOut), b.ControlOutput(CompOut), b.ControlOutput(LimitOut)}
+	hits := b.ControlInput(KeyIn)
+	// A block that starts past the last one's end comes after a sleep through silence, and one with no block before it
+	// after a reset: keyed, both start at the keyed rest
+	slept, first := p.clocked && b.Position.Frame > p.next, !p.clocked
+	p.next, p.clocked = b.Position.Frame+int64(b.Frames), true
+	if hits == nil || slept {
+		p.hits.clear()
+	}
 	next := 0
+	if hits != nil && (slept || first) {
+		// Take the block's first settings, so the gate rests as they have it
+		for next < len(b.Changes) && b.Changes[next].Frame <= 0 {
+			p.take(b.Changes[next])
+			next++
+		}
+		p.rest()
+	}
 	p.gateLeast, p.compLeast, p.limLeast = 0, 0, 1
 	for i := 0; i < b.Frames; {
 		for next < len(b.Changes) && b.Changes[next].Frame <= i {
@@ -513,13 +605,17 @@ func (p *processor) Process(b *plug.Block) {
 		if stereo {
 			or = outR[i:e]
 		}
+		var hit []float32
+		if hits != nil {
+			hit = hits[i:e]
+		}
 		var run [3][]float32
 		for c, v := range ctl {
 			if v != nil {
 				run[c] = v[i:e]
 			}
 		}
-		p.stages(inL[i:e], inR[i:e], kl, kr, outL[i:e], or, run, b.Position.Frame+int64(i))
+		p.stages(inL[i:e], inR[i:e], kl, kr, hit, outL[i:e], or, run, b.Position.Frame+int64(i))
 		i = e
 	}
 	for ; next < len(b.Changes); next++ {
@@ -529,6 +625,39 @@ func (p *processor) Process(b *plug.Block) {
 	p.gateGR.Set(p.gateLeast)
 	p.compGR.Set(p.compLeast)
 	p.limGR.Set(dbOf(p.limLeast))
+	p.unsettled.Store(hits != nil && (p.hits.running() || !p.rested()))
+	wired := 0.0
+	if hits != nil {
+		wired = 1
+	}
+	p.keyWired.Set(wired)
+	p.keyHits.Set(float64(p.hits.count % keyHitsWrap))
+}
+
+// keyRestDB is how near their rest the keyed gate's and compressor's gains must be, in decibels, for the tail to end. A
+// wake from sleep then moves the gain by at most 0.01 dB, which nobody hears. A gate of 40 dB gets there about 8
+// releases after a hit: about 1.3 s with the default release, and about 17 s with 2 s.
+const keyRestDB = 0.01
+
+// rest puts the gate and the compressor where silence on Key brings them: the gate shut, where it is on, and the
+// compressor at no reduction.
+func (p *processor) rest() {
+	p.comp.gr = 0
+	if g := &p.gate; g.on {
+		g.env, g.open, g.gain = 0, false, -g.rangeDB
+	}
+}
+
+// rested reports whether the gate and the compressor stand where rest puts them, to within keyRestDB.
+func (p *processor) rested() bool {
+	g, to := &p.gate, 0.0
+	if g.on {
+		if g.open {
+			return false
+		}
+		to = -g.rangeDB
+	}
+	return p.comp.gr >= -keyRestDB && math.Abs(g.gain-to) <= keyRestDB
 }
 
 // runs is what a run of frames holds between the stages.
@@ -550,10 +679,10 @@ func (r *runs) make(n int) {
 
 // stages runs a run of frames, inL and inR, through each part in turn
 // into outL and outR, outR nil where the plugin is mono; keyL and keyR
-// are the sidechain's, or nil; ctl the control outputs' frames, by
-// GateOut, CompOut and LimitOut, each nil where unconnected; f is the
-// run's first frame.
-func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, ctl [3][]float32, f int64) {
+// are the sidechain's, or nil; hits Key's frames, or nil where it is not
+// wired; ctl the control outputs' frames, by GateOut, CompOut and
+// LimitOut, each nil where unconnected; f is the run's first frame.
+func (p *processor) stages(inL, inR, keyL, keyR, hits, outL, outR []float32, ctl [3][]float32, f int64) {
 	n := len(inL)
 	r := &p.run
 	xl, xr, key, heard := r.xl[:n], r.xr[:n], r.key[:n], r.heard[:n]
@@ -587,6 +716,13 @@ func (p *processor) stages(inL, inR, keyL, keyR, outL, outR []float32, ctl [3][]
 			heard[i] = max(math.Abs(sl[i]), math.Abs(sr[i]))
 		}
 	} else {
+		copy(heard, key)
+	}
+	if hits != nil {
+		// While Key is wired, the gate and the compressor hear its hits alone
+		for i, v := range hits[:n] {
+			key[i] = float64(p.hits.step(v))
+		}
 		copy(heard, key)
 	}
 	for i, v := range key {
@@ -767,8 +903,14 @@ func (l *limiter) smooth(low float64) float64 {
 // late.
 func (p *processor) Latency() int { return p.lim.ahead }
 
-// Tail implements [plug.Processor]: the plugin never rings.
-func (p *processor) Tail() int { return 0 }
+// Tail implements [plug.Processor]: none, and with Key wired no end until a hit's hold is over, the gate shut and
+// the compressor at rest.
+func (p *processor) Tail() int {
+	if p.unsettled.Load() {
+		return math.MaxInt32
+	}
+	return 0
+}
 
 // Reset implements [plug.Processor]: what it held, let go.
 func (p *processor) Reset() {
@@ -787,6 +929,9 @@ func (p *processor) Reset() {
 	p.side.z = [2][2]float64{}
 	p.in, p.out, p.comp.makeup = p.inTo, p.outTo, p.comp.makeupTo
 	p.fresh = true
+	p.hits.clear()
+	p.unsettled.Store(false)
+	p.clocked = false
 	p.gateGR.Set(0)
 	p.compGR.Set(0)
 	p.limGR.Set(0)
@@ -806,6 +951,10 @@ func (p *processor) Report(id uint32) float64 {
 		return p.compGR.Get()
 	case LimitGRID:
 		return p.limGR.Get()
+	case KeyWiredID:
+		return p.keyWired.Get()
+	case KeyHitsID:
+		return p.keyHits.Get()
 	}
 	return 0
 }

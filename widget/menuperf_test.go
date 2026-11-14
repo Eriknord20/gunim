@@ -56,9 +56,17 @@ func TestAHugeMenuOpensAtOnce(t *testing.T) {
 	start := time.Now()
 	m := NewMenu(items)
 	m.Layout(gunim.Loose(geom.Sz(600, 480)), gunim.Frame{Scale: 1}, gunim.Children{})
-	// Shaping every item took a second; the longest few take milliseconds.
-	if took := time.Since(start); took > 250*time.Millisecond {
-		t.Fatalf("a menu of 100 000 items took %v to lay out the first time", took)
+	took := time.Since(start)
+	// Shaping every item took a second; the longest few take milliseconds. The menu is measured against shaping a
+	// fifth of its items here and now, so a loaded machine or the race detector slows both sides alike.
+	face, size := faceIn(Font, nil), TextSize.Default()
+	start = time.Now()
+	for i := range len(items) / 5 {
+		face.Shape(m.label(i), size)
+	}
+	if fifth := time.Since(start); took > fifth {
+		t.Fatalf("a menu of 100 000 items took %v to lay out the first time, longer than shaping a fifth of them, %v",
+			took, fifth)
 	}
 }
 

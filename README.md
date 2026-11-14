@@ -5,7 +5,8 @@ the display's refresh rate.
 
 ## Status
 
-gunim runs on Windows 11, on Linux under X11, on Android, and in a browser. On Windows
+gunim runs on Windows 11, on Linux under X11, on Android, in a browser, and full screen on a
+Linux screen with no window system, such as a Raspberry Pi's touch screen. On Windows
 each window draws at its own monitor's rate, with 60 Hz and 120 Hz
 monitors side by side. macOS builds and is still untested. The API
 still changes as the examples ask more of it.
@@ -148,18 +149,20 @@ Bonbon Sudoku, a sudoku of candies made for a phone, started here as
 `example/sudoku`, to see how far the animation goes. It is now an app of
 Skalarit AB's, on its way to Google Play.
 
-Three smaller examples show one thing each. `example/widgets` is a
+Four smaller examples show one thing each. `example/widgets` is a
 gallery of the widgets, with a dark and a light theme to switch
 between. `example/controls` has popups, pictures that fly to fill the
 window, a list of a hundred thousand items, rows to put in order by
 dragging, and a second window to drag pictures to. `example/paragraph`
 springs a column of English, Hebrew and Arabic between narrow and wide,
-wrapping it again every frame.
+wrapping it again every frame. `example/tray` puts an icon in the tray
+and opens a flyout beside it on a click.
 
 ```sh
 CGO_ENABLED=0 go run ./example/widgets
 CGO_ENABLED=0 go run ./example/controls
 CGO_ENABLED=0 go run ./example/paragraph
+CGO_ENABLED=0 go run ./example/tray
 ```
 
 ## Sound
@@ -347,9 +350,23 @@ An application reaches the rest of the desktop through `App`, `Client`
 and `UI`:
 
 - **The tray.** `App.SetTray` shows an icon with a menu, and
-  `App.TrayNotify` a message from it. With `App.StayOpen` the
+  `App.TrayNotify` a message from it. On Windows, `Tray.OnNotifyClick`
+  hears a click on the message, to open the page it is about, and
+  `Tray.OnNotifyGone` hears it leave the screen. A window of
+  `driver.KindFlyout` opens beside the icon, at `App.TrayRect` on
+  Windows, takes the keyboard, and closes once the user turns to
+  something else. With `App.StayOpen` the
   application runs on with no window open. Linux speaks
   StatusNotifierItem.
+- **The system's look.** `App.SystemLook` reads what the user chose
+  for every application: light or dark, fewer animations, a text size
+  and a contrast theme. `App.WatchSystemLook` hears each change.
+  `widget.ForLook` turns them into a theme. It scales every size
+  declared with `theme.FontSize` or `theme.TextRow`, sets `theme.Scale`
+  to 0 for fewer animations, and gives every widget colour one of the
+  contrast theme's colours. `calendar`, `widget/graph`, `widget/dock`
+  and `audioui` each add theirs with a `Contrast` of their own. Windows
+  alone is read so far.
 - **Keys from every program.** `App.RegisterHotKey` hears a key
   whatever program has the keyboard, on Windows and on X11.
 - **Media controls.** `App.SetNowPlaying` tells the system what plays,
@@ -364,6 +381,16 @@ and `UI`:
   text. `UI.ClipboardImage` reads a picture, and `UI.SetClipboardImage`
   and `Client.SetClipboardImage` put one there, on Windows, X11 and
   macOS.
+- **Sensitive text on the clipboard.** `UI.SetClipboardSensitive` puts
+  text such as a password on the clipboard. On Windows it is marked so
+  that Win+V history and the cloud clipboard leave it out, and clipboard
+  managers, old and new, are asked to skip it. Elsewhere it is put there
+  plainly, and a clipboard manager may keep it.
+  `UI.MarksClipboardSensitive` says which, so an app can warn the user
+  or clear the text sooner. `UI.ClearClipboardIf` takes the text off
+  again, only if the clipboard still holds it. On Windows it goes by
+  ownership: a copy made since, even of the same text, survives, and
+  nothing another program put there is read.
 - **Drag and drop.** Files and pictures drag between windows, out to
   other programs and in from them, and a drop target lights while
   another program's files hover over it. With
@@ -590,6 +617,44 @@ The examples lay themselves out for a phone where the window is narrow;
 the calculator and the chat take `-size 390x800` to try it on the
 desktop.
 
+## A screen with no window system
+
+`driver/kms` draws one full-screen UI straight to a Linux screen through the kernel's DRM/KMS,
+with touch read from `/dev/input`: a Raspberry Pi 5 with a Touch Display 2, say. It draws with
+gunim's renderer on the GPU, through OpenGL ES 3, and pages each frame on at the panel's vblank, so
+a screen that moves draws at the panel's rate and a still one draws nothing. Mesa's libraries load
+at run time, so it builds with `CGO_ENABLED=0`; the machine needs `libgbm1`, `libegl1`,
+`libegl-mesa0` and `libgles2`. Where the GPU fails, Mesa draws on the CPU, more slowly. A
+program opens the driver with the options it wants and runs as with `Main`:
+
+```go
+d, err := kms.Open(kms.Options{Rotate: 90, VT: "free"})
+if err != nil {
+	log.Fatal(err)
+}
+err = gunim.MainWith(ctx, d, fn)
+```
+
+`example/kmsdemo` is a test pattern with a dot under each finger, and `tools/kmsbench` measures
+the driver against the goals in [docs/plans/kms-touch.md](docs/plans/kms-touch.md). `kms.Options`'
+`Record` and `Replay` record a touch screen's events and play them back through the driver, for
+such measures. Built with `-tags gunimkms`, `gunim.Main` opens the driver itself with its default
+options. The driver is for 64-bit Linux, as on a Raspberry Pi 4 or 5 with a 64-bit system.
+
+The touch kit is what a screen worked by a finger needs on top. `widget.Touch` is a theme laid over another, as
+`widget.Dark().With(widget.Touch()...)`. It sets text in Inter, built into the program, makes every target at least
+48 pixels, and turns tooltips off. Every control lights and squashes under a finger on the frame it lands, with a
+glow from the finger. `widget.Stack` goes back by a swipe from the left edge, and `widget.PinPad`,
+`widget.Keyboard` and `widget.HoldButton` take a PIN, typing and a hold to confirm. `WIDGETS.md` has the design
+language they follow. `example/kmshello` is a plant-watering panel built on them. It runs full screen on a Pi, and
+in a window the size of the 5" Touch Display 2 on a desktop, worked with a mouse:
+
+```sh
+CGO_ENABLED=0 go run ./example/kmshello
+```
+
+![kmshello](example/kmshello/kmshello.png)
+
 ## The split
 
 A gunim program is two halves that speak only in values.
@@ -789,6 +854,12 @@ takes the theme sets it for the whole program with `anim.SetScale`.
 It leaves flings alone, and any value marked `RealTime`, such as a
 fade in sound or a meter's needle.
 
+Declare a size of text with `theme.FontSize` rather than
+`theme.Length`. `theme.ScaleText` then scales it with the rest, as
+for the user's text size setting. Declare the height of a row,
+a button or anything else that holds a line of text with
+`theme.TextRow`, so it grows with the text.
+
 Colours blend through Oklab, so a switch keeps its brightness and its
 hues. Text colours are declared with `theme.Foreground`: they fade out
 in the old colour and back in with the new one. Text and background
@@ -945,7 +1016,7 @@ path data.
 | `gunim/widget/dock` | Views in tabs and splits over many windows, which the user drags along a bar, into another group, to a pane's edge to split it, or out into a window of its own; the layout is plain data the program keeps, and the widgets say what the user asks for |
 | `gunim/widget/graph` | Boxes joined by wires on a plane that pans and zooms: wires drawn from port to port that snap to a port they may join, boxes dragged, wires replugged or pulled out, a band to pick boxes by; the graph is plain data the program keeps, and the view says what the user asks for |
 | `gunim/calendar` | A calendar's views: a day or a week by the hour, a month, and a small month to pick a day from |
-| `gunim/widget` | `Row`, `Column`, `Scroll`, a `TileGrid` that builds only the tiles in view and selects with a band, `Label` whose text the mouse can select and copy when `Selectable`, `TextField`, `NumberField` that sits at the right, steps with the arrows and the wheel, drags up and down as in a design tool, and holds itself to its bounds, `TextArea`, `Card`, `Button`, `Icon`, `IconButton`, `Checkbox`, `Switch`, `Slider`, which runs up the height as a fader when its `Axis` is vertical, fills from a resting value a double click glides back to, colours its track with a `Gradient` and drags finely with Shift, a `SliderRow` that labels one with a readout counting along and a reset mark, a `ToneCurve` that edits a monotone curve through points, a `Histogram` of red, green and blue mixed as light, `Tabs`, a `Segmented` control whose pill springs to the option chosen, `Dropdown`, a `ColorPicker` of a square, a hue strip, an opacity strip and a hex field, and a `ColorButton` that opens one in a popup, `ContextMenu`, `Tooltip`, `Image`, `Hero` for elements that fly between screens, `Draggable` and `DropTarget` for drag and drop within and between windows and to and from file managers, a `DragGhost` that trails the pointer and says what a drop would do, a `DropZone` that lights the spot under a drag and springs it open, `Dialog`, a keyed `List`, a `VirtualList` that builds only the rows in view, a `DataGrid` that draws millions of rows of styled cells by index and drags the rows selected, an `Overview` strip that maps and scrolls it, a `MenuButton` whose menu can stay open to tick several items, removable `Chip`s and a `Wrap` that flows them onto lines, `RichText` that wraps text in several styles with links, a `CodeEditor` with line numbers, tab stops, highlighting and marks such as a compiler's errors, and their theme tokens |
+| `gunim/widget` | `Row`, `Column`, `Scroll`, a `TileGrid` that builds only the tiles in view and selects with a band, `Label` whose text the mouse can select and copy when `Selectable`, `TextField`, `NumberField` that sits at the right, steps with the arrows and the wheel, drags up and down as in a design tool, and holds itself to its bounds, `TextArea`, `Card`, `Button`, `Icon`, `IconButton`, `Checkbox`, a `RadioGroup` of choices in cards, each with a line that explains it, `Switch`, `Slider`, which runs up the height as a fader when its `Axis` is vertical, fills from a resting value a double click glides back to, colours its track with a `Gradient` and drags finely with Shift, a `SliderRow` that labels one with a readout counting along and a reset mark, a `ToneCurve` that edits a monotone curve through points, a `Histogram` of red, green and blue mixed as light, `Tabs`, a `Segmented` control whose pill springs to the option chosen, a `NavList` of icon-and-label rows for moving between pages, with a pill that glides to the chosen one and a count in a badge, `Dropdown`, a `ColorPicker` of a square, a hue strip, an opacity strip and a hex field, and a `ColorButton` that opens one in a popup, `ContextMenu`, `Tooltip`, `Image`, `Hero` for elements that fly between screens, `Draggable` and `DropTarget` for drag and drop within and between windows and to and from file managers, a `DragGhost` that trails the pointer and says what a drop would do, a `DropZone` that lights the spot under a drag and springs it open, `Dialog`, a keyed `List`, a `VirtualList` that builds only the rows in view, a `DataGrid` that draws millions of rows of styled cells by index and drags the rows selected, an `Overview` strip that maps and scrolls it, a `MenuButton` whose menu can stay open to tick several items, removable `Chip`s and a `Wrap` that flows them onto lines, `RichText` that wraps text in several styles with links, a `CodeEditor` with line numbers, tab stops, highlighting and marks such as a compiler's errors, and their theme tokens |
 
 Commands, intents, topics and the `Client` live in `wire.go` and
 `view.go`. `driver.Offscreen` plus `Window.Frame` run a window with no
@@ -1106,6 +1177,18 @@ examples read out, and a screen reader can press, check, set and move
 focus through them. On Windows it answers UI Automation, which
 Narrator reads, on 64-bit Windows. macOS comes later.
 
+A node that says how things stand takes `access.RoleStatus`, and one
+that says what the user must hear at once takes `access.RoleAlert`. On
+Windows a screen reader reads either one again as its words change,
+without the user moving to it, at most once a second, so change a
+status's words only at the steps that matter. `UI.Announce` has a
+screen reader say words that show nowhere as a node, through UI
+Automation's notification event, from an open window a screen reader
+has looked at. A choice of several is a `RoleGroup` of
+`access.RoleRadioButton`s. On Linux the roles reach Orca, but a change
+of a status or an alert is not read out by itself yet, and
+`UI.Announce` says nothing.
+
 A Go program for Windows is a console program, and started from
 Explorer or a shortcut it gets a console window of its own. The driver
 lets go of a console the program was given alone, as it starts, and
@@ -1142,4 +1225,5 @@ In no set order:
 gunim is under the Apache License 2.0, in `LICENSE`. The code copied from
 Ebitengine keeps its own notices; see `internal/README.md`. The icons in
 `icon/lucide.go` are generated from Lucide's, under the ISC licence in
-`icon/LICENSE-lucide`.
+`icon/LICENSE-lucide`. The Inter font in `text/fonts` is under the SIL Open
+Font License 1.1, in `text/fonts/LICENSE-Inter.txt`.

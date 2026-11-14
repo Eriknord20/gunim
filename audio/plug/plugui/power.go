@@ -3,6 +3,8 @@ package plugui
 import (
 	"image/color"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -34,12 +36,15 @@ func PaintPower(p *paint.Painter, c geom.Point, on, hover float32, accent, ink c
 
 // Power switches something on and off, as a power lamp: lit while on,
 // gliding as it changes, lighting a little under the pointer, its
-// tooltip saying what a click does.
+// tooltip saying what a click does. Tab brings the keyboard to it, a
+// focus ring fades in round it, and Space or Enter switches it.
 type Power struct {
 	anim.Group
 	checked bool
 	on      *anim.Float
 	hover   *anim.Float
+	// ring is how far the focus ring shows.
+	ring *anim.Float
 	// squash is how far it is pressed in; held says a press is on it, and size is how big it was laid out.
 	squash *anim.Float
 	held   bool
@@ -49,14 +54,16 @@ type Power struct {
 	OnChange func(on bool, u *gunim.UI) gunim.Intent
 	// Name is what it switches, for its tooltip and for access.
 	Name string
-	tip  widget.PartTip
+	// Tooltip, where set, replaces the default tooltip, which says whether Name is on and what a click does.
+	Tooltip string
+	tip     widget.PartTip
 }
 
 // NewPower returns a power lamp, off, switching name.
 func NewPower(name string) *Power {
-	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), squash: anim.NewFloat(0),
-		click: widget.Clicker{Repeats: true}}
-	p.Add(p.on, p.hover, p.squash)
+	p := &Power{Name: name, on: anim.NewFloat(0), hover: anim.NewFloat(0), ring: anim.NewFloat(0),
+		squash: anim.NewFloat(0), click: widget.Clicker{Repeats: true}}
+	p.Add(p.on, p.hover, p.ring, p.squash)
 	return p
 }
 
@@ -87,16 +94,27 @@ func (p *Power) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geo
 func (p *Power) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	mid := geom.Pt(box.W/2, box.H/2)
+	// The ring hugs the lamp, so it stays clear of a section's title beside it.
+	widget.FocusRing(pt, geom.Rc(mid.X-6, mid.Y-6, 12, 12), 6, p.ring.Value(), th)
 	defer pt.Push(paint.Scale(1-0.12*p.squash.Value(), mid))()
 	PaintPower(pt, mid, p.on.Value(), p.hover.Value(), widget.Accent.Get(th), widget.Ink.Get(th))
 }
 
-// tooltip says what a click does.
+// tooltip says whether it is on and what a click does, as "Follow song: on. Click to turn off.".
 func (p *Power) tooltip() string {
-	if p.checked {
-		return "Switch the " + p.Name + " off"
+	if p.Tooltip != "" {
+		return p.Tooltip
 	}
-	return "Switch the " + p.Name + " on"
+	now, to := "off", "on"
+	if p.checked {
+		now, to = "on", "off"
+	}
+	if p.Name == "" {
+		r, n := utf8.DecodeRuneInString(now)
+		return string(unicode.ToUpper(r)) + now[n:] + ". Click to turn " + to + "."
+	}
+	r, n := utf8.DecodeRuneInString(p.Name)
+	return string(unicode.ToUpper(r)) + p.Name[n:] + ": " + now + ". Click to turn " + to + "."
 }
 
 // Focusable implements [gunim.Focusable].
@@ -106,6 +124,9 @@ func (p *Power) Focusable() bool { return true }
 // switches it.
 func (p *Power) Handle(e input.Event, u *gunim.UI) bool {
 	p.tip.Handle(e, u, p, p.tooltip())
+	if followRing(p.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
 	case input.PointerEnter:
 		p.hover.Animate(1, widget.Quick.Get(u.Theme()))
@@ -126,7 +147,7 @@ func (p *Power) Handle(e input.Event, u *gunim.UI) bool {
 		p.click.Press(e, 0)
 		p.squash.Animate(1, widget.Quick.Get(u.Theme()))
 	case input.PointerUp:
-		if !p.held {
+		if !p.held || e.Button != input.ButtonPrimary {
 			return false
 		}
 		p.held = false

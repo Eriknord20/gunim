@@ -104,10 +104,16 @@ func (p *Popup) Offscreen() *driver.OffscreenWindow {
 
 // Input hands the popup a platform event, as its window would, for a window driven with [Window.Frame]. It must be
 // called from the goroutine calling Frame, and positions are in the popup's window's space.
-func (p *Popup) Input(ev any) { p.u.popupEvent(popupEvent{s: p.s, ev: ev}) }
+func (p *Popup) Input(ev any) {
+	defer p.u.w.drive()()
+	p.u.popupEvent(popupEvent{s: p.s, ev: ev})
+}
 
-// Move attaches the popup to a new anchor, in the opener's space.
+// Move attaches the popup to a new anchor, in the opener's space, and does nothing where the anchor is the same.
 func (p *Popup) Move(anchor geom.Rect) {
+	if p.s.opts.Anchor == anchor {
+		return
+	}
 	p.s.opts.Anchor = anchor
 	p.u.invalid = true
 }
@@ -174,8 +180,11 @@ type surface struct {
 	// opened is when the popup was opened, window how it got its window and in how long, and shown whether its first
 	// frame has been shown, for GUNIM_DEBUG_POPUP.
 	opened time.Time
-	window string
-	shown  bool
+	// unshown says a held frame gave up waiting for the popup's window to show its frame, and waits no more until
+	// it does; see waitsForPopups.
+	unshown bool
+	window  string
+	shown   bool
 	// region is where the window was last told it takes the pointer, and regionSet says it was told at all; see
 	// pointerRegion.
 	region    []geom.Rect
@@ -316,12 +325,7 @@ func (u *UI) framePopups(f Frame) {
 
 func (u *UI) framePopup(s *surface, f Frame) {
 	opener := s.root.opener
-	f.Theme = u.themeOf(opener)
-	// A popup's window keeps clear of the system's bars itself.
-	f.Safe = geom.Insets{}
-	f.Keyboard = 0
-	// Until the window opens, guess it blends as the last one did.
-	f.Transparent = u.w.blends
+	f = u.popupFrame(s, f)
 	if s.dw != nil && s.zoom != u.zoom {
 		setZoom(s.dw, u.zoom)
 		// Place the window again at the new zoom
@@ -392,12 +396,38 @@ func (u *UI) framePopup(s *surface, f Frame) {
 		s.stale = true
 		return
 	}
+	u.stampClock(s.dw)
 	if err := s.dw.Present(pp.Ops(), everything); err != nil {
 		u.w.err = fmt.Errorf("gunim: present popup: %w", err)
 		u.closePopup(s)
 		return
 	}
 	s.inFlight, s.stale = true, false
+}
+
+// popupFrame is f as popup s's content sees it.
+func (u *UI) popupFrame(s *surface, f Frame) Frame {
+	f.Theme = u.themeOf(s.root.opener)
+	// A popup's window keeps clear of the system's bars itself.
+	f.Safe = geom.Insets{}
+	f.Keyboard = 0
+	// Until the window opens, guess it blends as the last one did.
+	f.Transparent = u.w.blends
+	return f
+}
+
+// layoutPopups lays out the popups open, for a frame left unpainted, which has them neither painted nor
+// presented: what a popup's layout starts moving moves from the frame it would have, as in a frame painted.
+func (u *UI) layoutPopups(f Frame) {
+	for _, s := range u.popups {
+		if s.dw == nil || s.closing && len(s.root.kids) == 0 {
+			continue
+		}
+		pf := u.popupFrame(s, f)
+		pf.Scale, pf.Transparent = s.dw.Scale(), transparent(s.dw)
+		u.fitPopup(s, u.windowOf(s.root.opener))
+		u.layoutPopup(s, pf)
+	}
 }
 
 // fitPopup tells content that fits itself to the screen how much room there is round its anchor, asking the parent
@@ -417,7 +447,9 @@ func (u *UI) fitPopup(s *surface, parent driver.Window) {
 	if len(fits) == 0 && !s.opts.Beside {
 		return
 	}
-	a := u.popupAnchor(s)
+	// The room round the anchor the content asked for: the slide inside the window is the engine's, and content that
+	// places itself goes by where it asked to go.
+	a := u.askedAnchor(s)
 	if s.opts.Beside {
 		// The room round the anchor itself, which the popup is put beside
 		a = u.openerRect(s)
@@ -459,46 +491,47 @@ func (u *UI) layoutPopup(s *surface, f Frame) geom.Size {
 // bottom, even where the padding turns it inside out: the popup lines
 // its top up with the bottom and its bottom with the top.
 //
-// A popup opened beside its anchor gets an anchor of no size, at where its window's top-left corner goes.
+// A popup opened beside its anchor gets an anchor of no size, at where its window's top-left corner goes. One of the
+// main window that opens below or above slides sideways to keep inside the window, as [UI.insideWindow] says.
 func (u *UI) popupAnchor(s *surface) geom.Rect {
+	anchor := u.askedAnchor(s)
+	if s.opts.Beside || s.opts.Over {
+		return anchor
+	}
+	return u.insideWindow(s, anchor, u.popupPadding(s))
+}
+
+// popupPadding returns the padding of s's content, where it has one.
+func (u *UI) popupPadding(s *surface) geom.Insets {
+	for _, k := range s.root.kids {
+		if pp, ok := k.node.(PopupPadder); ok {
+			return pp.PopupPadding()
+		}
+	}
+	return geom.Insets{}
+}
+
+// askedAnchor returns s's anchor as [UI.popupAnchor] does, before the slide that keeps a popup inside its window: where
+// the content asked to go.
+func (u *UI) askedAnchor(s *surface) geom.Rect {
 	anchor := u.openerRect(s)
-	if s.opts.Beside {
+	in := u.popupPadding(s)
+	switch {
+	case s.opts.Beside:
 		room := driver.NoRoomLimit
 		if s.roomKnown {
 			room = s.room
 		}
-		var in geom.Insets
-		for _, k := range s.root.kids {
-			if pp, ok := k.node.(PopupPadder); ok {
-				in = pp.PopupPadding()
-				break
-			}
-		}
 		at := besideAt(anchor, s.root.size, in, room)
 		return geom.Rect{Min: at, Max: at}
+	case s.opts.Over:
+		// The content, inside its padding, sits on the anchor's corner
+		return anchor.Add(geom.Pt(-in.Left, -in.Top))
 	}
-	var in geom.Insets
-	for _, k := range s.root.kids {
-		pp, ok := k.node.(PopupPadder)
-		if !ok {
-			continue
-		}
-		in = pp.PopupPadding()
-		if s.opts.Over {
-			// The content, inside its padding, sits on the anchor's corner
-			anchor.Min = anchor.Min.Sub(geom.Pt(in.Left, in.Top))
-			anchor.Max = anchor.Max.Sub(geom.Pt(in.Left, in.Top))
-			return anchor
-		}
-		anchor.Min.X -= in.Left
-		anchor.Min.Y += in.Bottom
-		anchor.Max.Y -= in.Top
-		break
-	}
-	if s.opts.Over {
-		return anchor
-	}
-	return u.insideWindow(s, anchor, in)
+	anchor.Min.X -= in.Left
+	anchor.Min.Y += in.Bottom
+	anchor.Max.Y -= in.Top
+	return anchor
 }
 
 // insideWindow slides anchor, where a popup of the main window opens
@@ -815,7 +848,7 @@ func (u *UI) popupEvent(e popupEvent) {
 				float64(time.Since(e.s.opened).Microseconds())/1000, e.s.window)
 		}
 		e.s.shown = true
-		e.s.inFlight = false
+		e.s.inFlight, e.s.unshown = false, false
 		if e.s.stale {
 			u.invalid = true
 		}
@@ -825,7 +858,7 @@ func (u *UI) popupEvent(e popupEvent) {
 		u.popupCovered(e.s, c.Covered)
 		return
 	}
-	u.handleOn(e.s.root, e.ev)
+	u.handleOn(e.s.root, u.heldTime(e.ev))
 }
 
 // popupCovered notes whether s's window is out of sight. A popup is on top of other windows, so one can still be
@@ -885,6 +918,7 @@ func (w *Window) forward(s *surface) {
 // called from the goroutine calling Frame: never on a window its loop
 // runs, which takes [Client.Input].
 func (w *Window) Inject(ev input.Event) {
+	defer w.drive()()
 	w.ui.paintOwed()
 	w.route(ev)
 	w.ui.focusNow()

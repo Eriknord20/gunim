@@ -14,11 +14,14 @@ import (
 // Selector picks one of a few options, as a synth's panel does: its
 // lamps, the chosen one lit, where a knob's cap stands, and under them,
 // as under a knob, its title and the chosen option's name, or the name
-// of the one under the pointer. A click on a lamp
-// picks its option, and the arrow keys step through them. The wheel
-// passes it by, to scroll the pane it is in.
+// of the one under the pointer. A press squashes a lamp, and its release
+// over the same lamp picks the option; a press dragged away picks
+// nothing. The arrow keys move through the lamps as they stand in the
+// grid, and Home and End go to the first and the last. The wheel passes
+// it by, to scroll the pane it is in.
 // Lamps light and dim gliding, the name turns over as it changes, and
-// each lamp's tooltip says what its option does.
+// each lamp's tooltip says what its option does. Tab brings the keyboard
+// to it, and a focus ring fades in round it.
 type Selector struct {
 	anim.Group
 	names, tips []string
@@ -27,6 +30,12 @@ type Selector struct {
 	// gliding as it changes.
 	lit   []*anim.Float
 	shown *anim.Float
+	// ring is how far the focus ring shows, press how far the lamp at pressed is pushed in, and held says the press
+	// is still down.
+	ring, press *anim.Float
+	pressed     int
+	held        bool
+	click       widget.Clicker
 	// OnPick picks option i, as the user chose it.
 	OnPick func(i int, u *gunim.UI)
 	// Locked greys the selector, and it picks nothing.
@@ -36,6 +45,8 @@ type Selector struct {
 	Columns int
 	// Title is what it picks, written under its lamps as a knob's name.
 	Title string
+	// Label, where set, names the selector for a screen reader in place of Title.
+	Label string
 	tip   widget.PartTip
 	cells []geom.Rect
 	size  geom.Size
@@ -47,12 +58,13 @@ const SelectorH = KnobH
 // NewSelector returns a selector titled title of the options names, each
 // with its tooltip of tips, the first chosen.
 func NewSelector(title string, names, tips []string) *Selector {
-	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0)}
+	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0), ring: anim.NewFloat(0),
+		press: anim.NewFloat(0), click: widget.Clicker{Repeats: true}}
 	for i := range names {
 		s.lit = append(s.lit, anim.NewFloat(float32(anim.OnOff(i == 0))))
 		s.Add(s.lit[i])
 	}
-	s.Add(s.shown)
+	s.Add(s.shown, s.ring, s.press)
 	return s
 }
 
@@ -143,6 +155,14 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
 	end := widget.Faint(p, box, anim.OnOff(s.Locked)*0.6)
 	defer end()
+	if len(s.cells) > 0 {
+		// The ring runs round the lamps' grid, 6 out from the middle of the lamps at its corners.
+		g := geom.Rect{Min: s.cells[0].Min, Max: s.cells[len(s.cells)-1].Max}
+		for _, r := range s.cells {
+			g = g.Union(r)
+		}
+		widget.FocusRing(p, g.Inset(geom.Uniform(lampCol/2-6)), 6, s.ring.Value(), th)
+	}
 	for i, r := range s.cells {
 		lit := s.lit[i].Value()
 		cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
@@ -154,7 +174,14 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		if i == s.hot && i != s.sel {
 			lamp = paint.Faded(ink, 0.4)
 		}
-		p.RRect(geom.Rc(cx-3.5, cy-3.5, 7, 7), 3.5, paint.Solid(lamp))
+		// The lamp pressed squashes and lights toward the accent.
+		lr := float32(3.5)
+		if i == s.pressed {
+			pr := s.press.Value()
+			lamp = anim.MixColor(lamp, accent, 0.5*pr)
+			lr *= 1 - 0.25*pr
+		}
+		p.RRect(geom.Rc(cx-lr, cy-lr, 2*lr, 2*lr), lr, paint.Solid(lamp))
 	}
 	// The title, as a knob's name, and under it the name: the chosen
 	// option's, or the one under the pointer, the words before sliding
@@ -227,39 +254,91 @@ func (s *Selector) Handle(e input.Event, u *gunim.UI) bool {
 	if _, ok := e.(input.PointerMove); ok || isLeave(e) {
 		s.tip.Handle(e, u, s, tip)
 	}
+	if followRing(s.ring, e, u) {
+		return true
+	}
 	switch e := e.(type) {
 	case input.PointerMove:
 		if h := s.at(e.Pos); h != s.hot {
 			s.hot = h
 			s.glide(u)
 		}
+		if s.held {
+			s.press.Animate(anim.OnOff(s.at(e.Pos) == s.pressed), widget.Quick.Get(u.Theme()))
+		}
 	case input.PointerLeave:
 		s.hot = -1
 		s.glide(u)
 	case input.PointerDown:
-		if e.Button != input.ButtonPrimary {
+		if e.Button != input.ButtonPrimary || s.Locked {
 			return false
 		}
 		s.tip.Hide(u)
-		s.pick(s.at(e.Pos), u)
+		i := s.at(e.Pos)
+		s.click.Press(e, i)
+		if i < 0 {
+			return true
+		}
+		s.held, s.pressed = true, i
+		s.press.Animate(1, widget.Quick.Get(u.Theme()))
+		u.Invalidate()
+	case input.PointerUp:
+		if !s.held || e.Button != input.ButtonPrimary {
+			return false
+		}
+		s.held = false
+		s.press.Animate(0, widget.Bounce.Get(u.Theme()))
+		u.Invalidate()
+		// It acts on the release over the lamp pressed, so a press dragged away does nothing.
+		if i := s.at(e.Pos); s.click.Release(e, i) {
+			s.pick(i, u)
+		}
 	case input.KeyPress:
 		// Ctrl, Alt or Super with a key is the window's shortcut, such as
 		// Alt+Left to the loop's start: the selector leaves it be.
 		if e.Mods.Has(input.ModControl) || e.Mods.Has(input.ModAlt) || e.Mods.Has(input.ModSuper) {
 			return false
 		}
-		switch e.Key {
-		case input.KeyLeft, input.KeyUp:
-			s.pick(s.sel-1, u)
-		case input.KeyRight, input.KeyDown:
-			s.pick(s.sel+1, u)
-		default:
+		i, ok := s.move(e.Key)
+		if !ok {
 			return false
 		}
+		s.pick(i, u)
 	default:
 		return false
 	}
 	return true
+}
+
+// move returns the option key moves to from the one chosen, and false for a key that moves nothing.
+func (s *Selector) move(key input.Key) (int, bool) {
+	cols, rows := s.grid()
+	i, n := s.sel, len(s.names)
+	switch key {
+	case input.KeyLeft:
+		i--
+	case input.KeyRight:
+		i++
+	case input.KeyUp, input.KeyDown:
+		d := 1
+		if rows > 1 {
+			d = cols
+		}
+		if key == input.KeyUp {
+			d = -d
+		}
+		// A lamp past the grid's edge leaves the choice where it is.
+		if i+d >= 0 && i+d < n {
+			i += d
+		}
+	case input.KeyHome:
+		i = 0
+	case input.KeyEnd:
+		i = n - 1
+	default:
+		return 0, false
+	}
+	return min(max(i, 0), n-1), true
 }
 
 func isLeave(e input.Event) bool {
@@ -267,10 +346,16 @@ func isLeave(e input.Event) bool {
 	return ok
 }
 
-// Access implements [gunim.Accessible]: a list of tabs, one an
-// option, as a segmented control reads.
+// Access implements [gunim.Accessible]: a list of tabs named by its
+// Label or its title, one an option, as a segmented control reads.
 func (s *Selector) Access() access.Info {
-	info := access.Info{Role: access.RoleTabList, Value: s.names[s.sel]}
+	info := access.Info{Role: access.RoleTabList, Name: s.Title, Value: s.names[s.sel]}
+	if s.Label != "" {
+		info.Name = s.Label
+	}
+	if s.Locked {
+		info.State = access.StateDisabled
+	}
 	for i, n := range s.names {
 		part := access.Info{Role: access.RoleTab, Name: n, Actions: []string{access.ActionPress}}
 		if i < len(s.tips) {

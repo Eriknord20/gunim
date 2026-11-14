@@ -41,6 +41,18 @@ jobs:
         if: runner.os == 'Windows'
         run: go test "-gcflags=github.com/marrasen/gunim/filemanager=-d=maymorestack=runtime.mayMoreStackMove" -run StackMoves ./filemanager/
 
+      # The tests on the real clipboard, named in the log. The ones in
+      # internal/glfw fail rather than skip in CI when they cannot run,
+      # and the step fails unless all five passed, so a rename cannot
+      # leave it passing with nothing run. The one in driver/desktop
+      # needs a display, which this runner lacks, so it skips here.
+      - name: Test the clipboard
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go test -v -count=1 -run '^TestSensitive' ./internal/glfw/ ./driver/desktop/ | tee clipboard.log
+          test "$(grep -c -- '--- PASS: TestSensitive' clipboard.log)" -ge 5
+
       - name: Build
         run: go build ./...
 
@@ -71,6 +83,44 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+  # Every package under the race detector, which runs them many times
+  # slower. It runs beside the other jobs, in two parts of about the same
+  # length: the plug-ins, and everything else. So it adds little to how
+  # long CI takes.
+  race:
+    name: Test with the race detector, ${{ matrix.part }} (ubuntu-latest)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: the plug-ins
+            packages: ./audio/plug/...
+          - part: the rest
+            packages: rest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      # The list is made in a step of its own, so a failing go list stops
+      # the job rather than leaving go test with no packages.
+      - name: List the packages
+        run: |
+          if [ '${{ matrix.packages }}' = rest ]; then
+            go list ./... | grep -v '/audio/plug\(/\|$\)' > "$RUNNER_TEMP/packages"
+          else
+            go list ${{ matrix.packages }} > "$RUNNER_TEMP/packages"
+          fi
+          test -s "$RUNNER_TEMP/packages"
+
+      - name: Test with the race detector
+        run: go test -race $(cat "$RUNNER_TEMP/packages")
+
   # Linux on 64-bit ARM. The audio packages hold assembly for arm64, the
   # JACK, PipeWire and Core Audio clients' callbacks, which their
   # tests run through fakes: with the macOS job, this is where that
@@ -93,8 +143,50 @@ jobs:
       - name: Test audio
         run: go test ./audio/...
 
+      # driver/kms, the touch screen's driver for a Raspberry Pi, on its own
+      # architecture: its structures go to the kernel as they lie.
+      - name: Test the KMS driver
+        run: |
+          go test ./driver/kms/ ./driver/internal/compose/
+          go build ./driver/kms/... ./tools/kmsbench ./example/kmsdemo
+          go vet -tags kmspi -unsafeptr=false ./driver/kms/
+        env:
+          CGO_ENABLED: 0
+
       - name: Test audio without cgo
         run: go test ./audio/internal/jack/ ./audio/internal/pipewire/ ./audio/internal/audiounit/ ./audio/speaker/
+        env:
+          CGO_ENABLED: 0
+
+  # driver/kms on the kernel's virtual display, vkms, with Mesa drawing
+  # on the CPU: the whole driver, from the modeset to blanking, on a
+  # machine with no screen.
+  vkms:
+    name: Test the KMS driver on vkms (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: go.sum
+
+      - name: Load vkms
+        run: |
+          uname -r
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgbm1 libegl1 libegl-mesa0 libgles2
+          modinfo vkms || find /lib/modules/"$(uname -r)" -name 'vkms*'
+          sudo modprobe vkms
+          ls -l /dev/dri
+          for c in /sys/class/drm/card*-*; do echo "$c $(cat "$c/status")"; done
+
+      - name: Test on vkms
+        run: |
+          go test -c -tags kmsvkms -o vkms.test ./driver/kms
+          sudo ./vkms.test -test.v -test.run TestOnVKMS
         env:
           CGO_ENABLED: 0
 

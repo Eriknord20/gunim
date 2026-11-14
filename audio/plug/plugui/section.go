@@ -1,8 +1,6 @@
 package plugui
 
 import (
-	"strings"
-
 	"math"
 
 	"github.com/marrasen/gunim"
@@ -53,7 +51,7 @@ func NewSection(h plug.Host, d *plug.Descriptor, name string, on uint32, ids ...
 		s.Knobs = append(s.Knobs, NewKnob(h, p))
 	}
 	if on != 0 {
-		s.Switch = NewPower(strings.ToLower(name))
+		s.Switch = NewPower(name)
 		s.Switch.SetChecked(h.Param(on) > 0.5, nil)
 		s.Switch.OnChange = func(v bool, u *gunim.UI) gunim.Intent {
 			h.Begin(on, u)
@@ -116,17 +114,17 @@ func (s *Section) Follow(id uint32, v float64, u *gunim.UI) {
 	}
 }
 
-// Children implements [gunim.Composite].
+// Children implements [gunim.Composite]: the switch first, as Tab reaches it before the knobs.
 func (s *Section) Children() []gunim.Node {
 	kids := make([]gunim.Node, 0, len(s.Knobs)+len(s.extras)+1)
+	if s.Switch != nil {
+		kids = append(kids, s.Switch)
+	}
 	for _, k := range s.Knobs {
 		kids = append(kids, k)
 	}
 	for _, e := range s.extras {
 		kids = append(kids, e.n)
-	}
-	if s.Switch != nil {
-		kids = append(kids, s.Switch)
 	}
 	return kids
 }
@@ -136,23 +134,25 @@ func (s *Section) Children() []gunim.Node {
 // height, and the switch at the top right.
 func (s *Section) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	s.size = c.Constrain(geom.Sz(s.Width(), SectionH))
+	first := 0
+	if s.Switch != nil {
+		k := kids.At(0)
+		k.Layout(gunim.Tight(geom.Sz(PowerSize, PowerSize)))
+		k.Place(geom.Pt(SectionPad-3, (SectionHead-PowerSize)/2+2))
+		first = 1
+	}
 	x := float32(SectionPad)
 	for i := range s.Knobs {
-		kids.At(i).Layout(gunim.Tight(geom.Sz(KnobW, KnobH)))
-		kids.At(i).Place(geom.Pt(x, SectionHead))
+		kids.At(first + i).Layout(gunim.Tight(geom.Sz(KnobW, KnobH)))
+		kids.At(first + i).Place(geom.Pt(x, SectionHead))
 		x += KnobW
 	}
 	for i, e := range s.extras {
 		x += SectionPad
-		k := kids.At(len(s.Knobs) + i)
+		k := kids.At(first + len(s.Knobs) + i)
 		sz := k.Layout(gunim.Constraints{Min: geom.Sz(e.w, 0), Max: geom.Sz(e.w, KnobH)})
 		k.Place(geom.Pt(x, SectionHead+(KnobH-sz.H)/2))
 		x += e.w
-	}
-	if s.Switch != nil {
-		k := kids.At(kids.Len() - 1)
-		k.Layout(gunim.Tight(geom.Sz(PowerSize, PowerSize)))
-		k.Place(geom.Pt(SectionPad-3, (SectionHead-PowerSize)/2+2))
 	}
 	return s.size
 }

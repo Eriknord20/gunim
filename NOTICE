@@ -10,3 +10,7 @@ Icons and Contributors, under the ISC License in icon/LICENSE-lucide.
 The emoji and their names in emoji/data.go are generated from Unicode's
 emoji-test.txt, Copyright Unicode, Inc., under the Unicode License v3,
 https://www.unicode.org/license.txt.
+
+The Inter font, regular and semibold, in text/fonts is Inter 4.1,
+Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter),
+under the SIL Open Font License 1.1 in text/fonts/LICENSE-Inter.txt.

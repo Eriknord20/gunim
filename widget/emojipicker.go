@@ -492,6 +492,9 @@ func (t *emojiTabs) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 		if i == t.shown {
 			ink = Ink.Get(th)
 		}
+		if i == t.hover && th.Sets(MenuHotInk.Key()) {
+			ink = MenuHotInk.Get(th)
+		}
 		c := cellBox.Center()
 		drawIcon(p, th, g.icon, geom.Rc(c.X-s/2, c.Y-s/2, s, s), ink, 1)
 	}

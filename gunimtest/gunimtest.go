@@ -1,8 +1,9 @@
 // Package gunimtest helps test an interface built with gunim.
 //
-// Its windows are offscreen windows that fail the test that made them
-// if, by the test's end, anything sent from a node or focused a node
-// that was not in the tree. Such a call does nothing for the node, and
+// Its windows are offscreen windows that paint a frame only when the test
+// looks at what they drew; see [gunim.Window.PaintWhenLooked]. They fail
+// the test that made them if, by the test's end, anything sent from a
+// node or focused a node that was not in the tree. Such a call does nothing for the node, and
 // what a test sees of it is a later symptom, an intent that never came
 // or focus that stayed put, far from the cause. The failure names the
 // call, the node's type and where the call came from.
@@ -20,25 +21,39 @@ import (
 )
 
 // New returns an offscreen window of size with root at the top, as
-// [gunim.NewOffscreen] does, which fails t at the end of the test for
-// each stray it kept.
+// [gunim.NewOffscreen] does, which paints only when looked at and fails
+// t at the end of the test for each stray it kept.
 func New(t testing.TB, size geom.Size, root gunim.Node) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreen(size, root)
-	t.Cleanup(w.Close)
-	t.Cleanup(func() { Check(t, w) })
+	setUp(t, w)
 	return w
 }
 
 // NewWith returns an offscreen window set up by o, as
-// [gunim.NewOffscreenWith] does, which fails t at the end of the test
-// for each stray it kept.
+// [gunim.NewOffscreenWith] does, which paints only when looked at and
+// fails t at the end of the test for each stray it kept.
 func NewWith(t testing.TB, o gunim.WindowOptions) *gunim.Window {
 	t.Helper()
 	w := gunim.NewOffscreenWith(o)
-	t.Cleanup(w.Close)
-	t.Cleanup(func() { Check(t, w) })
+	setUp(t, w)
 	return w
+}
+
+// setUp has w paint only when looked at, and checks and closes it as t ends.
+func setUp(t testing.TB, w *gunim.Window) {
+	w.PaintWhenLooked(true)
+	closeAtEnd(t, w)
+}
+
+// closeAtEnd checks and closes w as t ends, and then lets go of it, as testing keeps a finished test's cleanups
+// until the package ends.
+func closeAtEnd(t testing.TB, w *gunim.Window) {
+	t.Cleanup(func() {
+		Check(t, w)
+		w.Close()
+		w = nil
+	})
 }
 
 // Check fails t for each stray w has kept since it was last asked. A

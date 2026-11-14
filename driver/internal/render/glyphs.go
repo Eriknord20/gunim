@@ -277,6 +277,9 @@ func (r *Renderer) glyph(key glyphKey, raster func() text.Mask) (glyphSlot, bool
 			gl.UNSIGNED_BYTE, slot.pix)
 		g.ActiveTexture(gl.TEXTURE0)
 		a.have[key] = true
+		if framesDebug {
+			r.Stats.Glyphs++
+		}
 	}
 	return slot.glyphSlot, true
 }

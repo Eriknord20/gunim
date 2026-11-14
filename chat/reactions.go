@@ -17,7 +17,7 @@ import (
 
 // Reaction chip tokens.
 var (
-	ChipHeight  = theme.Length("chat.reaction.height", 26)
+	ChipHeight  = theme.TextRow("chat.reaction.height", 26)
 	ChipFillOff = theme.Color("chat.reaction.fill", color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x0e})
 	ChipFillOn  = theme.Color("chat.reaction.fill.on", color.NRGBA{R: 0x5e, G: 0x9c, B: 0xff, A: 0x30})
 )

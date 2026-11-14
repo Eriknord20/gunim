@@ -239,13 +239,15 @@ const (
 
 // cursorfont.h
 const (
-	_XC_crosshair         = 34
-	_XC_fleur             = 52
-	_XC_hand2             = 60
-	_XC_left_ptr          = 68
-	_XC_sb_h_double_arrow = 108
-	_XC_sb_v_double_arrow = 116
-	_XC_xterm             = 152
+	_XC_bottom_left_corner  = 12
+	_XC_bottom_right_corner = 14
+	_XC_crosshair           = 34
+	_XC_fleur               = 52
+	_XC_hand2               = 60
+	_XC_left_ptr            = 68
+	_XC_sb_h_double_arrow   = 108
+	_XC_sb_v_double_arrow   = 116
+	_XC_xterm               = 152
 )
 
 // randr.h

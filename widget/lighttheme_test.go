@@ -15,6 +15,8 @@ var bothThemes = map[string]bool{
 	"button.strong.ink": true, "button.primary.ink": true, "check.mark": true, "window.close.hot": true,
 	// None, unless a theme casts one.
 	"button.shadow": true,
+	// Inks that follow Ink unless a theme sets them, as a contrast theme does.
+	"button.ink": true, "menu.hot.ink": true,
 	// Tints over content, the same on dark and light.
 	"grid.mark": true, "table.mark": true,
 	// Light on the histogram's own dark fill, which the light theme keeps dark too.
@@ -23,6 +25,8 @@ var bothThemes = map[string]bool{
 	"livegraph.head": true,
 	// Rings drawn on the desktop around the window, not on the window's background.
 	"echo.problem": true, "echo.done": true, "echo.call": true, "echo.wait": true,
+	// The chosen row's ink of a navigation list, which follows Ink unless a theme sets it.
+	"nav.selected.ink": true,
 }
 
 func TestTheLightThemeGivesEveryColourALightValue(t *testing.T) {

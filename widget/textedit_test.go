@@ -18,7 +18,7 @@ type keyboard struct {
 	copy input.TextState
 }
 
-func newKeyboard(ty *typer) *keyboard {
+func newTestKeyboard(ty *typer) *keyboard {
 	return &keyboard{t: ty.t, ty: ty, copy: ty.field.TextState()}
 }
 
@@ -42,7 +42,7 @@ func (k *keyboard) send(e input.TextEdit) {
 func TestAKeyboardFixesAWordBehindTheCaret(t *testing.T) {
 	ty := newTyper(t)
 	ty.typeText("hte cat ")
-	k := newKeyboard(ty)
+	k := newTestKeyboard(ty)
 	k.send(input.TextEdit{Replace: [2]int{0, 3}, With: "the", Selection: [2]int{8, 8}, Composing: [2]int{8, 8}})
 	ty.want("the cat ", 8)
 	if ty.field.caret != 8 {
@@ -55,7 +55,7 @@ func TestAKeyboardFixesAWordBehindTheCaret(t *testing.T) {
 func TestAKeyboardBackspaceDeletesWithAnEdit(t *testing.T) {
 	ty := newTyper(t)
 	ty.typeText("abc")
-	k := newKeyboard(ty)
+	k := newTestKeyboard(ty)
 	k.send(input.TextEdit{Replace: [2]int{2, 3}, Selection: [2]int{2, 2}, Composing: [2]int{2, 2}})
 	ty.want("ab", 2)
 	k.send(input.TextEdit{Replace: [2]int{1, 2}, Selection: [2]int{1, 1}, Composing: [2]int{1, 1}})
@@ -68,7 +68,7 @@ func TestAWordTakenUpToComposeStaysInTheText(t *testing.T) {
 	ty := newTyper(t)
 	ty.typeText("hello world")
 	ty.intents()
-	k := newKeyboard(ty)
+	k := newTestKeyboard(ty)
 	// The keyboard takes "world" up again, as Gboard does when the
 	// caret comes back into a word.
 	k.send(input.TextEdit{Replace: [2]int{6, 11}, With: "world", Selection: [2]int{11, 11}, Composing: [2]int{6, 11}})
@@ -88,7 +88,7 @@ func TestAWordTakenUpToComposeStaysInTheText(t *testing.T) {
 
 func TestSwipeTypingCommitsAWordAtATime(t *testing.T) {
 	ty := newTyper(t)
-	k := newKeyboard(ty)
+	k := newTestKeyboard(ty)
 	for _, w := range []string{"swipe", " typing"} {
 		k.send(k.copy.Compose(w, [2]int{len(w), len(w)}))
 		k.send(k.copy.Commit(w))

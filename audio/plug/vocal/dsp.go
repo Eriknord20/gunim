@@ -8,6 +8,12 @@ import (
 
 // The chain's fixed settings: what the user does not turn.
 const (
+	// The gate: how fast it opens and how fast the level it follows
+	// falls, in milliseconds, and how far under its threshold the voice
+	// must fall for it to shut, in decibels.
+	gateAttack = 0.5
+	gateFall   = 10
+	gateHyst   = 4
 	// deEssRatio is how hard the de-esser turns down the hiss over its
 	// threshold, before Range stops it.
 	deEssRatio = 4
@@ -147,6 +153,17 @@ type processor struct {
 	dirty bool
 	fresh bool
 
+	// The gate: whether it works; the level it follows, as a ratio, and
+	// its gain, in decibels; the levels it opens and shuts at; whether it
+	// is open; and how fast its gain rises and falls, and the level it
+	// follows falls.
+	gateOn                 bool
+	gateEnv, gateGain      float64
+	gateOpenAt, gateShutAt float64
+	gateOpen               bool
+	gateUp, gateDown       float64
+	gateEnvFall            float64
+
 	// The de-esser: the band it listens to, the voice under the band it
 	// turns down, and its gain.
 	deEss    biquad
@@ -202,8 +219,8 @@ type processor struct {
 
 	// What the processor reports: how far each part turns the voice
 	// down, the least over the last block, and by frame.
-	deEssMeter, peakMeter, glueMeter plug.Meter
-	deEssTrace, peakTrace, glueTrace plug.Trace
+	deEssMeter, peakMeter, glueMeter, gateMeter plug.Meter
+	deEssTrace, peakTrace, glueTrace, gateTrace plug.Trace
 	// stats are the last block's, for Learn: how far each compressor
 	// turned it down, the most and the average, and its loudest frame
 	// going into the peak compressor.
@@ -255,6 +272,7 @@ func (p *processor) Reset() {
 	p.widthSt = [2]biquadState{}
 	clear(p.line)
 	p.lineAt = 0
+	p.gateEnv, p.gateGain, p.gateOpen = 0, 0, true
 	p.deEssGR.gr, p.peak.gr, p.glue.gr, p.par.gr = 0, 0, 0, 0
 	p.glueMS, p.parMS = 0, 0
 	p.octFlip, p.octEnv, p.octArmed = 1, 0, false
@@ -262,6 +280,7 @@ func (p *processor) Reset() {
 	p.deEssMeter.Set(0)
 	p.peakMeter.Set(0)
 	p.glueMeter.Set(0)
+	p.gateMeter.Set(0)
 }
 
 // take takes a change to a parameter.
@@ -283,6 +302,10 @@ func (p *processor) retune() {
 	if p.fresh {
 		p.in, p.out, p.fresh = p.inTarget, p.outTarget, false
 	}
+
+	p.gateOn = v[GateOnID] > 0.5 && v[GateThresholdID] > GateOff+0.5
+	p.gateOpenAt, p.gateShutAt = gainOf(v[GateThresholdID]), gainOf(v[GateThresholdID]-gateHyst)
+	p.gateUp, p.gateDown, p.gateEnvFall = coef(gateAttack, rate), coef(v[GateReleaseID], rate), coef(gateFall, rate)
 
 	p.deEssOn, p.deEssAmt = v[DeEssOnID] > 0.5, v[DeEssID]/100
 	p.deEss.set(highPass, v[DeEssFreqID], 0, 0.707, rate)
@@ -322,7 +345,7 @@ func (p *processor) Process(b *plug.Block) {
 	chans := min(len(b.Out), len(b.In), maxChannels)
 	next := 0
 	st := blockStats{peakIn: math.Inf(-1)}
-	var deEssLeast float64
+	var gateLeast, deEssLeast float64
 	for i := range b.Frames {
 		for next < len(b.Changes) && b.Changes[next].Frame <= i {
 			p.take(b.Changes[next])
@@ -336,6 +359,7 @@ func (p *processor) Process(b *plug.Block) {
 			x[ch] = float64(b.In[ch][i])
 		}
 		f := b.Position.Frame + int64(i)
+		gateLeast = min(gateLeast, p.runGate(&x, chans, f))
 		deEssLeast = min(deEssLeast, p.runDeEss(&x, chans, f))
 		p.in += (p.inTarget - p.in) * p.step
 		for ch := range chans {
@@ -364,6 +388,7 @@ func (p *processor) Process(b *plug.Block) {
 	p.deEssMeter.Set(deEssLeast)
 	p.peakMeter.Set(st.peakLeast)
 	p.glueMeter.Set(st.glueLeast)
+	p.gateMeter.Set(gateLeast)
 }
 
 // tiny is the level under which flush rounds what the chain holds to
@@ -395,9 +420,43 @@ func (p *processor) flush() {
 		zs(&p.widthSt[k])
 	}
 	zs(&p.octToneSt)
-	for _, v := range []*float64{&p.deEssGR.gr, &p.peak.gr, &p.glue.gr, &p.par.gr, &p.glueMS, &p.parMS, &p.octEnv} {
+	for _, v := range []*float64{&p.gateEnv, &p.deEssGR.gr, &p.peak.gr, &p.glue.gr, &p.par.gr, &p.glueMS, &p.parMS, &p.octEnv} {
 		z(v)
 	}
+}
+
+// runGate turns x, frame f, down by Range while the voice is under the
+// gate's threshold, and returns how far.
+func (p *processor) runGate(x *[maxChannels]float64, chans int, f int64) float64 {
+	var peak float64
+	for ch := range chans {
+		peak = max(peak, math.Abs(x[ch]))
+	}
+	p.gateEnv = max(peak, p.gateEnv+(peak-p.gateEnv)*p.gateEnvFall)
+	switch {
+	case !p.gateOn:
+		p.gateOpen = true
+	case p.gateOpen && p.gateEnv < p.gateShutAt:
+		p.gateOpen = false
+	case !p.gateOpen && p.gateEnv >= p.gateOpenAt:
+		p.gateOpen = true
+	}
+	to, c := -p.values[GateRangeID], p.gateDown
+	if p.gateOpen {
+		to, c = 0, p.gateUp
+	}
+	p.gateGain += (to - p.gateGain) * c
+	if p.gateGain > -1e-9 {
+		p.gateGain = 0
+	}
+	p.gateTrace.Put(f, float32(p.gateGain))
+	if p.gateGain < 0 {
+		g := gainOf(p.gateGain)
+		for ch := range chans {
+			x[ch] *= g
+		}
+	}
+	return p.gateGain
 }
 
 // runDeEss turns down the hiss in x, frame f, and returns how far. It
@@ -581,6 +640,8 @@ func (p *processor) Report(id uint32) float64 {
 		return p.peakMeter.Get()
 	case GlueGRID:
 		return p.glueMeter.Get()
+	case GateGRID:
+		return p.gateMeter.Get()
 	}
 	return 0
 }
@@ -595,6 +656,8 @@ func (p *processor) Trace(id uint32) *plug.Trace {
 		return &p.peakTrace
 	case GlueGRID:
 		return &p.glueTrace
+	case GateGRID:
+		return &p.gateTrace
 	}
 	return nil
 }

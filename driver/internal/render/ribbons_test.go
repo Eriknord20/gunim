@@ -225,7 +225,8 @@ func TestARibbonDrawsInTheBatchOfTheShapesAroundIt(t *testing.T) {
 	if draws != plainDraws {
 		t.Errorf("a frame of shapes and a ribbon took %d draw calls, want the %d of the shapes alone", draws, plainDraws)
 	}
-	if allocs > plainAllocs {
+	// The race detector allocates of its own.
+	if !raceOn && allocs > plainAllocs {
 		t.Errorf("a frame with a ribbon allocated %v times, want the %v of one without", allocs, plainAllocs)
 	}
 }

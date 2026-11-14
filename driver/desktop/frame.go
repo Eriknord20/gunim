@@ -74,6 +74,7 @@ func (w *Window) SetFullScreen(on bool) {
 		if !on {
 			r := w.windowed
 			_ = w.gw.SetMonitor(nil, r[0], r[1], r[2], r[3], 0)
+			w.minSizeAgain()
 			return
 		}
 		x, y, _ := w.gw.GetPos()

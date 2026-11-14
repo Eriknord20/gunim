@@ -2,6 +2,7 @@ package plugui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/access"
@@ -16,6 +17,7 @@ func TestASelectorPicksByLampAndKeys(t *testing.T) {
 	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
 	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
 	s.Handle(input.PointerDown{Pos: s.cells[2].Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	s.Handle(input.PointerUp{Pos: s.cells[2].Center(), Button: input.ButtonPrimary}, nil)
 	// The wheel passes it by, to scroll the pane it is in.
 	if s.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil) || s.Selected() != 2 {
 		t.Fatalf("the wheel took the selector from 2 to %d", s.Selected())
@@ -134,5 +136,156 @@ func TestArrowsWithCtrlAltOrSuperPassTheSelectorBy(t *testing.T) {
 		if s.Handle(input.KeyPress{Key: input.KeyRight, Mods: m}, nil) || s.Selected() != 0 {
 			t.Errorf("Right with %v took the selector to %d", m, s.Selected())
 		}
+	}
+}
+
+// A click on a lamp picks its option on the release. A press dragged off the lamp, or onto another, picks nothing.
+func TestASelectorPicksOnTheRelease(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	var picked []int
+	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
+	w := stageNode(t, s)
+	at := func(i int) geom.Point { return s.Cell(i).Center() }
+	down := func(p geom.Point) {
+		w.Input(input.PointerMove{Pos: p})
+		w.Input(input.PointerDown{Pos: p, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+		w.Frame(time.Second / 60)
+	}
+	up := func(p geom.Point) {
+		w.Input(input.PointerMove{Pos: p})
+		w.Input(input.PointerUp{Pos: p, Button: input.ButtonPrimary, Time: time.Now()})
+		frames(w, 30)
+	}
+	down(at(2))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("the press alone picked %d", s.Selected())
+	}
+	w.Frame(time.Second / 60)
+	if v := s.press.Value(); v <= 0 {
+		t.Errorf("pressed, the lamp shows no press: %v", v)
+	}
+	up(geom.Pt(at(2).X, 300))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("a press dragged away picked %d", s.Selected())
+	}
+	if v := s.press.Value(); v != 0 {
+		t.Errorf("let go away, the lamp still shows a press of %v", v)
+	}
+	down(at(2))
+	up(at(1))
+	if s.Selected() != 0 || len(picked) != 0 {
+		t.Fatalf("a press dragged onto another lamp picked %d", s.Selected())
+	}
+	down(at(2))
+	up(at(2))
+	if s.Selected() != 2 || len(picked) != 1 || picked[0] != 2 {
+		t.Fatalf("a click on C picked %v, want [2]", picked)
+	}
+}
+
+// A second button clicked while the first is held leaves the click to land on the first's release.
+func TestASecondButtonLeavesTheSelectorsClick(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	w := stageNode(t, s)
+	at := s.Cell(2).Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonSecondary, Clicks: 1, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonSecondary, Time: time.Now()})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	w.Frame(time.Second / 60)
+	if s.Selected() != 2 {
+		t.Errorf("with a second button clicked mid-press, the release picked %d, want 2", s.Selected())
+	}
+}
+
+// A press in the selector's box beside its lamps stays with the selector and reaches nothing behind it.
+func TestAPressBesideTheLampsStaysWithTheSelector(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B"}, nil)
+	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
+	beside := geom.Pt(2, 2)
+	if s.at(beside) >= 0 {
+		t.Fatalf("%v is on option %d, want beside the lamps", beside, s.at(beside))
+	}
+	if !s.Handle(input.PointerDown{Pos: beside, Button: input.ButtonPrimary, Clicks: 1}, nil) {
+		t.Error("a press beside the lamps passed to what is behind the selector")
+	}
+	s.Handle(input.PointerUp{Pos: beside, Button: input.ButtonPrimary}, nil)
+	if s.Selected() != 0 {
+		t.Errorf("a click beside the lamps picked %d", s.Selected())
+	}
+}
+
+// The arrows move through the lamps as they stand in the grid, and Home and End go to the first and the last.
+func TestTheArrowsFollowTheGrid(t *testing.T) {
+	grid := NewSelector("Test", []string{"A", "B", "C", "D"}, nil)
+	grid.Columns = 2
+	for _, step := range []struct {
+		key  input.Key
+		want int
+	}{
+		{input.KeyDown, 2}, {input.KeyDown, 2}, {input.KeyRight, 3}, {input.KeyUp, 1}, {input.KeyUp, 1},
+		{input.KeyLeft, 0}, {input.KeyEnd, 3}, {input.KeyHome, 0},
+	} {
+		if !grid.Handle(input.KeyPress{Key: step.key}, nil) || grid.Selected() != step.want {
+			t.Fatalf("%v took the grid to %d, want %d", step.key, grid.Selected(), step.want)
+		}
+	}
+	line := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	for _, step := range []struct {
+		key  input.Key
+		want int
+	}{{input.KeyDown, 1}, {input.KeyEnd, 2}, {input.KeyUp, 1}, {input.KeyHome, 0}} {
+		if !line.Handle(input.KeyPress{Key: step.key}, nil) || line.Selected() != step.want {
+			t.Fatalf("%v took the row to %d, want %d", step.key, line.Selected(), step.want)
+		}
+	}
+}
+
+// A finger that goes on to scroll lets go at input.Away: it picks nothing, and the lamp lets go of its press.
+func TestATouchReleasedAwayPicksNothing(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	w := stageNode(t, s)
+	at := s.Cell(2).Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Touch: true, Time: time.Now()})
+	w.Frame(time.Second / 60)
+	w.Input(input.PointerUp{Pos: input.Away, Button: input.ButtonPrimary, Touch: true, Time: time.Now()})
+	frames(w, 90)
+	if s.Selected() != 0 {
+		t.Errorf("a touch let go away picked %d", s.Selected())
+	}
+	if v := s.press.Value(); v != 0 {
+		t.Errorf("a touch let go away left the lamp pressed %v", v)
+	}
+}
+
+// A locked selector under the pointer shows no press and picks nothing.
+func TestALockedSelectorUnderThePointerPicksNothing(t *testing.T) {
+	s := NewSelector("Test", []string{"A", "B", "C"}, nil)
+	s.Locked = true
+	picked := false
+	s.OnPick = func(int, *gunim.UI) { picked = true }
+	w := stageNode(t, s)
+	at := s.Cell(1).Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Time: time.Now()})
+	w.Frame(time.Second / 60)
+	if v := s.press.Value(); v != 0 {
+		t.Errorf("locked, the lamp pressed in %v", v)
+	}
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Time: time.Now()})
+	frames(w, 10)
+	if picked || s.Selected() != 0 {
+		t.Errorf("locked, a click picked %d", s.Selected())
+	}
+}
+
+// Label, where set, names the selector for a screen reader, its title still written under the lamps.
+func TestASelectorsLabelReplacesItsTitleForAccess(t *testing.T) {
+	s := NewSelector("Style", []string{"A", "B"}, nil)
+	s.Label = "Low style"
+	if got := s.Access().Name; got != "Low style" {
+		t.Errorf("the selector reads as %q, want %q", got, "Low style")
 	}
 }
