@@ -309,6 +309,7 @@ func TestAZipOpensInTheWindowAndCopiesOut(t *testing.T) {
 	}
 	h.do(Command{Name: CmdPaste})
 	h.until("the copy lands", func() bool { return h.exists("out/in.txt") })
+	h.idle()
 	if got := contents(t, filepath.Join(h.dir, "out", "in.txt")); got != "inside" {
 		t.Fatalf("the copy holds %q", got)
 	}
@@ -364,6 +365,7 @@ func TestAProtectedZipAsksForItsPassword(t *testing.T) {
 			h.until("out opens", func() bool { return h.a.nav.archive == "" && !h.a.nav.loading })
 			h.do(Command{Name: CmdPaste})
 			h.until("the copy lands", func() bool { return h.exists("out/fox.txt") })
+			h.idle()
 			if got := contents(t, filepath.Join(h.dir, "out", "fox.txt")); !strings.HasPrefix(got, "The quick brown fox") {
 				t.Fatalf("the copy holds %q", got)
 			}
